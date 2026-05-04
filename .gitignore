@@ -1,0 +1,34 @@
+# Runtime state (auto-generated, not committed)
+nowplaying_state.json
+streaming_history.jsonl
+queues.json
+devices.json
+selected_state.json
+ignored_tracks.json
+server.log
+server.log.*
+
+# Extracted / cached artwork (can be regenerated)
+artwork_cache/
+
+# Alexa skill test payloads with real tokens / user IDs
+skill/launch-request.json
+skill/misrouted-playtrack-request.json
+skill/play-yacht-request.json
+
+# Systemd unit (machine-specific, tracked separately)
+ourmedia.service
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Node / UI tests
+tests/ui/node_modules/
+tests/ui/package-lock.json
+
+# Editor
+.cursor/
+*.swp

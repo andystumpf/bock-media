@@ -1,0 +1,253 @@
+{
+  "interactionModel": {
+    "languageModel": {
+      "invocationName": "our media",
+      "intents": [
+        {
+          "name": "PlayPlaylistIntent",
+          "slots": [
+            { "name": "PlaylistName", "type": "AMAZON.SearchQuery" }
+          ],
+          "samples": [
+            "play the playlist {PlaylistName}",
+            "start playing {PlaylistName}",
+            "start {PlaylistName}",
+            "put on {PlaylistName}",
+            "play {PlaylistName} playlist",
+            "play my {PlaylistName} playlist",
+            "play my {PlaylistName} stream",
+            "play my {PlaylistName} internet stream",
+            "play my {PlaylistName} internet playlist",
+            "play {PlaylistName} internet radio station"
+          ]
+        },
+        {
+          "name": "ShufflePlaylistIntent",
+          "slots": [
+            { "name": "PlaylistName", "type": "AMAZON.SearchQuery" }
+          ],
+          "samples": [
+            "shuffle {PlaylistName}",
+            "shuffle my {PlaylistName} playlist",
+            "shuffle the playlist {PlaylistName}",
+            "shuffle {PlaylistName} playlist"
+          ]
+        },
+        {
+          "name": "PlayArtistIntent",
+          "slots": [
+            { "name": "ArtistName", "type": "AMAZON.MusicGroup" }
+          ],
+          "samples": [
+            "play music by {ArtistName}",
+            "play songs by {ArtistName}",
+            "play some {ArtistName}",
+            "play artist {ArtistName}",
+            "play the artist {ArtistName}"
+          ]
+        },
+        {
+          "name": "ShuffleArtistIntent",
+          "slots": [
+            { "name": "ArtistName", "type": "AMAZON.MusicGroup" }
+          ],
+          "samples": [
+            "shuffle music by {ArtistName}",
+            "shuffle songs by {ArtistName}",
+            "shuffle {ArtistName}",
+            "shuffle {ArtistName} music",
+            "shuffle some {ArtistName}"
+          ]
+        },
+        {
+          "name": "PlayAlbumIntent",
+          "slots": [
+            { "name": "AlbumName", "type": "AMAZON.SearchQuery" }
+          ],
+          "samples": [
+            "play the album {AlbumName}",
+            "play album {AlbumName}",
+            "play {AlbumName} album"
+          ]
+        },
+        {
+          "name": "ShuffleAlbumIntent",
+          "slots": [
+            { "name": "AlbumName", "type": "AMAZON.SearchQuery" }
+          ],
+          "samples": [
+            "shuffle the album {AlbumName}",
+            "shuffle {AlbumName} the album",
+            "shuffle album {AlbumName}",
+            "shuffle {AlbumName} album"
+          ]
+        },
+        {
+          "name": "PlayTrackIntent",
+          "slots": [
+            { "name": "TrackName", "type": "AMAZON.MusicRecording" }
+          ],
+          "samples": [
+            "play the track {TrackName}",
+            "play the song {TrackName}"
+          ]
+        },
+        {
+          "name": "PlayTrackByArtistIntent",
+          "slots": [
+            { "name": "TrackName", "type": "AMAZON.MusicRecording" },
+            { "name": "ArtistName", "type": "AMAZON.MusicGroup" }
+          ],
+          "samples": [
+            "play {TrackName} by {ArtistName}",
+            "play the track {TrackName} by {ArtistName}",
+            "play the song {TrackName} by {ArtistName}"
+          ]
+        },
+        {
+          "name": "PlayGeneralIntent",
+          "slots": [
+            { "name": "Query", "type": "AMAZON.SearchQuery" }
+          ],
+          "samples": [
+            "play {Query}"
+          ]
+        },
+        {
+          "name": "PlayGenreIntent",
+          "slots": [
+            { "name": "Genre", "type": "AMAZON.SearchQuery" }
+          ],
+          "samples": [
+            "play {Genre} music",
+            "play some {Genre} music",
+            "play {Genre} songs",
+            "play some {Genre} songs"
+          ]
+        },
+        {
+          "name": "ShuffleGenreIntent",
+          "slots": [
+            { "name": "Genre", "type": "AMAZON.SearchQuery" }
+          ],
+          "samples": [
+            "shuffle {Genre} music",
+            "shuffle some {Genre} music",
+            "shuffle {Genre} songs",
+            "shuffle some {Genre} songs"
+          ]
+        },
+        {
+          "name": "ReadBookIntent",
+          "slots": [
+            { "name": "BookName", "type": "AMAZON.SearchQuery" }
+          ],
+          "samples": [
+            "read {BookName}",
+            "read the book {BookName}",
+            "read the audio book {BookName}",
+            "play the audio book {BookName}"
+          ]
+        },
+        {
+          "name": "PlayCurrentIntent",
+          "slots": [],
+          "samples": [
+            "play this",
+            "play this song",
+            "play this track",
+            "play this music",
+            "play this album",
+            "play this artist",
+            "play what's showing",
+            "play what's on my screen"
+          ]
+        },
+        {
+          "name": "WhatsPlayingIntent",
+          "slots": [],
+          "samples": [
+            "what's playing",
+            "what is playing",
+            "what's this track",
+            "what is this track",
+            "what song is this",
+            "what's this song",
+            "what am I listening to"
+          ]
+        },
+        {
+          "name": "AddToPlaylistIntent",
+          "slots": [
+            { "name": "PlaylistName", "type": "AMAZON.SearchQuery" }
+          ],
+          "samples": [
+            "add this to my {PlaylistName} playlist",
+            "add this song to my {PlaylistName} playlist",
+            "add this track to my {PlaylistName} playlist"
+          ]
+        },
+        {
+          "name": "IgnoreSongIntent",
+          "slots": [],
+          "samples": [
+            "ignore this song",
+            "ignore this track",
+            "not play this again",
+            "don't play this again",
+            "never play this again",
+            "skip this song"
+          ]
+        },
+        {
+          "name": "ListServersIntent",
+          "slots": [],
+          "samples": [
+            "list my servers",
+            "show my servers",
+            "what servers do I have"
+          ]
+        },
+        {
+          "name": "SwitchServersIntent",
+          "slots": [],
+          "samples": [
+            "switch servers",
+            "change servers",
+            "switch to a different server"
+          ]
+        },
+        {
+          "name": "CurrentServerIntent",
+          "slots": [],
+          "samples": [
+            "what is my current server",
+            "which server am I using",
+            "what server am I on"
+          ]
+        },
+        {
+          "name": "ListInvitationsIntent",
+          "slots": [],
+          "samples": [
+            "list my invitations",
+            "show my invitations",
+            "do I have any invitations"
+          ]
+        },
+        { "name": "AMAZON.StopIntent",    "samples": [] },
+        { "name": "AMAZON.CancelIntent",  "samples": [] },
+        { "name": "AMAZON.PauseIntent",   "samples": [] },
+        { "name": "AMAZON.ResumeIntent",  "samples": [] },
+        { "name": "AMAZON.NextIntent",    "samples": [] },
+        { "name": "AMAZON.PreviousIntent","samples": [] },
+        { "name": "AMAZON.HelpIntent",    "samples": [] },
+        { "name": "AMAZON.ShuffleOnIntent",  "samples": [] },
+        { "name": "AMAZON.ShuffleOffIntent", "samples": [] },
+        { "name": "AMAZON.LoopOnIntent",     "samples": [] },
+        { "name": "AMAZON.LoopOffIntent",    "samples": [] }
+      ],
+      "types": []
+    }
+  }
+}

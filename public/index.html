@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ourMedia Console</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="page-wrapper">
+
+  <!-- Sidebar -->
+  <div id="sidebar-wrapper">
+    <div class="sidebar-brand">
+      <span class="brand-icon"><i class="fa fa-music"></i></span>
+      <div class="brand-text">
+        ourMedia
+        <span>Local Media Console</span>
+      </div>
+    </div>
+
+    <div class="sidebar-user" id="sidebar-user">
+      <div class="user-line"><i class="fa fa-user"></i><span id="user-label">Loading...</span></div>
+      <div class="user-line"><i class="fa fa-laptop"></i><span id="server-label">—</span></div>
+    </div>
+
+    <ul class="sidebar-nav">
+      <li><a href="#dashboard" class="nav-link"><span class="nav-icon"><i class="fa fa-tachometer-alt"></i></span><span class="nav-label">Dashboard</span></a></li>
+      <li><a href="#nowplaying" class="nav-link"><span class="nav-icon"><i class="fa fa-play"></i></span><span class="nav-label">Now Playing</span></a></li>
+      <div class="sidebar-divider"></div>
+      <li><a href="#playlists" class="nav-link"><span class="nav-icon"><i class="fa fa-list"></i></span><span class="nav-label">Playlists</span></a></li>
+      <li><a href="#albums" class="nav-link"><span class="nav-icon"><i class="fa fa-compact-disc"></i></span><span class="nav-label">Albums</span></a></li>
+      <li><a href="#artists" class="nav-link"><span class="nav-icon"><i class="fa fa-microphone"></i></span><span class="nav-label">Artists</span></a></li>
+      <li><a href="#songs" class="nav-link"><span class="nav-icon"><i class="fa fa-music"></i></span><span class="nav-label">Songs</span></a></li>
+      <div class="sidebar-divider"></div>
+      <li><a href="#watchfolders" class="nav-link"><span class="nav-icon"><i class="fa fa-folder-open"></i></span><span class="nav-label">Watch Folders</span></a></li>
+      <li><a href="#devices" class="nav-link"><span class="nav-icon"><i class="fa fa-headphones"></i></span><span class="nav-label">Alexa Devices</span></a></li>
+      <div class="sidebar-divider"></div>
+      <li><a href="#settings" class="nav-link"><span class="nav-icon"><i class="fa fa-cog"></i></span><span class="nav-label">Settings</span></a></li>
+    </ul>
+  </div>
+  <!-- End Sidebar -->
+
+  <!-- Content -->
+  <div id="content-wrapper">
+    <div class="page-header">
+      <div style="display:flex;align-items:center;gap:8px">
+        <button class="toggle-btn" id="sidebar-toggle" title="Toggle sidebar">
+          <i class="fa fa-bars"></i>
+        </button>
+        <span class="page-title" id="page-title">Dashboard</span>
+      </div>
+      <div class="header-right">
+        <div id="now-playing-bar" style="display:none;align-items:center;gap:8px;background:#e8eef9;border-radius:20px;padding:4px 14px;font-size:12px;color:#30426a;max-width:360px;overflow:hidden;cursor:pointer" onclick="window.location='#nowplaying'">
+          <i class="fa fa-music" style="color:#e99d1a"></i>
+          <span id="np-track-text" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></span>
+        </div>
+        <span class="header-badge" id="connection-badge"><i class="fa fa-circle" style="color:#2eaa5a;font-size:8px;margin-right:4px"></i>Running</span>
+      </div>
+    </div>
+
+    <div class="page-content" id="main-content">
+      <div class="spinner-wrap"><div class="spinner"></div></div>
+    </div>
+  </div>
+  <!-- End Content -->
+
+</div>
+
+<script src="js/app.js"></script>
+</body>
+</html>

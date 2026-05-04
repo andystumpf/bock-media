@@ -1,0 +1,11 @@
+{
+  "name": "ourmedia-ui-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test_app.mjs"
+  },
+  "dependencies": {
+    "jsdom": "^27.0.1"
+  }
+}
