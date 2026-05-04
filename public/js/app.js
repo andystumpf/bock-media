@@ -883,6 +883,192 @@ async function clearImageCache() {
   else showToast('Failed to clear cache', true);
 }
 
+// ── Analytics ─────────────────────────────────────────────────────────────
+
+let _anFrom = '', _anTo = '';
+let _anCharts = [];
+
+async function _loadAnalytics() {
+  _anCharts.forEach(c => { try { c.destroy(); } catch {} });
+  _anCharts = [];
+  loading();
+  let url = '/api/analytics';
+  const params = [];
+  if (_anFrom) params.push(`from=${_anFrom}`);
+  if (_anTo)   params.push(`to=${_anTo}`);
+  if (params.length) url += '?' + params.join('&');
+  const data = await API(url);
+  if (!data || !data.totalPlays) {
+    renderPage('Analytics', `
+      <div class="card" style="margin-bottom:20px">${_anDatePickerHtml(data)}</div>
+      <div class="empty-state"><i class="fa fa-chart-bar"></i><p>No streaming history yet.</p></div>`);
+    _restoreDateInputs();
+    return;
+  }
+  window._anData = data;
+  renderPage('Analytics', _buildAnalyticsHTML(data));
+  _restoreDateInputs();
+  _initAnalyticsCharts(data);
+  _initEntityActivityCharts(data);
+}
+
+function _restoreDateInputs() {
+  const fi = document.getElementById('an-date-from');
+  const ti = document.getElementById('an-date-to');
+  if (fi) fi.value = _anFrom;
+  if (ti) ti.value = _anTo;
+}
+
+function _anDatePickerHtml(data) {
+  const dr = (data || {}).dateRange || {};
+  const activeFilter = dr.from || dr.to;
+  return `<div class="card-body" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 16px">
+    <span style="font-size:13px;font-weight:600;color:#556">Date Range</span>
+    <input type="date" id="an-date-from" style="padding:4px 8px;border:1px solid #ccd;border-radius:4px;font-size:12px" onchange="_anFrom=this.value;_loadAnalytics()">
+    <span style="font-size:12px;color:#aab">to</span>
+    <input type="date" id="an-date-to" style="padding:4px 8px;border:1px solid #ccd;border-radius:4px;font-size:12px" onchange="_anTo=this.value;_loadAnalytics()">
+    ${activeFilter ? `<button class="btn-sm btn-default" onclick="_anFrom='';_anTo='';_loadAnalytics()"><i class="fa fa-times"></i> Clear</button>` : ''}
+    ${activeFilter ? `<span style="font-size:11px;color:#e99d1a"><i class="fa fa-filter"></i> Filtered</span>` : ''}
+  </div>`;
+}
+
+register('analytics', async () => { _anFrom = ''; _anTo = ''; await _loadAnalytics(); });
+
+function _buildAnalyticsHTML(d) {
+  const top = (arr, icon) => (arr || []).map((x, i) =>
+    `<tr><td style="color:#8899bb;width:24px">${i+1}</td><td>${escHtml(x.name)}</td><td style="text-align:right;font-weight:600">${fmtNum(x.count)}</td></tr>`
+  ).join('');
+
+  const streak = n => n === 1 ? '1 hr streak' : `${n} hrs streak`;
+
+  return `
+    <div class="card" style="margin-bottom:20px">${_anDatePickerHtml(d)}</div>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-icon blue"><i class="fa fa-play"></i></div>
+        <div class="stat-info"><div class="stat-value">${fmtNum(d.totalPlays)}</div><div class="stat-label">Total Plays</div></div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon green"><i class="fa fa-music"></i></div>
+        <div class="stat-info"><div class="stat-value">${fmtNum(d.uniqueTracks)}</div><div class="stat-label">Unique Tracks</div></div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon purple"><i class="fa fa-microphone"></i></div>
+        <div class="stat-info"><div class="stat-value">${fmtNum(d.uniqueArtists)}</div><div class="stat-label">Unique Artists</div></div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon orange"><i class="fa fa-compact-disc"></i></div>
+        <div class="stat-info"><div class="stat-value">${fmtNum(d.uniqueAlbums)}</div><div class="stat-label">Unique Albums</div></div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon yellow"><i class="fa fa-fire"></i></div>
+        <div class="stat-info"><div class="stat-value">${d.currentStreak || 0}</div><div class="stat-label">Current ${streak(d.currentStreak||0)}</div></div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon red"><i class="fa fa-trophy"></i></div>
+        <div class="stat-info"><div class="stat-value">${d.longestStreak || 0}</div><div class="stat-label">Longest ${streak(d.longestStreak||0)}</div></div>
+      </div>
+    </div>
+
+    <div class="row-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px">
+      <div class="card">
+        <div class="card-header"><h3><i class="fa fa-chart-line"></i> Plays Over Time</h3></div>
+        <div class="card-body"><canvas id="an-plays-chart" height="160"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="card-header"><h3><i class="fa fa-headphones"></i> Top Devices</h3></div>
+        <div class="card-body"><table class="data-table"><tbody>${top(d.topDevices)}</tbody></table></div>
+      </div>
+    </div>
+
+    <div class="row-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px">
+      <div class="card">
+        <div class="card-header"><h3><i class="fa fa-microphone"></i> Top Artists</h3></div>
+        <div class="card-body"><table class="data-table"><tbody>${top(d.topArtists)}</tbody></table></div>
+      </div>
+      <div class="card">
+        <div class="card-header"><h3><i class="fa fa-compact-disc"></i> Top Albums</h3></div>
+        <div class="card-body"><table class="data-table"><tbody>${top(d.topAlbums)}</tbody></table></div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-header"><h3><i class="fa fa-music"></i> Top Tracks</h3></div>
+      <div class="card-body"><table class="data-table"><tbody>${top(d.topTracks)}</tbody></table></div>
+    </div>
+
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-header"><h3><i class="fa fa-chart-line"></i> Artist Activity Over Time</h3></div>
+      <div class="card-body"><canvas id="an-artist-chart" height="160"></canvas></div>
+    </div>
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-header"><h3><i class="fa fa-chart-line"></i> Album Activity Over Time</h3></div>
+      <div class="card-body"><canvas id="an-album-chart" height="160"></canvas></div>
+    </div>
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-header"><h3><i class="fa fa-chart-line"></i> Track Activity Over Time</h3></div>
+      <div class="card-body"><canvas id="an-track-chart" height="160"></canvas></div>
+    </div>
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-header"><h3><i class="fa fa-chart-line"></i> Device Activity Over Time</h3></div>
+      <div class="card-body"><canvas id="an-device-chart" height="160"></canvas></div>
+    </div>`;
+}
+
+const _AN_COLORS = ['#4e91e6','#e6914e','#4ec74e','#e64e4e','#a44ee6','#e6c84e','#4ec7c7','#e64ea4','#91e64e','#4e4ee6'];
+
+function _buildEntityChart(canvasId, seriesMap) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  const allDays = [...new Set(Object.values(seriesMap).flatMap(m => Object.keys(m)))].sort();
+  if (!allDays.length) return;
+  const datasets = Object.entries(seriesMap).map(([label, dayCounts], i) => ({
+    label,
+    data: allDays.map(d => dayCounts[d] || 0),
+    borderColor: _AN_COLORS[i % _AN_COLORS.length],
+    backgroundColor: _AN_COLORS[i % _AN_COLORS.length] + '22',
+    tension: 0.3, fill: false, pointRadius: 3,
+  }));
+  const chart = new Chart(canvas, {
+    type: 'line',
+    data: { labels: allDays, datasets },
+    options: {
+      responsive: true,
+      plugins: { legend: { position: 'bottom', labels: { font: { size: 11 } } } },
+      scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
+    },
+  });
+  _anCharts.push(chart);
+}
+
+function _initAnalyticsCharts(data) {
+  const canvas = document.getElementById('an-plays-chart');
+  if (!canvas) return;
+  const days = Object.keys(data.playsPerDay || {}).sort();
+  const chart = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels: days,
+      datasets: [{ label: 'Plays', data: days.map(d => data.playsPerDay[d]), backgroundColor: '#4e91e6cc' }],
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
+    },
+  });
+  _anCharts.push(chart);
+}
+
+function _initEntityActivityCharts(data) {
+  const ea = (data.entity_activity || {});
+  _buildEntityChart('an-artist-chart', ea.artists || {});
+  _buildEntityChart('an-album-chart',  ea.albums  || {});
+  _buildEntityChart('an-track-chart',  ea.tracks  || {});
+  _buildEntityChart('an-device-chart', ea.devices || {});
+}
+
 function showToast(msg, isError = false) {
   let t = document.getElementById('toast');
   if (!t) {

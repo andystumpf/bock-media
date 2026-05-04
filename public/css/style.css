@@ -158,7 +158,7 @@ ul.sidebar-nav li a .nav-label { overflow: hidden; }
 .card-body { padding: 16px 20px; }
 
 /* Stat cards */
-.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; margin-bottom: 20px; }
+.stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 20px; }
 .stat-card {
   background: #fff;
   border-radius: 8px;

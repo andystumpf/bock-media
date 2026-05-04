@@ -542,6 +542,160 @@ def recent():
         print(f'Recent error: {e}')
         return jsonify({'items': [], 'total': 0})
 
+# ── API: Analytics ───────────────────────────────────────────────────────────
+
+@app.route('/api/analytics')
+def analytics():
+    from collections import Counter, defaultdict
+    from_str = request.args.get('from', '').strip()
+    to_str   = request.args.get('to',   '').strip()
+    cache_key = (from_str, to_str)
+    cached = _analytics_cache.get(cache_key)
+    if cached and (time.time() - cached['ts']) < _ANALYTICS_TTL:
+        return jsonify(cached['data'])
+
+    rows = _read_stream_history()
+
+    # Date filtering
+    from_dt = to_dt = None
+    try:
+        if from_str:
+            from_dt = datetime.datetime.fromisoformat(from_str)
+        if to_str:
+            to_dt   = datetime.datetime.fromisoformat(to_str).replace(hour=23, minute=59, second=59)
+    except Exception:
+        pass
+
+    if from_dt or to_dt:
+        filtered = []
+        for r in rows:
+            try:
+                ts = datetime.datetime.fromisoformat(r.get('timestamp','').replace('Z',''))
+                if from_dt and ts < from_dt:
+                    continue
+                if to_dt and ts > to_dt:
+                    continue
+                filtered.append(r)
+            except Exception:
+                continue
+        rows = filtered
+
+    total = len(rows)
+    if total == 0:
+        result = {
+            'totalPlays': 0, 'uniqueTracks': 0, 'uniqueArtists': 0, 'uniqueAlbums': 0,
+            'topTracks': [], 'topArtists': [], 'topAlbums': [], 'topDevices': [],
+            'playsPerDay': {}, 'currentStreak': 0, 'longestStreak': 0,
+            'entity_activity': {}, 'dateRange': {'from': from_str, 'to': to_str},
+        }
+        _analytics_cache[cache_key] = {'data': result, 'ts': time.time()}
+        return jsonify(result)
+
+    track_ctr   = Counter()
+    artist_ctr  = Counter()
+    album_ctr   = Counter()
+    device_ctr  = Counter()
+    day_ctr     = Counter()
+
+    artist_day_ctr = defaultdict(Counter)
+    album_day_ctr  = defaultdict(Counter)
+    track_day_ctr  = defaultdict(Counter)
+    device_day_ctr = defaultdict(Counter)
+
+    for r in rows:
+        track  = r.get('track')  or 'Unknown'
+        artist = r.get('artist') or 'Unknown'
+        album  = r.get('album')  or 'Unknown'
+        device = r.get('device') or 'Unknown'
+        ts_str = r.get('timestamp', '')
+        dt = None
+        try:
+            dt = datetime.datetime.fromisoformat(ts_str.replace('Z',''))
+        except Exception:
+            pass
+
+        track_ctr[track]   += 1
+        artist_ctr[artist] += 1
+        album_ctr[album]   += 1
+        device_ctr[device] += 1
+
+        if dt:
+            day = dt.strftime('%Y-%m-%d')
+            day_ctr[day] += 1
+            artist_day_ctr[artist][day] += 1
+            album_day_ctr[album][day]   += 1
+            track_day_ctr[track][day]   += 1
+            device_day_ctr[device][day] += 1
+
+    # Streak calculation in hours
+    all_hours = set()
+    for r in rows:
+        try:
+            dt = datetime.datetime.fromisoformat(r.get('timestamp','').replace('Z',''))
+            all_hours.add(dt.strftime('%Y-%m-%d %H'))
+        except Exception:
+            pass
+
+    current_streak = longest_streak = 0
+    if all_hours:
+        sorted_hours = sorted(all_hours)
+        streak = 1
+        for i in range(1, len(sorted_hours)):
+            prev = datetime.datetime.strptime(sorted_hours[i-1], '%Y-%m-%d %H')
+            curr = datetime.datetime.strptime(sorted_hours[i],   '%Y-%m-%d %H')
+            if (curr - prev).total_seconds() <= 3600:
+                streak += 1
+            else:
+                longest_streak = max(longest_streak, streak)
+                streak = 1
+        longest_streak = max(longest_streak, streak)
+        now = datetime.datetime.utcnow()
+        streak = 1
+        for i in range(len(sorted_hours)-1, 0, -1):
+            curr = datetime.datetime.strptime(sorted_hours[i],   '%Y-%m-%d %H')
+            prev = datetime.datetime.strptime(sorted_hours[i-1], '%Y-%m-%d %H')
+            if (curr - prev).total_seconds() <= 3600:
+                streak += 1
+            else:
+                break
+        last_hour = datetime.datetime.strptime(sorted_hours[-1], '%Y-%m-%d %H')
+        if (now - last_hour).total_seconds() < 7200:
+            current_streak = streak
+
+    def entity_series(day_ctr_map, top_keys):
+        result = {}
+        for k in top_keys:
+            result[k] = dict(day_ctr_map.get(k, {}))
+        return result
+
+    top5_artists = [k for k, _ in artist_ctr.most_common(5)]
+    top5_albums  = [k for k, _ in album_ctr.most_common(5)]
+    top5_tracks  = [k for k, _ in track_ctr.most_common(5)]
+    top5_devices = [k for k, _ in device_ctr.most_common(5)]
+
+    result = {
+        'totalPlays':    total,
+        'uniqueTracks':  len(track_ctr),
+        'uniqueArtists': len(artist_ctr),
+        'uniqueAlbums':  len(album_ctr),
+        'topTracks':   [{'name': k, 'count': v} for k, v in track_ctr.most_common(10)],
+        'topArtists':  [{'name': k, 'count': v} for k, v in artist_ctr.most_common(10)],
+        'topAlbums':   [{'name': k, 'count': v} for k, v in album_ctr.most_common(10)],
+        'topDevices':  [{'name': k, 'count': v} for k, v in device_ctr.most_common(10)],
+        'playsPerDay': dict(day_ctr),
+        'currentStreak': current_streak,
+        'longestStreak': longest_streak,
+        'entity_activity': {
+            'artists': entity_series(artist_day_ctr, top5_artists),
+            'albums':  entity_series(album_day_ctr,  top5_albums),
+            'tracks':  entity_series(track_day_ctr,  top5_tracks),
+            'devices': entity_series(device_day_ctr, top5_devices),
+        },
+        'dateRange': {'from': from_str, 'to': to_str},
+    }
+    _analytics_cache[cache_key] = {'data': result, 'ts': time.time()}
+    return jsonify(result)
+
 # ── API: Now Playing (recent streaming events from Messages.xml) ─────────────
 
 import re as _re
@@ -562,10 +716,17 @@ def _parse_stream_message(title, description):
 STREAM_HISTORY_PATH = os.path.join(HERE, 'streaming_history.jsonl')
 _STREAM_HISTORY_MAX = 5000
 
+_analytics_cache: dict = {}
+_ANALYTICS_TTL = 60  # seconds
+
+def _bust_analytics_cache():
+    _analytics_cache.clear()
+
 def append_stream_history(entry):
     try:
         with open(STREAM_HISTORY_PATH, 'a') as f:
             f.write(json.dumps(entry) + '\n')
+        _bust_analytics_cache()
     except Exception as e:
         print(f'history write error: {e}', flush=True)
 
@@ -1051,6 +1212,12 @@ def normalize_spoken_value(value):
     if not v:
         return ''
     prefixes = [
+        'alexa ask our media to ',
+        'ask our media to ',
+        'our media to ',
+        'alexa ask our media ',
+        'ask our media ',
+        'our media ',
         'alexa ask local media to ',
         'ask local media to ',
         'local media to ',
@@ -1491,6 +1658,7 @@ def alexa_skill():
         iname  = intent.get('name', '')
         slots  = intent.get('slots', {})
         def sv(name): return normalize_spoken_value((slots.get(name, {}).get('value') or '').strip())
+        print(f'[ALEXA DEBUG] intent={iname} slots={json.dumps({k: slots[k].get("value") for k in slots})}', flush=True)
 
         # ── Play playlist ──────────────────────────────────────────────────
         if iname == 'PlayPlaylistIntent':
@@ -1498,6 +1666,7 @@ def alexa_skill():
             if not query:
                 return alexa_speak("Which playlist would you like to play?", end_session=False)
             name, source = fuzzy_find_playlist(query)
+            print(f'[ALEXA DEBUG] PlayPlaylistIntent query={repr(query)} -> name={repr(name)} source={repr(source)}', flush=True)
             if not name:
                 return alexa_speak(f"Sorry, I couldn't find a playlist called {query}.")
             tracks = parse_m3u(source) if source and os.path.isfile(source) else []
@@ -1511,6 +1680,7 @@ def alexa_skill():
             if not query:
                 return alexa_speak("Which playlist would you like to shuffle?", end_session=False)
             name, source = fuzzy_find_playlist(query)
+            print(f'[ALEXA DEBUG] ShufflePlaylistIntent query={repr(query)} -> name={repr(name)} source={repr(source)}', flush=True)
             if not name:
                 return alexa_speak(f"Sorry, I couldn't find a playlist called {query}.")
             tracks = parse_m3u(source) if source and os.path.isfile(source) else []
