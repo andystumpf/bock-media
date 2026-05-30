@@ -270,3 +270,21 @@ class TestParseM3U:
         out = server.parse_m3u(str(m3u))
         assert sample_track['path'] in out
         assert '/no/such/file.mp3' not in out
+
+
+# ─────────────────────────── device auto-merge ───────────────────────────────
+
+class TestAutoMerge:
+    def test_skips_bare_audioplayer_fingerprint(self, isolated_paths):
+        store = {
+            'kitchen': {'name': 'Kitchen Show', 'lastSeen': time.time(), 'fingerprint': 'AudioPlayer'},
+        }
+        assert server._auto_merge_target('new-id', 'AudioPlayer', store) is None
+
+    def test_skips_ambiguous_fingerprint(self, isolated_paths):
+        now = time.time()
+        store = {
+            'kitchen': {'name': 'Kitchen Show', 'lastSeen': now, 'fingerprint': 'AudioPlayer,Display'},
+            'office':  {'name': 'Office Show',  'lastSeen': now - 3600, 'fingerprint': 'AudioPlayer,Display'},
+        }
+        assert server._auto_merge_target('new-id', 'AudioPlayer,Display', store) is None

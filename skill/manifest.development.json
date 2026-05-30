@@ -4,9 +4,13 @@
       "custom": {
         "endpoint": {
           "sslCertificateType": "Wildcard",
-          "uri": "https://hannelore-unguinous-redundantly.ngrok-free.dev/alexa"
+          "uri": "https://alexa.morejava.bid/alexa"
         },
-        "interfaces": [],
+        "interfaces": [
+          {
+            "type": "AUDIO_PLAYER"
+          }
+        ],
         "locales": {}
       }
     },
@@ -24,7 +28,7 @@
             "help"
           ],
           "keywords": [],
-          "name": "Our Media",
+          "name": "Bock Media",
           "summary": "Sample Short Description"
         }
       },

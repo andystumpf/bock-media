@@ -1,0 +1,21 @@
+{
+  "publicUrl": "https://alexa.morejava.bid",
+  "launchPlaylistPrompt": true,
+  "msp": {
+    "skillId": "amzn1.ask.skill.5a3f1b96-1e0d-4a39-ac7a-1bacd6f4438a",
+    "catalogId": "amzn1.ask-catalog.cat.8d881399-7f6b-4d02-93c9-6c4b44043406",
+    "alias": "bock media",
+    "endpoint": "https://alexa.morejava.bid/music"
+  },
+  "mspOauth": {
+    "clientId": "ourmedia-msp-client",
+    "clientSecret": "GENERATE_AND_SET_LOCALLY",
+    "accessToken": "GENERATE_AND_SET_LOCALLY",
+    "refreshToken": "GENERATE_AND_SET_LOCALLY",
+    "redirectUriPrefixes": [
+      "https://alexa.amazon.com/",
+      "https://layla.amazon.com/",
+      "https://pitangui.amazon.com/"
+    ]
+  }
+}

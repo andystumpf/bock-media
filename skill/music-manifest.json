@@ -1,0 +1,92 @@
+{
+  "manifest": {
+    "publishingInformation": {
+      "locales": {
+        "en-US": {
+          "summary": "Stream playlists from your personal ourMedia music library.",
+          "examplePhrases": [
+            "Alexa, play my road trip playlist on bock media",
+            "Alexa, ask bock media to mix yacht rock",
+            "Alexa, play music on bock media"
+          ],
+          "keywords": [],
+          "name": "Bock Media",
+          "description": "Play playlists from your personal ourMedia music library on Alexa, hands-free."
+        }
+      },
+      "isAvailableWorldwide": false,
+      "testingInstructions": "Account-link to your ourMedia server, then say: Alexa, play <playlist name> on bock media.",
+      "category": "STREAMING_SERVICE",
+      "distributionCountries": ["US"]
+    },
+    "apis": {
+      "music": {
+        "endpoint": {
+          "uri": "https://alexa.morejava.bid/music",
+          "sslCertificateType": "Wildcard"
+        },
+        "locales": {
+          "en-US": {
+            "aliases": [{ "name": "bock media" }],
+            "promptName": "bock media",
+            "features": [{ "name": "EXPLICIT_LANGUAGE_FILTER" }]
+          }
+        },
+        "interfaces": [
+          {
+            "namespace": "Alexa.Audio.PlayQueue",
+            "requests": [{ "name": "GetNextItem" }, { "name": "GetPreviousItem" }],
+            "version": "1.0"
+          },
+          {
+            "namespace": "Alexa.Media.Playback",
+            "requests": [{ "name": "Initiate" }],
+            "version": "1.0"
+          },
+          {
+            "namespace": "Alexa.Media.PlayQueue",
+            "requests": [{ "name": "GetItem" }, { "name": "SetShuffle" }, { "name": "SetLoop" }],
+            "version": "1.0"
+          },
+          {
+            "namespace": "Alexa.Media.Search",
+            "requests": [{ "name": "GetPlayableContent" }],
+            "version": "1.0"
+          }
+        ]
+      }
+    },
+    "manifestVersion": "1.0",
+    "events": {
+      "subscriptions": [
+        { "eventName": "SKILL_ENABLED" },
+        { "eventName": "SKILL_DISABLED" },
+        { "eventName": "SKILL_ACCOUNT_LINKED" },
+        { "eventName": "AUDIO_ITEM_PLAYBACK_STARTED" },
+        { "eventName": "AUDIO_ITEM_PLAYBACK_FINISHED" },
+        { "eventName": "AUDIO_ITEM_PLAYBACK_STOPPED" },
+        { "eventName": "AUDIO_ITEM_PLAYBACK_FAILED" }
+      ],
+      "endpoint": {
+        "uri": "https://alexa.morejava.bid/music",
+        "sslCertificateType": "Wildcard"
+      },
+      "regions": {
+        "NA": {
+          "endpoint": {
+            "uri": "https://alexa.morejava.bid/music",
+            "sslCertificateType": "Wildcard"
+          }
+        }
+      }
+    },
+    "permissions": [],
+    "privacyAndCompliance": {
+      "allowsPurchases": false,
+      "isExportCompliant": true,
+      "containsAds": false,
+      "isChildDirected": false,
+      "usesPersonalInfo": false
+    }
+  }
+}

@@ -34,6 +34,16 @@ class TestLaunchAndUnknown:
         resp = post_alexa('LaunchRequest')
         assert _speech(resp)
 
+    def test_launch_playlist_prompt_mode(self, post_alexa, isolated_paths):
+        """When config launchPlaylistPrompt is true, open without auto-play, keep session + reprompt"""
+        import server
+        with open(server.CONFIG_PATH, 'w', encoding='utf-8') as f:
+            json.dump({'launchPlaylistPrompt': True}, f)
+        resp = post_alexa('LaunchRequest')
+        assert resp['response']['shouldEndSession'] is False
+        assert 'reprompt' in resp['response']
+        assert 'Our Media' in _speech(resp) or 'listening' in _speech(resp).lower()
+
     def test_unknown_intent(self, post_alexa):
         """unknown intent gets a friendly fallback response"""
         resp = post_alexa('IntentRequest', 'TotallyMadeUpIntent')
@@ -44,6 +54,17 @@ class TestLaunchAndUnknown:
         resp = post_alexa('IntentRequest', 'AMAZON.HelpIntent')
         assert _speech(resp)
         assert resp['response']['shouldEndSession'] is False
+
+    def test_can_fulfill_returns_valid_schema(self, post_alexa):
+        """CanFulfillIntentRequest responds with canFulfillIntent payload"""
+        resp = post_alexa('CanFulfillIntentRequest')
+        cfi = resp.get('response', {}).get('canFulfillIntent', {})
+        assert cfi.get('canFulfill') in ('YES', 'MAYBE', 'NO')
+
+    def test_unknown_request_type_returns_spoken_fallback(self, post_alexa):
+        """unexpected request types should return valid speech JSON"""
+        resp = post_alexa('BogusRequestType')
+        assert _speech(resp)
 
 
 # ─────────────────────────── play artist / album / track / genre ─────────────

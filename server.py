@@ -16,7 +16,12 @@ import logging
 import socket
 import datetime
 from logging.handlers import RotatingFileHandler
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
+from urllib.request import urlopen
+from cryptography import x509
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding as rsa_padding
 from flask import Flask, jsonify, request, send_from_directory, send_file, Response
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -59,13 +64,21 @@ def xml_int(el, tag, default=0):
     except:
         return default
 
+_pref_cache: dict = {}
+_pref_mtime: float = 0.0
+
 def get_pref(xml_tag, default=''):
+    global _pref_cache, _pref_mtime
+    path = os.path.join(MMA_PATH, 'Preferences.xml')
     try:
-        tree = ET.parse(os.path.join(MMA_PATH, 'Preferences.xml'))
-        el = tree.getroot().find(xml_tag)
-        return (el.text or default) if el is not None else default
+        mtime = os.path.getmtime(path)
+        if mtime != _pref_mtime:
+            tree = ET.parse(path)
+            _pref_cache = {el.tag: (el.text or '') for el in tree.getroot()}
+            _pref_mtime = mtime
     except:
-        return default
+        pass
+    return _pref_cache.get(xml_tag, default)
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -83,8 +96,91 @@ def apply_logging():
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
-# Paths that Alexa fetches directly — must never require browser auth
-_NO_AUTH_PREFIXES = ('/alexa', '/stream/', '/artwork/')
+# Paths Alexa fetches over the public tunnel — must remain publicly reachable.
+# Everything else is LAN-only; Cloudflare-tunneled requests to other paths are
+# rejected with 403 so the admin console is never exposed to the internet.
+_PUBLIC_PREFIXES = ('/alexa', '/stream/', '/artwork/', '/music', '/oauth/')
+
+def _is_tunnel_request():
+    # Cloudflare cloudflared adds Cf-Connecting-Ip (and Cf-Ray) on every tunneled
+    # request. Local LAN traffic never has these. We treat presence of either as
+    # "came from the public internet via Cloudflare".
+    return bool(
+        request.headers.get('Cf-Connecting-Ip')
+        or request.headers.get('Cf-Ray')
+    )
+
+# Alexa request-signature verification per
+# https://developer.amazon.com/en-US/docs/alexa/custom-skills/host-a-custom-skill-as-a-web-service.html
+EXPECTED_SKILL_APP_ID = 'amzn1.ask.skill.c13622d4-8780-4bea-93a5-0ded84307466'
+_ALEXA_CERT_HOST = 's3.amazonaws.com'
+_ALEXA_CERT_PATH_PREFIX = '/echo.api/'
+_ALEXA_SIG_SAN = 'echo-api.amazon.com'
+_ALEXA_TIMESTAMP_WINDOW_SEC = 150
+_ALEXA_CERT_CACHE = {}
+
+def _alexa_cert_url_ok(url):
+    p = urlparse(url or '')
+    return (p.scheme == 'https'
+            and p.hostname == _ALEXA_CERT_HOST
+            and p.path.startswith(_ALEXA_CERT_PATH_PREFIX)
+            and (p.port is None or p.port == 443))
+
+def _alexa_cert_validity_window(cert):
+    nbf = getattr(cert, 'not_valid_before_utc', None) or cert.not_valid_before
+    naf = getattr(cert, 'not_valid_after_utc', None) or cert.not_valid_after
+    return nbf, naf
+
+def _alexa_load_cert(url):
+    cached = _ALEXA_CERT_CACHE.get(url)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    if cached is not None:
+        nbf, naf = _alexa_cert_validity_window(cached)
+        if nbf.tzinfo is None: nbf = nbf.replace(tzinfo=datetime.timezone.utc)
+        if naf.tzinfo is None: naf = naf.replace(tzinfo=datetime.timezone.utc)
+        if nbf <= now <= naf:
+            return cached
+    pem = urlopen(url, timeout=5).read()
+    cert = x509.load_pem_x509_certificate(pem, default_backend())
+    nbf, naf = _alexa_cert_validity_window(cert)
+    if nbf.tzinfo is None: nbf = nbf.replace(tzinfo=datetime.timezone.utc)
+    if naf.tzinfo is None: naf = naf.replace(tzinfo=datetime.timezone.utc)
+    if not (nbf <= now <= naf):
+        raise ValueError('certificate not within validity window')
+    san_ext = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    if _ALEXA_SIG_SAN not in san_ext.get_values_for_type(x509.DNSName):
+        raise ValueError(f'certificate SAN missing {_ALEXA_SIG_SAN}')
+    _ALEXA_CERT_CACHE[url] = cert
+    return cert
+
+def _verify_alexa_signature(raw_body, body_json):
+    cert_url = request.headers.get('SignatureCertChainUrl', '')
+    if not _alexa_cert_url_ok(cert_url):
+        return 'invalid SignatureCertChainUrl'
+    sig_b64 = request.headers.get('Signature', '')
+    if not sig_b64:
+        return 'missing Signature header'
+    try:
+        sig = base64.b64decode(sig_b64)
+    except Exception:
+        return 'unparsable Signature'
+    try:
+        cert = _alexa_load_cert(cert_url)
+    except Exception as e:
+        return f'cert load failed: {e}'
+    try:
+        cert.public_key().verify(sig, raw_body, rsa_padding.PKCS1v15(), hashes.SHA1())
+    except Exception:
+        return 'signature does not match request body'
+    ts_str = (body_json.get('request') or {}).get('timestamp', '')
+    try:
+        ts = datetime.datetime.strptime(ts_str.replace('Z', ''), '%Y-%m-%dT%H:%M:%S')
+        ts = ts.replace(tzinfo=datetime.timezone.utc)
+    except Exception:
+        return 'malformed request timestamp'
+    if abs((datetime.datetime.now(datetime.timezone.utc) - ts).total_seconds()) > _ALEXA_TIMESTAMP_WINDOW_SEC:
+        return 'request timestamp outside acceptance window'
+    return None
 
 @app.before_request
 def check_auth():
@@ -92,7 +188,14 @@ def check_auth():
         ua = request.headers.get('User-Agent', '')
         rng = request.headers.get('Range', '')
         print(f"[STREAM] {request.method} {request.path} ua={ua!r} range={rng!r}", flush=True)
-    if any(request.path.startswith(p) for p in _NO_AUTH_PREFIXES):
+
+    is_public_path = any(request.path.startswith(p) for p in _PUBLIC_PREFIXES)
+
+    if _is_tunnel_request() and not is_public_path:
+        return Response('Forbidden ', 403,
+                        {'Content-Type': 'text/plain; charset=utf-8'})
+
+    if is_public_path:
         return None
     if get_pref('RequirePassword', '').lower() != 'true':
         return None
@@ -102,7 +205,7 @@ def check_auth():
     auth = request.authorization
     if not auth or auth.username != 'admin' or auth.password != stored:
         return Response('Authentication required', 401,
-                        {'WWW-Authenticate': 'Basic realm="Our Media"'})
+                        {'WWW-Authenticate': 'Basic realm="My Media"'})
     return None
 
 # ── Static files ─────────────────────────────────────────────────────────────
@@ -154,16 +257,41 @@ def watchfolders():
         tree = ET.parse(os.path.join(MMA_PATH, 'WatchFolders.xml'))
         folders = []
         for wf in tree.getroot().findall('WatchFolder'):
+            path = xml_text(wf, 'Path')
+            exists = os.path.isdir(path)
+
+            if exists:
+                prefix = path.rstrip('/') + '/'
+                row = db_one(
+                    "SELECT COUNT(*) AS cnt FROM songs_cache WHERE path LIKE ?",
+                    [prefix + '%']
+                )
+                song_count = row.get('cnt', 0) if row else 0
+                try:
+                    m3u_count = sum(
+                        1 for f in os.listdir(path)
+                        if f.lower().endswith('.m3u')
+                    )
+                except Exception:
+                    m3u_count = 0
+                identified = song_count
+                playlists  = m3u_count
+                status = 'Done' if (song_count > 0 or m3u_count > 0) else 'Empty'
+            else:
+                identified = 0
+                playlists  = 0
+                status     = 'Missing'
+
             folders.append({
-                'guid': xml_text(wf, 'Guid'),
-                'path': xml_text(wf, 'Path'),
-                'label': xml_text(wf, 'Label'),
-                'status': xml_text(wf, 'Status'),
-                'count': xml_int(wf, 'Count'),
-                'identifiedFiles': xml_int(wf, 'IdentifiedFiles'),
-                'errors': xml_int(wf, 'Errors'),
-                'playlists': xml_int(wf, 'Playlists'),
-                'type': xml_text(wf, 'Type'),
+                'guid':            xml_text(wf, 'Guid'),
+                'path':            path,
+                'label':           xml_text(wf, 'Label'),
+                'status':          status,
+                'count':           xml_int(wf, 'Count'),
+                'identifiedFiles': identified,
+                'errors':          xml_int(wf, 'Errors'),
+                'playlists':       playlists,
+                'type':            xml_text(wf, 'Type'),
             })
         return jsonify(folders)
     except Exception as e:
@@ -419,6 +547,13 @@ def clear_cache():
 
 DEVICES_PATH = os.path.join(HERE, 'devices.json')
 
+def _atomic_json_write(path, data, **dump_kwargs):
+    """Write JSON atomically: write to .tmp then os.replace to avoid corruption on crash."""
+    tmp = path + '.tmp'
+    with open(tmp, 'w') as f:
+        json.dump(data, f, **dump_kwargs)
+    os.replace(tmp, path)
+
 def _load_devices():
     try:
         with open(DEVICES_PATH) as f:
@@ -431,47 +566,302 @@ def _load_devices():
 
 def _save_devices(data):
     try:
-        with open(DEVICES_PATH, 'w') as f:
-            json.dump(data, f, indent=2)
+        _atomic_json_write(DEVICES_PATH, data, indent=2)
     except Exception as e:
         print(f'devices write error: {e}', flush=True)
 
-def register_device(device_id, default_name=None):
+def _resolve_device_id(device_id, store=None):
+    """Follow aliasOf chain so a merged/rotated id reports as its primary.
+
+    Alexa occasionally rotates `deviceId` (after re-link, endpoint change, or
+    skill re-enable). We persist `aliasOf` so the next event from the rotated
+    id lands on the original device's analytics, queue, and now-playing state.
+    """
+    if not device_id:
+        return device_id
+    if store is None:
+        store = _load_devices()
+    seen = set()
+    cur = device_id
+    for _ in range(4):
+        entry = store.get(cur) or {}
+        nxt = entry.get('aliasOf')
+        if not nxt or nxt in seen or nxt == cur:
+            return cur
+        seen.add(cur)
+        cur = nxt
+    return cur
+
+def _fingerprint_interfaces(supported_interfaces):
+    """Stable fingerprint of an Alexa device's supportedInterfaces.
+
+    Alexa skills can't see a hardware/serial id — only an opaque `deviceId`
+    that occasionally rotates. The capability set (AudioPlayer / Display /
+    APL / VideoApp / …) is a same-physical-device-always-equal signal we
+    can use to detect rotations and propose merges.
+    """
+    if not isinstance(supported_interfaces, dict):
+        return ''
+    return ','.join(sorted(supported_interfaces.keys()))
+
+
+def _merge_fingerprints(existing, incoming):
+    """Union of capability fingerprints — never lose interfaces we've seen.
+
+    AudioPlayer events report only `{AudioPlayer:{}}` even from Echo Show
+    devices, so without unioning we'd degrade a rich fingerprint
+    (e.g. 'Alexa.Presentation.APL,AudioPlayer,Display') to bare 'AudioPlayer'
+    on the next event, breaking subsequent auto-merge attempts.
+    """
+    parts = set()
+    for s in (existing or '', incoming or ''):
+        for p in s.split(','):
+            p = p.strip()
+            if p:
+                parts.add(p)
+    return ','.join(sorted(parts))
+
+def _auto_merge_ok_fingerprint(fp):
+    """Bare AudioPlayer is shared by nearly every Echo — too weak to auto-merge."""
+    return bool(fp) and fp != 'AudioPlayer'
+
+def _auto_merge_target(new_id, fp, store):
+    """Return the renamed device this rotated id most likely belongs to, or None.
+
+    Auto-merge requires high confidence:
+      * matching fingerprint
+      * winner's renamed device went silent within the last 24h (so this looks
+        like an actual rotation event, not a stale stranger)
+      * any runner-up with the same fingerprint went silent at least 24h
+        BEFORE the winner — i.e. clean temporal separation
+    Otherwise we defer to manual merge via the candidates UI.
+    """
+    if not _auto_merge_ok_fingerprint(fp):
+        return None
+    now = time.time()
+    matches = []
+    for did, e in store.items():
+        if did == new_id or e.get('aliasOf'):
+            continue
+        if e.get('fingerprint') != fp:
+            continue
+        n = (e.get('name') or '').strip().lower()
+        looks_auto = (not n) or n == f"echo {did[-6:]}".lower()
+        if looks_auto:
+            continue
+        last = e.get('lastSeen') or 0
+        gap_h = (now - last) / 3600.0 if last else 999
+        matches.append((gap_h, did))
+    if not matches:
+        return None
+    if len(matches) > 1:
+        # Multiple renamed devices share this fingerprint (e.g. two Echo Shows
+        # both report bare AudioPlayer) — cannot tell which one rotated.
+        return None
+    matches.sort()
+    winner_gap, winner_id = matches[0]
+    if winner_gap > 24:
+        return None
+    return winner_id
+
+
+def _alias_to(source_id, target_id, store):
+    """Mark source as an alias of target in-place (does NOT migrate history).
+
+    Used by register_device when it auto-merges a freshly-rotated deviceId.
+    The new id has no history yet, so we only need to plant the alias; future
+    events resolve via _resolve_device_id and land on the existing primary.
+    """
+    src = store.get(source_id) or {}
+    tgt = store.get(target_id) or {}
+    target_name = tgt.get('name') or target_id[-6:]
+    store[source_id] = {
+        'aliasOf':   target_id,
+        'name':      target_name,
+        'firstSeen': src.get('firstSeen'),
+        'lastSeen':  src.get('lastSeen'),
+        'mergedAt':  time.time(),
+        'autoMerged': True,
+    }
+
+
+def register_device(device_id, default_name=None, supported_interfaces=None):
     if not device_id:
         return
     data = _load_devices()
-    entry = data.get(device_id)
+    primary = _resolve_device_id(device_id, data)
     now = time.time()
+    incoming_fp = _fingerprint_interfaces(supported_interfaces) if supported_interfaces else ''
+    if primary != device_id:
+        prim_entry = data.get(primary)
+        if prim_entry is not None:
+            prim_entry['lastSeen'] = now
+            if incoming_fp:
+                prim_entry['fingerprint'] = _merge_fingerprints(prim_entry.get('fingerprint',''), incoming_fp)
+            _save_devices(data)
+        return
+
+    entry = data.get(device_id)
     if not entry:
         data[device_id] = {
             'name': default_name or f'Echo {device_id[-6:]}',
             'firstSeen': now,
             'lastSeen': now,
+            'fingerprint': incoming_fp,
         }
     else:
         entry['lastSeen'] = now
         if default_name and not entry.get('name'):
             entry['name'] = default_name
+        if incoming_fp:
+            entry['fingerprint'] = _merge_fingerprints(entry.get('fingerprint',''), incoming_fp)
+
+    cur = data[device_id]
+    cur_name = (cur.get('name') or '').strip().lower()
+    looks_auto = (not cur_name) or cur_name == f"echo {device_id[-6:]}".lower()
+
+    # Auto-merge on every event while the device is still auto-named so we get
+    # a second chance even if the first event had a degraded fingerprint
+    # (AudioPlayer events from Echo Shows omit Display from supportedInterfaces).
+    if looks_auto and cur.get('fingerprint'):
+        tgt = _auto_merge_target(device_id, cur['fingerprint'], data)
+        if tgt:
+            _alias_to(device_id, tgt, data)
+            print(f"[DEVICE AUTO-MERGE] {device_id[-12:]} -> {(data[tgt].get('name') or '')!r}", flush=True)
+
     _save_devices(data)
 
 def device_friendly_name(device_id):
     if not device_id:
         return ''
-    return (_load_devices().get(device_id) or {}).get('name') or ''
+    store = _load_devices()
+    primary = _resolve_device_id(device_id, store)
+    return (store.get(primary) or {}).get('name') or ''
+
+def _device_label(device_id):
+    """Human-readable device name for now-playing / history."""
+    if not device_id or device_id == 'default':
+        return 'default'
+    store = _load_devices()
+    entry = store.get(device_id) or {}
+    if entry.get('aliasOf'):
+        label = device_friendly_name(device_id)
+        if label:
+            return label
+    name = (entry.get('name') or '').strip()
+    if name and name.lower() != f"echo {device_id[-6:]}".lower():
+        return name
+    return f"Echo {device_id[-6:]}"
 
 @app.route('/api/devices')
 def devices():
     data = _load_devices()
     result = []
     for did, e in data.items():
+        if e.get('aliasOf'):
+            continue
         result.append({
-            'deviceId':  did,
-            'name':      e.get('name') or did[-6:],
-            'lastSeen':  e.get('lastSeen'),
-            'firstSeen': e.get('firstSeen'),
+            'deviceId':    did,
+            'name':        e.get('name') or did[-6:],
+            'lastSeen':    e.get('lastSeen'),
+            'firstSeen':   e.get('firstSeen'),
+            'fingerprint': e.get('fingerprint') or '',
         })
     result.sort(key=lambda x: x.get('lastSeen') or 0, reverse=True)
     return jsonify(result)
+
+
+@app.route('/api/devices/<device_id>/dismiss_candidate', methods=['POST'])
+def dismiss_merge_candidate(device_id):
+    """Mark a device as 'not a duplicate' so it stops appearing as a candidate."""
+    store = _load_devices()
+    e = store.get(device_id)
+    if not e:
+        return jsonify({'error': 'unknown device'}), 404
+    e['notDuplicate'] = True
+    _save_devices(store)
+    return jsonify({'ok': True})
+
+
+@app.route('/api/devices/merge_candidates')
+def device_merge_candidates():
+    """Suggest likely-duplicate pairs (rotated deviceIds for the same Echo).
+
+    Heuristic: for each auto-named device that has a capability fingerprint,
+    find the most-recently-active *renamed* device sharing the fingerprint
+    that went silent at or before the auto-named one's firstSeen. Returns
+    one candidate per auto-named device, ranked by confidence.
+    """
+    data = _load_devices()
+    devices = []
+    for did, e in data.items():
+        if e.get('aliasOf'):
+            continue
+        devices.append({
+            'id':          did,
+            'name':        e.get('name') or '',
+            'firstSeen':   e.get('firstSeen') or 0,
+            'lastSeen':    e.get('lastSeen')  or 0,
+            'fingerprint': e.get('fingerprint') or '',
+        })
+
+    # Stream activity per id so we don't propose noise (test/curl entries)
+    counts = {}
+    if os.path.exists(STREAM_HISTORY_PATH):
+        try:
+            with open(STREAM_HISTORY_PATH) as f:
+                for line in f:
+                    try: r = json.loads(line)
+                    except: continue
+                    did = r.get('deviceId')
+                    if did:
+                        counts[did] = counts.get(did, 0) + 1
+        except Exception:
+            pass
+
+    def is_auto(d):
+        n = (d['name'] or '').strip().lower()
+        return (not n) or n == f"echo {d['id'][-6:]}".lower()
+
+    dismissed = {did for did, e in data.items() if e.get('notDuplicate')}
+    auto    = [d for d in devices if is_auto(d) and counts.get(d['id'], 0) >= 1 and d['id'] not in dismissed]
+    renamed = [d for d in devices if not is_auto(d)]
+
+    suggestions = []
+    for a in auto:
+        best = None
+        for r in renamed:
+            if r['id'] == a['id']:
+                continue
+            # gap < 0 means renamed went silent BEFORE auto-named first appeared (good)
+            gap_h = (a['firstSeen'] - r['lastSeen']) / 3600.0
+            if gap_h > 168 or gap_h < -1:  # > 1wk silence or overlap > 1h means likely different devices
+                continue
+            score = 0
+            if a['fingerprint'] and a['fingerprint'] == r['fingerprint']:
+                score += 100
+            if 0 <= gap_h <= 24:
+                score += 30
+            elif gap_h <= 72:
+                score += 10
+            score -= int(abs(gap_h) / 24)  # closer in time wins
+            if best is None or score > best['score']:
+                best = {'target': r, 'score': score, 'gapHours': round(gap_h, 1)}
+        if best and best['score'] > 0:
+            suggestions.append({
+                'sourceId':         a['id'],
+                'sourceName':       a['name'] or a['id'][-6:],
+                'sourceStreams':    counts.get(a['id'], 0),
+                'sourceFingerprint': a['fingerprint'],
+                'targetId':         best['target']['id'],
+                'targetName':       best['target']['name'],
+                'targetFingerprint': best['target']['fingerprint'],
+                'gapHours':         best['gapHours'],
+                'score':            best['score'],
+                'fingerprintMatch': bool(a['fingerprint']) and a['fingerprint'] == best['target']['fingerprint'],
+            })
+    suggestions.sort(key=lambda s: s['score'], reverse=True)
+    return jsonify({'candidates': suggestions})
 
 @app.route('/api/devices/<device_id>', methods=['POST'])
 def rename_device(device_id):
@@ -481,7 +871,8 @@ def rename_device(device_id):
         return jsonify({'error': 'Name required'}), 400
     try:
         store = _load_devices()
-        entry = store.get(device_id)
+        primary = _resolve_device_id(device_id, store)
+        entry = store.get(primary)
         if not entry:
             return jsonify({'error': 'Unknown device'}), 404
         entry['name'] = new_name
@@ -495,8 +886,119 @@ def remove_device(device_id):
     store = _load_devices()
     if device_id in store:
         del store[device_id]
+        # Also drop any aliases pointing here (orphaned)
+        for did, e in list(store.items()):
+            if e.get('aliasOf') == device_id:
+                del store[did]
         _save_devices(store)
     return jsonify({'ok': True})
+
+@app.route('/api/devices/<source_id>/merge', methods=['POST'])
+def merge_device(source_id):
+    """Merge `source_id` into `target` (from JSON body).
+
+    Effects:
+      - streaming_history.jsonl rows with deviceId==source are rewritten to
+        target's id and name (analytics aggregate cleanly).
+      - queues.json and nowplaying_state.json entries for source move to target
+        (target wins if both exist).
+      - devices.json: source becomes alias `aliasOf=target`. All future Alexa
+        events from source automatically resolve to target via _resolve_device_id.
+    """
+    body = request.get_json(silent=True) or {}
+    target_id = (body.get('target') or '').strip()
+    if not target_id or target_id == source_id:
+        return jsonify({'error': 'target required and must differ from source'}), 400
+    store = _load_devices()
+    if source_id not in store:
+        return jsonify({'error': 'unknown source device'}), 404
+    if target_id not in store:
+        return jsonify({'error': 'unknown target device'}), 404
+    # Reject cycles: target must not already alias to source
+    if _resolve_device_id(target_id, store) == source_id:
+        return jsonify({'error': 'target already aliased to source'}), 400
+
+    src = store[source_id]
+    tgt = store[target_id]
+    target_name = tgt.get('name') or target_id[-6:]
+
+    history_rewrites = _rewrite_history_device(source_id, target_id, target_name)
+    _migrate_state_files(source_id, target_id)
+
+    # firstSeen/lastSeen take the union
+    fs = min(x for x in (src.get('firstSeen'), tgt.get('firstSeen')) if x) if (src.get('firstSeen') or tgt.get('firstSeen')) else None
+    ls = max(x for x in (src.get('lastSeen'),  tgt.get('lastSeen'))  if x) if (src.get('lastSeen')  or tgt.get('lastSeen'))  else None
+    if fs is not None: tgt['firstSeen'] = fs
+    if ls is not None: tgt['lastSeen']  = ls
+
+    store[source_id] = {
+        'aliasOf':   target_id,
+        'name':      target_name,
+        'firstSeen': src.get('firstSeen'),
+        'lastSeen':  src.get('lastSeen'),
+        'mergedAt':  time.time(),
+    }
+    # Re-point any aliases that had source as their target to target
+    for did, e in store.items():
+        if did != source_id and e.get('aliasOf') == source_id:
+            e['aliasOf'] = target_id
+    _save_devices(store)
+    _bust_analytics_cache()
+    return jsonify({
+        'ok': True,
+        'historyRowsRewritten': history_rewrites,
+        'targetName': target_name,
+    })
+
+
+def _rewrite_history_device(source_id, target_id, target_name):
+    """Rewrite streaming_history.jsonl rows with deviceId==source_id to target."""
+    if not os.path.exists(STREAM_HISTORY_PATH):
+        return 0
+    tmp = STREAM_HISTORY_PATH + '.tmp'
+    rewritten = 0
+    with open(STREAM_HISTORY_PATH) as fin, open(tmp, 'w') as fout:
+        for line in fin:
+            line = line.rstrip('\n')
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except Exception:
+                fout.write(line + '\n')
+                continue
+            if row.get('deviceId') == source_id:
+                row['deviceId'] = target_id
+                row['device']   = target_name
+                rewritten += 1
+            fout.write(json.dumps(row) + '\n')
+    os.replace(tmp, STREAM_HISTORY_PATH)
+    return rewritten
+
+
+def _migrate_state_files(source_id, target_id):
+    # queues.json: move source's queue if target has none
+    try:
+        queues = _load_queues()
+        if isinstance(queues, dict) and source_id in queues:
+            if target_id not in queues:
+                queues[target_id] = queues[source_id]
+            queues.pop(source_id, None)
+            _save_queues(queues)
+    except Exception as e:
+        print(f'merge: queues migrate failed: {e}', flush=True)
+    # nowplaying_state.json
+    try:
+        payload = _read_all_np() or {'devices': {}}
+        devs = payload.get('devices', {}) or {}
+        if source_id in devs:
+            if target_id not in devs:
+                devs[target_id] = devs[source_id]
+            devs.pop(source_id, None)
+            payload['devices'] = devs
+            _write_all_np(payload)
+    except Exception as e:
+        print(f'merge: nowplaying migrate failed: {e}', flush=True)
 
 # ── API: Recent play requests ────────────────────────────────────────────────
 
@@ -544,6 +1046,21 @@ def recent():
 
 # ── API: Analytics ───────────────────────────────────────────────────────────
 
+def _row_dt(row):
+    """Best-effort timestamp parse from a stream-history row.
+
+    Older rows used `timestamp`, newer ones use `date`. Both are ISO8601;
+    we accept either so historical analytics keep working.
+    """
+    raw = (row.get('date') or row.get('timestamp') or '').replace('Z', '')
+    if not raw:
+        return None
+    try:
+        return datetime.datetime.fromisoformat(raw)
+    except Exception:
+        return None
+
+
 @app.route('/api/analytics')
 def analytics():
     from collections import Counter, defaultdict
@@ -556,7 +1073,6 @@ def analytics():
 
     rows = _read_stream_history()
 
-    # Date filtering
     from_dt = to_dt = None
     try:
         if from_str:
@@ -569,104 +1085,239 @@ def analytics():
     if from_dt or to_dt:
         filtered = []
         for r in rows:
-            try:
-                ts = datetime.datetime.fromisoformat(r.get('timestamp','').replace('Z',''))
-                if from_dt and ts < from_dt:
-                    continue
-                if to_dt and ts > to_dt:
-                    continue
-                filtered.append(r)
-            except Exception:
+            ts = _row_dt(r)
+            if not ts:
                 continue
+            if from_dt and ts < from_dt:
+                continue
+            if to_dt and ts > to_dt:
+                continue
+            filtered.append(r)
         rows = filtered
 
-    total = len(rows)
-    if total == 0:
-        result = {
-            'totalPlays': 0, 'uniqueTracks': 0, 'uniqueArtists': 0, 'uniqueAlbums': 0,
-            'topTracks': [], 'topArtists': [], 'topAlbums': [], 'topDevices': [],
-            'playsPerDay': {}, 'currentStreak': 0, 'longestStreak': 0,
-            'entity_activity': {}, 'dateRange': {'from': from_str, 'to': to_str},
-        }
-        _analytics_cache[cache_key] = {'data': result, 'ts': time.time()}
-        return jsonify(result)
+    # Strip test/placeholder rows that were never real device plays
+    rows = [r for r in rows if r.get('deviceId', '') not in ('DEVICE_ALPHA', 'DEVICE_BETA')]
 
-    track_ctr   = Counter()
+    total = len(rows)
+    EMPTY = {
+        'totalPlays': 0, 'uniqueTracks': 0, 'uniqueArtists': 0, 'uniqueAlbums': 0,
+        'topTracks': [], 'topArtists': [], 'topAlbums': [], 'topDevices': [],
+        'topGenres': [], 'topDecades': [],
+        'activity': {'day': [], 'week': [], 'month': [], 'year': []},
+        'hourOfDay': [{'hour': h, 'count': 0} for h in range(24)],
+        'dayOfWeek': [{'day': d, 'count': 0} for d in ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']],
+        'heatmap': [[0]*7 for _ in range(24)],
+        'playsPerDay': {},
+        'listeningStreak': {'current': 0, 'longest': 0},
+        'currentStreak': 0, 'longestStreak': 0,
+        'catalogCoverage': {'heard': 0, 'total': 0, 'pct': 0},
+        'repeatRate':      {'repeated': 0, 'total': 0, 'pct': 0},
+        'mostActiveDay':   None,
+        'entity_activity': {},
+        'dateRange': {'from': from_str, 'to': to_str},
+    }
+    if total == 0:
+        _analytics_cache[cache_key] = {'data': EMPTY, 'ts': time.time()}
+        return jsonify(EMPTY)
+
+    # Bulk-enrich genre/year from songs_cache (one query per 900-path chunk)
+    paths = list({r['filepath'] for r in rows if r.get('filepath')})
+    genre_map, year_map = {}, {}
+    for i in range(0, len(paths), 900):
+        chunk = paths[i:i + 900]
+        ph = ','.join(['?'] * len(chunk))
+        try:
+            for dbr in db_query(f'SELECT path, genre, year FROM songs_cache WHERE path IN ({ph})', chunk):
+                p = dbr.get('path')
+                if p:
+                    genre_map[p] = (dbr.get('genre') or '').strip()
+                    year_map[p]  = dbr.get('year') or ''
+        except Exception:
+            pass
+
     artist_ctr  = Counter()
     album_ctr   = Counter()
+    track_ctr   = Counter()
+    genre_ctr   = Counter()
+    decade_ctr  = Counter()
     device_ctr  = Counter()
+    hour_ctr    = Counter()
+    dow_ctr     = Counter()
     day_ctr     = Counter()
+    week_ctr    = Counter()
+    month_ctr   = Counter()
+    year_ctr    = Counter()
+    heatmap     = [[0] * 7 for _ in range(24)]
 
     artist_day_ctr = defaultdict(Counter)
     album_day_ctr  = defaultdict(Counter)
     track_day_ctr  = defaultdict(Counter)
     device_day_ctr = defaultdict(Counter)
 
-    for r in rows:
-        track  = r.get('track')  or 'Unknown'
-        artist = r.get('artist') or 'Unknown'
-        album  = r.get('album')  or 'Unknown'
-        device = r.get('device') or 'Unknown'
-        ts_str = r.get('timestamp', '')
-        dt = None
-        try:
-            dt = datetime.datetime.fromisoformat(ts_str.replace('Z',''))
-        except Exception:
-            pass
+    seen_tracks  = set()
+    repeat_count = 0
+    all_dates    = set()
 
-        track_ctr[track]   += 1
+    # Bucket devices by stable deviceId (alias-aware) so renames/merges fold
+    # historical rows automatically — the label is always the *current* name.
+    device_store = _load_devices()
+    def _device_label(row):
+        did = row.get('deviceId') or ''
+        if did:
+            primary = _resolve_device_id(did, device_store)
+            entry = device_store.get(primary)
+            if entry:
+                return entry.get('name') or row.get('device') or primary[-6:]
+        return row.get('device') or 'Unknown'
+
+    for r in rows:
+        artist   = (r.get('artist') or '').strip() or 'Unknown'
+        album    = (r.get('album')  or '').strip() or 'Unknown'
+        track    = (r.get('track')  or '').strip() or 'Unknown'
+        filepath = r.get('filepath', '')
+        device   = _device_label(r)
+
         artist_ctr[artist] += 1
-        album_ctr[album]   += 1
+        album_ctr[(album, artist)] += 1
+        track_ctr[(track, artist)] += 1
         device_ctr[device] += 1
 
+        g = genre_map.get(filepath, '')
+        if g:
+            genre_ctr[g] += 1
+
+        yr_raw = year_map.get(filepath, '')
+        if yr_raw:
+            try:
+                y = int(str(yr_raw)[:4])
+                if 1900 <= y <= 2100:
+                    decade_ctr[f'{(y // 10) * 10}s'] += 1
+            except (ValueError, TypeError):
+                pass
+
+        dt = _row_dt(r)
         if dt:
-            day = dt.strftime('%Y-%m-%d')
-            day_ctr[day] += 1
-            artist_day_ctr[artist][day] += 1
-            album_day_ctr[album][day]   += 1
-            track_day_ctr[track][day]   += 1
-            device_day_ctr[device][day] += 1
+            h, dow    = dt.hour, dt.weekday()
+            day_key   = dt.strftime('%Y-%m-%d')
+            week_key  = dt.strftime('%G-W%V')
+            month_key = dt.strftime('%Y-%m')
+            yr_key    = str(dt.year)
 
-    # Streak calculation in hours
-    all_hours = set()
-    for r in rows:
-        try:
-            dt = datetime.datetime.fromisoformat(r.get('timestamp','').replace('Z',''))
-            all_hours.add(dt.strftime('%Y-%m-%d %H'))
-        except Exception:
-            pass
+            hour_ctr[h]          += 1
+            dow_ctr[dow]         += 1
+            day_ctr[day_key]     += 1
+            week_ctr[week_key]   += 1
+            month_ctr[month_key] += 1
+            year_ctr[yr_key]     += 1
+            heatmap[h][dow]      += 1
+            all_dates.add(day_key)
 
-    current_streak = longest_streak = 0
-    if all_hours:
-        sorted_hours = sorted(all_hours)
-        streak = 1
-        for i in range(1, len(sorted_hours)):
-            prev = datetime.datetime.strptime(sorted_hours[i-1], '%Y-%m-%d %H')
-            curr = datetime.datetime.strptime(sorted_hours[i],   '%Y-%m-%d %H')
-            if (curr - prev).total_seconds() <= 3600:
-                streak += 1
+            artist_day_ctr[artist][day_key]    += 1
+            album_day_ctr[(album, artist)][day_key] += 1
+            track_day_ctr[(track, artist)][day_key] += 1
+            device_day_ctr[device][day_key]    += 1
+
+        tk = (track.lower(), artist.lower())
+        if tk in seen_tracks:
+            repeat_count += 1
+        else:
+            seen_tracks.add(tk)
+
+    today = datetime.date.today()
+
+    # Series: when a date filter is active use that range; otherwise use the
+    # legacy rolling windows (last 30d / 26w / 24mo / all years).
+    def _date_range(start, end):
+        out, d = [], start
+        while d <= end:
+            out.append(d)
+            d += datetime.timedelta(days=1)
+        return out
+
+    if from_dt or to_dt:
+        rstart = from_dt.date() if from_dt else (today - datetime.timedelta(days=29))
+        rend   = to_dt.date()   if to_dt   else today
+        day_series = [
+            {'label': d.strftime('%Y-%m-%d'), 'count': day_ctr.get(d.strftime('%Y-%m-%d'), 0)}
+            for d in _date_range(rstart, rend)
+        ]
+    else:
+        day_series = []
+        for i in range(29, -1, -1):
+            d = today - datetime.timedelta(days=i)
+            k = d.strftime('%Y-%m-%d')
+            day_series.append({'label': k, 'count': day_ctr.get(k, 0)})
+
+    week_series = []
+    for i in range(25, -1, -1):
+        d = today - datetime.timedelta(weeks=i)
+        k = d.strftime('%G-W%V')
+        week_series.append({'label': k, 'count': week_ctr.get(k, 0)})
+
+    month_series = []
+    for i in range(23, -1, -1):
+        m = today.month - i
+        y = today.year
+        while m <= 0:
+            m += 12
+            y -= 1
+        k = f'{y}-{m:02d}'
+        month_series.append({'label': k, 'count': month_ctr.get(k, 0)})
+
+    year_series = [{'label': k, 'count': v} for k, v in sorted(year_ctr.items())]
+
+    dow_names   = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+    hour_of_day = [{'hour': h, 'count': hour_ctr.get(h, 0)} for h in range(24)]
+    day_of_week = [{'day': dow_names[d], 'count': dow_ctr.get(d, 0)} for d in range(7)]
+
+    top_artists = [{'name': k, 'count': v}                    for k, v in artist_ctr.most_common(10)]
+    top_albums  = [{'name': k[0], 'artist': k[1], 'count': v} for k, v in album_ctr.most_common(10)]
+    top_tracks  = [{'name': k[0], 'artist': k[1], 'count': v} for k, v in track_ctr.most_common(10)]
+    top_genres  = [{'name': k, 'count': v}                    for k, v in genre_ctr.most_common(10)]
+    top_decades = [{'decade': k, 'count': v}                  for k, v in sorted(decade_ctr.items())]
+    top_devices = [{'name': k, 'count': v}                    for k, v in device_ctr.most_common(10)]
+
+    # Listening streaks — day-based (more meaningful than hour-based)
+    sorted_dates   = sorted(all_dates)
+    longest_streak = current_streak = 0
+    if sorted_dates:
+        run = 1
+        for i in range(1, len(sorted_dates)):
+            d1 = datetime.date.fromisoformat(sorted_dates[i - 1])
+            d2 = datetime.date.fromisoformat(sorted_dates[i])
+            if (d2 - d1).days == 1:
+                run += 1
             else:
-                longest_streak = max(longest_streak, streak)
-                streak = 1
-        longest_streak = max(longest_streak, streak)
-        now = datetime.datetime.utcnow()
-        streak = 1
-        for i in range(len(sorted_hours)-1, 0, -1):
-            curr = datetime.datetime.strptime(sorted_hours[i],   '%Y-%m-%d %H')
-            prev = datetime.datetime.strptime(sorted_hours[i-1], '%Y-%m-%d %H')
-            if (curr - prev).total_seconds() <= 3600:
-                streak += 1
-            else:
-                break
-        last_hour = datetime.datetime.strptime(sorted_hours[-1], '%Y-%m-%d %H')
-        if (now - last_hour).total_seconds() < 7200:
-            current_streak = streak
+                longest_streak = max(longest_streak, run)
+                run = 1
+        longest_streak = max(longest_streak, run)
+        check = today
+        while check.strftime('%Y-%m-%d') in all_dates:
+            current_streak += 1
+            check -= datetime.timedelta(days=1)
+        if current_streak == 0:
+            check = today - datetime.timedelta(days=1)
+            while check.strftime('%Y-%m-%d') in all_dates:
+                current_streak += 1
+                check -= datetime.timedelta(days=1)
 
-    def entity_series(day_ctr_map, top_keys):
-        result = {}
+    try:
+        total_in_db = (db_one('SELECT COUNT(*) as c FROM songs_cache WHERE path IS NOT NULL AND path != ""') or {}).get('c', 0)
+    except Exception:
+        total_in_db = 0
+    heard_unique = len(seen_tracks)
+
+    most_active = None
+    if day_ctr:
+        best = max(day_ctr.items(), key=lambda x: x[1])
+        most_active = {'date': best[0], 'count': best[1]}
+
+    def entity_series(day_ctr_map, top_keys, key_to_label=None):
+        out = {}
         for k in top_keys:
-            result[k] = dict(day_ctr_map.get(k, {}))
-        return result
+            label = key_to_label(k) if key_to_label else k
+            out[label] = dict(day_ctr_map.get(k, {}))
+        return out
 
     top5_artists = [k for k, _ in artist_ctr.most_common(5)]
     top5_albums  = [k for k, _ in album_ctr.most_common(5)]
@@ -674,21 +1325,37 @@ def analytics():
     top5_devices = [k for k, _ in device_ctr.most_common(5)]
 
     result = {
-        'totalPlays':    total,
-        'uniqueTracks':  len(track_ctr),
-        'uniqueArtists': len(artist_ctr),
-        'uniqueAlbums':  len(album_ctr),
-        'topTracks':   [{'name': k, 'count': v} for k, v in track_ctr.most_common(10)],
-        'topArtists':  [{'name': k, 'count': v} for k, v in artist_ctr.most_common(10)],
-        'topAlbums':   [{'name': k, 'count': v} for k, v in album_ctr.most_common(10)],
-        'topDevices':  [{'name': k, 'count': v} for k, v in device_ctr.most_common(10)],
-        'playsPerDay': dict(day_ctr),
-        'currentStreak': current_streak,
-        'longestStreak': longest_streak,
+        'totalPlays':      total,
+        'uniqueTracks':    len(track_ctr),
+        'uniqueArtists':   len(artist_ctr),
+        'uniqueAlbums':    len(album_ctr),
+        'activity':        {'day': day_series, 'week': week_series, 'month': month_series, 'year': year_series},
+        'hourOfDay':       hour_of_day,
+        'dayOfWeek':       day_of_week,
+        'heatmap':         heatmap,
+        'topArtists':      top_artists,
+        'topAlbums':       top_albums,
+        'topTracks':       top_tracks,
+        'topGenres':       top_genres,
+        'topDecades':      top_decades,
+        'topDevices':      top_devices,
+        'playsPerDay':     dict(day_ctr),
+        'listeningStreak': {'current': current_streak, 'longest': longest_streak},
+        'currentStreak':   current_streak,
+        'longestStreak':   longest_streak,
+        'catalogCoverage': {
+            'heard': heard_unique, 'total': total_in_db,
+            'pct': round(heard_unique / total_in_db * 100, 2) if total_in_db else 0,
+        },
+        'repeatRate': {
+            'repeated': repeat_count, 'total': total,
+            'pct': round(repeat_count / total * 100, 1) if total else 0,
+        },
+        'mostActiveDay': most_active,
         'entity_activity': {
             'artists': entity_series(artist_day_ctr, top5_artists),
-            'albums':  entity_series(album_day_ctr,  top5_albums),
-            'tracks':  entity_series(track_day_ctr,  top5_tracks),
+            'albums':  entity_series(album_day_ctr,  top5_albums,  lambda k: k[0]),
+            'tracks':  entity_series(track_day_ctr,  top5_tracks,  lambda k: k[0]),
             'devices': entity_series(device_day_ctr, top5_devices),
         },
         'dateRange': {'from': from_str, 'to': to_str},
@@ -772,12 +1439,31 @@ def now_playing():
 
 CONFIG_PATH = os.path.join(HERE, 'config.json')
 
+_config_cache: dict = {}
+_config_mtime: float = 0.0
+
 def load_config():
+    global _config_cache, _config_mtime
     try:
-        with open(CONFIG_PATH) as f:
-            return json.load(f)
+        mtime = os.path.getmtime(CONFIG_PATH)
+        if mtime != _config_mtime:
+            with open(CONFIG_PATH) as f:
+                _config_cache = json.load(f)
+            _config_mtime = mtime
     except:
-        return {}
+        pass
+    return _config_cache
+
+
+def cfg_bool(key, default=False):
+    """Read boolean from config.json (handles true/false and legacy strings)."""
+    v = load_config().get(key, default)
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        return v.strip().lower() in ('true', '1', 'yes', 'on')
+    return default
+
 
 def get_public_url():
     return load_config().get('publicUrl', '').rstrip('/')
@@ -1050,8 +1736,7 @@ def _load_queues():
 
 def _save_queues(queues):
     try:
-        with open(QUEUES_PATH, 'w') as f:
-            json.dump(queues, f)
+        _atomic_json_write(QUEUES_PATH, queues)
     except Exception as e:
         print(f'Queue save error: {e}')
 
@@ -1067,6 +1752,17 @@ def _store_queue(tracks, shuffle=False, loop=False):
                    'loop': bool(loop), 'ts': now}
     _save_queues(queues)
     return qid
+
+def _update_queue_flags(qid, **kwargs):
+    """Update loop/shuffle/tracks on an existing queue entry."""
+    if not qid:
+        return
+    queues = _load_queues()
+    if qid not in queues:
+        return
+    for k, v in kwargs.items():
+        queues[qid][k] = v
+    _save_queues(queues)
 
 def encode_token(data):
     qid = data.get('qid')
@@ -1212,6 +1908,18 @@ def normalize_spoken_value(value):
     if not v:
         return ''
     prefixes = [
+        'alexa ask bock media to ',
+        'ask bock media to ',
+        'bock media to ',
+        'alexa ask bock media ',
+        'ask bock media ',
+        'bock media ',
+        'alexa ask my media to ',
+        'ask my media to ',
+        'my media to ',
+        'alexa ask my media ',
+        'ask my media ',
+        'my media ',
         'alexa ask our media to ',
         'ask our media to ',
         'our media to ',
@@ -1264,7 +1972,7 @@ def general_search_tracks(query, limit=300):
     if artist:
         rows = db_query(
             "SELECT path FROM songs_cache WHERE artist = ? AND path IS NOT NULL "
-            "AND SUBSTR(path,-4) = '.mp3' ORDER BY RANDOM() LIMIT ?",
+            "AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac') ORDER BY RANDOM() LIMIT ?",
             [artist, limit]
         )
         tracks = [r['path'] for r in rows]
@@ -1274,7 +1982,7 @@ def general_search_tracks(query, limit=300):
     if album:
         rows = db_query(
             "SELECT path FROM songs_cache WHERE album = ? AND path IS NOT NULL "
-            "AND SUBSTR(path,-4) = '.mp3' ORDER BY CAST(track_number AS INTEGER), title LIMIT 50",
+            "AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac') ORDER BY CAST(track_number AS INTEGER), title LIMIT 50",
             [album]
         )
         tracks = [r['path'] for r in rows]
@@ -1296,6 +2004,13 @@ from flask import g
 def _current_device_id():
     return getattr(g, 'device_id', '') or 'default'
 
+def _np_device_id():
+    """Now-playing is keyed by the raw Alexa deviceId, not merged aliases."""
+    raw = getattr(g, 'raw_device_id', '') or ''
+    if raw and raw != 'default':
+        return raw
+    return _current_device_id()
+
 def _read_all_np():
     try:
         with open(NP_STATE_PATH) as f:
@@ -1308,10 +2023,27 @@ def _read_all_np():
 
 def _write_all_np(payload):
     try:
-        with open(NP_STATE_PATH, 'w') as f:
-            json.dump(payload, f)
+        _atomic_json_write(NP_STATE_PATH, payload)
     except Exception as e:
         print(f'NP write error: {e}', flush=True)
+
+def _clear_nowplaying_on_boot():
+    """
+    Clear active now-playing flags when the service process starts.
+    After a reboot, Alexa devices do not replay PlaybackStopped events, so
+    stale `playing: true` entries can stick around indefinitely.
+    """
+    payload = _read_all_np()
+    devices = payload.get('devices', {}) if payload else {}
+    if not devices:
+        return
+    changed = False
+    for st in devices.values():
+        if st.get('playing'):
+            st['playing'] = False
+            changed = True
+    if changed:
+        _write_all_np(payload)
 
 def _prune_np(payload):
     now = time.time()
@@ -1325,37 +2057,103 @@ def _prune_np(payload):
     payload['devices'] = keep
     return payload
 
+def _canonicalize_np(payload):
+    """Collapse manually-merged alias ids onto their primary for now-playing state.
+
+    Auto-merged ids are kept separate — those merges are often wrong when
+    several Echo Shows share a bare AudioPlayer fingerprint.
+    """
+    devices = payload.get('devices', {}) if payload else {}
+    store = _load_devices()
+    out = {}
+    for did, st in devices.items():
+        entry = store.get(did) or {}
+        if entry.get('autoMerged'):
+            out[did] = st
+            continue
+        primary = _resolve_device_id(did, store) if did and did != 'default' else did
+        if not primary or primary == 'default':
+            continue
+        prev = out.get(primary)
+        if not prev:
+            out[primary] = st
+            continue
+        prev_ts = prev.get('timestamp', 0) or 0
+        cur_ts = st.get('timestamp', 0) or 0
+        # Keep the newest state for this physical device.
+        if cur_ts >= prev_ts:
+            out[primary] = st
+    payload['devices'] = out
+    return payload
+
 def write_np_state(data):
-    did = _current_device_id()
+    did = _np_device_id()
     if did == 'default':
         return
-    payload = _read_all_np() or {'devices': {}}
+    payload = _canonicalize_np(_read_all_np() or {'devices': {}})
     devices = payload.setdefault('devices', {})
     if not data:
         devices.pop(did, None)
     else:
         devices[did] = data
-    _prune_np(payload)
+    _canonicalize_np(_prune_np(payload))
     _write_all_np(payload)
 
 def read_np_state():
-    payload = _read_all_np()
+    payload = _canonicalize_np(_read_all_np())
     devices = payload.get('devices', {}) if payload else {}
-    return devices.get(_current_device_id())
+    return devices.get(_np_device_id())
 
 def remove_np_state():
-    payload = _read_all_np() or {'devices': {}}
-    payload.get('devices', {}).pop(_current_device_id(), None)
+    payload = _canonicalize_np(_read_all_np() or {'devices': {}})
+    payload.get('devices', {}).pop(_np_device_id(), None)
     _write_all_np(payload)
+
+_clear_nowplaying_on_boot()
 
 @app.route('/api/currenttrack')
 def current_track():
-    g.device_id = request.args.get('deviceId') or 'default'
+    raw = request.args.get('deviceId') or 'default'
+    g.raw_device_id = raw
+    g.device_id = _resolve_device_id(raw) if raw != 'default' else 'default'
     return jsonify(read_np_state() or {})
+
+# Stop trusting `playing: true` when:
+#   • we know the track's duration AND elapsed time exceeds duration + grace,
+#     OR
+#   • we don't know the duration AND no event has been seen for fallback secs.
+# Echo devices fail to send PlaybackStopped/Finished after power loss, network
+# drops, or skill rotation; without this guard the UI sticks on the last track.
+_NP_DURATION_GRACE_SECONDS = 60        # tolerate ~1min of drift after track end
+_NP_FALLBACK_STALE_SECONDS = 10 * 60   # used when duration is unknown
+
+def _expire_stale_playing(payload):
+    now = time.time()
+    devices = payload.get('devices', {}) or {}
+    changed = False
+    for st in devices.values():
+        if not st.get('playing'):
+            continue
+        ts = st.get('timestamp') or 0
+        if not ts:
+            continue
+        elapsed = now - ts
+        duration_ms = st.get('duration_ms') or 0
+        offset_ms = st.get('offset_ms') or 0
+        if duration_ms:
+            remaining = (duration_ms - offset_ms) / 1000.0
+            if elapsed > max(remaining, 0) + _NP_DURATION_GRACE_SECONDS:
+                st['playing'] = False
+                changed = True
+        elif elapsed > _NP_FALLBACK_STALE_SECONDS:
+            st['playing'] = False
+            changed = True
+    return changed
 
 @app.route('/api/nowplaying_devices')
 def nowplaying_devices():
-    payload = _prune_np(_read_all_np() or {'devices': {}})
+    payload = _canonicalize_np(_prune_np(_read_all_np() or {'devices': {}}))
+    _expire_stale_playing(payload)
     _write_all_np(payload)
     devices = payload.get('devices', {})
     known = set(_load_devices().keys())
@@ -1367,7 +2165,7 @@ def nowplaying_devices():
             continue
         items.append({
             'deviceId':   did,
-            'deviceName': device_friendly_name(did) or did[-6:],
+            'deviceName': _device_label(did) or did[-6:],
             'track':      st.get('track'),
             'artist':     st.get('artist'),
             'album':      st.get('album'),
@@ -1419,14 +2217,14 @@ def add_ignored(path):
 
 # ── Alexa Response Helpers ────────────────────────────────────────────────────
 
-def alexa_speak(text, end_session=True):
-    return jsonify({
-        'version': '1.0',
-        'response': {
-            'outputSpeech': {'type': 'PlainText', 'text': text},
-            'shouldEndSession': end_session
-        }
-    })
+def alexa_speak(text, end_session=True, reprompt=None):
+    resp = {
+        'outputSpeech': {'type': 'PlainText', 'text': text},
+        'shouldEndSession': end_session,
+    }
+    if reprompt and not end_session:
+        resp['reprompt'] = {'outputSpeech': {'type': 'PlainText', 'text': reprompt}}
+    return jsonify({'version': '1.0', 'response': resp})
 
 def alexa_play(stream_url, token, offset_ms=0, previous_token=None,
                play_behavior='REPLACE_ALL', speech=None,
@@ -1483,6 +2281,24 @@ def alexa_stop():
 def alexa_empty():
     return jsonify({'version': '1.0', 'response': {}})
 
+def alexa_can_fulfill(slots=None, can_fulfill='MAYBE'):
+    """Respond to Alexa's preflight capability check with a valid schema."""
+    slot_map = {}
+    for slot_name in (slots or {}).keys():
+        slot_map[slot_name] = {
+            'canUnderstand': can_fulfill,
+            'canFulfill': can_fulfill,
+        }
+    return jsonify({
+        'version': '1.0',
+        'response': {
+            'canFulfillIntent': {
+                'canFulfill': can_fulfill,
+                'slots': slot_map,
+            }
+        }
+    })
+
 # ── Play from track list ──────────────────────────────────────────────────────
 
 def track_metadata(path):
@@ -1516,23 +2332,369 @@ def start_playing(tracks, shuffle=False, speech=None, loop=False):
     return alexa_play(file_to_stream_url(first), token, speech=speech,
                       title=title, subtitle=artist, artwork_url=artwork_url)
 
+# ── Music Skill (MSP) — scaffolding ───────────────────────────────────────────
+# Account linking + directive handler stubs for migrating to Alexa's Music Skill API.
+# Custom skill at /alexa stays live as fallback during migration.
+
+import secrets as _secrets
+from urllib.parse import urlencode as _urlencode
+
+_MSP_AUTH_CODES = {}  # short-lived auth codes: code -> {client_id, redirect_uri, created}
+
+def _msp_cfg():
+    try:
+        with open(os.path.join(HERE, 'config.json')) as f:
+            return (json.load(f) or {}).get('mspOauth') or {}
+    except Exception:
+        return {}
+
+@app.route('/oauth/authorize', methods=['GET', 'POST'])
+def oauth_authorize():
+    cfg = _msp_cfg()
+    src = request.form if request.method == 'POST' else request.args
+    client_id    = src.get('client_id', '')
+    redirect_uri = src.get('redirect_uri', '')
+    state        = src.get('state', '')
+    response_type= src.get('response_type', 'code')
+
+    if response_type != 'code':
+        return Response(f'unsupported response_type: {response_type}', 400)
+    if client_id != cfg.get('clientId'):
+        return Response('invalid client_id', 400)
+    allowed = cfg.get('redirectUriPrefixes', [])
+    if not any(redirect_uri.startswith(p) for p in allowed):
+        return Response(f'redirect_uri not on allowlist: {redirect_uri}', 400)
+
+    if request.method == 'GET':
+        # Minimal one-click approval page (single-user setup)
+        html = (
+            '<!doctype html><html><body style="font-family:sans-serif;max-width:480px;margin:60px auto">'
+            '<h2>Link My Media to Alexa</h2>'
+            '<p>Authorize Alexa to access your local music library?</p>'
+            '<form method="POST" action="/oauth/authorize">'
+            f'<input type="hidden" name="client_id" value="{client_id}">'
+            f'<input type="hidden" name="redirect_uri" value="{redirect_uri}">'
+            f'<input type="hidden" name="state" value="{state}">'
+            f'<input type="hidden" name="response_type" value="{response_type}">'
+            '<button type="submit" style="padding:12px 24px;font-size:16px">Authorize</button>'
+            '</form></body></html>'
+        )
+        return Response(html, mimetype='text/html')
+
+    # POST → mint a one-time code and redirect
+    code = _secrets.token_urlsafe(32)
+    _MSP_AUTH_CODES[code] = {
+        'client_id': client_id,
+        'redirect_uri': redirect_uri,
+        'created': time.time(),
+    }
+    sep = '&' if '?' in redirect_uri else '?'
+    location = redirect_uri + sep + _urlencode({'code': code, 'state': state})
+    print(f"[MSP OAUTH] authorize granted code={code[:8]}... redirect_uri={redirect_uri}", flush=True)
+    return Response('', 302, {'Location': location})
+
+@app.route('/oauth/token', methods=['POST'])
+def oauth_token():
+    cfg = _msp_cfg()
+    grant = request.form.get('grant_type', '')
+
+    # Client auth: either Basic header or form-encoded
+    auth = request.authorization
+    client_id     = (auth.username if auth else '') or request.form.get('client_id', '')
+    client_secret = (auth.password if auth else '') or request.form.get('client_secret', '')
+    if client_id != cfg.get('clientId') or client_secret != cfg.get('clientSecret'):
+        print(f"[MSP OAUTH] token rejected: bad client creds", flush=True)
+        return jsonify({'error': 'invalid_client'}), 401
+
+    if grant == 'authorization_code':
+        code = request.form.get('code', '')
+        info = _MSP_AUTH_CODES.pop(code, None)
+        if info is None:
+            return jsonify({'error': 'invalid_grant'}), 400
+        if time.time() - info['created'] > 600:
+            return jsonify({'error': 'invalid_grant', 'error_description': 'expired'}), 400
+    elif grant == 'refresh_token':
+        if request.form.get('refresh_token', '') != cfg.get('refreshToken'):
+            return jsonify({'error': 'invalid_grant'}), 400
+    else:
+        return jsonify({'error': 'unsupported_grant_type'}), 400
+
+    print(f"[MSP OAUTH] issued token (grant={grant})", flush=True)
+    return jsonify({
+        'access_token': cfg.get('accessToken'),
+        'refresh_token': cfg.get('refreshToken'),
+        'token_type': 'bearer',
+        'expires_in': 3600 * 24 * 365,
+    })
+
+# ── MSP directive helpers (Music Skill API) ──────────────────────────────────
+_MSP_STREAM_VALID_UNTIL = '2099-01-01T00:00:00Z'  # our stream URLs never expire
+
+def _msp_event(namespace, name, header, payload):
+    return jsonify({
+        'header': {
+            'namespace': namespace,
+            'name': name,
+            'messageId': _secrets.token_hex(12),
+            'payloadVersion': header.get('payloadVersion', '1.0'),
+        },
+        'payload': payload,
+    })
+
+def _msp_error(header, etype, msg):
+    return _msp_event('Alexa.Media', 'ErrorResponse', header, {'type': etype, 'message': msg})
+
+def _msp_ok(header):
+    return _msp_event('Alexa', 'Response', header, {})
+
+def _msp_art_sources(url):
+    if not url:
+        return None
+    sizes = [('X_SMALL', 48), ('SMALL', 60), ('MEDIUM', 110), ('LARGE', 256), ('X_LARGE', 600)]
+    return {'sources': [
+        {'url': url, 'size': s, 'widthPixels': px, 'heightPixels': px} for s, px in sizes
+    ]}
+
+def _msp_name(text):
+    text = text or ''
+    return {'speech': {'type': 'PLAIN_TEXT', 'text': text.lower()}, 'display': text}
+
+def _msp_playlist_by_id(pid):
+    """Return (name, source_path) for a playlist by its stable ID, or (None, None)."""
+    if not pid:
+        return None, None
+    try:
+        tree = ET.parse(os.path.join(MMA_PATH, 'ServerPlaylists.xml'))
+        for e in tree.getroot().findall('Entry'):
+            key = e.find('Key')
+            if key is not None and (key.findtext('ID') or '') == str(pid):
+                return xml_text(key, 'Name'), xml_text(key, 'SourceID')
+    except Exception as ex:
+        print(f'[MSP] playlist_by_id error: {ex}', flush=True)
+    return None, None
+
+def _msp_item_ref(ref):
+    """Extract (item_id, queue_id, content_id) from a *ItemReference object,
+    tolerating both the wrapped ({value:{…}}) and flat shapes."""
+    if not ref:
+        return None, None, None
+    val = ref.get('value') if isinstance(ref.get('value'), dict) else ref
+    content_id = val.get('contentId') or (val.get('content') or {}).get('id')
+    return val.get('id'), val.get('queueId'), content_id
+
+def _msp_parse_idx(item_id):
+    try:
+        return int(str(item_id).split('#', 1)[1])
+    except Exception:
+        return None
+
+def _msp_build_item(queue_id, idx, tracks, content_id):
+    """Build an Alexa.Audio.PlayQueue Item for tracks[idx]."""
+    path = tracks[idx]
+    title, artist, album, art = track_metadata(path)
+    item = {
+        'id': f'{queue_id}#{idx}',
+        'queueId': queue_id,
+        'contentId': content_id,
+        'playbackInfo': {'type': 'DEFAULT'},
+        'metadata': {'type': 'TRACK', 'name': _msp_name(title)},
+        'controls': [
+            {'type': 'COMMAND', 'name': 'NEXT', 'enabled': idx < len(tracks) - 1},
+            {'type': 'COMMAND', 'name': 'PREVIOUS', 'enabled': idx > 0},
+        ],
+        'rules': {'feedbackEnabled': False},
+        'stream': {
+            'id': f'{queue_id}#{idx}',
+            'uri': file_to_stream_url(path),
+            'offsetInMilliseconds': 0,
+            'validUntil': _MSP_STREAM_VALID_UNTIL,
+        },
+    }
+    if artist:
+        item['metadata']['authors'] = [{'name': _msp_name(artist)}]
+    if album:
+        item['metadata']['album'] = {'name': _msp_name(album)}
+    art_obj = _msp_art_sources(art)
+    if art_obj:
+        item['metadata']['art'] = art_obj
+    return item
+
+def _msp_handle(namespace, name, payload, header):
+    # ── Search: resolve a spoken query (already entity-resolved by Alexa) ──
+    if namespace == 'Alexa.Media.Search' and name == 'GetPlayableContent':
+        attrs = (payload.get('selectionCriteria') or {}).get('attributes') or []
+        playlist_id = next((a.get('entityId') for a in attrs
+                            if a.get('type') == 'PLAYLIST' and a.get('entityId')), None)
+        if not playlist_id:
+            return _msp_error(header, 'CONTENT_NOT_FOUND', 'No playlist in request')
+        pname, _ = _msp_playlist_by_id(playlist_id)
+        if not pname:
+            return _msp_error(header, 'CONTENT_NOT_FOUND', f'Playlist {playlist_id} not found')
+        return _msp_event('Alexa.Media.Search', 'GetPlayableContent.Response', header, {
+            'content': {'id': playlist_id,
+                        'metadata': {'type': 'PLAYLIST', 'name': _msp_name(pname)}},
+        })
+
+    # ── Playback: build a queue from the resolved contentId (= playlist id) ──
+    if namespace == 'Alexa.Media.Playback' and name == 'Initiate':
+        content_id = payload.get('contentId')
+        modes = payload.get('playbackModes') or {}
+        shuffle, loop = bool(modes.get('shuffle')), bool(modes.get('loop'))
+        pname, source = _msp_playlist_by_id(content_id)
+        tracks = parse_m3u(source) if source and os.path.isfile(source) else []
+        tracks = normalize_track_queue(tracks)
+        if not tracks:
+            return _msp_error(header, 'CONTENT_NOT_FOUND', 'Playlist has no playable tracks')
+        if shuffle:
+            random.shuffle(tracks)
+        qid = _store_queue(tracks, shuffle, loop)
+        return _msp_event('Alexa.Media.Playback', 'Initiate.Response', header, {
+            'playbackMethod': {
+                'type': 'ALEXA_AUDIO_PLAYER_QUEUE',
+                'id': qid,
+                'controls': [
+                    {'type': 'TOGGLE', 'name': 'SHUFFLE', 'enabled': True, 'selected': shuffle},
+                    {'type': 'TOGGLE', 'name': 'LOOP', 'enabled': True, 'selected': loop},
+                ],
+                'rules': {'feedback': {'type': 'PREFERENCE', 'enabled': False}},
+                'firstItem': _msp_build_item(qid, 0, tracks, content_id),
+            },
+        })
+
+    # ── Queue navigation ──
+    if namespace == 'Alexa.Audio.PlayQueue' and name in ('GetNextItem', 'GetPreviousItem'):
+        item_id, queue_id, content_id = _msp_item_ref(payload.get('currentItemReference'))
+        q = _load_queues().get(queue_id)
+        if not q:
+            return _msp_error(header, 'ITEM_NOT_FOUND', 'Queue not found')
+        tracks, loop = q.get('tracks', []), q.get('loop', False)
+        idx = _msp_parse_idx(item_id)
+        if idx is None:
+            return _msp_error(header, 'ITEM_NOT_FOUND', 'Bad item reference')
+        nxt = idx + 1 if name == 'GetNextItem' else idx - 1
+        if nxt >= len(tracks):
+            nxt = 0 if (loop and tracks) else None
+        elif nxt < 0:
+            nxt = len(tracks) - 1 if (loop and tracks) else None
+        if nxt is None:
+            return _msp_event('Alexa.Audio.PlayQueue', f'{name}.Response', header,
+                              {'isQueueFinished': True, 'item': None})
+        return _msp_event('Alexa.Audio.PlayQueue', f'{name}.Response', header,
+                          {'isQueueFinished': False,
+                           'item': _msp_build_item(queue_id, nxt, tracks, content_id)})
+
+    # ── Refresh an expired stream URI ──
+    if namespace == 'Alexa.Media.PlayQueue' and name == 'GetItem':
+        item_id, queue_id, content_id = _msp_item_ref(payload.get('targetItemReference'))
+        q = _load_queues().get(queue_id)
+        idx = _msp_parse_idx(item_id)
+        if not q or idx is None or idx >= len(q.get('tracks', [])):
+            return _msp_error(header, 'ITEM_NOT_FOUND', 'Item not found')
+        return _msp_event('Alexa.Audio.PlayQueue', 'GetItem.Response', header,
+                          {'item': _msp_build_item(queue_id, idx, q['tracks'], content_id)})
+
+    # ── Mode toggles ──
+    if namespace == 'Alexa.Media.PlayQueue' and name in ('SetShuffle', 'SetLoop'):
+        _, queue_id, _ = _msp_item_ref(payload.get('currentItemReference'))
+        enable = bool(payload.get('enable'))
+        if queue_id:
+            if name == 'SetShuffle':
+                q = _load_queues().get(queue_id)
+                if q and enable:
+                    tracks = list(q.get('tracks', []))
+                    random.shuffle(tracks)
+                    _update_queue_flags(queue_id, tracks=tracks, shuffle=True)
+                else:
+                    _update_queue_flags(queue_id, shuffle=enable)
+            else:
+                _update_queue_flags(queue_id, loop=enable)
+        return _msp_ok(header)
+
+    return _msp_error(header, 'INTERNAL_ERROR', f'Unsupported directive {namespace}.{name}')
+
+@app.route('/music', methods=['POST'])
+def music_skill():
+    cfg = _msp_cfg()
+    body = request.get_json(force=True) or {}
+    # Music Skill directives arrive top-level; tolerate a {"directive": …} wrapper too.
+    directive = body.get('directive') if isinstance(body.get('directive'), dict) else body
+    header = directive.get('header', {}) or {}
+    payload = directive.get('payload', {}) or {}
+
+    # The linked-account bearer arrives either as an Authorization header or, when
+    # Alexa calls our HTTPS endpoint directly, in requestContext.user.accessToken.
+    auth_header = request.headers.get('Authorization', '')
+    token = auth_header[7:].strip() if auth_header.startswith('Bearer ') else ''
+    if not token:
+        token = ((payload.get('requestContext') or {}).get('user') or {}).get('accessToken', '') or ''
+    if token != cfg.get('accessToken'):
+        nm = f"{header.get('namespace','')}.{header.get('name','')}"
+        print(f"[MSP REJECT] bearer mismatch dir={nm!r} hdr_auth={bool(auth_header)} "
+              f"tok_len={len(token)} body={json.dumps(body)[:500]}", flush=True)
+        return Response('Forbidden', 403)
+
+    namespace = header.get('namespace', '')
+    name = header.get('name', '')
+
+    print(f"[MSP] {namespace}.{name}", flush=True)
+    if namespace == 'Alexa.Media.Search':
+        attrs = (payload.get('selectionCriteria') or {}).get('attributes')
+        print(f"[MSP RESOLVED] attributes={json.dumps(attrs)}", flush=True)
+    print(f"[MSP DEBUG] payload={json.dumps(payload)[:2000]}", flush=True)
+
+    try:
+        return _msp_handle(namespace, name, payload, header)
+    except Exception as ex:
+        import traceback
+        print(f"[MSP ERROR] {namespace}.{name}: {ex}\n{traceback.format_exc()}", flush=True)
+        return _msp_error(header, 'INTERNAL_ERROR', str(ex))
+
 # ── Alexa Skill Endpoint ──────────────────────────────────────────────────────
 
 @app.route('/alexa', methods=['POST'])
 def alexa_skill():
+    raw_body = request.get_data(cache=True)
     body = request.get_json(force=True) or {}
+
+    sess_app = ((body.get('session') or {}).get('application') or {}).get('applicationId', '') or ''
+    ctx_app  = (((body.get('context') or {}).get('System') or {}).get('application') or {}).get('applicationId', '') or ''
+    presented_app_id = sess_app or ctx_app
+    if presented_app_id and presented_app_id != EXPECTED_SKILL_APP_ID:
+        print(f"[ALEXA REJECT] applicationId mismatch: {presented_app_id!r}", flush=True)
+        return Response('Forbidden: applicationId mismatch', 403,
+                        {'Content-Type': 'text/plain; charset=utf-8'})
+
+    if _is_tunnel_request():
+        sig_err = _verify_alexa_signature(raw_body, body)
+        if sig_err:
+            cf_ip = request.headers.get('Cf-Connecting-Ip', '')
+            cf_ray = request.headers.get('Cf-Ray', '')
+            ua = request.headers.get('User-Agent', '')
+            cert_url = request.headers.get('SignatureCertChainUrl', '')
+            sig_present = bool(request.headers.get('Signature', ''))
+            print(f"[ALEXA REJECT] {sig_err} cf_ip={cf_ip} cf_ray={cf_ray} ua={ua!r} cert_url={cert_url!r} sig_present={sig_present}", flush=True)
+            return Response(f'Forbidden: {sig_err}', 403,
+                            {'Content-Type': 'text/plain; charset=utf-8'})
+
     req  = body.get('request', {})
     rtype = req.get('type', '')
     ctx_device = ((body.get('context', {}) or {}).get('System', {}) or {}).get('device', {}) or {}
-    g.device_id = ctx_device.get('deviceId') or 'default'
-    if g.device_id and g.device_id != 'default':
-        register_device(g.device_id)
+    raw_device_id = ctx_device.get('deviceId') or 'default'
+    supported_ifaces = ctx_device.get('supportedInterfaces') or {}
+    if raw_device_id and raw_device_id != 'default':
+        register_device(raw_device_id, supported_interfaces=supported_ifaces)
+    g.raw_device_id = raw_device_id if raw_device_id != 'default' else 'default'
+    # Resolve through alias chain so merged/rotated ids land on their primary
+    g.device_id = _resolve_device_id(raw_device_id) if raw_device_id != 'default' else 'default'
     intent_name = (req.get('intent', {}) or {}).get('name', '') if rtype == 'IntentRequest' else ''
     error_summary = ''
     if rtype == 'AudioPlayer.PlaybackFailed':
         err = req.get('error', {}) or {}
         error_summary = f" error_type={err.get('type','')} error_message={err.get('message','')}"
-    print(f"[ALEXA] type={rtype} intent={intent_name} device={g.device_id[-12:]}{error_summary}", flush=True)
+    raw_suffix = raw_device_id[-12:] if raw_device_id and raw_device_id != 'default' else 'default'
+    resolved_suffix = g.device_id[-12:] if g.device_id != 'default' else 'default'
+    dev_note = f" raw={raw_suffix}" if raw_suffix != resolved_suffix else ''
+    print(f"[ALEXA] type={rtype} intent={intent_name} device={resolved_suffix}{dev_note}{error_summary}", flush=True)
 
     # ── AudioPlayer events ─────────────────────────────────────────────────
 
@@ -1544,27 +2706,29 @@ def alexa_skill():
         if 0 <= idx < len(tracks):
             path = tracks[idx]
             fname = os.path.splitext(os.path.basename(path))[0]
-            row = db_one('SELECT title, artist, album FROM songs_cache WHERE path = ?', [path]) or {}
+            row = db_one('SELECT title, artist, album, duration_seconds FROM songs_cache WHERE path = ?', [path]) or {}
             track_title = row.get('title', fname) or fname
             artist = row.get('artist')
             album = row.get('album')
+            duration_s = row.get('duration_seconds') or 0
             write_np_state({
-                'track':     track_title,
-                'artist':    artist,
-                'album':     album,
-                'filepath':  path,
-                'token':     token,
-                'playing':   True,
-                'timestamp': time.time(),
+                'track':       track_title,
+                'artist':      artist,
+                'album':       album,
+                'filepath':    path,
+                'token':       token,
+                'playing':     True,
+                'timestamp':   time.time(),
+                'duration_ms': int(duration_s * 1000) if duration_s else 0,
             })
-            device_label = device_friendly_name(g.device_id) or (g.device_id[-12:] if g.device_id else 'default')
+            device_label = _device_label(_np_device_id())
             append_stream_history({
                 'track':    track_title,
                 'artist':   artist,
                 'album':    album,
                 'filepath': path,
                 'device':   device_label,
-                'deviceId': g.device_id,
+                'deviceId': _np_device_id(),
                 'date':     datetime.datetime.now().isoformat(timespec='seconds'),
             })
         return alexa_empty()
@@ -1633,9 +2797,23 @@ def alexa_skill():
                  'PlaybackController.PreviousCommandIssued'):
         return alexa_empty()
 
+    if rtype == 'CanFulfillIntentRequest':
+        intent_slots = (req.get('intent', {}) or {}).get('slots', {}) or {}
+        return alexa_can_fulfill(intent_slots, can_fulfill='MAYBE')
+
     # ── Launch ─────────────────────────────────────────────────────────────
 
     if rtype == 'LaunchRequest':
+        # Two-step flow: avoids Alexa routing one-shot "mix/shuffle … yacht rock" to Spotify.
+        # Enable in Settings → Public URL card or set launchPlaylistPrompt in config.json.
+        if cfg_bool('launchPlaylistPrompt', False):
+            return alexa_speak(
+                "My Media is listening. Say a playlist name from your library, "
+                "or say mix, then the name. For example: yacht rock. "
+                "Do not include Spotify — this plays only your server.",
+                end_session=False,
+                reprompt="Say a playlist name, or mix, then the name.",
+            )
         default_pl = get_pref('DefaultPlaylist', '').strip()
         if default_pl:
             name, source = fuzzy_find_playlist(default_pl)
@@ -1646,7 +2824,7 @@ def alexa_skill():
                     return start_playing(tracks, shuffle=do_shuffle,
                                         speech=f"Playing {name}.")
         return alexa_speak(
-            "Welcome to Our Media. Say play followed by a playlist name, "
+            "Welcome to My Media. Say play followed by a playlist name, "
             "play music by an artist, or play an album name.",
             end_session=False
         )
@@ -1693,12 +2871,20 @@ def alexa_skill():
             query = sv('ArtistName')
             if not query:
                 return alexa_speak("Which artist would you like to play?", end_session=False)
+            if 'playlist' in query.lower():
+                pl_q = re.sub(r'\s+playlist$', '', query, flags=re.IGNORECASE).strip()
+                pl_q = re.sub(r'^(?:play\s+)?(?:my\s+)?(?:the\s+)?playlist\s+', '', pl_q, flags=re.IGNORECASE).strip() or query
+                name, source = fuzzy_find_playlist(pl_q)
+                if name and source and os.path.isfile(source):
+                    tracks = parse_m3u(source)
+                    if tracks:
+                        return start_playing(tracks, speech=f"Playing {name}.")
             artist = fuzzy_find_artist(query)
             if not artist:
                 return alexa_speak(f"Sorry, I couldn't find any music by {query}.")
             rows = db_query(
                 "SELECT path FROM songs_cache WHERE artist = ? AND path IS NOT NULL "
-                "AND SUBSTR(path,-4) = '.mp3' ORDER BY RANDOM() LIMIT 300",
+                "AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac') ORDER BY RANDOM() LIMIT 300",
                 [artist]
             )
             tracks = [r['path'] for r in rows]
@@ -1711,12 +2897,20 @@ def alexa_skill():
             query = sv('ArtistName')
             if not query:
                 return alexa_speak("Which artist would you like to shuffle?", end_session=False)
+            if 'playlist' in query.lower():
+                pl_q = re.sub(r'\s+playlist$', '', query, flags=re.IGNORECASE).strip()
+                pl_q = re.sub(r'^(?:shuffle\s+)?(?:play\s+)?(?:my\s+)?(?:the\s+)?playlist\s+', '', pl_q, flags=re.IGNORECASE).strip() or query
+                name, source = fuzzy_find_playlist(pl_q)
+                if name and source and os.path.isfile(source):
+                    tracks = parse_m3u(source)
+                    if tracks:
+                        return start_playing(tracks, shuffle=True, speech=f"Shuffling {name}.")
             artist = fuzzy_find_artist(query)
             if not artist:
                 return alexa_speak(f"Sorry, I couldn't find any music by {query}.")
             rows = db_query(
                 "SELECT path FROM songs_cache WHERE artist = ? AND path IS NOT NULL "
-                "AND SUBSTR(path,-4) = '.mp3' ORDER BY RANDOM() LIMIT 300",
+                "AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac') ORDER BY RANDOM() LIMIT 300",
                 [artist]
             )
             tracks = [r['path'] for r in rows]
@@ -1734,7 +2928,7 @@ def alexa_skill():
                 return alexa_speak(f"Sorry, I couldn't find the album {query}.")
             rows = db_query(
                 "SELECT path FROM songs_cache WHERE album = ? AND path IS NOT NULL "
-                "AND SUBSTR(path,-4) = '.mp3' ORDER BY CAST(track_number AS INTEGER), title LIMIT 50",
+                "AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac') ORDER BY CAST(track_number AS INTEGER), title LIMIT 50",
                 [album]
             )
             tracks = [r['path'] for r in rows]
@@ -1752,7 +2946,7 @@ def alexa_skill():
                 return alexa_speak(f"Sorry, I couldn't find the album {query}.")
             rows = db_query(
                 "SELECT path FROM songs_cache WHERE album = ? AND path IS NOT NULL "
-                "AND SUBSTR(path,-4) = '.mp3' ORDER BY RANDOM() LIMIT 50",
+                "AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac') ORDER BY RANDOM() LIMIT 50",
                 [album]
             )
             tracks = [r['path'] for r in rows]
@@ -1808,7 +3002,7 @@ def alexa_skill():
             if genre:
                 rows = db_query(
                     "SELECT path FROM songs_cache WHERE genre = ? AND path IS NOT NULL "
-                    "AND SUBSTR(path,-4) = '.mp3' ORDER BY RANDOM() LIMIT 300",
+                    "AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac') ORDER BY RANDOM() LIMIT 300",
                     [genre]
                 )
                 tracks = [r['path'] for r in rows]
@@ -1831,7 +3025,7 @@ def alexa_skill():
             if genre:
                 rows = db_query(
                     "SELECT path FROM songs_cache WHERE genre = ? AND path IS NOT NULL "
-                    "AND SUBSTR(path,-4) = '.mp3' ORDER BY RANDOM() LIMIT 300",
+                    "AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac') ORDER BY RANDOM() LIMIT 300",
                     [genre]
                 )
                 tracks = [r['path'] for r in rows]
@@ -1866,7 +3060,7 @@ def alexa_skill():
                 if album:
                     rows = db_query(
                         "SELECT path FROM songs_cache WHERE album = ? AND path IS NOT NULL "
-                        "AND SUBSTR(path,-4) = '.mp3' ORDER BY CAST(track_number AS INTEGER), title LIMIT 100",
+                        "AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac') ORDER BY CAST(track_number AS INTEGER), title LIMIT 100",
                         [album]
                     )
                     tracks = [r['path'] for r in rows]
@@ -1884,7 +3078,7 @@ def alexa_skill():
             if not sel:
                 return alexa_speak(
                     "Nothing is currently selected in the console. "
-                    "Open the ourMedia web app and browse to a song, album, or artist first."
+                    "Open the My Media web app and browse to a song, album, or artist first."
                 )
             sel_type = sel.get('type', '')
             query    = sel.get('name', '')
@@ -1895,7 +3089,7 @@ def alexa_skill():
             elif sel_type == 'album':
                 rows = db_query(
                     "SELECT path FROM songs_cache WHERE album = ? AND path IS NOT NULL "
-                    "AND SUBSTR(path,-4) = '.mp3' ORDER BY CAST(track_number AS INTEGER), title LIMIT 50",
+                    "AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac') ORDER BY CAST(track_number AS INTEGER), title LIMIT 50",
                     [query]
                 )
                 tracks = [r['path'] for r in rows]
@@ -1904,7 +3098,7 @@ def alexa_skill():
             elif sel_type == 'artist':
                 rows = db_query(
                     "SELECT path FROM songs_cache WHERE artist = ? AND path IS NOT NULL "
-                    "AND SUBSTR(path,-4) = '.mp3' ORDER BY RANDOM() LIMIT 300",
+                    "AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac') ORDER BY RANDOM() LIMIT 300",
                     [query]
                 )
                 tracks = [r['path'] for r in rows]
@@ -1974,21 +3168,21 @@ def alexa_skill():
 
         # ── Server management ──────────────────────────────────────────────
         elif iname == 'ListServersIntent':
-            return alexa_speak("You have one server: ourMedia.", end_session=False)
+            return alexa_speak("You have one server: My Media.", end_session=False)
 
         elif iname == 'SwitchServersIntent':
             return alexa_speak(
-                "You only have one server configured: ourMedia. "
-                "Add additional servers in the ourMedia console to switch between them.",
+                "You only have one server configured: My Media. "
+                "Add additional servers in the My Media console to switch between them.",
                 end_session=False
             )
 
         elif iname == 'CurrentServerIntent':
-            return alexa_speak("Your current server is ourMedia.", end_session=False)
+            return alexa_speak("Your current server is My Media.", end_session=False)
 
         elif iname == 'ListInvitationsIntent':
             return alexa_speak(
-                "Family share invitations are managed in the ourMedia console under Settings.",
+                "Family share invitations are managed in the My Media console under Settings.",
                 end_session=False
             )
 
@@ -2050,18 +3244,14 @@ def alexa_skill():
             state = read_np_state() or {}
             if state.get('token'):
                 data = decode_token(state['token'])
-                data['loop'] = True
-                state['token'] = encode_token(data)
-                write_np_state(state)
+                _update_queue_flags(data.get('qid'), loop=True)
             return alexa_speak("Loop mode on.")
 
         elif iname == 'AMAZON.LoopOffIntent':
             state = read_np_state() or {}
             if state.get('token'):
                 data = decode_token(state['token'])
-                data['loop'] = False
-                state['token'] = encode_token(data)
-                write_np_state(state)
+                _update_queue_flags(data.get('qid'), loop=False)
             return alexa_speak("Loop mode off.")
 
         # ── Shuffle (built-in Alexa intents as aliases) ────────────────────
@@ -2070,38 +3260,45 @@ def alexa_skill():
             token = state.get('token', '')
             if token:
                 data = decode_token(token)
-                data['shuffle'] = True
-                # Reshuffle remaining tracks from current position
+                # Reshuffle remaining tracks from current position and persist
                 idx = data.get('idx', 0)
-                remaining = data['tracks'][idx:]
+                remaining = data.get('tracks', [])[idx:]
                 random.shuffle(remaining)
-                data['tracks'] = data['tracks'][:idx] + remaining
-                state['token'] = encode_token(data)
-                write_np_state(state)
+                new_tracks = data.get('tracks', [])[:idx] + remaining
+                _update_queue_flags(data.get('qid'), shuffle=True, tracks=new_tracks)
                 return alexa_speak("Shuffle on.")
             return alexa_speak("Nothing is playing to shuffle.")
 
         elif iname == 'AMAZON.ShuffleOffIntent':
-            return alexa_speak("Shuffle off. Tracks will continue in their original order.")
+            state = read_np_state() or {}
+            if state.get('token'):
+                data = decode_token(state['token'])
+                _update_queue_flags(data.get('qid'), shuffle=False)
+            return alexa_speak("Shuffle off.")
 
         # ── Help ───────────────────────────────────────────────────────────
         elif iname == 'AMAZON.HelpIntent':
             return alexa_speak(
                 "You can say: play my Yacht Rock playlist, play the album Rumours, "
                 "play music by Dave Matthews, play the song Hotel California, "
-                "play jazz music, shuffle the album Kind of Blue, "
-                "what's playing, next, previous, pause, resume, or stop.",
+                "play jazz music, or mix the album Kind of Blue. "
+                "Tip: say mix instead of shuffle to avoid Spotify or Amazon Music "
+                "intercepting your request. Or open My Media first, then say the playlist name. "
+                "You can also say: what's playing, next, previous, pause, resume, or stop.",
                 end_session=False
             )
 
         return alexa_speak("I didn't understand that. Try saying play followed by a playlist, artist, or album name.")
 
-    return alexa_empty()
+    return alexa_speak(
+        "Sorry, I couldn't process that Alexa request. Please try again.",
+        end_session=True
+    )
 
 # ── Run ──────────────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
     apply_logging()
     port = int(os.environ.get('PORT', 3001))
-    print(f'ourMedia running at http://localhost:{port}')
+    print(f'My Media running at http://localhost:{port}')
     app.run(host='0.0.0.0', port=port, debug=False)

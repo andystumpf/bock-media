@@ -1,7 +1,7 @@
 {
   "interactionModel": {
     "languageModel": {
-      "invocationName": "our media",
+      "invocationName": "bock media",
       "intents": [
         {
           "name": "PlayPlaylistIntent",
@@ -9,16 +9,30 @@
             { "name": "PlaylistName", "type": "AMAZON.SearchQuery" }
           ],
           "samples": [
-            "play the playlist {PlaylistName}",
-            "start playing {PlaylistName}",
-            "start {PlaylistName}",
-            "put on {PlaylistName}",
-            "play {PlaylistName} playlist",
             "play my {PlaylistName} playlist",
+            "play playlist {PlaylistName}",
+            "play the playlist {PlaylistName}",
+            "play the {PlaylistName} playlist",
+            "play {PlaylistName} playlist",
             "play my {PlaylistName} stream",
             "play my {PlaylistName} internet stream",
             "play my {PlaylistName} internet playlist",
-            "play {PlaylistName} internet radio station"
+            "play {PlaylistName} internet radio station",
+            "play the {PlaylistName} internet radio station",
+            "play my {PlaylistName} radio station",
+            "play the {PlaylistName} radio station",
+            "queue {PlaylistName}",
+            "queue the {PlaylistName} playlist",
+            "queue my {PlaylistName} playlist",
+            "start {PlaylistName}",
+            "start the {PlaylistName} playlist",
+            "start my {PlaylistName} playlist",
+            "put on {PlaylistName}",
+            "put on the {PlaylistName} playlist",
+            "put on my {PlaylistName} playlist",
+            "load {PlaylistName}",
+            "load the {PlaylistName} playlist",
+            "load my {PlaylistName} playlist"
           ]
         },
         {
@@ -27,10 +41,18 @@
             { "name": "PlaylistName", "type": "AMAZON.SearchQuery" }
           ],
           "samples": [
-            "shuffle {PlaylistName}",
             "shuffle my {PlaylistName} playlist",
             "shuffle the playlist {PlaylistName}",
-            "shuffle {PlaylistName} playlist"
+            "shuffle the {PlaylistName} playlist",
+            "shuffle playlist {PlaylistName}",
+            "shuffle {PlaylistName} playlist",
+            "mix my {PlaylistName} playlist",
+            "mix the {PlaylistName} playlist",
+            "mix the playlist {PlaylistName}",
+            "mix {PlaylistName} playlist",
+            "randomize the {PlaylistName} playlist",
+            "randomize my {PlaylistName} playlist",
+            "randomize {PlaylistName} playlist"
           ]
         },
         {
@@ -42,6 +64,7 @@
             "play music by {ArtistName}",
             "play songs by {ArtistName}",
             "play some {ArtistName}",
+            "play {ArtistName}",
             "play artist {ArtistName}",
             "play the artist {ArtistName}"
           ]
@@ -55,8 +78,9 @@
             "shuffle music by {ArtistName}",
             "shuffle songs by {ArtistName}",
             "shuffle {ArtistName}",
-            "shuffle {ArtistName} music",
-            "shuffle some {ArtistName}"
+            "shuffle some {ArtistName}",
+            "shuffle the artist {ArtistName}",
+            "shuffle artist {ArtistName}"
           ]
         },
         {
@@ -67,7 +91,10 @@
           "samples": [
             "play the album {AlbumName}",
             "play album {AlbumName}",
-            "play {AlbumName} album"
+            "play {AlbumName} album",
+            "play music from the album {AlbumName}",
+            "play songs from the album {AlbumName}",
+            "play the album called {AlbumName}"
           ]
         },
         {
@@ -79,7 +106,9 @@
             "shuffle the album {AlbumName}",
             "shuffle {AlbumName} the album",
             "shuffle album {AlbumName}",
-            "shuffle {AlbumName} album"
+            "shuffle {AlbumName} album",
+            "shuffle music from the album {AlbumName}",
+            "shuffle songs from the album {AlbumName}"
           ]
         },
         {
@@ -89,7 +118,10 @@
           ],
           "samples": [
             "play the track {TrackName}",
-            "play the song {TrackName}"
+            "play the song {TrackName}",
+            "play track {TrackName}",
+            "play song {TrackName}",
+            "play {TrackName}"
           ]
         },
         {
@@ -101,40 +133,36 @@
           "samples": [
             "play {TrackName} by {ArtistName}",
             "play the track {TrackName} by {ArtistName}",
-            "play the song {TrackName} by {ArtistName}"
-          ]
-        },
-        {
-          "name": "PlayGeneralIntent",
-          "slots": [
-            { "name": "Query", "type": "AMAZON.SearchQuery" }
-          ],
-          "samples": [
-            "play {Query}"
+            "play the song {TrackName} by {ArtistName}",
+            "play {TrackName} the song by {ArtistName}",
+            "play {TrackName} the track by {ArtistName}"
           ]
         },
         {
           "name": "PlayGenreIntent",
           "slots": [
-            { "name": "Genre", "type": "AMAZON.SearchQuery" }
+            { "name": "GenreName", "type": "AMAZON.Genre" }
           ],
           "samples": [
-            "play {Genre} music",
-            "play some {Genre} music",
-            "play {Genre} songs",
-            "play some {Genre} songs"
+            "play {GenreName} music",
+            "play some {GenreName} music",
+            "play some {GenreName}",
+            "play {GenreName} songs",
+            "play the genre {GenreName}",
+            "play genre {GenreName}"
           ]
         },
         {
           "name": "ShuffleGenreIntent",
           "slots": [
-            { "name": "Genre", "type": "AMAZON.SearchQuery" }
+            { "name": "GenreName", "type": "AMAZON.Genre" }
           ],
           "samples": [
-            "shuffle {Genre} music",
-            "shuffle some {Genre} music",
-            "shuffle {Genre} songs",
-            "shuffle some {Genre} songs"
+            "shuffle {GenreName} music",
+            "shuffle some {GenreName} music",
+            "shuffle some {GenreName}",
+            "shuffle {GenreName} songs",
+            "shuffle the genre {GenreName}"
           ]
         },
         {
@@ -146,7 +174,9 @@
             "read {BookName}",
             "read the book {BookName}",
             "read the audio book {BookName}",
-            "play the audio book {BookName}"
+            "play the audio book {BookName}",
+            "start reading {BookName}",
+            "begin reading {BookName}"
           ]
         },
         {
@@ -160,7 +190,9 @@
             "play this album",
             "play this artist",
             "play what's showing",
-            "play what's on my screen"
+            "play what's on my screen",
+            "play the selection",
+            "play current selection"
           ]
         },
         {
@@ -173,6 +205,9 @@
             "what is this track",
             "what song is this",
             "what's this song",
+            "what's the name of this song",
+            "who's singing",
+            "who is singing",
             "what am I listening to"
           ]
         },
@@ -184,7 +219,10 @@
           "samples": [
             "add this to my {PlaylistName} playlist",
             "add this song to my {PlaylistName} playlist",
-            "add this track to my {PlaylistName} playlist"
+            "add this track to my {PlaylistName} playlist",
+            "add this to the {PlaylistName} playlist",
+            "add this song to the {PlaylistName} playlist",
+            "add this track to the {PlaylistName} playlist"
           ]
         },
         {
@@ -196,7 +234,9 @@
             "not play this again",
             "don't play this again",
             "never play this again",
-            "skip this song"
+            "skip this song",
+            "forget this song",
+            "forget this track"
           ]
         },
         {
@@ -205,7 +245,9 @@
           "samples": [
             "list my servers",
             "show my servers",
-            "what servers do I have"
+            "what servers do I have",
+            "what servers can I use",
+            "tell me my servers"
           ]
         },
         {
@@ -214,6 +256,8 @@
           "samples": [
             "switch servers",
             "change servers",
+            "switch server",
+            "change server",
             "switch to a different server"
           ]
         },
@@ -222,8 +266,11 @@
           "slots": [],
           "samples": [
             "what is my current server",
+            "what's my current server",
             "which server am I using",
-            "what server am I on"
+            "what server am I on",
+            "which server is active",
+            "what is my active server"
           ]
         },
         {
@@ -232,7 +279,9 @@
           "samples": [
             "list my invitations",
             "show my invitations",
-            "do I have any invitations"
+            "do I have any invitations",
+            "list my invites",
+            "any pending invitations"
           ]
         },
         { "name": "AMAZON.StopIntent",    "samples": [] },

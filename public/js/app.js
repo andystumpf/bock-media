@@ -1,4 +1,4 @@
-// ourMedia frontend app
+// My Media frontend app
 
 const API = (path) => fetch(path).then(r => r.json()).catch(() => null);
 const POST = (path, body) => fetch(path, {
@@ -91,17 +91,17 @@ function searchInput(placeholder, id) {
 
 // ── Dashboard ────────────────────────────────────────────────────────────────
 const VOICE_SUGGESTIONS = [
-  'Alexa, ask Our Media to play music by Brandi Carlile',
-  'Alexa, ask Our Media to play my [playlist] Playlist',
-  'Alexa, ask Our Media to play some Virginia Indie music',
-  'Alexa, ask Our Media to play the album Christmas Is Here',
-  'Alexa, ask Our Media to play the song Hands First by Headlund',
-  'Alexa, ask Our Media to turn shuffling on/off',
-  'Alexa, ask Our Media to turn loop mode on/off',
-  "Alexa, ask Our Media what's playing",
-  'Alexa, ask Our Media which is my current server',
-  'Alexa, ask Our Media to switch servers',
-  'Alexa, ask Our Media to list my invitations',
+  'Alexa, ask My Media to play music by Brandi Carlile',
+  'Alexa, ask My Media to play my [playlist] Playlist',
+  'Alexa, ask My Media to play some Virginia Indie music',
+  'Alexa, ask My Media to play the album Christmas Is Here',
+  'Alexa, ask My Media to play the song Hands First by Headlund',
+  'Alexa, ask My Media to turn shuffling on/off',
+  'Alexa, ask My Media to turn loop mode on/off',
+  "Alexa, ask My Media what's playing",
+  'Alexa, ask My Media which is my current server',
+  'Alexa, ask My Media to switch servers',
+  'Alexa, ask My Media to list my invitations',
   'Alexa, previous / go back',
   'Alexa, skip / next',
   'Alexa, stop',
@@ -328,7 +328,7 @@ async function loadPlaylists() {
       ? `<span class="source-path" title="${escHtml(p.source)}">${escHtml(p.source)}</span>`
       : '<span class="text-muted">—</span>';
     const typeBadge = isMyMedia
-      ? '<span class="badge orange">Our Media</span>'
+      ? '<span class="badge orange">My Media</span>'
       : '<span class="badge">File</span>';
     const editBtn = p.id
       ? `<button class="edit-btn" onclick="startEditPlaylist(${i})" title="Rename"><i class="fa fa-pencil"></i></button>`
@@ -347,7 +347,7 @@ async function loadPlaylists() {
   document.getElementById('page-title').textContent = 'Playlists';
   document.getElementById('main-content').innerHTML = `
     <div class="page-desc">
-      This page shows playlists that have been indexed by ourMedia. File based playlists (M3U, M3U8, PLS) are automatically indexed if ourMedia finds them during a scan of a Watch Folder. Use the pencil icon to rename a playlist — Alexa will recognize the new name immediately.
+      This page shows playlists that have been indexed by My Media. File based playlists (M3U, M3U8, PLS) are automatically indexed if My Media finds them during a scan of a Watch Folder. Use the pencil icon to rename a playlist — Alexa will recognize the new name immediately.
     </div>
     <div class="card">
       <div class="card-header">
@@ -574,7 +574,9 @@ register('watchfolders', async () => {
         ${f.label ? `<span class="folder-label">${escHtml(f.label)}</span>` : ''}
         <div class="folder-path">${escHtml(f.path)}</div>
         <div class="folder-meta">
-          <span><i class="fa fa-music"></i> ${fmtNum(f.identifiedFiles)} identified</span>
+          ${f.identifiedFiles > 0 ? `<span><i class="fa fa-music"></i> ${fmtNum(f.identifiedFiles)} tracks</span>` : ''}
+          ${f.playlists > 0 ? `<span><i class="fa fa-list"></i> ${fmtNum(f.playlists)} playlists</span>` : ''}
+          ${f.identifiedFiles === 0 && f.playlists === 0 ? `<span style="color:#999"><i class="fa fa-music"></i> 0 identified</span>` : ''}
           <span><i class="fa fa-layer-group"></i> ${escHtml(f.type)}</span>
           ${f.errors > 0 ? `<span style="color:#e44"><i class="fa fa-triangle-exclamation"></i> ${f.errors} errors</span>` : ''}
         </div>
@@ -597,8 +599,12 @@ register('watchfolders', async () => {
 // ── Devices ──────────────────────────────────────────────────────────────────
 register('devices', async () => {
   loading();
-  const devices = await API('/api/devices') || [];
-  window._devices = devices;
+  const [devices, mc] = await Promise.all([
+    API('/api/devices'),
+    API('/api/devices/merge_candidates'),
+  ]);
+  window._devices = devices || [];
+  window._mergeCandidates = (mc && mc.candidates) || [];
   renderDevices();
 });
 
@@ -610,13 +616,44 @@ function renderDevices() {
       <span class="device-name-text">${escHtml(d.name)}</span>
       <span class="device-last-seen" style="font-size:11px;color:#9aa;margin-left:8px">${d.lastSeen ? 'Last seen ' + fmtDateTime(new Date(d.lastSeen * 1000).toISOString()) : ''}</span>
       <button class="edit-btn" onclick="startEditDevice(${i})" title="Edit name"><i class="fa fa-pencil"></i></button>
+      <button class="edit-btn" onclick="startMergeDevice(${i})" title="Merge into another device"><i class="fa fa-code-branch"></i></button>
       <button class="edit-btn" onclick="deleteDevice(${i})" title="Remove device" style="color:#c33"><i class="fa fa-trash"></i></button>
     </li>`).join('');
 
+  const candidates = window._mergeCandidates || [];
+  const candHtml = candidates.length ? `
+    <div class="card" style="margin-bottom:16px;border-left:3px solid #e6a14e">
+      <div class="card-header">
+        <h3 style="color:#9a6520"><i class="fa fa-triangle-exclamation"></i> Likely Duplicates (${candidates.length})</h3>
+      </div>
+      <div class="card-body" style="padding:8px 16px 14px">
+        <p class="hint" style="margin:0 0 8px">Alexa sometimes rotates a device's id. These auto-named entries look like rotated copies of an existing device. Merge to fold past streams in and route future events automatically.</p>
+        <ul class="device-list" style="margin:0">
+          ${candidates.map(c => `
+            <li>
+              <span class="device-icon-col"><i class="fa fa-code-branch"></i></span>
+              <span class="device-name-text">
+                <b>${escHtml(c.sourceName)}</b>
+                <span style="font-size:11px;color:#aab">(${c.sourceStreams} stream${c.sourceStreams===1?'':'s'})</span>
+                <i class="fa fa-arrow-right" style="margin:0 6px;color:#aab"></i>
+                <b>${escHtml(c.targetName)}</b>
+                <span style="font-size:11px;color:#aab;margin-left:8px">
+                  ${c.fingerprintMatch ? '<i class="fa fa-check-circle" style="color:#2eaa5a"></i> capability match' : ''}
+                  · gap ${c.gapHours}h · score ${c.score}
+                </span>
+              </span>
+              <button class="save-btn" onclick="acceptMergeCandidate('${escHtml(c.sourceId)}','${escHtml(c.targetId)}','${escHtml(c.targetName)}')">Merge</button>
+              <button class="cancel-btn" onclick="dismissMergeCandidate('${escHtml(c.sourceId)}')">Not a duplicate</button>
+            </li>`).join('')}
+        </ul>
+      </div>
+    </div>` : '';
+
   renderPage('Alexa Devices', `
     <div class="page-desc">
-      Devices auto-register the first time they stream music via ourMedia. Rename them with the pencil icon, or remove them with the trash icon. If your device does not appear here, ask Alexa to play something through this skill from that device.
+      Devices auto-register the first time they stream music via My Media. Rename them with the pencil icon, or remove them with the trash icon. If Alexa rotated the deviceId for a device you already named (a duplicate appears), use the merge icon to fold it into the original — history and analytics will follow.
     </div>
+    ${candHtml}
     <div class="card">
       <div class="card-header">
         <h3><i class="fa fa-headphones"></i> Alexa Devices (${devices.length})</h3>
@@ -625,6 +662,35 @@ function renderDevices() {
         ? `<ul class="device-list">${rows}</ul>`
         : `<div class="empty-state"><i class="fa fa-headphones"></i><p>No devices yet — start streaming from an Echo to register it.</p></div>`}
     </div>`);
+}
+
+async function acceptMergeCandidate(sourceId, targetId, targetName) {
+  if (!confirm(`Merge into "${targetName}"?\n\nAll past streams from this rotated id will be re-attributed, and any future events will route there automatically.`)) return;
+  const res = await fetch(`/api/devices/${encodeURIComponent(sourceId)}/merge`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ target: targetId }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    alert('Merge failed: ' + (body.error || res.status));
+    return;
+  }
+  const result = await res.json();
+  showToast(`Merged into ${targetName} — ${result.historyRowsRewritten || 0} history rows updated`);
+  const [devices, mc] = await Promise.all([
+    API('/api/devices'),
+    API('/api/devices/merge_candidates'),
+  ]);
+  window._devices = devices || [];
+  window._mergeCandidates = (mc && mc.candidates) || [];
+  renderDevices();
+}
+
+async function dismissMergeCandidate(sourceId) {
+  await fetch(`/api/devices/${encodeURIComponent(sourceId)}/dismiss_candidate`, { method: 'POST' });
+  window._mergeCandidates = (window._mergeCandidates || []).filter(c => c.sourceId !== sourceId);
+  renderDevices();
 }
 
 async function deleteDevice(i) {
@@ -674,6 +740,56 @@ async function saveDevice(i) {
   }
 }
 
+function startMergeDevice(i) {
+  const devices = window._devices || [];
+  const src = devices[i];
+  if (!src) return;
+  const others = devices.filter((_, j) => j !== i);
+  if (!others.length) {
+    alert('No other devices to merge into.');
+    return;
+  }
+  const row = document.getElementById(`dev-row-${i}`);
+  if (!row) return;
+  const opts = others.map(o => `<option value="${escHtml(o.deviceId)}">${escHtml(o.name)}</option>`).join('');
+  row.innerHTML = `
+    <span class="device-icon-col"><i class="fa fa-code-branch"></i></span>
+    <div class="edit-row" style="gap:6px">
+      <span style="font-size:12px;color:#556">Merge <b>${escHtml(src.name)}</b> into:</span>
+      <select id="dev-merge-${i}" class="settings-input" style="min-width:160px">${opts}</select>
+      <button class="save-btn" onclick="confirmMergeDevice(${i})">Merge</button>
+      <button class="cancel-btn" onclick="renderDevices()">Cancel</button>
+    </div>`;
+}
+
+async function confirmMergeDevice(i) {
+  const src = (window._devices || [])[i];
+  const sel = document.getElementById(`dev-merge-${i}`);
+  if (!src || !sel || !sel.value) return;
+  const targetId = sel.value;
+  const targetName = (sel.options[sel.selectedIndex] || {}).text || '';
+  if (!confirm(`Merge "${src.name}" into "${targetName}"?\n\nAll past streams from "${src.name}" will be reattributed to "${targetName}", and any future events from this id will route there automatically.`)) {
+    renderDevices();
+    return;
+  }
+  const res = await fetch(`/api/devices/${encodeURIComponent(src.deviceId)}/merge`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ target: targetId }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    alert('Merge failed: ' + (body.error || res.status));
+    renderDevices();
+    return;
+  }
+  const result = await res.json();
+  showToast(`Merged into ${targetName} — ${result.historyRowsRewritten || 0} history rows updated`);
+  const refreshed = await API('/api/devices') || [];
+  window._devices = refreshed;
+  renderDevices();
+}
+
 // ── Settings ─────────────────────────────────────────────────────────────────
 register('settings', async () => {
   loading();
@@ -706,7 +822,7 @@ register('settings', async () => {
 
         <div class="settings-section">
           <h4>Default Playlist</h4>
-          <p class="hint">Played automatically when you open Our Media without specifying a playlist, artist, or track.</p>
+          <p class="hint">Played automatically when you open My Media without specifying a playlist, artist, or track.</p>
           <div class="settings-row">
             <input type="text" id="s-default-pl" class="settings-input wide" value="${escHtml(settings.defaultPlaylist || '')}">
             <button class="btn-sm btn-primary" onclick="saveSetting('defaultPlaylist', document.getElementById('s-default-pl').value)">Set</button>
@@ -753,7 +869,7 @@ register('settings', async () => {
 
         <div class="settings-section">
           <h4>Logging</h4>
-          <p class="hint">Writes a rotating log to <code>server.log</code> in the ourMedia directory. Changes take effect on next server restart.</p>
+          <p class="hint">Writes a rotating log to <code>server.log</code> in the My Media directory. Changes take effect on next server restart.</p>
           ${toggle('s-log', 'Enable Logging', chk(settings.verboseLogging))}
         </div>
 
@@ -787,15 +903,17 @@ register('settings', async () => {
 
         <div class="settings-section">
           <h4>Public URL — Alexa Skill Endpoint</h4>
-          <p class="hint">Required for Alexa to reach this server. Run a Cloudflare tunnel and paste the URL here.</p>
+          <p class="hint">Required for Alexa to reach this server. Use a Cloudflare named tunnel for a permanent hostname; quick tunnels rotate.</p>
           <div class="settings-row" style="margin-bottom:8px">
-            <code style="background:#f4f6f9;padding:6px 10px;border-radius:4px;font-size:12px;flex:1">cloudflared tunnel --url http://localhost:3001</code>
+            <code style="background:#f4f6f9;padding:6px 10px;border-radius:4px;font-size:12px;flex:1">cloudflared tunnel run ourmedia  # named tunnel (fixed URL)</code>
           </div>
           <div class="settings-row">
-            <input type="text" id="s-public-url" class="settings-input wide" value="${escHtml(publicUrl)}" placeholder="https://xxxx.trycloudflare.com">
+            <input type="text" id="s-public-url" class="settings-input wide" value="${escHtml(publicUrl)}" placeholder="https://alexa.example.com">
             <button class="btn-sm btn-primary" onclick="savePublicUrl(document.getElementById('s-public-url').value)">Save</button>
           </div>
           ${publicUrl ? `<p style="font-size:12px;color:#2eaa5a;margin-top:8px"><i class="fa fa-circle-check"></i> Alexa endpoint: <code>${escHtml(publicUrl)}/alexa</code></p>` : ''}
+          ${toggle('s-launch-pl-prompt', 'After “Open My Media,” ask which playlist (recommended if Alexa keeps opening Spotify instead of this skill)', chk((cfg || {}).launchPlaylistPrompt), 'saveLaunchPlaylistPrompt()')}
+          <p class="hint" style="margin-top:6px">When enabled, say: <b>Alexa, open my media</b> — then answer with only a playlist name, or <b>mix</b> and the name. That stays inside the skill and avoids Spotify.</p>
         </div>
 
         <div class="settings-row" style="padding-top:8px;border-top:1px solid #eef2f8;margin-top:4px">
@@ -877,6 +995,13 @@ async function savePublicUrl(url) {
   }
 }
 
+async function saveLaunchPlaylistPrompt() {
+  const el = document.getElementById('s-launch-pl-prompt');
+  const r = await POST('/api/config', { launchPlaylistPrompt: !!(el && el.checked) });
+  if (r && r.ok) showToast('Alexa launch preference saved');
+  else showToast('Save failed', true);
+}
+
 async function clearImageCache() {
   const result = await POST('/api/clearcache', {});
   if (result && result.ok) showToast(`Image cache cleared (${result.deleted} items removed)`);
@@ -886,11 +1011,11 @@ async function clearImageCache() {
 // ── Analytics ─────────────────────────────────────────────────────────────
 
 let _anFrom = '', _anTo = '';
-let _anCharts = [];
+window._anCharts = window._anCharts || {};
 
 async function _loadAnalytics() {
-  _anCharts.forEach(c => { try { c.destroy(); } catch {} });
-  _anCharts = [];
+  Object.values(window._anCharts || {}).forEach(c => { try { c && c.destroy(); } catch {} });
+  window._anCharts = {};
   loading();
   let url = '/api/analytics';
   const params = [];
@@ -901,15 +1026,21 @@ async function _loadAnalytics() {
   if (!data || !data.totalPlays) {
     renderPage('Analytics', `
       <div class="card" style="margin-bottom:20px">${_anDatePickerHtml(data)}</div>
-      <div class="empty-state"><i class="fa fa-chart-bar"></i><p>No streaming history yet.</p></div>`);
+      <div class="empty-state"><i class="fa fa-chart-bar"></i><p>No streaming history yet.</p>
+        <p style="font-size:12px;margin-top:8px">Start playing music through Alexa to build analytics.</p></div>`);
     _restoreDateInputs();
     return;
   }
   window._anData = data;
+  // Trim leading all-zero days from the day series so the chart starts at first play
+  if (!_anFrom && !_anTo && data.activity && data.activity.day) {
+    const first = data.activity.day.findIndex(r => r.count > 0);
+    if (first > 1) data.activity.day = data.activity.day.slice(first - 1);
+  }
   renderPage('Analytics', _buildAnalyticsHTML(data));
   _restoreDateInputs();
   _initAnalyticsCharts(data);
-  _initEntityActivityCharts(data);
+  if (Object.keys(data.playsPerDay || {}).length >= 7) _initEntityActivityCharts(data);
 }
 
 function _restoreDateInputs() {
@@ -935,85 +1066,355 @@ function _anDatePickerHtml(data) {
 register('analytics', async () => { _anFrom = ''; _anTo = ''; await _loadAnalytics(); });
 
 function _buildAnalyticsHTML(d) {
-  const top = (arr, icon) => (arr || []).map((x, i) =>
-    `<tr><td style="color:#8899bb;width:24px">${i+1}</td><td>${escHtml(x.name)}</td><td style="text-align:right;font-weight:600">${fmtNum(x.count)}</td></tr>`
-  ).join('');
-
-  const streak = n => n === 1 ? '1 hr streak' : `${n} hrs streak`;
+  const sk  = d.listeningStreak  || {current: d.currentStreak || 0, longest: d.longestStreak || 0};
+  const cov = d.catalogCoverage  || {};
+  const rr  = d.repeatRate       || {};
+  const mad = d.mostActiveDay;
+  const hasGenres  = (d.topGenres  || []).length > 0;
+  const hasDecades = (d.topDecades || []).length > 0;
+  const uniqueDays = Object.keys(d.playsPerDay || {}).length;
 
   return `
     <div class="card" style="margin-bottom:20px">${_anDatePickerHtml(d)}</div>
 
     <div class="stats-grid">
       <div class="stat-card">
-        <div class="stat-icon blue"><i class="fa fa-play"></i></div>
+        <div class="stat-icon blue"><i class="fa fa-headphones"></i></div>
         <div class="stat-info"><div class="stat-value">${fmtNum(d.totalPlays)}</div><div class="stat-label">Total Plays</div></div>
       </div>
       <div class="stat-card">
-        <div class="stat-icon green"><i class="fa fa-music"></i></div>
-        <div class="stat-info"><div class="stat-value">${fmtNum(d.uniqueTracks)}</div><div class="stat-label">Unique Tracks</div></div>
+        <div class="stat-icon orange"><i class="fa fa-fire"></i></div>
+        <div class="stat-info">
+          <div class="stat-value">${sk.current || 0}<span style="font-size:13px;font-weight:400;color:#778"> day streak</span></div>
+          <div class="stat-label">Current Streak</div>
+        </div>
       </div>
       <div class="stat-card">
-        <div class="stat-icon purple"><i class="fa fa-microphone"></i></div>
-        <div class="stat-info"><div class="stat-value">${fmtNum(d.uniqueArtists)}</div><div class="stat-label">Unique Artists</div></div>
+        <div class="stat-icon green"><i class="fa fa-trophy"></i></div>
+        <div class="stat-info">
+          <div class="stat-value">${sk.longest || 0}<span style="font-size:13px;font-weight:400;color:#778"> days</span></div>
+          <div class="stat-label">Longest Streak</div>
+        </div>
       </div>
       <div class="stat-card">
-        <div class="stat-icon orange"><i class="fa fa-compact-disc"></i></div>
-        <div class="stat-info"><div class="stat-value">${fmtNum(d.uniqueAlbums)}</div><div class="stat-label">Unique Albums</div></div>
+        <div class="stat-icon purple"><i class="fa fa-compact-disc"></i></div>
+        <div class="stat-info">
+          <div class="stat-value">${(cov.heard > 0 && cov.pct < 0.1) ? '&lt;&nbsp;0.1' : (cov.pct || 0)}<span style="font-size:13px;font-weight:400;color:#778">%</span></div>
+          <div class="stat-label">Catalog Heard &middot; ${fmtNum(cov.heard || 0)}/${fmtNum(cov.total || 0)}</div>
+        </div>
       </div>
       <div class="stat-card">
-        <div class="stat-icon yellow"><i class="fa fa-fire"></i></div>
-        <div class="stat-info"><div class="stat-value">${d.currentStreak || 0}</div><div class="stat-label">Current ${streak(d.currentStreak||0)}</div></div>
+        <div class="stat-icon teal"><i class="fa fa-rotate"></i></div>
+        <div class="stat-info">
+          <div class="stat-value">${rr.pct || 0}<span style="font-size:13px;font-weight:400;color:#778">%</span></div>
+          <div class="stat-label">Repeat Rate</div>
+        </div>
       </div>
+      ${mad ? `
       <div class="stat-card">
-        <div class="stat-icon red"><i class="fa fa-trophy"></i></div>
-        <div class="stat-info"><div class="stat-value">${d.longestStreak || 0}</div><div class="stat-label">Longest ${streak(d.longestStreak||0)}</div></div>
+        <div class="stat-icon orange"><i class="fa fa-calendar-day"></i></div>
+        <div class="stat-info">
+          <div class="stat-value">${fmtNum(mad.count)}</div>
+          <div class="stat-label">Best Day &middot; ${escHtml(mad.date)}</div>
+        </div>
+      </div>` : ''}
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h3><i class="fa fa-chart-line"></i> Activity Over Time</h3>
+        <div style="display:flex;gap:6px">
+          <button class="an-period-btn active" onclick="setAnalyticsPeriod('day')">Day</button>
+          <button class="an-period-btn" onclick="setAnalyticsPeriod('week')">Week</button>
+          <button class="an-period-btn" onclick="setAnalyticsPeriod('month')">Month</button>
+          <button class="an-period-btn" onclick="setAnalyticsPeriod('year')">Year</button>
+        </div>
+      </div>
+      <div class="card-body"><canvas id="an-activity" height="70"></canvas></div>
+    </div>
+
+    <div class="an-grid-2">
+      <div class="card">
+        <div class="card-header"><h3><i class="fa fa-clock"></i> Hour of Day</h3></div>
+        <div class="card-body" style="padding-top:10px"><canvas id="an-hour" height="120"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="card-header"><h3><i class="fa fa-calendar-week"></i> Day of Week</h3></div>
+        <div class="card-body" style="padding-top:10px"><canvas id="an-dow" height="120"></canvas></div>
       </div>
     </div>
 
-    <div class="row-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px">
-      <div class="card">
-        <div class="card-header"><h3><i class="fa fa-chart-line"></i> Plays Over Time</h3></div>
-        <div class="card-body"><canvas id="an-plays-chart" height="160"></canvas></div>
-      </div>
-      <div class="card">
-        <div class="card-header"><h3><i class="fa fa-headphones"></i> Top Devices</h3></div>
-        <div class="card-body"><table class="data-table"><tbody>${top(d.topDevices)}</tbody></table></div>
-      </div>
+    <div class="card">
+      <div class="card-header"><h3><i class="fa fa-table-cells"></i> Listening Heatmap &mdash; Hour &times; Day of Week</h3></div>
+      <div class="card-body">${_buildHeatmapHTML(d.heatmap)}</div>
     </div>
 
-    <div class="row-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px">
+    <div class="an-grid-2">
       <div class="card">
         <div class="card-header"><h3><i class="fa fa-microphone"></i> Top Artists</h3></div>
-        <div class="card-body"><table class="data-table"><tbody>${top(d.topArtists)}</tbody></table></div>
+        <div class="card-body an-hbar-wrap"><canvas id="an-artists"></canvas></div>
       </div>
       <div class="card">
         <div class="card-header"><h3><i class="fa fa-compact-disc"></i> Top Albums</h3></div>
-        <div class="card-body"><table class="data-table"><tbody>${top(d.topAlbums)}</tbody></table></div>
+        <div class="card-body an-hbar-wrap"><canvas id="an-albums"></canvas></div>
       </div>
     </div>
 
-    <div class="card" style="margin-bottom:20px">
-      <div class="card-header"><h3><i class="fa fa-music"></i> Top Tracks</h3></div>
-      <div class="card-body"><table class="data-table"><tbody>${top(d.topTracks)}</tbody></table></div>
+    <div class="an-grid-2">
+      <div class="card">
+        <div class="card-header"><h3><i class="fa fa-music"></i> Top Tracks</h3></div>
+        <div class="card-body an-hbar-wrap"><canvas id="an-tracks"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="card-header"><h3><i class="fa fa-headphones"></i> Top Devices</h3></div>
+        <div class="card-body an-hbar-wrap"><canvas id="an-devices"></canvas></div>
+      </div>
     </div>
 
-    <div class="card" style="margin-bottom:20px">
-      <div class="card-header"><h3><i class="fa fa-chart-line"></i> Artist Activity Over Time</h3></div>
-      <div class="card-body"><canvas id="an-artist-chart" height="160"></canvas></div>
+    ${hasGenres || hasDecades ? `
+    <div class="an-grid-2">
+      ${hasGenres ? `
+      <div class="card">
+        <div class="card-header"><h3><i class="fa fa-tag"></i> Top Genres</h3></div>
+        <div class="card-body" style="display:flex;justify-content:center;padding:20px 20px 24px">
+          <canvas id="an-genres" style="max-height:300px;max-width:300px"></canvas>
+        </div>
+      </div>` : '<div></div>'}
+      ${hasDecades ? `
+      <div class="card">
+        <div class="card-header"><h3><i class="fa fa-calendar"></i> By Decade</h3></div>
+        <div class="card-body" style="padding-top:10px"><canvas id="an-decades" height="120"></canvas></div>
+      </div>` : '<div></div>'}
+    </div>` : ''}
+
+    ${uniqueDays >= 7 ? `
+    <div class="an-grid-2">
+      <div class="card">
+        <div class="card-header"><h3><i class="fa fa-chart-line"></i> Artist Activity Over Time</h3></div>
+        <div class="card-body"><canvas id="an-artist-chart" height="160"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="card-header"><h3><i class="fa fa-chart-line"></i> Album Activity Over Time</h3></div>
+        <div class="card-body"><canvas id="an-album-chart" height="160"></canvas></div>
+      </div>
     </div>
-    <div class="card" style="margin-bottom:20px">
-      <div class="card-header"><h3><i class="fa fa-chart-line"></i> Album Activity Over Time</h3></div>
-      <div class="card-body"><canvas id="an-album-chart" height="160"></canvas></div>
-    </div>
-    <div class="card" style="margin-bottom:20px">
-      <div class="card-header"><h3><i class="fa fa-chart-line"></i> Track Activity Over Time</h3></div>
-      <div class="card-body"><canvas id="an-track-chart" height="160"></canvas></div>
-    </div>
-    <div class="card" style="margin-bottom:20px">
-      <div class="card-header"><h3><i class="fa fa-chart-line"></i> Device Activity Over Time</h3></div>
-      <div class="card-body"><canvas id="an-device-chart" height="160"></canvas></div>
-    </div>`;
+    <div class="an-grid-2">
+      <div class="card">
+        <div class="card-header"><h3><i class="fa fa-chart-line"></i> Track Activity Over Time</h3></div>
+        <div class="card-body"><canvas id="an-track-chart" height="160"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="card-header"><h3><i class="fa fa-chart-line"></i> Device Activity Over Time</h3></div>
+        <div class="card-body"><canvas id="an-device-chart" height="160"></canvas></div>
+      </div>
+    </div>` : ''}
+`;
+}
+
+function _buildHeatmapHTML(matrix) {
+  if (!matrix || !matrix.length) return '<p style="color:#aab;font-size:13px">No data</p>';
+  const days   = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const maxVal = Math.max(1, ...matrix.map(row => Math.max(...row)));
+  let html = '<div class="an-heatmap">';
+  html += '<div></div>' + days.map(d => `<div class="an-hm-label">${d}</div>`).join('');
+  for (let h = 0; h < 24; h++) {
+    const lbl = h === 0 ? '12a' : h < 12 ? `${h}a` : h === 12 ? '12p' : `${h - 12}p`;
+    html += `<div class="an-hm-label" style="justify-content:flex-end;padding-right:6px">${lbl}</div>`;
+    for (let d = 0; d < 7; d++) {
+      const v     = (matrix[h] || [])[d] || 0;
+      const alpha = v > 0 ? (0.1 + (v / maxVal) * 0.85).toFixed(2) : 0;
+      const bg    = v > 0 ? `rgba(48,66,106,${alpha})` : '#f0f3f8';
+      html += `<div class="an-hm-cell" style="background:${bg}" title="${lbl} ${days[d]}: ${v} play${v !== 1 ? 's' : ''}"></div>`;
+    }
+  }
+  html += '</div>';
+  return html;
+}
+
+function _initAnalyticsCharts(d) {
+  const C = {
+    navy: '#30426a', orange: '#e99d1a', green: '#2eaa5a',
+    purple: '#7c4dbd', teal: '#1a9ba1',
+  };
+  const xTick = { color: '#778', font: { size: 11 } };
+  const yTick = { color: '#778', font: { size: 11 } };
+  const noLegend = { legend: { display: false } };
+
+  // Activity line chart with hover tooltip
+  const actSeries = (d.activity || {}).day || [];
+  const actCanvas = document.getElementById('an-activity');
+  if (actCanvas) {
+    window._anCharts.activity = new Chart(actCanvas, {
+      type: 'line',
+      data: {
+        labels: actSeries.map(r => r.label),
+        datasets: [{
+          label: 'Plays',
+          data: actSeries.map(r => r.count),
+          borderColor: C.navy,
+          backgroundColor: 'rgba(48,66,106,0.08)',
+          fill: true, tension: 0.3,
+          pointRadius: actSeries.length > 60 ? 0 : 3,
+          pointHoverRadius: 5,
+        }],
+      },
+      options: {
+        plugins: { legend: { display: false }, tooltip: { mode: 'index', intersect: false } },
+        interaction: { mode: 'index', intersect: false },
+        scales: {
+          x: { grid: { display: false }, ticks: xTick },
+          y: { grid: { color: '#f0f3f8' }, ticks: yTick, beginAtZero: true },
+        },
+      },
+    });
+  }
+
+  // Hour of day
+  const hourCanvas = document.getElementById('an-hour');
+  if (hourCanvas && d.hourOfDay) {
+    window._anCharts.hour = new Chart(hourCanvas, {
+      type: 'bar',
+      data: {
+        labels: d.hourOfDay.map(r => {
+          const h = r.hour;
+          return h === 0 ? '12a' : h < 12 ? `${h}a` : h === 12 ? '12p' : `${h - 12}p`;
+        }),
+        datasets: [{ label: 'Plays', data: d.hourOfDay.map(r => r.count), backgroundColor: C.navy, borderRadius: 3 }],
+      },
+      options: {
+        plugins: noLegend,
+        scales: {
+          x: { grid: { display: false }, ticks: xTick },
+          y: { grid: { color: '#f0f3f8' }, ticks: yTick, beginAtZero: true },
+        },
+      },
+    });
+  }
+
+  // Day of week
+  const dowCanvas = document.getElementById('an-dow');
+  if (dowCanvas && d.dayOfWeek) {
+    window._anCharts.dow = new Chart(dowCanvas, {
+      type: 'bar',
+      data: {
+        labels: d.dayOfWeek.map(r => r.day),
+        datasets: [{ label: 'Plays', data: d.dayOfWeek.map(r => r.count), backgroundColor: C.orange, borderRadius: 3 }],
+      },
+      options: {
+        plugins: noLegend,
+        scales: {
+          x: { grid: { display: false }, ticks: xTick },
+          y: { grid: { color: '#f0f3f8' }, ticks: yTick, beginAtZero: true },
+        },
+      },
+    });
+  }
+
+  // Horizontal bar with hover-tooltip showing full label + artist
+  function hbar(id, items, color) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (!items || !items.length) {
+      const wrap = el.closest('.an-hbar-wrap');
+      if (wrap) wrap.innerHTML = '<p style="color:#aab;font-size:13px;padding:16px 0">No data yet</p>';
+      return;
+    }
+    window._anCharts[id] = new Chart(el, {
+      type: 'bar',
+      data: {
+        labels: items.map(r => {
+          const n = r.name || '';
+          return n.length > 26 ? n.slice(0, 26) + '…' : n;
+        }),
+        datasets: [{ data: items.map(r => r.count), backgroundColor: color, borderRadius: 3 }],
+      },
+      options: {
+        indexAxis: 'y',
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              title: ctx => (items[ctx[0].dataIndex] || {}).name || '',
+              label: ctx => {
+                const item = items[ctx.dataIndex] || {};
+                return item.artist ? ` ${ctx.raw} plays — ${item.artist}` : ` ${ctx.raw} plays`;
+              },
+            },
+          },
+        },
+        scales: {
+          x: { grid: { color: '#f0f3f8' }, ticks: xTick, beginAtZero: true },
+          y: { grid: { display: false }, ticks: { color: '#333', font: { size: 11 } } },
+        },
+      },
+    });
+  }
+
+  hbar('an-artists', d.topArtists, C.navy);
+  hbar('an-albums',  d.topAlbums,  C.purple);
+  hbar('an-tracks',  d.topTracks,  C.teal);
+  hbar('an-devices', d.topDevices, C.orange);
+
+  // Genres doughnut
+  if ((d.topGenres || []).length) {
+    const el = document.getElementById('an-genres');
+    if (el) {
+      const PAL = [C.navy, C.orange, C.green, C.purple, C.teal,
+                   '#e44040', '#e8734a', '#3a8fc9', '#9bc13a', '#b54ab5'];
+      window._anCharts.genres = new Chart(el, {
+        type: 'doughnut',
+        data: {
+          labels: d.topGenres.map(r => r.name),
+          datasets: [{
+            data: d.topGenres.map(r => r.count),
+            backgroundColor: PAL, borderWidth: 2, borderColor: '#fff',
+          }],
+        },
+        options: {
+          cutout: '60%',
+          plugins: {
+            legend: { position: 'bottom', labels: { font: { size: 11 }, color: '#333', boxWidth: 12, padding: 10 } },
+          },
+        },
+      });
+    }
+  }
+
+  // Decades bar
+  if ((d.topDecades || []).length) {
+    const el = document.getElementById('an-decades');
+    if (el) {
+      window._anCharts.decades = new Chart(el, {
+        type: 'bar',
+        data: {
+          labels: d.topDecades.map(r => r.decade),
+          datasets: [{ label: 'Plays', data: d.topDecades.map(r => r.count), backgroundColor: C.green, borderRadius: 3 }],
+        },
+        options: {
+          plugins: noLegend,
+          scales: {
+            x: { grid: { display: false }, ticks: xTick },
+            y: { grid: { color: '#f0f3f8' }, ticks: yTick, beginAtZero: true },
+          },
+        },
+      });
+    }
+  }
+}
+
+function setAnalyticsPeriod(period) {
+  const d = window._anData;
+  if (!d || !window._anCharts.activity) return;
+  document.querySelectorAll('.an-period-btn').forEach(b => {
+    b.classList.toggle('active', b.textContent.toLowerCase() === period);
+  });
+  const series = (d.activity || {})[period] || [];
+  const chart  = window._anCharts.activity;
+  chart.data.labels = series.map(r => r.label);
+  chart.data.datasets[0].data = series.map(r => r.count);
+  chart.data.datasets[0].pointRadius = series.length > 60 ? 0 : 3;
+  chart.update();
 }
 
 const _AN_COLORS = ['#4e91e6','#e6914e','#4ec74e','#e64e4e','#a44ee6','#e6c84e','#4ec7c7','#e64ea4','#91e64e','#4e4ee6'];
@@ -1030,35 +1431,19 @@ function _buildEntityChart(canvasId, seriesMap) {
     backgroundColor: _AN_COLORS[i % _AN_COLORS.length] + '22',
     tension: 0.3, fill: false, pointRadius: 3,
   }));
-  const chart = new Chart(canvas, {
+  window._anCharts[canvasId] = new Chart(canvas, {
     type: 'line',
     data: { labels: allDays, datasets },
     options: {
       responsive: true,
-      plugins: { legend: { position: 'bottom', labels: { font: { size: 11 } } } },
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { position: 'bottom', labels: { font: { size: 11 } } },
+        tooltip: { mode: 'index', intersect: false },
+      },
       scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
     },
   });
-  _anCharts.push(chart);
-}
-
-function _initAnalyticsCharts(data) {
-  const canvas = document.getElementById('an-plays-chart');
-  if (!canvas) return;
-  const days = Object.keys(data.playsPerDay || {}).sort();
-  const chart = new Chart(canvas, {
-    type: 'bar',
-    data: {
-      labels: days,
-      datasets: [{ label: 'Plays', data: days.map(d => data.playsPerDay[d]), backgroundColor: '#4e91e6cc' }],
-    },
-    options: {
-      responsive: true,
-      plugins: { legend: { display: false } },
-      scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
-    },
-  });
-  _anCharts.push(chart);
 }
 
 function _initEntityActivityCharts(data) {

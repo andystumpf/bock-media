@@ -7,6 +7,13 @@ selected_state.json
 ignored_tracks.json
 server.log
 server.log.*
+msp_slu_poll.log
+cron-ask.log
+tunnel.log
+
+# Local secrets (use *.example.json templates)
+config.json
+skill/account-linking.json
 
 # Extracted / cached artwork (can be regenerated)
 artwork_cache/
