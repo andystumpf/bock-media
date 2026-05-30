@@ -1998,6 +1998,11 @@ def general_search_tracks(query, limit=300):
 NP_STATE_PATH = os.path.join(HERE, 'nowplaying_state.json')
 _NP_DEVICE_TTL_SECONDS = 6 * 3600
 
+# MSP (music-skill) playback exposes no device id, so all of it is attributed to
+# this single pseudo-device for the Now Playing UI.
+MSP_DEVICE_ID = 'msp-bock-media'
+MSP_DEVICE_NAME = 'Bock Media (Alexa)'
+
 # Per-request device id (set by the Alexa handler).
 from flask import g
 
@@ -2612,26 +2617,114 @@ def _msp_handle(namespace, name, payload, header):
 
     return _msp_error(header, 'INTERNAL_ERROR', f'Unsupported directive {namespace}.{name}')
 
+def _msp_handle_event(req, ctx):
+    """Handle music-skill playback lifecycle events
+    (AlexaAudioPlayQueueEvent.ItemPlaybackStarted/Stopped/Finished/Failed),
+    keeping the web UI's Now Playing in sync. These arrive shaped like a custom
+    skill event (top-level request/context), not as a directive."""
+    etype = req.get('type', '')
+    item = (req.get('body') or {}).get('item') or {}
+    queue_id = item.get('queueId') or ''
+    item_id = item.get('id') or ''
+
+    # Music-skill (MSP) requests carry NO device id anywhere — neither directives
+    # (requestContext has only user/location) nor playback events. Amazon does not
+    # tell a music provider which Echo is rendering. So we attribute all MSP
+    # playback to one stable pseudo-device that the web UI can display.
+    device = ((ctx.get('System') or {}).get('device') or {})
+    raw_device_id = device.get('deviceId') or MSP_DEVICE_ID
+    register_device(raw_device_id,
+                    default_name=(MSP_DEVICE_NAME if raw_device_id == MSP_DEVICE_ID else None),
+                    supported_interfaces=device.get('supportedInterfaces') or {})
+    g.raw_device_id = raw_device_id
+    g.device_id = _resolve_device_id(raw_device_id)
+
+    print(f"[MSP EVENT] {etype} device={raw_device_id[-12:] if raw_device_id!='default' else 'default'} "
+          f"queue={queue_id} item={item_id}", flush=True)
+
+    if etype == 'AlexaAudioPlayQueueEvent.ItemPlaybackStarted':
+        q = _load_queues().get(queue_id) or {}
+        tracks = q.get('tracks', [])
+        idx = _msp_parse_idx(item_id)
+        if idx is not None and 0 <= idx < len(tracks):
+            path = tracks[idx]
+            row = db_one('SELECT title, artist, album, duration_seconds FROM songs_cache WHERE path = ?', [path]) or {}
+            fname = os.path.splitext(os.path.basename(path))[0]
+            track_title = row.get('title', fname) or fname
+            artist = row.get('artist')
+            album = row.get('album')
+            duration_s = row.get('duration_seconds') or 0
+            write_np_state({
+                'track':       track_title,
+                'artist':      artist,
+                'album':       album,
+                'filepath':    path,
+                'token':       f'{queue_id}:{idx}',
+                'playing':     True,
+                'timestamp':   time.time(),
+                'duration_ms': int(duration_s * 1000) if duration_s else 0,
+                'offset_ms':   (req.get('body') or {}).get('offsetInMilliseconds') or 0,
+            })
+            append_stream_history({
+                'track':    track_title,
+                'artist':   artist,
+                'album':    album,
+                'filepath': path,
+                'device':   _device_label(_np_device_id()),
+                'deviceId': _np_device_id(),
+                'date':     datetime.datetime.now().isoformat(timespec='seconds'),
+            })
+        return ('', 200)
+
+    if etype in ('AlexaAudioPlayQueueEvent.ItemPlaybackStopped',
+                 'AlexaAudioPlayQueueEvent.ItemPlaybackFinished',
+                 'AlexaAudioPlayQueueEvent.ItemPlaybackFailed'):
+        state = read_np_state() or {}
+        if state:
+            state['playing'] = False
+            write_np_state(state)
+        return ('', 200)
+
+    return ('', 200)
+
 @app.route('/music', methods=['POST'])
 def music_skill():
     cfg = _msp_cfg()
     body = request.get_json(force=True) or {}
-    # Music Skill directives arrive top-level; tolerate a {"directive": …} wrapper too.
-    directive = body.get('directive') if isinstance(body.get('directive'), dict) else body
-    header = directive.get('header', {}) or {}
-    payload = directive.get('payload', {}) or {}
 
-    # The linked-account bearer arrives either as an Authorization header or, when
-    # Alexa calls our HTTPS endpoint directly, in requestContext.user.accessToken.
-    auth_header = request.headers.get('Authorization', '')
-    token = auth_header[7:].strip() if auth_header.startswith('Bearer ') else ''
-    if not token:
-        token = ((payload.get('requestContext') or {}).get('user') or {}).get('accessToken', '') or ''
+    # Two payload shapes hit this endpoint:
+    #  • Directives   → {"directive"?: {header, payload}}  (or top-level header/payload)
+    #  • Skill events → {"request": {type, body}, "context": {System:{user, device}}}
+    is_event = isinstance(body.get('request'), dict) and 'header' not in body
+    if is_event:
+        ctx = body.get('context') or {}
+        token = ((ctx.get('System') or {}).get('user') or {}).get('accessToken', '') or ''
+    else:
+        directive = body.get('directive') if isinstance(body.get('directive'), dict) else body
+        header = directive.get('header', {}) or {}
+        payload = directive.get('payload', {}) or {}
+        # The linked-account bearer arrives either as an Authorization header or, when
+        # Alexa calls our HTTPS endpoint directly, in requestContext.user.accessToken.
+        auth_header = request.headers.get('Authorization', '')
+        token = auth_header[7:].strip() if auth_header.startswith('Bearer ') else ''
+        if not token:
+            token = ((payload.get('requestContext') or {}).get('user') or {}).get('accessToken', '') or ''
+
     if token != cfg.get('accessToken'):
-        nm = f"{header.get('namespace','')}.{header.get('name','')}"
-        print(f"[MSP REJECT] bearer mismatch dir={nm!r} hdr_auth={bool(auth_header)} "
-              f"tok_len={len(token)} body={json.dumps(body)[:500]}", flush=True)
+        kind = body.get('request', {}).get('type', '') if is_event else \
+               f"{(body.get('directive') or body).get('header',{}).get('namespace','')}." \
+               f"{(body.get('directive') or body).get('header',{}).get('name','')}"
+        print(f"[MSP REJECT] bearer mismatch kind={kind!r} tok_len={len(token)} "
+              f"body={json.dumps(body)[:300]}", flush=True)
         return Response('Forbidden', 403)
+
+    if is_event:
+        try:
+            return _msp_handle_event(body.get('request') or {}, body.get('context') or {})
+        except Exception as ex:
+            import traceback
+            print(f"[MSP EVENT ERROR] {ex}\n{traceback.format_exc()}", flush=True)
+            return ('', 200)
 
     namespace = header.get('namespace', '')
     name = header.get('name', '')
