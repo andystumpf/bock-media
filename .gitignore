@@ -1,4 +1,5 @@
 # Runtime state (auto-generated, not committed)
+*.bak
 nowplaying_state.json
 streaming_history.jsonl
 queues.json
