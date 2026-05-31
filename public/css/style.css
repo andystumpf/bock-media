@@ -32,6 +32,7 @@ a { text-decoration: none; color: inherit; }
 .sidebar-brand {
   padding: 16px 12px;
   display: flex;
+  justify-content: center;
   align-items: center;
   gap: 10px;
   background: #2d3e63;
@@ -52,6 +53,19 @@ a { text-decoration: none; color: inherit; }
   overflow: hidden;
 }
 .sidebar-brand .brand-text span { display: block; font-size: 11px; font-weight: 400; color: #aab8d0; }
+.sidebar-brand .brand-logo {
+  max-width: 100%;
+  max-height: 150px;
+  height: auto;
+  width: auto;
+  object-fit: contain;
+  background: #fff;
+  border-radius: 8px;
+  padding: 6px;
+}
+/* Collapsed sidebar: shrink the logo to the rail width */
+#sidebar-wrapper.collapsed .sidebar-brand { padding: 8px 4px; }
+#sidebar-wrapper.collapsed .sidebar-brand .brand-logo { max-height: 40px; padding: 2px; }
 
 /* Sidebar nav */
 ul.sidebar-nav { list-style: none; flex: 1; overflow-y: auto; overflow-x: hidden; padding: 8px 0; }

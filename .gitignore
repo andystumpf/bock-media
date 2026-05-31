@@ -10,6 +10,8 @@ server.log
 server.log.*
 msp_slu_poll.log
 cron-ask.log
+cron-catalog.log
+plex-sync.log
 tunnel.log
 
 # Local secrets (use *.example.json templates)

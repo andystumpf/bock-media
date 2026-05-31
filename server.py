@@ -31,10 +31,10 @@ app = Flask(__name__, static_folder=os.path.join(HERE, 'public'))
 # are configurable via environment variables (the defaults preserve the original
 # deployment). Override in the systemd unit / shell to relocate without code changes.
 #   OURMEDIA_DB_PATH    – SQLite music index (table songs_cache)
-#   OURMEDIA_MMA_PATH   – My Media for Alexa data dir (Preferences/WatchFolders/ServerPlaylists XML)
+#   OURMEDIA_DATA_DIR   – library data dir (Preferences/WatchFolders/ServerPlaylists XML, ImageCache)
 #   OURMEDIA_MUSIC_ROOT – root of the music library that gets streamed
 DB_PATH = os.environ.get('OURMEDIA_DB_PATH', '/mnt/bock/Music/music_organizer.db')
-MMA_PATH = os.environ.get('OURMEDIA_MMA_PATH', '/home/plex/.MyMediaForAlexa')
+DATA_DIR = os.environ.get('OURMEDIA_DATA_DIR', '/home/plex/.bockmedia')
 
 # ── DB helper ────────────────────────────────────────────────────────────────
 
@@ -75,7 +75,7 @@ _pref_mtime: float = 0.0
 
 def get_pref(xml_tag, default=''):
     global _pref_cache, _pref_mtime
-    path = os.path.join(MMA_PATH, 'Preferences.xml')
+    path = os.path.join(DATA_DIR, 'Preferences.xml')
     try:
         mtime = os.path.getmtime(path)
         if mtime != _pref_mtime:
@@ -211,7 +211,7 @@ def check_auth():
     auth = request.authorization
     if not auth or auth.username != 'admin' or auth.password != stored:
         return Response('Authentication required', 401,
-                        {'WWW-Authenticate': 'Basic realm="My Media"'})
+                        {'WWW-Authenticate': 'Basic realm="Bock Media"'})
     return None
 
 # ── Static files ─────────────────────────────────────────────────────────────
@@ -237,12 +237,12 @@ def summary():
     watch_folders = 0
     playlists = 0
     try:
-        wf = ET.parse(os.path.join(MMA_PATH, 'WatchFolders.xml'))
+        wf = ET.parse(os.path.join(DATA_DIR, 'WatchFolders.xml'))
         watch_folders = len(wf.getroot().findall('WatchFolder'))
     except:
         pass
     try:
-        pl = ET.parse(os.path.join(MMA_PATH, 'ServerPlaylists.xml'))
+        pl = ET.parse(os.path.join(DATA_DIR, 'ServerPlaylists.xml'))
         playlists = len(pl.getroot().findall('Entry'))
     except:
         pass
@@ -260,7 +260,7 @@ def summary():
 @app.route('/api/watchfolders')
 def watchfolders():
     try:
-        tree = ET.parse(os.path.join(MMA_PATH, 'WatchFolders.xml'))
+        tree = ET.parse(os.path.join(DATA_DIR, 'WatchFolders.xml'))
         folders = []
         for wf in tree.getroot().findall('WatchFolder'):
             path = xml_text(wf, 'Path')
@@ -312,7 +312,7 @@ def playlists():
     search = request.args.get('search', '').lower()
 
     try:
-        tree = ET.parse(os.path.join(MMA_PATH, 'ServerPlaylists.xml'))
+        tree = ET.parse(os.path.join(DATA_DIR, 'ServerPlaylists.xml'))
         all_playlists = []
         for entry in tree.getroot().findall('Entry'):
             key = entry.find('Key')
@@ -353,7 +353,7 @@ def rename_playlist():
     if not new_name:
         return jsonify({'error': 'name required'}), 400
     try:
-        path = os.path.join(MMA_PATH, 'ServerPlaylists.xml')
+        path = os.path.join(DATA_DIR, 'ServerPlaylists.xml')
         ET.register_namespace('xsd', 'http://www.w3.org/2001/XMLSchema')
         ET.register_namespace('xsi', 'http://www.w3.org/2001/XMLSchema-instance')
         tree = ET.parse(path)
@@ -501,7 +501,7 @@ SETTINGS_MAP = {
 @app.route('/api/settings', methods=['GET'])
 def settings_get():
     try:
-        tree = ET.parse(os.path.join(MMA_PATH, 'Preferences.xml'))
+        tree = ET.parse(os.path.join(DATA_DIR, 'Preferences.xml'))
         root = tree.getroot()
         def t(tag): return (root.find(tag).text or '') if root.find(tag) is not None else ''
         return jsonify({k: t(v) for k, v in SETTINGS_MAP.items()})
@@ -511,7 +511,7 @@ def settings_get():
 @app.route('/api/settings', methods=['POST'])
 def settings_post():
     data = request.get_json() or {}
-    prefs_path = os.path.join(MMA_PATH, 'Preferences.xml')
+    prefs_path = os.path.join(DATA_DIR, 'Preferences.xml')
     try:
         ET.register_namespace('xsd', 'http://www.w3.org/2001/XMLSchema')
         ET.register_namespace('xsi', 'http://www.w3.org/2001/XMLSchema-instance')
@@ -535,7 +535,7 @@ def settings_post():
 
 @app.route('/api/clearcache', methods=['POST'])
 def clear_cache():
-    cache_dir = os.path.join(MMA_PATH, 'ImageCache')
+    cache_dir = os.path.join(DATA_DIR, 'ImageCache')
     try:
         deleted = 0
         for f in glob.glob(os.path.join(cache_dir, '*')):
@@ -1015,7 +1015,7 @@ def recent():
     page = int(request.args.get('page', 1))
     limit = int(request.args.get('limit', 10))
     try:
-        tree = ET.parse(os.path.join(MMA_PATH, 'PlaylistHistory.xml'))
+        tree = ET.parse(os.path.join(DATA_DIR, 'PlaylistHistory.xml'))
         all_entries = list(tree.getroot().findall('Entry'))
         all_entries.reverse()  # most recent first
 
@@ -1822,7 +1822,7 @@ def parse_m3u(filepath):
 
 def fuzzy_find_playlist(query):
     try:
-        tree = ET.parse(os.path.join(MMA_PATH, 'ServerPlaylists.xml'))
+        tree = ET.parse(os.path.join(DATA_DIR, 'ServerPlaylists.xml'))
         entries = []
         for e in tree.getroot().findall('Entry'):
             key = e.find('Key')
@@ -1920,12 +1920,6 @@ def normalize_spoken_value(value):
         'alexa ask bock media ',
         'ask bock media ',
         'bock media ',
-        'alexa ask my media to ',
-        'ask my media to ',
-        'my media to ',
-        'alexa ask my media ',
-        'ask my media ',
-        'my media ',
         'alexa ask our media to ',
         'ask our media to ',
         'our media to ',
@@ -2008,6 +2002,50 @@ _NP_DEVICE_TTL_SECONDS = 6 * 3600
 # this single pseudo-device for the Now Playing UI.
 MSP_DEVICE_ID = 'msp-bock-media'
 MSP_DEVICE_NAME = 'Bock Media (Alexa)'
+
+# Amazon never tells a music provider which Echo is rendering. Rather than file
+# all MSP playback under the generic pseudo-device (which shows up as a phantom
+# extra "device" and duplicates whatever is already playing on the real Echo),
+# adopt the speaker the user is almost certainly addressing: the one currently
+# playing, else the most-recently-active real Echo within this window.
+_MSP_DEVICE_ADOPT_SECONDS = 30 * 60
+
+def _msp_pick_device_id(real_device_id):
+    """Resolve which device an MSP playback event belongs to.
+
+    Prefers a real deviceId if Amazon ever supplies one; otherwise adopts the
+    currently-playing (or most-recently-active) real Echo so Now Playing shows
+    the true speaker and supersedes its prior track instead of duplicating it.
+    Falls back to the pseudo-device only when no recent real device is known.
+    """
+    if real_device_id and real_device_id != MSP_DEVICE_ID:
+        return real_device_id
+    try:
+        devices = (_canonicalize_np(_read_all_np() or {'devices': {}})
+                   .get('devices', {}))
+        known = _load_devices()
+        now = time.time()
+        best = None  # (is_playing, timestamp, device_id)
+        for did, st in devices.items():
+            if did in (MSP_DEVICE_ID, 'default') or did not in known:
+                continue
+            cand = (bool(st.get('playing')), st.get('timestamp', 0) or 0, did)
+            if best is None or cand[:2] > best[:2]:
+                best = cand
+        if best and (best[0] or (now - best[1]) <= _MSP_DEVICE_ADOPT_SECONDS):
+            return best[2]
+    except Exception as e:
+        print(f'[MSP] device-adopt error: {e}', flush=True)
+    return MSP_DEVICE_ID
+
+def _retire_pseudo_msp_device():
+    """Drop the placeholder MSP pseudo-device from Now Playing state."""
+    try:
+        payload = _read_all_np() or {'devices': {}}
+        if payload.get('devices', {}).pop(MSP_DEVICE_ID, None) is not None:
+            _write_all_np(payload)
+    except Exception as e:
+        print(f'[MSP] retire pseudo-device error: {e}', flush=True)
 
 # Per-request device id (set by the Alexa handler).
 from flask import g
@@ -2380,7 +2418,7 @@ def oauth_authorize():
         # Minimal one-click approval page (single-user setup)
         html = (
             '<!doctype html><html><body style="font-family:sans-serif;max-width:480px;margin:60px auto">'
-            '<h2>Link My Media to Alexa</h2>'
+            '<h2>Link Bock Media to Alexa</h2>'
             '<p>Authorize Alexa to access your local music library?</p>'
             '<form method="POST" action="/oauth/authorize">'
             f'<input type="hidden" name="client_id" value="{client_id}">'
@@ -2475,7 +2513,7 @@ def _msp_playlist_by_id(pid):
     if not pid:
         return None, None
     try:
-        tree = ET.parse(os.path.join(MMA_PATH, 'ServerPlaylists.xml'))
+        tree = ET.parse(os.path.join(DATA_DIR, 'ServerPlaylists.xml'))
         for e in tree.getroot().findall('Entry'):
             key = e.find('Key')
             if key is not None and (key.findtext('ID') or '') == str(pid):
@@ -2638,12 +2676,17 @@ def _msp_handle_event(req, ctx):
     # tell a music provider which Echo is rendering. So we attribute all MSP
     # playback to one stable pseudo-device that the web UI can display.
     device = ((ctx.get('System') or {}).get('device') or {})
-    raw_device_id = device.get('deviceId') or MSP_DEVICE_ID
+    raw_device_id = _msp_pick_device_id(device.get('deviceId'))
     register_device(raw_device_id,
                     default_name=(MSP_DEVICE_NAME if raw_device_id == MSP_DEVICE_ID else None),
                     supported_interfaces=device.get('supportedInterfaces') or {})
     g.raw_device_id = raw_device_id
     g.device_id = _resolve_device_id(raw_device_id)
+
+    # If we adopted a real Echo, retire any lingering pseudo-device entry so the
+    # UI never shows both "Bock Media (Alexa)" and the real speaker at once.
+    if raw_device_id != MSP_DEVICE_ID:
+        _retire_pseudo_msp_device()
 
     print(f"[MSP EVENT] {etype} device={raw_device_id[-12:] if raw_device_id!='default' else 'default'} "
           f"queue={queue_id} item={item_id}", flush=True)
@@ -2907,7 +2950,7 @@ def alexa_skill():
         # Enable in Settings → Public URL card or set launchPlaylistPrompt in config.json.
         if cfg_bool('launchPlaylistPrompt', False):
             return alexa_speak(
-                "My Media is listening. Say a playlist name from your library, "
+                "Bock Media is listening. Say a playlist name from your library, "
                 "or say mix, then the name. For example: yacht rock. "
                 "Do not include Spotify — this plays only your server.",
                 end_session=False,
@@ -2923,7 +2966,7 @@ def alexa_skill():
                     return start_playing(tracks, shuffle=do_shuffle,
                                         speech=f"Playing {name}.")
         return alexa_speak(
-            "Welcome to My Media. Say play followed by a playlist name, "
+            "Welcome to Bock Media. Say play followed by a playlist name, "
             "play music by an artist, or play an album name.",
             end_session=False
         )
@@ -3177,7 +3220,7 @@ def alexa_skill():
             if not sel:
                 return alexa_speak(
                     "Nothing is currently selected in the console. "
-                    "Open the My Media web app and browse to a song, album, or artist first."
+                    "Open the Bock Media web app and browse to a song, album, or artist first."
                 )
             sel_type = sel.get('type', '')
             query    = sel.get('name', '')
@@ -3267,21 +3310,21 @@ def alexa_skill():
 
         # ── Server management ──────────────────────────────────────────────
         elif iname == 'ListServersIntent':
-            return alexa_speak("You have one server: My Media.", end_session=False)
+            return alexa_speak("You have one server: Bock Media.", end_session=False)
 
         elif iname == 'SwitchServersIntent':
             return alexa_speak(
-                "You only have one server configured: My Media. "
-                "Add additional servers in the My Media console to switch between them.",
+                "You only have one server configured: Bock Media. "
+                "Add additional servers in the Bock Media console to switch between them.",
                 end_session=False
             )
 
         elif iname == 'CurrentServerIntent':
-            return alexa_speak("Your current server is My Media.", end_session=False)
+            return alexa_speak("Your current server is Bock Media.", end_session=False)
 
         elif iname == 'ListInvitationsIntent':
             return alexa_speak(
-                "Family share invitations are managed in the My Media console under Settings.",
+                "Family share invitations are managed in the Bock Media console under Settings.",
                 end_session=False
             )
 
@@ -3382,7 +3425,7 @@ def alexa_skill():
                 "play music by Dave Matthews, play the song Hotel California, "
                 "play jazz music, or mix the album Kind of Blue. "
                 "Tip: say mix instead of shuffle to avoid Spotify or Amazon Music "
-                "intercepting your request. Or open My Media first, then say the playlist name. "
+                "intercepting your request. Or open Bock Media first, then say the playlist name. "
                 "You can also say: what's playing, next, previous, pause, resume, or stop.",
                 end_session=False
             )
@@ -3399,5 +3442,5 @@ def alexa_skill():
 if __name__ == '__main__':
     apply_logging()
     port = int(os.environ.get('PORT', 3001))
-    print(f'My Media running at http://localhost:{port}')
+    print(f'Bock Media running at http://localhost:{port}')
     app.run(host='0.0.0.0', port=port, debug=False)

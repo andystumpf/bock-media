@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Build an Alexa Music Skill catalog (AMAZON.MusicPlaylist) from the
-MyMediaForAlexa ServerPlaylists.xml.
+library's ServerPlaylists.xml.
 
 Each catalog entity's `id` equals the playlist's stable ServerPlaylists ID, so
 that the `entityId` Alexa returns in GetPlayableContent maps directly back to a
@@ -20,8 +20,8 @@ import re
 import xml.etree.ElementTree as ET
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MMA_PATH = os.environ.get('OURMEDIA_MMA_PATH', os.environ.get('MMA_PATH', '/home/plex/.MyMediaForAlexa'))
-PLAYLISTS_XML = os.path.join(MMA_PATH, 'ServerPlaylists.xml')
+DATA_DIR = os.environ.get('OURMEDIA_DATA_DIR', '/home/plex/.bockmedia')
+PLAYLISTS_XML = os.path.join(DATA_DIR, 'ServerPlaylists.xml')
 
 # Words that add no entity-resolution value and only pollute the voice model.
 _NOISE = re.compile(r'\b(playlist|mix|radio|collection|complete)\b', re.IGNORECASE)

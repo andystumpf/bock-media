@@ -5,10 +5,9 @@ device stream music straight off your NAS — playlists, artists, albums, tracks
 genres, audiobooks — using your own voice commands instead of a paid streaming
 service.
 
-It is built around an existing
-[MyMediaForAlexa](https://www.mymediaalexa.com/) (MMA) installation and reuses
-its preferences, watch folders, playlists, and image cache, while replacing the
-paid MMA cloud bridge with:
+It reads a local media indexer's on-disk data (preferences, watch folders,
+playlists, image cache, and a `songs_cache` SQLite index) and replaces any paid
+cloud bridge with:
 
 - a **Flask backend** (`server.py`) that talks SQLite + XML on disk,
 - a **vanilla-JS admin console** for the LAN, and
@@ -28,46 +27,46 @@ by JSON endpoints:
   `AudioPlayer` events; artwork resolved from sidecar files, embedded ID3/MP4
   tags, sibling tracks on the same album, or the iTunes Search API.
 - **Playlists** — browse `.m3u` playlists referenced from
-  `~/.MyMediaForAlexa/ServerPlaylists.xml`; rename in place.
-- **Albums / Artists / Songs** — paginated browsers backed by the MMA
+  `~/.bockmedia/ServerPlaylists.xml`; rename in place.
+- **Albums / Artists / Songs** — paginated browsers backed by the
   `songs_cache` SQLite table.
-- **Watch Folders** — read MMA's `WatchFolders.xml` configuration.
+- **Watch Folders** — read the `WatchFolders.xml` configuration.
 - **Alexa Devices** — list every Echo that has hit the skill, rename them,
   merge duplicates left over from device-id rotation, and dismiss false-positive
   merge candidates.
 - **Analytics** — per-device / per-artist / per-day streaming history pulled
   from `streaming_history.jsonl` with Chart.js visualisations.
-- **Settings** — edit a subset of MMA `Preferences.xml` keys (default playlist,
+- **Settings** — edit a subset of `Preferences.xml` keys (default playlist,
   ffmpeg path, web password, verbose logging, ...) plus `config.json` toggles
   (public URL, launch playlist prompt).
 
 ### Alexa custom skill
 
 Endpoint: `https://alexa.morejava.bid/alexa` (fixed Cloudflare named tunnel).
-Invocation name: **"my media"**.
+Invocation name: **"bock media"**.
 
 Intents defined in [`skill/interaction_model.json`](skill/interaction_model.json):
 
 | Intent | Example utterance |
 | --- | --- |
-| `PlayPlaylistIntent` | *"Alexa, ask my media to start the yacht rock playlist"* |
-| `ShufflePlaylistIntent` | *"Alexa, ask my media to mix the yacht rock playlist"* |
-| `PlayArtistIntent` / `ShuffleArtistIntent` | *"Alexa, ask my media to play Steely Dan"* |
-| `PlayAlbumIntent` / `ShuffleAlbumIntent` | *"Alexa, ask my media to play the album Aja"* |
-| `PlayTrackIntent` / `PlayTrackByArtistIntent` | *"Alexa, ask my media to play Peg by Steely Dan"* |
-| `PlayGenreIntent` / `ShuffleGenreIntent` | *"Alexa, ask my media to play some jazz"* |
-| `ReadBookIntent` | *"Alexa, ask my media to read \<book title\>"* |
-| `PlayCurrentIntent` | *"Alexa, ask my media to play this"* (uses the track selected in the web UI) |
+| `PlayPlaylistIntent` | *"Alexa, ask bock media to start the yacht rock playlist"* |
+| `ShufflePlaylistIntent` | *"Alexa, ask bock media to mix the yacht rock playlist"* |
+| `PlayArtistIntent` / `ShuffleArtistIntent` | *"Alexa, ask bock media to play Steely Dan"* |
+| `PlayAlbumIntent` / `ShuffleAlbumIntent` | *"Alexa, ask bock media to play the album Aja"* |
+| `PlayTrackIntent` / `PlayTrackByArtistIntent` | *"Alexa, ask bock media to play Peg by Steely Dan"* |
+| `PlayGenreIntent` / `ShuffleGenreIntent` | *"Alexa, ask bock media to play some jazz"* |
+| `ReadBookIntent` | *"Alexa, ask bock media to read \<book title\>"* |
+| `PlayCurrentIntent` | *"Alexa, ask bock media to play this"* (uses the track selected in the web UI) |
 | `WhatsPlayingIntent` | *"Alexa, what's playing?"* |
-| `AddToPlaylistIntent` | *"Alexa, ask my media to add this to my road trip playlist"* |
-| `IgnoreSongIntent` | *"Alexa, ask my media to never play this again"* |
-| `ListServersIntent` / `CurrentServerIntent` / `SwitchServersIntent` | *"Alexa, ask my media what servers do I have"* |
-| `ListInvitationsIntent` | *"Alexa, ask my media do I have any invitations"* |
+| `AddToPlaylistIntent` | *"Alexa, ask bock media to add this to my road trip playlist"* |
+| `IgnoreSongIntent` | *"Alexa, ask bock media to never play this again"* |
+| `ListServersIntent` / `CurrentServerIntent` / `SwitchServersIntent` | *"Alexa, ask bock media what servers do I have"* |
+| `ListInvitationsIntent` | *"Alexa, ask bock media do I have any invitations"* |
 | `AMAZON.{Pause,Resume,Next,Previous,Stop,Cancel,Help,ShuffleOn,ShuffleOff,LoopOn,LoopOff}` | Standard audio-player controls |
 
 Fuzzy matching falls back through playlist → artist → album → track when a
 slot value doesn't match exactly, and `normalize_spoken_value()` strips
-invocation bleed-through (`"ask my media to ..."`) that occasionally shows up
+invocation bleed-through (`"ask bock media to ..."`) that occasionally shows up
 in slot values.
 
 ### Audio streaming + artwork
@@ -90,7 +89,7 @@ in slot values.
   validation, ±150 s timestamp window, and `applicationId` pinning to the
   skill ID.
 - LAN requests can be optionally protected with HTTP Basic auth driven by
-  MMA's `WebPassword` preference.
+  the `WebPassword` preference.
 
 ### Music Skill API (experimental)
 
@@ -139,20 +138,24 @@ Runtime state (excluded via `.gitignore`):
 - `streaming_history.jsonl` — append-only play log feeding Analytics
 - `artwork_cache/` — sidecar/embedded/iTunes art
 
-External dependencies on disk:
+External data on disk (configurable via env vars — see below):
 
-- `/mnt/bock/Music/music_organizer.db` — MMA's SQLite `songs_cache`
-- `/home/plex/.MyMediaForAlexa/` — MMA's XML config and image cache
+- `$OURMEDIA_DB_PATH` (default `/mnt/bock/Music/music_organizer.db`) — SQLite `songs_cache`
+- `$OURMEDIA_DATA_DIR` (default `~/.bockmedia`) — XML config and image cache
+- `$OURMEDIA_MUSIC_ROOT` (default `/mnt/bock/Music`) — music library root
+
+The code hardcodes no machine-specific paths; override the three `OURMEDIA_*`
+environment variables (declared in `ourmedia.service`) to relocate.
 
 ---
 
 ## Requirements
 
 - **Python 3.10+**
-- **ffmpeg** on `PATH` (or set `FFmpegLocation` in MMA preferences) for
+- **ffmpeg** on `PATH` (or set `FFmpegLocation` in preferences) for
   non-native formats.
-- **MyMediaForAlexa** installed and indexing — ourMedia reuses its
-  `songs_cache` SQLite DB and XML config.
+- A **media indexer** populating the `songs_cache` SQLite DB and the XML config
+  in `$OURMEDIA_DATA_DIR` (e.g. a local library scanner writing `ServerPlaylists.xml`).
 - **Cloudflare account + named tunnel** with a public hostname pointing to
   `http://127.0.0.1:3001`.
 - **Amazon Developer account** to host the custom skill in development mode.
@@ -263,14 +266,14 @@ its own):
 }
 ```
 
-- `launchPlaylistPrompt` — when `true`, `"Alexa, open my media"` asks for a
+- `launchPlaylistPrompt` — when `true`, `"Alexa, open bock media"` asks for a
   playlist name and stays in the skill session. Useful workaround when
   Spotify keeps stealing one-shot commands; reply with **only the name** or
   `"mix <name>"`.
 - When `false`, a `LaunchRequest` immediately plays the playlist named in
-  MMA's `DefaultPlaylist` preference.
+  the `DefaultPlaylist` preference.
 
-Other relevant MMA prefs surfaced under **Settings** in the UI:
+Other relevant prefs surfaced under **Settings** in the UI:
 `DefaultPlaylist`, `FFmpegLocation`, `RequirePassword`, `WebPassword`,
 `VerboseLogging`.
 
@@ -318,7 +321,7 @@ pytest tests/
 ```
 
 `tests/conftest.py` redirects every writable path in `server.py` into a
-per-test `tmp_path`, seeds it with snapshots of `~/.MyMediaForAlexa` XML, and
+per-test `tmp_path`, seeds it with snapshots of `$OURMEDIA_DATA_DIR` XML, and
 gives each test a Flask test client plus an `alexa_request()` envelope
 builder. Real DB-backed fixtures (`sample_artist`, `sample_album`,
 `sample_track`, `sample_playlist`) read the live `songs_cache` so the Alexa

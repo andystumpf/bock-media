@@ -1,4 +1,4 @@
-// My Media frontend app
+// Bock Media frontend app
 
 const API = (path) => fetch(path).then(r => r.json()).catch(() => null);
 const POST = (path, body) => fetch(path, {
@@ -90,21 +90,38 @@ function searchInput(placeholder, id) {
 }
 
 // ── Dashboard ────────────────────────────────────────────────────────────────
+// Voice commands routed through the custom skill ("ask Bock Media to ..."). Each
+// maps to a real intent in skill/interaction_model.json. [bracketed] = fill-in.
 const VOICE_SUGGESTIONS = [
-  'Alexa, ask My Media to play music by Brandi Carlile',
-  'Alexa, ask My Media to play my [playlist] Playlist',
-  'Alexa, ask My Media to play some Virginia Indie music',
-  'Alexa, ask My Media to play the album Christmas Is Here',
-  'Alexa, ask My Media to play the song Hands First by Headlund',
-  'Alexa, ask My Media to turn shuffling on/off',
-  'Alexa, ask My Media to turn loop mode on/off',
-  "Alexa, ask My Media what's playing",
-  'Alexa, ask My Media which is my current server',
-  'Alexa, ask My Media to switch servers',
-  'Alexa, ask My Media to list my invitations',
-  'Alexa, previous / go back',
-  'Alexa, skip / next',
+  'Alexa, ask Bock Media to play my [playlist] playlist',
+  'Alexa, ask Bock Media to mix my [playlist] playlist',
+  'Alexa, ask Bock Media to play music by [artist]',
+  'Alexa, ask Bock Media to play the album [album]',
+  'Alexa, ask Bock Media to play the song [song] by [artist]',
+  'Alexa, ask Bock Media to play [genre] music',
+  "Alexa, ask Bock Media what's playing",
+];
+
+// Spoken without "ask" once Bock Media is the active audio player (in-playback
+// controls handled by the AMAZON.* built-in intents).
+const PLAYBACK_CONTROLS = [
+  'Alexa, pause',
+  'Alexa, resume',
+  'Alexa, next',
+  'Alexa, previous',
+  'Alexa, shuffle on',
+  'Alexa, shuffle off',
+  'Alexa, loop on',
+  'Alexa, loop off',
   'Alexa, stop',
+];
+
+// Hands-free, no "ask" prefix. These only work after you create an Alexa Routine
+// (Alexa app -> Routines -> When you say [phrase] -> Music -> Bock Media). Tip:
+// use "mix" over "shuffle" to avoid Amazon Music / Spotify intercepting.
+const ROUTINE_SUGGESTIONS = [
+  'Alexa, play [playlist] on Bock Media',
+  'Alexa, play [playlist]   (after you map the phrase in a Routine)',
 ];
 
 let _dashPage = 1;
@@ -130,8 +147,20 @@ async function loadDashboard() {
       <td style="color:${r.success ? '#2eaa5a' : '#e44'}">${escHtml(r.found)}</td>
     </tr>`).join('');
 
-  const voiceRows = VOICE_SUGGESTIONS.map(s =>
-    `<tr><td><i class="fa fa-microphone" style="color:#e99d1a;margin-right:8px;font-size:11px"></i>${escHtml(s)}</td></tr>`
+  const cmdRow = (s, icon, color) =>
+    `<tr><td><i class="fa ${icon}" style="color:${color};margin-right:8px;font-size:11px"></i>${escHtml(s)}</td></tr>`;
+  const sectionRow = (label) =>
+    `<tr><td style="padding-top:10px;font-size:11px;font-weight:600;color:#7a8aa8;text-transform:uppercase;letter-spacing:.04em">${escHtml(label)}</td></tr>`;
+
+  const voiceRows = [
+    sectionRow('Start playback'),
+    ...VOICE_SUGGESTIONS.map(s => cmdRow(s, 'fa-microphone', '#e99d1a')),
+    sectionRow('While music is playing'),
+    ...PLAYBACK_CONTROLS.map(s => cmdRow(s, 'fa-sliders', '#30426a')),
+  ].join('');
+
+  const routineRows = ROUTINE_SUGGESTIONS.map(s =>
+    cmdRow(s, 'fa-bolt', '#7c4dbd')
   ).join('');
 
   const recentPager = buildPagination(recentTotal, _dashPage, 10, (p) => { _dashPage = p; loadDashboard(); });
@@ -172,7 +201,7 @@ async function loadDashboard() {
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
       <div class="card">
         <div class="card-header">
-          <h3><i class="fa fa-microphone"></i> Alexa Voice Command Suggestions</h3>
+          <h3><i class="fa fa-microphone"></i> Voice Commands</h3>
         </div>
         <table class="data-table">
           <tbody>${voiceRows}</tbody>
@@ -181,18 +210,30 @@ async function loadDashboard() {
 
       <div class="card">
         <div class="card-header">
-          <h3><i class="fa fa-history"></i> Recent Alexa Play Requests</h3>
-          <button onclick="loadDashboard()" style="background:none;border:none;color:#30426a;cursor:pointer;font-size:12px">
-            <i class="fa fa-rotate-right"></i> Refresh
-          </button>
+          <h3><i class="fa fa-bolt"></i> Hands-free (Alexa Routines)</h3>
         </div>
-        ${recentRows ? `
+        <div class="page-desc" style="margin:0 0 6px">
+          No "ask" prefix needed. Set up in the Alexa app: <b>Routines → When you say [phrase] → Music → Bock Media</b>. Routines bypass the music-provider arbitration that otherwise sends "play" to Amazon Music or Spotify.
+        </div>
         <table class="data-table">
-          <thead><tr><th>Heard</th><th>Found</th></tr></thead>
-          <tbody>${recentRows}</tbody>
+          <tbody>${routineRows}</tbody>
         </table>
-        ${recentPager}` : `<div class="empty-state"><i class="fa fa-history"></i><p>No recent play requests.</p></div>`}
       </div>
+    </div>
+
+    <div class="card" style="margin-top:20px">
+      <div class="card-header">
+        <h3><i class="fa fa-history"></i> Recent Alexa Play Requests</h3>
+        <button onclick="loadDashboard()" style="background:none;border:none;color:#30426a;cursor:pointer;font-size:12px">
+          <i class="fa fa-rotate-right"></i> Refresh
+        </button>
+      </div>
+      ${recentRows ? `
+      <table class="data-table">
+        <thead><tr><th>Heard</th><th>Found</th></tr></thead>
+        <tbody>${recentRows}</tbody>
+      </table>
+      ${recentPager}` : `<div class="empty-state"><i class="fa fa-history"></i><p>No recent play requests.</p></div>`}
     </div>`;
 }
 
@@ -320,15 +361,17 @@ async function loadPlaylists() {
   window._playlists = items;
 
   const rows = items.map((p, i) => {
-    const isMyMedia = !p.source || p.source.includes('MyMedia');
+    // SourceID in the library XML still tags indexed playlists as "MyMedia";
+    // match the raw data value, but display it under the Bock Media brand.
+    const isLibraryPlaylist = !p.source || p.source.includes('MyMedia');
     const typeIcon = p.isAudioBook
       ? `<i class="fa fa-book" title="Audiobook" style="color:#7c4dbd"></i>`
       : `<i class="fa fa-music" title="Music" style="color:#e99d1a"></i>`;
     const srcDisplay = p.source
       ? `<span class="source-path" title="${escHtml(p.source)}">${escHtml(p.source)}</span>`
       : '<span class="text-muted">—</span>';
-    const typeBadge = isMyMedia
-      ? '<span class="badge orange">My Media</span>'
+    const typeBadge = isLibraryPlaylist
+      ? '<span class="badge orange">Bock Media</span>'
       : '<span class="badge">File</span>';
     const editBtn = p.id
       ? `<button class="edit-btn" onclick="startEditPlaylist(${i})" title="Rename"><i class="fa fa-pencil"></i></button>`
@@ -347,7 +390,7 @@ async function loadPlaylists() {
   document.getElementById('page-title').textContent = 'Playlists';
   document.getElementById('main-content').innerHTML = `
     <div class="page-desc">
-      This page shows playlists that have been indexed by My Media. File based playlists (M3U, M3U8, PLS) are automatically indexed if My Media finds them during a scan of a Watch Folder. Use the pencil icon to rename a playlist — Alexa will recognize the new name immediately.
+      This page shows playlists that have been indexed by Bock Media. File based playlists (M3U, M3U8, PLS) are automatically indexed if Bock Media finds them during a scan of a Watch Folder. Use the pencil icon to rename a playlist — Alexa will recognize the new name immediately.
     </div>
     <div class="card">
       <div class="card-header">
@@ -651,7 +694,7 @@ function renderDevices() {
 
   renderPage('Alexa Devices', `
     <div class="page-desc">
-      Devices auto-register the first time they stream music via My Media. Rename them with the pencil icon, or remove them with the trash icon. If Alexa rotated the deviceId for a device you already named (a duplicate appears), use the merge icon to fold it into the original — history and analytics will follow.
+      Devices auto-register the first time they stream music via Bock Media. Rename them with the pencil icon, or remove them with the trash icon. If Alexa rotated the deviceId for a device you already named (a duplicate appears), use the merge icon to fold it into the original — history and analytics will follow.
     </div>
     ${candHtml}
     <div class="card">
@@ -822,7 +865,7 @@ register('settings', async () => {
 
         <div class="settings-section">
           <h4>Default Playlist</h4>
-          <p class="hint">Played automatically when you open My Media without specifying a playlist, artist, or track.</p>
+          <p class="hint">Played automatically when you open Bock Media without specifying a playlist, artist, or track.</p>
           <div class="settings-row">
             <input type="text" id="s-default-pl" class="settings-input wide" value="${escHtml(settings.defaultPlaylist || '')}">
             <button class="btn-sm btn-primary" onclick="saveSetting('defaultPlaylist', document.getElementById('s-default-pl').value)">Set</button>
@@ -869,7 +912,7 @@ register('settings', async () => {
 
         <div class="settings-section">
           <h4>Logging</h4>
-          <p class="hint">Writes a rotating log to <code>server.log</code> in the My Media directory. Changes take effect on next server restart.</p>
+          <p class="hint">Writes a rotating log to <code>server.log</code> in the Bock Media directory. Changes take effect on next server restart.</p>
           ${toggle('s-log', 'Enable Logging', chk(settings.verboseLogging))}
         </div>
 
@@ -912,8 +955,8 @@ register('settings', async () => {
             <button class="btn-sm btn-primary" onclick="savePublicUrl(document.getElementById('s-public-url').value)">Save</button>
           </div>
           ${publicUrl ? `<p style="font-size:12px;color:#2eaa5a;margin-top:8px"><i class="fa fa-circle-check"></i> Alexa endpoint: <code>${escHtml(publicUrl)}/alexa</code></p>` : ''}
-          ${toggle('s-launch-pl-prompt', 'After “Open My Media,” ask which playlist (recommended if Alexa keeps opening Spotify instead of this skill)', chk((cfg || {}).launchPlaylistPrompt), 'saveLaunchPlaylistPrompt()')}
-          <p class="hint" style="margin-top:6px">When enabled, say: <b>Alexa, open my media</b> — then answer with only a playlist name, or <b>mix</b> and the name. That stays inside the skill and avoids Spotify.</p>
+          ${toggle('s-launch-pl-prompt', 'After “Open Bock Media,” ask which playlist (recommended if Alexa keeps opening Spotify instead of this skill)', chk((cfg || {}).launchPlaylistPrompt), 'saveLaunchPlaylistPrompt()')}
+          <p class="hint" style="margin-top:6px">When enabled, say: <b>Alexa, open bock media</b> — then answer with only a playlist name, or <b>mix</b> and the name. That stays inside the skill and avoids Spotify.</p>
         </div>
 
         <div class="settings-row" style="padding-top:8px;border-top:1px solid #eef2f8;margin-top:4px">

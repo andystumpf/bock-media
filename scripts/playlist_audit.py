@@ -31,6 +31,7 @@ import os
 import shutil
 import sqlite3
 import sys
+import xml.etree.ElementTree as ET
 from collections import defaultdict
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -38,6 +39,29 @@ from pathlib import Path
 _MUSIC_ROOT  = os.environ.get('OURMEDIA_MUSIC_ROOT', '/mnt/bock/Music')
 PLAYLIST_DIR = Path(os.environ.get('OURMEDIA_PLAYLIST_DIR', os.path.join(_MUSIC_ROOT, 'exportedPlaylists')))
 DB_PATH      = Path(os.environ.get('OURMEDIA_DB_PATH', os.path.join(_MUSIC_ROOT, 'music_organizer.db')))
+DATA_DIR     = os.environ.get('OURMEDIA_DATA_DIR', '/home/plex/.bockmedia')
+SERVER_PLAYLISTS = Path(DATA_DIR) / 'ServerPlaylists.xml'
+
+
+def targets_from_xml():
+    """Audit exactly what the Alexa skill serves: every <Entry> in
+    ServerPlaylists.xml, resolved via its <SourceID> .m3u. Returns
+    (existing_m3u_paths, missing) where missing = [(playlist_name, source)]."""
+    tree = ET.parse(SERVER_PLAYLISTS)
+    existing, missing = [], []
+    for e in tree.getroot().findall('Entry'):
+        key = e.find('Key')
+        if key is None:
+            continue
+        name = (key.findtext('Name') or '').strip() or '(unnamed)'
+        src = (key.findtext('SourceID') or '').strip()
+        if not src:
+            missing.append((name, '(no SourceID)'))
+        elif Path(src).is_file():
+            existing.append(Path(src))
+        else:
+            missing.append((name, src))
+    return existing, missing
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -156,7 +180,7 @@ def fmt_pct(n, total):
 
 
 def print_report(playlist_results: list[tuple[Path, list[TrackResult], bool]],
-                 fix: bool, verbose: bool):
+                 fix: bool, verbose: bool, missing_m3u: list[tuple[str, str]] | None = None):
     total_playlists   = len(playlist_results)
     clean_playlists   = 0
     repaired_playlists = 0
@@ -200,8 +224,33 @@ def print_report(playlist_results: list[tuple[Path, list[TrackResult], bool]],
     print('  PLAYLIST AUDIT REPORT' + ('  [DRY RUN — no files changed]' if not fix else '  [CHANGES APPLIED]'))
     print('=' * W)
 
+    empty_playlists = [m.name for m, results, _ in playlist_results
+                       if results and all(r.status != 'ok' for r in results)]
+
     print(f'\nScanned : {total_playlists:>6,} playlists   |   {total_tracks:>7,} track references')
+    if missing_m3u:
+        print(f'        : {len(missing_m3u):>6,} served playlists whose .m3u file is MISSING')
+    if empty_playlists:
+        print(f'        : {len(empty_playlists):>6,} playlists with ZERO playable tracks')
     print()
+
+    if missing_m3u:
+        print('-' * W)
+        print(f'Missing .m3u files ({len(missing_m3u)}) — playlist is listed but has no source file:')
+        for name, src in sorted(missing_m3u)[:80]:
+            print(f'  ✗ {name}  →  {src}')
+        if len(missing_m3u) > 80:
+            print(f'  … and {len(missing_m3u) - 80} more')
+        print()
+
+    if empty_playlists:
+        print('-' * W)
+        print(f'Empty playlists ({len(empty_playlists)}) — every track is dead (would play nothing):')
+        for name in sorted(empty_playlists)[:80]:
+            print(f'  ✗ {name}')
+        if len(empty_playlists) > 80:
+            print(f'  … and {len(empty_playlists) - 80} more')
+        print()
 
     # ── playlist-level summary ──────────────────────────────────────────────
     print('Playlist summary:')
@@ -278,26 +327,36 @@ def main():
                         help='Only audit this one playlist filename (e.g. "Baroque Music.m3u")')
     parser.add_argument('--verbose',  action='store_true',
                         help='Show each fixed/unfixable track per playlist')
+    parser.add_argument('--from-xml', action='store_true',
+                        help='Audit exactly what the skill serves (every ServerPlaylists.xml entry)')
     args = parser.parse_args()
 
-    if not PLAYLIST_DIR.is_dir():
-        sys.exit(f'Playlist dir not found: {PLAYLIST_DIR}')
     if not DB_PATH.is_file():
         sys.exit(f'Database not found: {DB_PATH}')
 
+    missing_m3u: list[tuple[str, str]] = []
     # Collect playlists to scan
-    if args.playlist:
+    if args.from_xml:
+        if not SERVER_PLAYLISTS.is_file():
+            sys.exit(f'ServerPlaylists.xml not found: {SERVER_PLAYLISTS}')
+        m3u_files, missing_m3u = targets_from_xml()
+        if not m3u_files and not missing_m3u:
+            sys.exit('No playlists found in ServerPlaylists.xml')
+    elif args.playlist:
         target = PLAYLIST_DIR / args.playlist
         if not target.is_file():
             sys.exit(f'Playlist not found: {target}')
         m3u_files = [target]
     else:
-        m3u_files = sorted(PLAYLIST_DIR.glob('*.m3u'))
+        if not PLAYLIST_DIR.is_dir():
+            sys.exit(f'Playlist dir not found: {PLAYLIST_DIR}')
+        m3u_files = sorted(PLAYLIST_DIR.rglob('*.m3u'))  # recurse into plex/ etc.
         if not m3u_files:
             sys.exit(f'No .m3u files found in {PLAYLIST_DIR}')
 
-    print(f'\nPlaylist Audit  —  {"REPAIRING" if args.fix else "DRY RUN"}')
-    print(f'Playlists : {PLAYLIST_DIR}')
+    print(f'\nPlaylist Audit  —  {"REPAIRING" if args.fix else "DRY RUN"}'
+          f'{"  [from ServerPlaylists.xml]" if args.from_xml else ""}')
+    print(f'Playlists : {SERVER_PLAYLISTS if args.from_xml else PLAYLIST_DIR}')
     print(f'Database  : {DB_PATH}')
     print()
 
@@ -316,7 +375,7 @@ def main():
     if total > 1:
         print()  # newline after progress line
 
-    print_report(playlist_results, fix=args.fix, verbose=args.verbose)
+    print_report(playlist_results, fix=args.fix, verbose=args.verbose, missing_m3u=missing_m3u)
 
 
 if __name__ == '__main__':

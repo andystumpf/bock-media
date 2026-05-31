@@ -69,7 +69,7 @@ Two Alexa skills share one backend and one tunnel:
 | `/home/plex/Documents/github/ourMedia/server.py` | Flask backend (entry point) |
 | `/mnt/bock/Music/music_organizer.db` | SQLite DB (`DB_PATH`), table `songs_cache` |
 | `/mnt/bock/Music` | `MUSIC_ROOT` — music files |
-| `/home/plex/.MyMediaForAlexa/ServerPlaylists.xml` | `MMA_PATH` — playlist source (~22 MB) |
+| `/home/plex/.bockmedia/ServerPlaylists.xml` | `DATA_DIR` — playlist source (~22 MB); `.bockmedia` is a symlink → `/home/plex/.MyMediaForAlexa` (the upstream indexer's data) |
 | `/home/plex/.cloudflared/` | Tunnel config + credentials |
 
 - Backend listens on **port 3001** (`Environment=PORT=3001`).
@@ -85,14 +85,14 @@ Two Alexa skills share one backend and one tunnel:
 HERE                  = repo dir
 DB_PATH               = $OURMEDIA_DB_PATH    (default /mnt/bock/Music/music_organizer.db)
 MUSIC_ROOT            = $OURMEDIA_MUSIC_ROOT  (default /mnt/bock/Music)
-MMA_PATH              = $OURMEDIA_MMA_PATH    (default /home/plex/.MyMediaForAlexa; ServerPlaylists.xml)
+DATA_DIR              = $OURMEDIA_DATA_DIR    (default /home/plex/.bockmedia → symlink to indexer data; ServerPlaylists.xml)
 EXPECTED_SKILL_APP_ID = amzn1.ask.skill.c13622d4-8780-4bea-93a5-0ded84307466
 MSP_DEVICE_ID         = 'msp-bock-media'      (Now Playing pseudo-device)
 MSP_DEVICE_NAME       = 'Bock Media (Alexa)'
 ```
 
 > External data lives outside the repo and is **configurable via environment variables**
-> (`OURMEDIA_DB_PATH`, `OURMEDIA_MMA_PATH`, `OURMEDIA_MUSIC_ROOT`). The code hardcodes nothing
+> (`OURMEDIA_DB_PATH`, `OURMEDIA_DATA_DIR`, `OURMEDIA_MUSIC_ROOT`). The code hardcodes nothing
 > machine-specific; defaults preserve this deployment. The values are declared in
 > `ourmedia.service`. Scripts honor the same vars (`scripts/playlist_audit.py`,
 > `scripts/build_msp_catalog.py`, plus `OURMEDIA_PLAYLIST_DIR`).
@@ -231,7 +231,7 @@ User step: Alexa app → Skills → Your Skills → Bock Media → Settings → 
 
 ## 9. MSP catalog (playlists for voice resolution)
 
-- Source: `/home/plex/.MyMediaForAlexa/ServerPlaylists.xml` → generated `skill/catalog_playlists.json` (629 entities).
+- Source: `$OURMEDIA_DATA_DIR/ServerPlaylists.xml` (i.e. `/home/plex/.bockmedia/...`) → generated `skill/catalog_playlists.json` (629 entities).
 - Entity `id` == ServerPlaylists playlist ID; `entityId` from `GetPlayableContent` maps back via `_msp_playlist_by_id`.
 
 ```bash
@@ -269,7 +269,7 @@ Binary: `/usr/local/bin/cloudflared`. Latency to `alexa.morejava.bid` should be 
 
 All in `/etc/systemd/system/`, run as user **plex**.
 
-- **`ourmedia.service`** — Flask backend. `ExecStart=/usr/bin/python3 .../server.py`, `Restart=always`, logs → `server.log`. Environment: `PORT=3001`, `OURMEDIA_DB_PATH`, `OURMEDIA_MMA_PATH`, `OURMEDIA_MUSIC_ROOT` (external data locations — change these to relocate). After editing this unit in the repo, copy to `/etc/systemd/system/`, `daemon-reload`, restart.
+- **`ourmedia.service`** — Flask backend. `ExecStart=/usr/bin/python3 .../server.py`, `Restart=always`, logs → `server.log`. Environment: `PORT=3001`, `OURMEDIA_DB_PATH`, `OURMEDIA_DATA_DIR`, `OURMEDIA_MUSIC_ROOT` (external data locations — change these to relocate). After editing this unit in the repo, copy to `/etc/systemd/system/`, `daemon-reload`, restart.
 - **`ourmedia-tunnel-named.service`** — `cloudflared tunnel --config .../config.yml run ourmedia`. `Requires=ourmedia.service`, `Restart=always`, logs → `tunnel.log`.
 - **`ourmedia-stack.target`** — boot aggregate, `WantedBy=multi-user.target`, wants both services above.
 
@@ -310,7 +310,7 @@ sudo systemctl enable ourmedia-stack.target
 ## 14. Disaster-recovery rebuild order
 
 1. Restore repo + restore git-ignored secret files (§15).
-2. Place `ServerPlaylists.xml` at `/home/plex/.MyMediaForAlexa/`; ensure DB at `/mnt/bock/Music/music_organizer.db`.
+2. Restore the data dir and recreate the symlink: `ln -sfn /home/plex/.MyMediaForAlexa /home/plex/.bockmedia` (or point `OURMEDIA_DATA_DIR` wherever `ServerPlaylists.xml` lives); ensure DB at `/mnt/bock/Music/music_organizer.db`.
 3. Restore `/home/plex/.cloudflared/` (config.yml + creds JSON + cert.pem). Install `cloudflared`.
 4. Install the 3 systemd units → `daemon-reload` → `enable ourmedia-stack.target` → `start`.
 5. Verify: `curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:3001/api/summary` (200) and
@@ -329,7 +329,7 @@ Back these up off-box; without them the above identifiers are not enough:
 - [ ] `/home/plex/.cloudflared/config.yml`
 - [ ] `/home/plex/.cloudflared/4916dffe-cfa6-4dde-ba2e-02b9306cc5b0.json` (tunnel creds)
 - [ ] `/home/plex/.cloudflared/cert.pem`
-- [ ] `/home/plex/.MyMediaForAlexa/ServerPlaylists.xml` (playlist source of truth)
+- [ ] `/home/plex/.MyMediaForAlexa/ServerPlaylists.xml` (playlist source of truth; reached via the `~/.bockmedia` symlink)
 - [ ] `/mnt/bock/Music/music_organizer.db` (or the means to rebuild it)
 - [ ] The 3 systemd unit files (also tracked: `ourmedia.service`, `ourmedia-stack.target` in repo)
 - [ ] Amazon developer account credentials + `ask configure` profile (`~/.ask/`)

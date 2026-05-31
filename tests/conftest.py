@@ -3,7 +3,7 @@ Shared test fixtures.
 
 Strategy: import server.py once, then monkeypatch its module-level
 file path globals to point inside a per-test tmp directory so nothing
-under the project (or under ~/.MyMediaForAlexa) is modified.
+under the project (or under the library data dir) is modified.
 """
 import os
 import sys
@@ -23,10 +23,10 @@ import server  # noqa: E402
 
 # ─────────────────────────── helpers ─────────────────────────────────────────
 
-REAL_MMA_PATH = '/home/plex/.MyMediaForAlexa'
-REAL_DB_PATH = '/mnt/bock/Music/music_organizer.db'
+REAL_DATA_DIR = os.environ.get('OURMEDIA_DATA_DIR', '/home/plex/.bockmedia')
+REAL_DB_PATH = os.environ.get('OURMEDIA_DB_PATH', '/mnt/bock/Music/music_organizer.db')
 
-# XML files under MMA we want to copy into tmp so tests can read them.
+# XML files in the data dir we want to copy into tmp so tests can read them.
 MMA_XML_FILES = [
     'Preferences.xml',
     'WatchFolders.xml',
@@ -40,7 +40,7 @@ MMA_XML_FILES = [
 def _seed_mma(tmp_dir):
     os.makedirs(tmp_dir, exist_ok=True)
     for name in MMA_XML_FILES:
-        src = os.path.join(REAL_MMA_PATH, name)
+        src = os.path.join(REAL_DATA_DIR, name)
         dst = os.path.join(tmp_dir, name)
         if os.path.exists(src):
             shutil.copy2(src, dst)
@@ -61,7 +61,7 @@ def isolated_paths(tmp_path, monkeypatch):
     _seed_mma(str(mma_dir))
 
     monkeypatch.setattr(server, 'HERE', str(state_dir))
-    monkeypatch.setattr(server, 'MMA_PATH', str(mma_dir))
+    monkeypatch.setattr(server, 'DATA_DIR', str(mma_dir))
     monkeypatch.setattr(server, 'DEVICES_PATH', str(state_dir / 'devices.json'))
     monkeypatch.setattr(server, 'STREAM_HISTORY_PATH', str(state_dir / 'streaming_history.jsonl'))
     monkeypatch.setattr(server, 'CONFIG_PATH', str(state_dir / 'config.json'))
@@ -133,7 +133,7 @@ def sample_track(db_conn):
 @pytest.fixture(scope='session')
 def sample_playlist():
     """First playlist from real ServerPlaylists.xml whose m3u has at least one playable track."""
-    spl = os.path.join(REAL_MMA_PATH, 'ServerPlaylists.xml')
+    spl = os.path.join(REAL_DATA_DIR, 'ServerPlaylists.xml')
     if not os.path.exists(spl):
         pytest.skip('ServerPlaylists.xml not available')
     tree = ET.parse(spl)
