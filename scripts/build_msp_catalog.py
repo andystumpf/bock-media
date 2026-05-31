@@ -20,7 +20,7 @@ import re
 import xml.etree.ElementTree as ET
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MMA_PATH = os.environ.get('MMA_PATH', '/home/plex/.MyMediaForAlexa')
+MMA_PATH = os.environ.get('OURMEDIA_MMA_PATH', os.environ.get('MMA_PATH', '/home/plex/.MyMediaForAlexa'))
 PLAYLISTS_XML = os.path.join(MMA_PATH, 'ServerPlaylists.xml')
 
 # Words that add no entity-resolution value and only pollute the voice model.

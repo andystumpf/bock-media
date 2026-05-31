@@ -27,8 +27,14 @@ from flask import Flask, jsonify, request, send_from_directory, send_file, Respo
 HERE = os.path.dirname(os.path.abspath(__file__))
 app = Flask(__name__, static_folder=os.path.join(HERE, 'public'))
 
-DB_PATH = '/mnt/bock/Music/music_organizer.db'
-MMA_PATH = '/home/plex/.MyMediaForAlexa'
+# External data locations are machine-specific and live outside this repo, so they
+# are configurable via environment variables (the defaults preserve the original
+# deployment). Override in the systemd unit / shell to relocate without code changes.
+#   OURMEDIA_DB_PATH    – SQLite music index (table songs_cache)
+#   OURMEDIA_MMA_PATH   – My Media for Alexa data dir (Preferences/WatchFolders/ServerPlaylists XML)
+#   OURMEDIA_MUSIC_ROOT – root of the music library that gets streamed
+DB_PATH = os.environ.get('OURMEDIA_DB_PATH', '/mnt/bock/Music/music_organizer.db')
+MMA_PATH = os.environ.get('OURMEDIA_MMA_PATH', '/home/plex/.MyMediaForAlexa')
 
 # ── DB helper ────────────────────────────────────────────────────────────────
 
@@ -1492,7 +1498,7 @@ def config_endpoint():
 
 # ── Audio Streaming ───────────────────────────────────────────────────────────
 
-MUSIC_ROOT = '/mnt/bock/Music'
+MUSIC_ROOT = os.environ.get('OURMEDIA_MUSIC_ROOT', '/mnt/bock/Music')
 NATIVE_EXTS   = {'.mp3', '.m4a', '.aac'}
 TRANSCODE_EXTS = {'.flac', '.wma', '.wav', '.ogg', '.aif', '.aiff'}
 SUPPORTED_EXTS = NATIVE_EXTS | TRANSCODE_EXTS

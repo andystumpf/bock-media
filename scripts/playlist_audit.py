@@ -35,8 +35,9 @@ from collections import defaultdict
 from difflib import SequenceMatcher
 from pathlib import Path
 
-PLAYLIST_DIR = Path('/mnt/bock/Music/exportedPlaylists')
-DB_PATH      = Path('/mnt/bock/Music/music_organizer.db')
+_MUSIC_ROOT  = os.environ.get('OURMEDIA_MUSIC_ROOT', '/mnt/bock/Music')
+PLAYLIST_DIR = Path(os.environ.get('OURMEDIA_PLAYLIST_DIR', os.path.join(_MUSIC_ROOT, 'exportedPlaylists')))
+DB_PATH      = Path(os.environ.get('OURMEDIA_DB_PATH', os.path.join(_MUSIC_ROOT, 'music_organizer.db')))
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
