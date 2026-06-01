@@ -156,19 +156,40 @@ Lives at repo root, **git-ignored**. Template: `config.example.json`.
 
 ---
 
-## 17. "Play on device" (web UI → specific Echo, via `alexapy`)
+## 17. "Play on device" — play a playlist on a specific Echo from the web UI ✅ WORKING
 
-Amazon has **no official API** to start playback on a chosen Echo from a skill/MSP, so the `#playlists` ▶ button uses the **unofficial Alexa API** (`alexapy`) to inject *"ask bock media to play the <name> playlist"* on the selected device (reuses the custom skill).
+Amazon has **no official API** to start playback on a chosen Echo from a skill/MSP (playback is always device-initiated), so the `#playlists` ▶ button uses the **unofficial Alexa API** (`alexapy`, the lib Home Assistant uses). It injects a text command on the selected device = exactly like speaking *"ask bock media to start the &lt;name&gt; playlist"*, which runs our **custom skill** and plays the library directly.
 
-- **Files:** `alexa_remote.py` (wrapper), `scripts/alexa_login.py` (one-time auth), endpoints `GET /api/alexa_remote/status|devices`, `POST /api/playlists/play`.
-- **Setup:**
-  1. `pip3 install --user alexapy "aiohttp>=3.10,<3.11"` (service runs as `plex`; the aiohttp pin is required — alexapy 1.26.9, the last py3.10 build, imports `ALLOWED_CLOSE_CODES` which aiohttp ≥3.11 removed).
-  2. Fill `config.json` → `alexaRemote.email/password` (+ `otpSecret` if 2FA).
-  3. Authenticate (writes cookie to `<DATA_DIR>/.storage/alexa_media.<email>.{pickle,txt}`):
-     - Password account: `python3 scripts/alexa_login.py` (handles captcha/2FA/OTP).
-     - **Passkey account** (no automatable password): log into `alexa.amazon.com` in your browser, export `amazon.com` cookies as Netscape `cookies.txt` (e.g. "Get cookies.txt LOCALLY" extension), then `python3 scripts/alexa_login.py --cookies /path/to/cookies.txt`. (Login-capture proxy won't work — passkeys are bound to the real amazon.com origin.) Set `alexaRemote.email` (password can stay blank).
-  4. Restart `ourmedia`. The ▶ button appears once configured.
-- **Maintenance:** cookies expire → re-run `scripts/alexa_login.py` when calls return `not_authenticated`. Unofficial API may break on Amazon changes.
+### Moving parts
+- **`alexa_remote.py`** — alexapy wrapper: cookie-session reuse (`make_login`/`_login_from_cookie`), `list_devices()`, `play_text(target, text)`. Per-call throwaway asyncio loop (Flask is sync). Pseudo-device shim exposes `_device_type`/`device_serial_number`/`_locale`.
+- **`scripts/alexa_login.py`** — one-time auth, writes session to `<DATA_DIR>/.storage/alexa_media.<email>.pickle`. Modes: `--proxy` (used — browser login), `--cookies <file>` (insufficient — see below), bare (password form login).
+- **Endpoints (`server.py`):** `GET /api/alexa_remote/status` (`{available,configured}`), `GET /api/alexa_remote/devices`, `POST /api/playlists/play` (`{id|name, device, shuffle}`).
+- **Frontend:** per-row ▶ → device-picker modal (`openPlayMenu` in `public/js/app.js`); button shows only when `status.configured`.
+- **Config:** `config.json` → `alexaRemote {url:"amazon.com", email, password, otpSecret}`.
+
+### Exact working settings (2026-06-01)
+- **Dependency (pinned):** `pip3 install --user alexapy "aiohttp>=3.10,<3.11"`. The pin is **mandatory** — alexapy 1.26.9 (last py3.10 build) imports `ALLOWED_CLOSE_CODES`, removed in aiohttp ≥3.11; without it `import alexapy` fails in `alexawebsocket`. Installed: alexapy 1.26.9, aiohttp 3.10.11. Service runs as `plex`, so `--user` is on its path.
+- **Auth = browser proxy login** (account uses a **passkey**; the form-login script and cookie-import both fail — modern Amazon requires an OAuth token that's only minted during a real login/device-registration, which raw web cookies can't provide). A passkey was un-automatable, so a **password was added** to the Amazon account (passkey kept) and:
+  ```bash
+  /usr/bin/python3 scripts/alexa_login.py --proxy --host 192.168.1.187 --port 3005
+  # open http://192.168.1.187:3005 in a browser on the LAN, sign in (choose
+  # password if passkey is offered — passkeys are bound to amazon.com origin and
+  # won't work through the proxy), land on "Successfully logged in…".
+  ```
+- **Command verbs (collision-safe):** non-shuffle → **`start`**, shuffle → **`mix`** (`server.py` `play_playlist_on_device`). NEVER `play`/`shuffle` — Amazon's music domain hijacks those + a music name and routes to the (now-disabled) MSP music skill / default provider.
+- **Two Amazon-side changes were required to stop a "Link your Bock Media account" card** (playback worked underneath it, but the card was annoying):
+  1. **Disabled the MSP music skill** so "bock media" is no longer a music provider:
+     `ask smapi delete-skill-enablement --skill-id amzn1.ask.skill.5a3f1b96-1e0d-4a39-ac7a-1bacd6f4438a --stage development`
+  2. **Removed the (vestigial, unused) account linking from the CUSTOM skill** (it was `IMPLICIT` → `https://alexa.morejava.bid/login`; the skill never used the token):
+     `ask smapi delete-account-linking-info --skill-id amzn1.ask.skill.c13622d4-8780-4bea-93a5-0ded84307466 --stage development`
+     (If a device still shows the card, toggle the skill off/on in the Alexa app to refresh cached metadata.)
+  - Note: the 6-hourly enablement cron only re-enables the **custom** skill (`c13622d4…`), NOT the music skill — so MSP stays disabled. The nightly MSP catalog upload still runs but is harmless.
+
+### Maintenance / gotchas
+- **Cookies expire** → ▶ button fails with `not_authenticated`; re-run the `--proxy` login above and restart `ourmedia`.
+- Unofficial API — can break on Amazon changes (no warning).
+- Device list includes multi-room groups (e.g. "Downstairs") — useful — and Fire TVs, which may not handle the music command well.
+- Re-enabling MSP later (to restore one-shot "play X on bock media") means re-fixing its account linking AND accepting the link-card collision returns unless handled.
 
 ---
 
