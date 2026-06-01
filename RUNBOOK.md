@@ -152,6 +152,23 @@ Lives at repo root, **git-ignored**. Template: `config.example.json`.
 
 - `mspOauth.accessToken` is the bearer the backend validates on every `/music` call.
 - `launchPlaylistPrompt: true` → `"open bock media"` asks for a playlist and keeps the session open.
+- `alexaRemote {url,email,password,otpSecret}` (optional) — Amazon creds for the "Play on device" feature (see §17).
+
+---
+
+## 17. "Play on device" (web UI → specific Echo, via `alexapy`)
+
+Amazon has **no official API** to start playback on a chosen Echo from a skill/MSP, so the `#playlists` ▶ button uses the **unofficial Alexa API** (`alexapy`) to inject *"ask bock media to play the <name> playlist"* on the selected device (reuses the custom skill).
+
+- **Files:** `alexa_remote.py` (wrapper), `scripts/alexa_login.py` (one-time auth), endpoints `GET /api/alexa_remote/status|devices`, `POST /api/playlists/play`.
+- **Setup:**
+  1. `pip3 install --user alexapy "aiohttp>=3.10,<3.11"` (service runs as `plex`; the aiohttp pin is required — alexapy 1.26.9, the last py3.10 build, imports `ALLOWED_CLOSE_CODES` which aiohttp ≥3.11 removed).
+  2. Fill `config.json` → `alexaRemote.email/password` (+ `otpSecret` if 2FA).
+  3. Authenticate (writes cookie to `<DATA_DIR>/.storage/alexa_media.<email>.{pickle,txt}`):
+     - Password account: `python3 scripts/alexa_login.py` (handles captcha/2FA/OTP).
+     - **Passkey account** (no automatable password): log into `alexa.amazon.com` in your browser, export `amazon.com` cookies as Netscape `cookies.txt` (e.g. "Get cookies.txt LOCALLY" extension), then `python3 scripts/alexa_login.py --cookies /path/to/cookies.txt`. (Login-capture proxy won't work — passkeys are bound to the real amazon.com origin.) Set `alexaRemote.email` (password can stay blank).
+  4. Restart `ourmedia`. The ▶ button appears once configured.
+- **Maintenance:** cookies expire → re-run `scripts/alexa_login.py` when calls return `not_authenticated`. Unofficial API may break on Amazon changes.
 
 ---
 

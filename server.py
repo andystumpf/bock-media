@@ -378,6 +378,64 @@ def rename_playlist():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+# ── API: Alexa remote control ("Play on device") ─────────────────────────────
+# Uses the unofficial Alexa API (alexapy) to inject a text command on a chosen
+# Echo, since Amazon gives skills/MSP no way to initiate playback on a device.
+
+def _alexa_alias():
+    return ((load_config().get('msp') or {}).get('alias') or 'bock media').strip()
+
+@app.route('/api/alexa_remote/status')
+def alexa_remote_status():
+    try:
+        import alexa_remote
+    except Exception as e:
+        return jsonify({'available': False, 'configured': False, 'reason': str(e)})
+    return jsonify({'available': True, 'configured': alexa_remote.is_configured()})
+
+@app.route('/api/alexa_remote/devices')
+def alexa_remote_devices():
+    try:
+        import alexa_remote
+        return jsonify({'devices': alexa_remote.list_devices()})
+    except ImportError:
+        return jsonify({'error': 'alexapy not installed', 'code': 'not_installed'}), 503
+    except Exception as e:
+        code = str(e)
+        status = 400 if code in ('not_configured', 'not_authenticated') else 500
+        return jsonify({'error': code, 'code': code}), status
+
+@app.route('/api/playlists/play', methods=['POST'])
+def play_playlist_on_device():
+    """Start a playlist on a specific Echo via the unofficial Alexa API."""
+    data = request.get_json() or {}
+    device = (data.get('device') or '').strip()
+    name = (data.get('name') or '').strip()
+    pid = (data.get('id') or '').strip()
+    shuffle = bool(data.get('shuffle'))
+    if not device:
+        return jsonify({'error': 'device required'}), 400
+    if not name and pid:
+        name, _ = _msp_playlist_by_id(pid)
+    if not name:
+        return jsonify({'error': 'name or id required'}), 400
+    # Use the custom skill's collision-safe verbs: "play"/"shuffle" get grabbed
+    # by Amazon's music domain (-> the MSP music skill, which needs account
+    # linking). "start"/"mix" route to our custom skill (no linking, serves the
+    # library directly). See alexa-skill-troubleshooting rule.
+    verb = 'mix' if shuffle else 'start'
+    text = f"ask {_alexa_alias()} to {verb} the {name} playlist"
+    try:
+        import alexa_remote
+        result = alexa_remote.play_text(device, text)
+        return jsonify({'ok': True, **result})
+    except ImportError:
+        return jsonify({'error': 'alexapy not installed', 'code': 'not_installed'}), 503
+    except Exception as e:
+        code = str(e)
+        status = 400 if code in ('not_configured', 'not_authenticated', 'device_not_found') else 500
+        return jsonify({'error': code, 'code': code}), status
+
 # ── API: Artists ─────────────────────────────────────────────────────────────
 
 @app.route('/api/artists')
@@ -748,6 +806,8 @@ def _device_label(device_id):
     """Human-readable device name for now-playing / history."""
     if not device_id or device_id == 'default':
         return 'default'
+    if _is_msp_pseudo(device_id):
+        return MSP_DEVICE_NAME
     store = _load_devices()
     entry = store.get(device_id) or {}
     if entry.get('aliasOf'):
@@ -1770,6 +1830,19 @@ def _update_queue_flags(qid, **kwargs):
         queues[qid][k] = v
     _save_queues(queues)
 
+def _touch_queue(qid):
+    """Refresh a queue's TTL so a long-running / looping stream is never pruned
+    out from under us — otherwise we lose the track mapping needed to show it in
+    Now Playing once a newer play triggers the prune in _store_queue()."""
+    if not qid:
+        return
+    queues = _load_queues()
+    entry = queues.get(qid)
+    if not entry:
+        return
+    entry['ts'] = time.time()
+    _save_queues(queues)
+
 def encode_token(data):
     qid = data.get('qid')
     idx = int(data.get('idx', 0) or 0)
@@ -1820,34 +1893,74 @@ def parse_m3u(filepath):
 
 # ── Fuzzy Search ─────────────────────────────────────────────────────────────
 
-def fuzzy_find_playlist(query):
+# Words that carry no discriminating signal in a spoken playlist request, so we
+# ignore them when scoring (e.g. "the french bistro playlist" -> "french bistro").
+_PL_FILLER = {'the', 'a', 'an', 'playlist', 'playlists', 'mix', 'station',
+              'music', 'please', 'to', 'my', 'list'}
+
+def _norm_pl(s):
+    """Lowercase, expand &, drop punctuation, collapse whitespace."""
+    s = (s or '').lower().replace('&', ' and ')
+    s = re.sub(r"[^\w\s]", ' ', s)
+    return re.sub(r'\s+', ' ', s).strip()
+
+def _pl_tokens(s):
+    return [t for t in _norm_pl(s).split() if t not in _PL_FILLER]
+
+def _score_playlist(query, name):
+    """Closeness of a spoken `query` to a playlist `name` in [0, 1]."""
+    qn, nn = _norm_pl(query), _norm_pl(name)
+    if not qn or not nn:
+        return 0.0
+    if qn == nn:
+        return 1.0
+    score = difflib.SequenceMatcher(None, qn, nn).ratio()
+    qt, nt = set(_pl_tokens(query)), set(_pl_tokens(name))
+    if qt and nt:
+        inter = len(qt & nt)
+        if inter:
+            cover_q, cover_n = inter / len(qt), inter / len(nt)
+            score = max(score, (cover_q + cover_n) / 2)
+            if qt <= nt:  # every spoken word appears in the name
+                score = max(score, 0.90 + 0.10 * cover_n)
+    if nn.startswith(qn) or qn.startswith(nn):
+        score = max(score, 0.90)
+    elif qn in nn or nn in qn:
+        score = max(score, 0.85)
+    return score
+
+def _load_playlist_entries():
+    """[(id, name, source), …] from ServerPlaylists.xml."""
+    entries = []
     try:
         tree = ET.parse(os.path.join(DATA_DIR, 'ServerPlaylists.xml'))
-        entries = []
         for e in tree.getroot().findall('Entry'):
             key = e.find('Key')
-            if key is not None:
-                name = xml_text(key, 'Name')
-                source = xml_text(key, 'SourceID')
-                if name:
-                    entries.append((name, source))
-        q = query.lower()
-        # Exact → contains → fuzzy
-        for name, src in entries:
-            if name.lower() == q:
-                return name, src
-        for name, src in entries:
-            if q in name.lower() or name.lower() in q:
-                return name, src
-        names = [e[0] for e in entries]
-        matches = difflib.get_close_matches(query, names, n=1, cutoff=0.4)
-        if matches:
-            for name, src in entries:
-                if name == matches[0]:
-                    return name, src
+            if key is None:
+                continue
+            name = xml_text(key, 'Name')
+            if name:
+                entries.append((key.findtext('ID') or '', name, xml_text(key, 'SourceID')))
     except Exception as e:
-        print(f'Playlist search error: {e}')
-    return None, None
+        print(f'Playlist load error: {e}')
+    return entries
+
+def best_playlist_entry(query, cutoff=0.5):
+    """Best (id, name, source) match for a spoken query, or None below cutoff."""
+    if not query:
+        return None
+    best, best_score = None, 0.0
+    for pid, name, src in _load_playlist_entries():
+        s = _score_playlist(query, name)
+        if s > best_score:
+            best, best_score = (pid, name, src), s
+            if s >= 1.0:
+                break
+    return best if best and best_score >= cutoff else None
+
+def fuzzy_find_playlist(query):
+    entry = best_playlist_entry(query)
+    return (entry[1], entry[2]) if entry else (None, None)
 
 def fuzzy_find_artist(query):
     q = query.lower()
@@ -2003,49 +2116,25 @@ _NP_DEVICE_TTL_SECONDS = 6 * 3600
 MSP_DEVICE_ID = 'msp-bock-media'
 MSP_DEVICE_NAME = 'Bock Media (Alexa)'
 
-# Amazon never tells a music provider which Echo is rendering. Rather than file
-# all MSP playback under the generic pseudo-device (which shows up as a phantom
-# extra "device" and duplicates whatever is already playing on the real Echo),
-# adopt the speaker the user is almost certainly addressing: the one currently
-# playing, else the most-recently-active real Echo within this window.
-_MSP_DEVICE_ADOPT_SECONDS = 30 * 60
-
-def _msp_pick_device_id(real_device_id):
-    """Resolve which device an MSP playback event belongs to.
-
-    Prefers a real deviceId if Amazon ever supplies one; otherwise adopts the
-    currently-playing (or most-recently-active) real Echo so Now Playing shows
-    the true speaker and supersedes its prior track instead of duplicating it.
-    Falls back to the pseudo-device only when no recent real device is known.
-    """
+# Amazon never tells a music provider which Echo is rendering — every MSP
+# directive AND playback event arrives with no deviceId. We deliberately do NOT
+# guess a specific Echo (a previous "adopt the most-recently-active speaker"
+# heuristic confidently mislabeled cross-device routine playback, e.g. showing
+# "Kitchen Show" for audio sent to "Office Show"). Instead each MSP stream is
+# keyed by its QUEUE id under a pseudo-device that reads "Bock Media (Alexa)",
+# so two simultaneous Bock Media streams (e.g. Kitchen + Office) show as two
+# separate Now Playing rows instead of overwriting each other. Pseudo ids are
+# NOT persisted in the device registry.
+def _msp_pick_device_id(real_device_id, queue_id):
+    """Use a real deviceId only if Amazon ever supplies one (it doesn't for MSP
+    today); otherwise a per-queue pseudo id so concurrent streams stay distinct."""
     if real_device_id and real_device_id != MSP_DEVICE_ID:
         return real_device_id
-    try:
-        devices = (_canonicalize_np(_read_all_np() or {'devices': {}})
-                   .get('devices', {}))
-        known = _load_devices()
-        now = time.time()
-        best = None  # (is_playing, timestamp, device_id)
-        for did, st in devices.items():
-            if did in (MSP_DEVICE_ID, 'default') or did not in known:
-                continue
-            cand = (bool(st.get('playing')), st.get('timestamp', 0) or 0, did)
-            if best is None or cand[:2] > best[:2]:
-                best = cand
-        if best and (best[0] or (now - best[1]) <= _MSP_DEVICE_ADOPT_SECONDS):
-            return best[2]
-    except Exception as e:
-        print(f'[MSP] device-adopt error: {e}', flush=True)
-    return MSP_DEVICE_ID
+    return f'{MSP_DEVICE_ID}:{queue_id}' if queue_id else MSP_DEVICE_ID
 
-def _retire_pseudo_msp_device():
-    """Drop the placeholder MSP pseudo-device from Now Playing state."""
-    try:
-        payload = _read_all_np() or {'devices': {}}
-        if payload.get('devices', {}).pop(MSP_DEVICE_ID, None) is not None:
-            _write_all_np(payload)
-    except Exception as e:
-        print(f'[MSP] retire pseudo-device error: {e}', flush=True)
+def _is_msp_pseudo(device_id):
+    return bool(device_id) and (device_id == MSP_DEVICE_ID
+                                or device_id.startswith(MSP_DEVICE_ID + ':'))
 
 # Per-request device id (set by the Alexa handler).
 from flask import g
@@ -2210,7 +2299,7 @@ def nowplaying_devices():
     for did, st in devices.items():
         if not st.get('playing'):
             continue
-        if did == 'default' or did not in known:
+        if did == 'default' or (did not in known and not _is_msp_pseudo(did)):
             continue
         items.append({
             'deviceId':   did,
@@ -2574,11 +2663,22 @@ def _msp_handle(namespace, name, payload, header):
         attrs = (payload.get('selectionCriteria') or {}).get('attributes') or []
         playlist_id = next((a.get('entityId') for a in attrs
                             if a.get('type') == 'PLAYLIST' and a.get('entityId')), None)
-        if not playlist_id:
-            return _msp_error(header, 'CONTENT_NOT_FOUND', 'No playlist in request')
-        pname, _ = _msp_playlist_by_id(playlist_id)
+        pname = None
+        if playlist_id:
+            pname, _ = _msp_playlist_by_id(playlist_id)
+        # Fallback: Alexa couldn't entity-resolve the catalog id (stale catalog,
+        # SLU lag) — fuzzy-match the spoken text against our live playlist names.
         if not pname:
-            return _msp_error(header, 'CONTENT_NOT_FOUND', f'Playlist {playlist_id} not found')
+            spoken = next((a.get('value') for a in attrs
+                           if a.get('type') in ('PLAYLIST', 'MEDIA_SEARCH_KEY', 'NAME')
+                           and a.get('value')), None) \
+                     or (payload.get('selectionCriteria') or {}).get('searchText')
+            entry = best_playlist_entry(spoken) if spoken else None
+            if entry:
+                playlist_id, pname = entry[0], entry[1]
+                print(f"[MSP] fuzzy playlist match {spoken!r} -> {pname!r}", flush=True)
+        if not pname or not playlist_id:
+            return _msp_error(header, 'CONTENT_NOT_FOUND', 'No matching playlist')
         return _msp_event('Alexa.Media.Search', 'GetPlayableContent.Response', header, {
             'content': {'id': playlist_id,
                         'metadata': {'type': 'PLAYLIST', 'name': _msp_name(pname)}},
@@ -2616,6 +2716,7 @@ def _msp_handle(namespace, name, payload, header):
         q = _load_queues().get(queue_id)
         if not q:
             return _msp_error(header, 'ITEM_NOT_FOUND', 'Queue not found')
+        _touch_queue(queue_id)
         tracks, loop = q.get('tracks', []), q.get('loop', False)
         idx = _msp_parse_idx(item_id)
         if idx is None:
@@ -2676,20 +2777,20 @@ def _msp_handle_event(req, ctx):
     # tell a music provider which Echo is rendering. So we attribute all MSP
     # playback to one stable pseudo-device that the web UI can display.
     device = ((ctx.get('System') or {}).get('device') or {})
-    raw_device_id = _msp_pick_device_id(device.get('deviceId'))
-    register_device(raw_device_id,
-                    default_name=(MSP_DEVICE_NAME if raw_device_id == MSP_DEVICE_ID else None),
-                    supported_interfaces=device.get('supportedInterfaces') or {})
+    raw_device_id = _msp_pick_device_id(device.get('deviceId'), queue_id)
+    # Only persist REAL Echo ids; per-queue pseudo ids are ephemeral and must
+    # not pile up in the device registry / /devices page.
+    if not _is_msp_pseudo(raw_device_id):
+        register_device(raw_device_id,
+                        supported_interfaces=device.get('supportedInterfaces') or {})
     g.raw_device_id = raw_device_id
     g.device_id = _resolve_device_id(raw_device_id)
 
-    # If we adopted a real Echo, retire any lingering pseudo-device entry so the
-    # UI never shows both "Bock Media (Alexa)" and the real speaker at once.
-    if raw_device_id != MSP_DEVICE_ID:
-        _retire_pseudo_msp_device()
-
     print(f"[MSP EVENT] {etype} device={raw_device_id[-12:] if raw_device_id!='default' else 'default'} "
           f"queue={queue_id} item={item_id}", flush=True)
+
+    # Keep the queue alive for the duration of playback.
+    _touch_queue(queue_id)
 
     if etype == 'AlexaAudioPlayQueueEvent.ItemPlaybackStarted':
         q = _load_queues().get(queue_id) or {}

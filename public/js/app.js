@@ -355,10 +355,24 @@ register('playlists', async (params) => {
   await loadPlaylists();
 });
 
+async function ensureAlexaRemoteStatus() {
+  if (window._alexaRemote) return window._alexaRemote;
+  try {
+    window._alexaRemote = await API('/api/alexa_remote/status') || { available: false };
+  } catch (e) {
+    window._alexaRemote = { available: false, configured: false };
+  }
+  return window._alexaRemote;
+}
+
 async function loadPlaylists() {
-  const data = await API(`/api/playlists?page=${_plPage}&limit=100&search=${encodeURIComponent(_plSearch)}`);
+  const [data, remote] = await Promise.all([
+    API(`/api/playlists?page=${_plPage}&limit=100&search=${encodeURIComponent(_plSearch)}`),
+    ensureAlexaRemoteStatus(),
+  ]);
   const { items = [], total = 0 } = data || {};
   window._playlists = items;
+  const canPlay = !!(remote && remote.configured);
 
   const rows = items.map((p, i) => {
     // SourceID in the library XML still tags indexed playlists as "MyMedia";
@@ -376,6 +390,9 @@ async function loadPlaylists() {
     const editBtn = p.id
       ? `<button class="edit-btn" onclick="startEditPlaylist(${i})" title="Rename"><i class="fa fa-pencil"></i></button>`
       : '';
+    const playBtn = canPlay
+      ? `<button class="edit-btn" onclick="openPlayMenu(${i})" title="Play on a device"><i class="fa fa-play"></i></button>`
+      : '';
     return `
     <tr id="pl-row-${i}">
       <td style="width:32px;text-align:center">${typeIcon}</td>
@@ -383,7 +400,7 @@ async function loadPlaylists() {
       <td>${srcDisplay}</td>
       <td>${typeBadge}</td>
       <td><span class="badge orange">${fmtNum(p.trackCount)}</span></td>
-      <td style="width:32px;text-align:right">${editBtn}</td>
+      <td style="width:64px;text-align:right;white-space:nowrap">${playBtn}${editBtn}</td>
     </tr>`;
   }).join('');
 
@@ -442,6 +459,66 @@ async function savePlaylistRename(i) {
     const err = await res.json().catch(() => ({}));
     showToast(err.error || 'Failed to rename', true);
   }
+}
+
+async function ensureAlexaDevices(force) {
+  if (window._alexaDevices && !force) return window._alexaDevices;
+  const res = await fetch('/api/alexa_remote/devices');
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Failed to load devices');
+  window._alexaDevices = data.devices || [];
+  return window._alexaDevices;
+}
+
+async function openPlayMenu(i) {
+  const p = (window._playlists || [])[i];
+  if (!p) return;
+  let devices;
+  try {
+    devices = await ensureAlexaDevices();
+  } catch (e) {
+    const msg = /not_authenticated/.test(e.message)
+      ? 'Alexa session expired — re-run scripts/alexa_login.py'
+      : (e.message || 'Failed to load devices');
+    return showToast(msg, true);
+  }
+  if (!devices.length) return showToast('No Alexa devices found', true);
+
+  const opts = devices.map(d =>
+    `<option value="${escHtml(d.serial)}">${escHtml(d.name)}${d.online ? '' : ' (offline)'}</option>`
+  ).join('');
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = `
+    <div class="modal-box">
+      <h3 style="margin-top:0"><i class="fa fa-play"></i> Play "${escHtml(p.name)}"</h3>
+      <label style="display:block;margin:12px 0 4px;font-size:13px;color:#888">Device</label>
+      <select id="play-device" class="settings-input" style="width:100%">${opts}</select>
+      <label style="display:flex;align-items:center;gap:8px;margin:14px 0">
+        <input type="checkbox" id="play-shuffle"> Shuffle
+      </label>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
+        <button class="cancel-btn" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+        <button class="save-btn" id="play-go">Play</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#play-go').onclick = async () => {
+    const device = overlay.querySelector('#play-device').value;
+    const shuffle = overlay.querySelector('#play-shuffle').checked;
+    const btn = overlay.querySelector('#play-go');
+    btn.disabled = true; btn.textContent = 'Sending…';
+    const res = await fetch('/api/playlists/play', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: p.id, name: p.name, device, shuffle }),
+    });
+    const data = await res.json().catch(() => ({}));
+    overlay.remove();
+    if (res.ok) showToast(`Playing "${p.name}" on ${data.device || 'device'}`);
+    else showToast(data.error || 'Failed to start playback', true);
+  };
 }
 
 // ── Artists ──────────────────────────────────────────────────────────────────
