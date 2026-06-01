@@ -15,6 +15,8 @@ import subprocess
 import logging
 import socket
 import datetime
+import threading
+import uuid
 from logging.handlers import RotatingFileHandler
 from urllib.parse import quote, urlparse
 from urllib.request import urlopen
@@ -447,6 +449,215 @@ def play_on_device():
     try:
         import alexa_remote
         result = alexa_remote.play_text(device, text)
+        return jsonify({'ok': True, **result})
+    except ImportError:
+        return jsonify({'error': 'alexapy not installed', 'code': 'not_installed'}), 503
+    except Exception as e:
+        code = str(e)
+        status = 400 if code in ('not_configured', 'not_authenticated', 'device_not_found') else 500
+        return jsonify({'error': code, 'code': code}), status
+
+# ── Automations (scheduled playlist playback) ────────────────────────────────
+
+AUTOMATIONS_PATH = os.path.join(HERE, 'automations.json')
+_AUTOMATIONS_LOCK = threading.Lock()
+_TIME_RE = re.compile(r'^([01]\d|2[0-3]):([0-5]\d)$')
+_DAY_PRESETS = {
+    'daily':    [0, 1, 2, 3, 4, 5, 6],
+    'weekdays': [0, 1, 2, 3, 4],
+    'weekends': [5, 6],
+}
+
+
+def _load_automations():
+    with _AUTOMATIONS_LOCK:
+        if not os.path.exists(AUTOMATIONS_PATH):
+            return []
+        try:
+            with open(AUTOMATIONS_PATH) as f:
+                data = json.load(f)
+            return data if isinstance(data, list) else []
+        except Exception:
+            return []
+
+
+def _save_automations(items):
+    with _AUTOMATIONS_LOCK:
+        tmp = AUTOMATIONS_PATH + '.tmp'
+        with open(tmp, 'w') as f:
+            json.dump(items, f, indent=2)
+        os.replace(tmp, AUTOMATIONS_PATH)
+
+
+def _normalize_days(raw):
+    if isinstance(raw, str):
+        preset = raw.strip().lower()
+        if preset in _DAY_PRESETS:
+            return list(_DAY_PRESETS[preset])
+        return []
+    days = []
+    for d in raw or []:
+        try:
+            n = int(d)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= n <= 6:
+            days.append(n)
+    return sorted(set(days))
+
+
+def _validate_automation_body(body, existing=None):
+    name = (body.get('name') or '').strip()
+    playlist_name = (body.get('playlistName') or '').strip()
+    playlist_id = (body.get('playlistId') or '').strip()
+    device = (body.get('device') or '').strip()
+    device_name = (body.get('deviceName') or '').strip()
+    time_str = (body.get('time') or '').strip()
+    days = _normalize_days(body.get('days'))
+    shuffle = bool(body.get('shuffle'))
+    enabled = bool(body.get('enabled')) if 'enabled' in body else (existing.get('enabled', True) if existing else True)
+
+    if not playlist_name and playlist_id:
+        playlist_name, _ = _msp_playlist_by_id(playlist_id)
+    if not playlist_name:
+        return None, ('playlistName or playlistId required', 400)
+    if not device:
+        return None, ('device required', 400)
+    if not _TIME_RE.match(time_str):
+        return None, ('time must be HH:MM (24-hour)', 400)
+    if not days:
+        return None, ('at least one day required', 400)
+
+    now = time.time()
+    item = {
+        'id': (existing or {}).get('id') or str(uuid.uuid4()),
+        'name': name or f'{playlist_name} on {device_name or device[-6:]}',
+        'enabled': enabled,
+        'playlistId': playlist_id,
+        'playlistName': playlist_name,
+        'device': device,
+        'deviceName': device_name or device,
+        'shuffle': shuffle,
+        'time': time_str,
+        'days': days,
+        'updatedAt': now,
+    }
+    if existing:
+        item['createdAt'] = existing.get('createdAt', now)
+        item['lastFiredAt'] = existing.get('lastFiredAt')
+        item['lastRunAt'] = existing.get('lastRunAt')
+        item['lastRunStatus'] = existing.get('lastRunStatus')
+    else:
+        item['createdAt'] = now
+    return item, None
+
+
+def _fire_automation(auto):
+    text = _build_play_text('playlist', auto['playlistName'], auto.get('shuffle'))
+    import alexa_remote
+    return alexa_remote.play_text(auto['device'], text)
+
+
+def _tick_automations():
+    now = datetime.datetime.now()
+    slot_key = now.strftime('%Y-%m-%d %H:%M')
+    current_time = now.strftime('%H:%M')
+    current_day = now.weekday()
+
+    items = _load_automations()
+    changed = False
+    for auto in items:
+        if not auto.get('enabled'):
+            continue
+        if auto.get('time') != current_time:
+            continue
+        if current_day not in (auto.get('days') or []):
+            continue
+        if auto.get('lastFiredAt') == slot_key:
+            continue
+        try:
+            _fire_automation(auto)
+            auto['lastRunStatus'] = 'ok'
+            print(f'AUTOMATION ok: {auto.get("name")} -> {auto.get("deviceName")} at {slot_key}')
+        except Exception as e:
+            auto['lastRunStatus'] = str(e)
+            print(f'AUTOMATION fail: {auto.get("name")}: {e}')
+        auto['lastFiredAt'] = slot_key
+        auto['lastRunAt'] = time.time()
+        changed = True
+    if changed:
+        _save_automations(items)
+
+
+def _automation_scheduler_loop():
+    while True:
+        try:
+            _tick_automations()
+        except Exception as e:
+            print(f'automation scheduler error: {e}')
+        time.sleep(30)
+
+
+def _start_automation_scheduler():
+    t = threading.Thread(target=_automation_scheduler_loop, daemon=True, name='automation-scheduler')
+    t.start()
+
+
+@app.route('/api/automations')
+def list_automations():
+    items = _load_automations()
+    items.sort(key=lambda x: (x.get('time') or '', x.get('name') or ''))
+    return jsonify({'items': items})
+
+
+@app.route('/api/automations', methods=['POST'])
+def create_automation():
+    body = request.get_json() or {}
+    item, err = _validate_automation_body(body)
+    if err:
+        return jsonify({'error': err[0]}), err[1]
+    items = _load_automations()
+    items.append(item)
+    _save_automations(items)
+    return jsonify(item), 201
+
+
+@app.route('/api/automations/<auto_id>', methods=['PUT'])
+def update_automation(auto_id):
+    body = request.get_json() or {}
+    items = _load_automations()
+    idx = next((i for i, a in enumerate(items) if a.get('id') == auto_id), None)
+    if idx is None:
+        return jsonify({'error': 'not found'}), 404
+    item, err = _validate_automation_body(body, existing=items[idx])
+    if err:
+        return jsonify({'error': err[0]}), err[1]
+    items[idx] = item
+    _save_automations(items)
+    return jsonify(item)
+
+
+@app.route('/api/automations/<auto_id>', methods=['DELETE'])
+def delete_automation(auto_id):
+    items = _load_automations()
+    new_items = [a for a in items if a.get('id') != auto_id]
+    if len(new_items) == len(items):
+        return jsonify({'error': 'not found'}), 404
+    _save_automations(new_items)
+    return jsonify({'ok': True})
+
+
+@app.route('/api/automations/<auto_id>/run', methods=['POST'])
+def run_automation_now(auto_id):
+    items = _load_automations()
+    auto = next((a for a in items if a.get('id') == auto_id), None)
+    if not auto:
+        return jsonify({'error': 'not found'}), 404
+    try:
+        result = _fire_automation(auto)
+        auto['lastRunStatus'] = 'ok (manual)'
+        auto['lastRunAt'] = time.time()
+        _save_automations(items)
         return jsonify({'ok': True, **result})
     except ImportError:
         return jsonify({'error': 'alexapy not installed', 'code': 'not_installed'}), 503
@@ -3561,6 +3772,7 @@ def alexa_skill():
 
 if __name__ == '__main__':
     apply_logging()
+    _start_automation_scheduler()
     port = int(os.environ.get('PORT', 3001))
     print(f'Bock Media running at http://localhost:{port}')
     app.run(host='0.0.0.0', port=port, debug=False)

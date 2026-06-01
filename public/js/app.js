@@ -949,6 +949,325 @@ async function confirmMergeDevice(i) {
   renderDevices();
 }
 
+// ── Automation ───────────────────────────────────────────────────────────────
+const AUTO_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const AUTO_DAY_PRESETS = {
+  daily: [0, 1, 2, 3, 4, 5, 6],
+  weekdays: [0, 1, 2, 3, 4],
+  weekends: [5, 6],
+};
+
+function autoDaysLabel(days) {
+  const d = days || [];
+  if (d.length === 7) return 'Daily';
+  if (d.length === 5 && d.every(x => x < 5)) return 'Weekdays';
+  if (d.length === 2 && d.includes(5) && d.includes(6)) return 'Weekends';
+  return d.map(i => AUTO_DAYS[i] || '?').join(', ');
+}
+
+function autoPresetFromDays(days) {
+  const key = JSON.stringify([...(days || [])].sort((a, b) => a - b));
+  for (const [name, preset] of Object.entries(AUTO_DAY_PRESETS)) {
+    if (key === JSON.stringify([...preset].sort((a, b) => a - b))) return name;
+  }
+  return 'custom';
+}
+
+register('automation', async () => {
+  loading();
+  await loadAutomation();
+});
+
+async function loadAutomation() {
+  const [data, remote, alexaDevs] = await Promise.all([
+    API('/api/automations'),
+    ensureAlexaRemoteStatus(),
+    ensureAlexaRemoteStatus().then(r => r && r.configured ? ensureAlexaDevices().catch(() => []) : []),
+  ]);
+  window._automations = (data && data.items) || [];
+  window._autoAlexaDevices = alexaDevs || [];
+  renderAutomation(remote);
+}
+
+function renderAutomation(remote) {
+  const canPlay = !!(remote && remote.configured);
+  const items = window._automations || [];
+  const devs = window._autoAlexaDevices || [];
+  const editing = window._autoEditing;
+
+  const devOpts = devs.map(d =>
+    `<option value="${escHtml(d.serial)}" data-name="${escHtml(d.name)}">${escHtml(d.name)}${d.online ? '' : ' (offline)'}</option>`
+  ).join('');
+
+  const preset = editing ? autoPresetFromDays(editing.days) : 'weekdays';
+  const selectedDays = editing ? (editing.days || []) : AUTO_DAY_PRESETS.weekdays;
+  const dayChips = AUTO_DAYS.map((label, i) => {
+    const on = selectedDays.includes(i);
+    return `<label class="auto-day-chip${on ? ' checked' : ''}">
+      <input type="checkbox" value="${i}" ${on ? 'checked' : ''} onchange="autoSyncDayPreset()"> ${label}
+    </label>`;
+  }).join('');
+
+  const formTitle = editing ? 'Edit automation' : 'New automation';
+  const formHtml = canPlay ? `
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-header"><h3><i class="fa fa-plus-circle"></i> ${formTitle}</h3></div>
+      <div class="card-body">
+        <div class="auto-form-grid">
+          <div class="auto-field">
+            <label>Label (optional)</label>
+            <input type="text" id="auto-name" class="settings-input" placeholder="Morning music" value="${escHtml(editing ? (editing.name || '') : '')}">
+          </div>
+          <div class="auto-field auto-pl-wrap">
+            <label>Playlist</label>
+            <input type="text" id="auto-pl-search" class="settings-input" placeholder="Search playlists…" autocomplete="off"
+              value="${escHtml(editing ? (editing.playlistName || '') : '')}"
+              oninput="autoSearchPlaylists(this.value)"
+              onfocus="autoSearchPlaylists(this.value)">
+            <div id="auto-pl-results" class="auto-pl-results"></div>
+            <input type="hidden" id="auto-pl-id" value="${escHtml(editing ? (editing.playlistId || '') : '')}">
+            <input type="hidden" id="auto-pl-name" value="${escHtml(editing ? (editing.playlistName || '') : '')}">
+          </div>
+          <div class="auto-field">
+            <label>Device</label>
+            <select id="auto-device" class="settings-input">
+              <option value="">Select a device…</option>
+              ${devOpts}
+            </select>
+          </div>
+          <div class="auto-field">
+            <label>Time</label>
+            <input type="time" id="auto-time" class="settings-input" value="${escHtml(editing ? (editing.time || '08:00') : '08:00')}">
+          </div>
+          <div class="auto-field" style="grid-column:1/-1">
+            <label>Repeat</label>
+            <div class="radio-group" style="margin-bottom:8px">
+              ${['daily', 'weekdays', 'weekends', 'custom'].map(p => `
+                <label class="radio-option">
+                  <input type="radio" name="auto-preset" value="${p}" ${preset === p ? 'checked' : ''} onchange="autoApplyDayPreset('${p}')">
+                  ${p.charAt(0).toUpperCase() + p.slice(1)}
+                </label>`).join('')}
+            </div>
+            <div id="auto-day-row" class="auto-day-row" style="${preset === 'custom' ? '' : 'display:none'}">${dayChips}</div>
+          </div>
+          <div class="auto-field">
+            <label style="display:flex;align-items:center;gap:8px;margin-top:20px">
+              <input type="checkbox" id="auto-shuffle" ${editing && editing.shuffle ? 'checked' : ''}> Shuffle
+            </label>
+          </div>
+          <div class="auto-field">
+            <label style="display:flex;align-items:center;gap:8px;margin-top:20px">
+              <input type="checkbox" id="auto-enabled" ${!editing || editing.enabled !== false ? 'checked' : ''}> Enabled
+            </label>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:16px">
+          <button class="save-btn" onclick="saveAutomation()">${editing ? 'Update' : 'Add automation'}</button>
+          ${editing ? `<button class="cancel-btn" onclick="cancelEditAutomation()">Cancel</button>` : ''}
+        </div>
+      </div>
+    </div>` : `
+    <div class="card" style="margin-bottom:16px;border-left:3px solid #e6a14e">
+      <div class="card-body">
+        <p class="hint" style="margin:0">Alexa remote control is not configured. Add <code>alexaRemote</code> credentials in <code>config.json</code> and run <code>scripts/alexa_login.py --proxy</code> to enable scheduled playback.</p>
+      </div>
+    </div>`;
+
+  const rows = items.map((a, i) => {
+    const status = a.lastRunStatus
+      ? `<span class="${/^ok/.test(a.lastRunStatus) ? 'auto-status-ok' : 'auto-status-err'}">${escHtml(a.lastRunStatus)}</span>`
+      : '—';
+    const lastRun = a.lastRunAt ? fmtDateTime(new Date(a.lastRunAt * 1000).toISOString()) : '—';
+    return `
+    <tr class="${a.enabled === false ? 'text-muted' : ''}">
+      <td>
+        <strong>${escHtml(a.name)}</strong>
+        <div class="auto-list-meta">${escHtml(a.playlistName)} · ${escHtml(a.deviceName || a.device)}</div>
+      </td>
+      <td>${escHtml(a.time)}</td>
+      <td>${escHtml(autoDaysLabel(a.days))}${a.shuffle ? ' · shuffle' : ''}</td>
+      <td>${lastRun}</td>
+      <td>${status}</td>
+      <td class="auto-actions">
+        ${canPlay ? `<button class="edit-btn" onclick="runAutomationNow('${escHtml(a.id)}')" title="Run now"><i class="fa fa-bolt"></i></button>` : ''}
+        <button class="edit-btn" onclick="toggleAutomation('${escHtml(a.id)}', ${a.enabled !== false})" title="${a.enabled !== false ? 'Disable' : 'Enable'}">
+          <i class="fa fa-${a.enabled !== false ? 'pause' : 'play'}"></i>
+        </button>
+        <button class="edit-btn" onclick="editAutomation(${i})" title="Edit"><i class="fa fa-pencil"></i></button>
+        <button class="edit-btn" onclick="deleteAutomation('${escHtml(a.id)}')" title="Delete" style="color:#c33"><i class="fa fa-trash"></i></button>
+      </td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('page-title').textContent = 'Automation';
+  document.getElementById('main-content').innerHTML = `
+    <div class="page-desc">
+      Schedule playlists to start on a specific Echo at a set time. Uses the same remote-control path as the Playlists page (<code>start</code>/<code>mix</code> commands via alexapy).
+    </div>
+    ${formHtml}
+    <div class="card">
+      <div class="card-header"><h3><i class="fa fa-clock"></i> Scheduled automations (${items.length})</h3></div>
+      ${rows ? `
+      <table class="data-table">
+        <thead><tr><th>Automation</th><th>Time</th><th>Schedule</th><th>Last run</th><th>Status</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>` : `<div class="empty-state"><i class="fa fa-clock"></i><p>No automations yet.</p></div>`}
+    </div>`;
+
+  if (editing && editing.device) {
+    const sel = document.getElementById('auto-device');
+    if (sel) sel.value = editing.device;
+  }
+}
+
+let _autoPlTimer = null;
+async function autoSearchPlaylists(q) {
+  clearTimeout(_autoPlTimer);
+  const box = document.getElementById('auto-pl-results');
+  if (!box) return;
+  _autoPlTimer = setTimeout(async () => {
+    const query = (q || '').trim();
+    if (query.length < 1) { box.innerHTML = ''; return; }
+    const data = await API(`/api/playlists?search=${encodeURIComponent(query)}&limit=25&page=1`) || {};
+    const items = data.items || [];
+    box.innerHTML = items.map((p, idx) => `
+      <div class="auto-pl-item" onclick="autoPickPlaylistIdx(${idx})">
+        ${escHtml(p.name)}<small>${fmtNum(p.trackCount)} tracks</small>
+      </div>`).join('') || `<div class="auto-pl-item" style="color:#889;cursor:default">No playlists found</div>`;
+    window._autoPlResults = items;
+  }, 250);
+}
+
+function autoPickPlaylistIdx(i) {
+  const p = (window._autoPlResults || [])[i];
+  if (!p) return;
+  autoPickPlaylist(p.id, p.name);
+}
+
+function autoPickPlaylist(id, name) {
+  const search = document.getElementById('auto-pl-search');
+  const idEl = document.getElementById('auto-pl-id');
+  const nameEl = document.getElementById('auto-pl-name');
+  const box = document.getElementById('auto-pl-results');
+  if (search) search.value = name;
+  if (idEl) idEl.value = id;
+  if (nameEl) nameEl.value = name;
+  if (box) box.innerHTML = '';
+}
+
+function autoApplyDayPreset(preset) {
+  const row = document.getElementById('auto-day-row');
+  if (row) row.style.display = preset === 'custom' ? '' : 'none';
+  const days = AUTO_DAY_PRESETS[preset];
+  if (!days) return;
+  row.querySelectorAll('input[type=checkbox]').forEach(cb => {
+    cb.checked = days.includes(parseInt(cb.value, 10));
+    cb.parentElement.classList.toggle('checked', cb.checked);
+  });
+}
+
+function autoSyncDayPreset() {
+  const row = document.getElementById('auto-day-row');
+  if (!row) return;
+  row.querySelectorAll('.auto-day-chip').forEach(chip => {
+    const cb = chip.querySelector('input');
+    chip.classList.toggle('checked', cb && cb.checked);
+  });
+  const days = [...row.querySelectorAll('input:checked')].map(cb => parseInt(cb.value, 10)).sort((a, b) => a - b);
+  const preset = autoPresetFromDays(days);
+  const radio = document.querySelector(`input[name=auto-preset][value="${preset}"]`);
+  if (radio) radio.checked = true;
+  row.style.display = preset === 'custom' ? '' : 'none';
+}
+
+function autoCollectDays() {
+  const preset = (document.querySelector('input[name=auto-preset]:checked') || {}).value || 'weekdays';
+  if (preset !== 'custom') return AUTO_DAY_PRESETS[preset] || AUTO_DAY_PRESETS.weekdays;
+  const row = document.getElementById('auto-day-row');
+  return [...(row ? row.querySelectorAll('input:checked') : [])].map(cb => parseInt(cb.value, 10));
+}
+
+async function saveAutomation() {
+  const editing = window._autoEditing;
+  const deviceSel = document.getElementById('auto-device');
+  const device = deviceSel ? deviceSel.value : '';
+  const deviceName = deviceSel && deviceSel.selectedIndex >= 0
+    ? (deviceSel.options[deviceSel.selectedIndex].dataset.name || deviceSel.options[deviceSel.selectedIndex].text)
+    : '';
+  const playlistName = (document.getElementById('auto-pl-name') || {}).value
+    || (document.getElementById('auto-pl-search') || {}).value || '';
+  const body = {
+    name: (document.getElementById('auto-name') || {}).value || '',
+    playlistId: (document.getElementById('auto-pl-id') || {}).value || '',
+    playlistName: playlistName.trim(),
+    device,
+    deviceName: (deviceName || '').replace(/ \(offline\)$/, ''),
+    time: (document.getElementById('auto-time') || {}).value || '',
+    days: autoCollectDays(),
+    shuffle: !!(document.getElementById('auto-shuffle') || {}).checked,
+    enabled: !!(document.getElementById('auto-enabled') || {}).checked,
+  };
+  if (!body.playlistName) return showToast('Select a playlist', true);
+  if (!body.device) return showToast('Select a device', true);
+  if (!body.days.length) return showToast('Select at least one day', true);
+
+  const url = editing ? `/api/automations/${encodeURIComponent(editing.id)}` : '/api/automations';
+  const res = await fetch(url, {
+    method: editing ? 'PUT' : 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) return showToast(data.error || 'Failed to save', true);
+  window._autoEditing = null;
+  showToast(editing ? 'Automation updated' : 'Automation created');
+  await loadAutomation();
+}
+
+function editAutomation(i) {
+  window._autoEditing = (window._automations || [])[i] || null;
+  loadAutomation();
+}
+
+function cancelEditAutomation() {
+  window._autoEditing = null;
+  loadAutomation();
+}
+
+async function deleteAutomation(id) {
+  if (!confirm('Delete this automation?')) return;
+  const res = await fetch(`/api/automations/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    return showToast(data.error || 'Delete failed', true);
+  }
+  showToast('Automation deleted');
+  await loadAutomation();
+}
+
+async function toggleAutomation(id, currentlyEnabled) {
+  const auto = (window._automations || []).find(a => a.id === id);
+  if (!auto) return;
+  const res = await fetch(`/api/automations/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...auto, enabled: !currentlyEnabled }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    return showToast(data.error || 'Update failed', true);
+  }
+  await loadAutomation();
+}
+
+async function runAutomationNow(id) {
+  const res = await fetch(`/api/automations/${encodeURIComponent(id)}/run`, { method: 'POST' });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) return showToast(data.error || 'Run failed', true);
+  showToast(`Started on ${data.device || 'device'}`);
+  await loadAutomation();
+}
+
 // ── Settings ─────────────────────────────────────────────────────────────────
 register('settings', async () => {
   loading();

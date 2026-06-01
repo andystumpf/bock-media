@@ -3,7 +3,7 @@
 nowplaying_state.json
 streaming_history.jsonl
 queues.json
-devices.json
+automations.json
 selected_state.json
 ignored_tracks.json
 server.log
