@@ -264,11 +264,24 @@ register('nowplaying', async () => {
     const card = document.getElementById('np-current-card');
     if (card) card.outerHTML = buildCurrentCard(window._npItems, window._npControlsAvailable);
     refreshCurrentTrack();
+    npLoadVolumes();
   }, 5000);
 });
 
+function npResolveSerial(d) {
+  const devs = window._alexaDevices || [];
+  const name = (d.deviceName || '').toLowerCase();
+  const match = devs.find(x => (x.name || '').toLowerCase() === name);
+  return match ? match.serial : '';
+}
+
 function npCanControl(d, controlsAvailable) {
-  return !!(controlsAvailable && d.deviceName && !String(d.deviceId || '').startsWith('msp-'));
+  // Transport needs a real Alexa serial. Auto-named rows (e.g. "Echo MT7SEE")
+  // that don't match an Alexa device name can't be controlled — rename them on
+  // the Devices tab to match the Echo's name in the Alexa app.
+  return !!(controlsAvailable && d.deviceName
+    && !String(d.deviceId || '').startsWith('msp-')
+    && npResolveSerial(d));
 }
 
 function npDeviceIdClass(deviceId) {
@@ -285,8 +298,20 @@ function buildDeviceRow(d, controlsAvailable = false) {
       ${actionBtn({ kind: 'muted', onclick: "npControlEl(this,'pause')", title: 'Pause', icon: 'pause', dataAttrs: devAttr })}
       ${actionBtn({ kind: 'muted', onclick: "npControlEl(this,'next')", title: 'Next', icon: 'forward-step', dataAttrs: devAttr })}
       ${actionBtn({ kind: 'muted', onclick: 'npToggleShuffleEl(this)', title: 'Shuffle', icon: 'shuffle', extraClass: `np-shuffle-btn np-shuffle-${shuffleCls}`, dataAttrs: devAttr })}
+      ${actionBtn({ kind: 'delete', onclick: "npControlEl(this,'stop')", title: 'Stop', icon: 'stop', dataAttrs: devAttr })}
     </div>` : '';
   const pausedBadge = d.paused ? '<span class="np-paused-badge">Paused</span>' : '';
+  const canControl = npCanControl(d, controlsAvailable);
+  window._npVolume = window._npVolume || {};
+  const knownVol = window._npVolume[d.deviceId];
+  const vol = (knownVol == null) ? 50 : knownVol;
+  const volume = canControl ? `
+    <div class="np-volume">
+      <i class="fa fa-volume-low np-volume-icon"></i>
+      <input type="range" class="np-volume-slider" min="0" max="100" value="${vol}"
+        oninput="npVolumeEl(this)" onchange="npVolumeEl(this)" ${devAttr}>
+      <span class="np-volume-val">${knownVol == null ? '—' : knownVol}</span>
+    </div>` : '';
   return `
     <div class="np-device-row${d.paused ? ' np-device-paused' : ''}">
       <div class="np-device-main">
@@ -299,7 +324,71 @@ function buildDeviceRow(d, controlsAvailable = false) {
         </div>
       </div>
       ${controls}
+      ${volume}
     </div>`;
+}
+
+let _npVolumeTimers = {};
+function npVolumeEl(slider) {
+  const deviceId = slider && slider.dataset && slider.dataset.deviceId;
+  if (!deviceId) return;
+  const d = (window._npItems || []).find(x => x.deviceId === deviceId);
+  if (!d) return;
+  const serial = npResolveSerial(d);
+  if (!serial) return;
+  const volume = parseInt(slider.value, 10);
+  // Persist immediately so the 5s poll re-render keeps this value.
+  window._npVolume = window._npVolume || {};
+  window._npVolume[deviceId] = volume;
+  const valEl = slider.parentElement && slider.parentElement.querySelector('.np-volume-val');
+  if (valEl) valEl.textContent = volume;
+  // Debounce: only send after the user pauses dragging.
+  clearTimeout(_npVolumeTimers[deviceId]);
+  _npVolumeTimers[deviceId] = setTimeout(async () => {
+    try {
+      const res = await fetch('/api/alexa_remote/volume', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ serial, device: d.deviceName, volume }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        showToast(data.error || 'Volume failed', true);
+      }
+    } catch (e) {
+      showToast(e.message || 'Volume failed', true);
+    }
+  }, 350);
+}
+
+// Fetch the real current volume for controllable devices we don't yet know,
+// then update the slider in place. Runs once per device (not on every poll) so
+// it never hammers the unofficial API or fights the user mid-drag.
+async function npLoadVolumes() {
+  window._npVolume = window._npVolume || {};
+  const items = (window._npItems || []).filter(d =>
+    npCanControl(d, window._npControlsAvailable) && window._npVolume[d.deviceId] == null);
+  for (const d of items) {
+    const serial = npResolveSerial(d);
+    if (!serial) continue;
+    try {
+      const data = await API(`/api/alexa_remote/volume?serial=${encodeURIComponent(serial)}`);
+      const v = data && data.volume;
+      if (v == null) continue;
+      window._npVolume[d.deviceId] = v;
+      // User may be dragging — only seed sliders still showing the placeholder.
+      const cls = npDeviceIdClass(d.deviceId);
+      document.querySelectorAll(`.np-volume-slider[data-device-id="${cssEsc(d.deviceId)}"]`).forEach(sl => {
+        sl.value = v;
+        const valEl = sl.parentElement && sl.parentElement.querySelector('.np-volume-val');
+        if (valEl) valEl.textContent = v;
+      });
+    } catch (_) { /* leave at placeholder */ }
+  }
+}
+
+function cssEsc(s) {
+  return (window.CSS && CSS.escape) ? CSS.escape(s) : String(s).replace(/"/g, '\\"');
 }
 
 async function npControlEl(btn, action) {
@@ -311,8 +400,10 @@ async function npControlEl(btn, action) {
 async function npControl(deviceId, action) {
   const d = (window._npItems || []).find(x => x.deviceId === deviceId);
   if (!d || !d.deviceName) return;
-  const devs = window._alexaDevices || [];
-  const match = devs.find(x => (x.name || '').toLowerCase() === (d.deviceName || '').toLowerCase());
+  const serial = npResolveSerial(d);
+  if (!serial) {
+    return showToast(`Can't control "${d.deviceName}" — rename it on the Devices tab to match the Echo's Alexa name.`, true);
+  }
   try {
     const res = await fetch('/api/alexa_remote/control', {
       method: 'POST',
@@ -320,7 +411,7 @@ async function npControl(deviceId, action) {
       body: JSON.stringify({
         deviceId: d.deviceId,
         device: d.deviceName,
-        serial: match?.serial || '',
+        serial,
         action,
       }),
     });
@@ -335,6 +426,7 @@ async function npControl(deviceId, action) {
     window._npItems = (fresh && fresh.items) || window._npItems;
     const card = document.getElementById('np-current-card');
     if (card) card.outerHTML = buildCurrentCard(window._npItems, window._npControlsAvailable);
+    npLoadVolumes();
   } catch (e) {
     showToast(e.message || 'Control failed', true);
   }
@@ -418,6 +510,7 @@ async function loadNowPlaying() {
       ${buildPagination(total, _npPage, 25, (p) => { _npPage = p; loadNowPlaying(); })}
       ` : `<div class="empty-state"><i class="fa fa-play"></i><p>No streaming history found.</p></div>`}
     </div>`;
+  npLoadVolumes();
 }
 
 async function refreshCurrentTrack() {
@@ -561,6 +654,13 @@ async function ensureAlexaDevices(force) {
   return window._alexaDevices;
 }
 
+async function ensureDeviceGroups(force) {
+  if (window._deviceGroups && !force) return window._deviceGroups;
+  const data = await API('/api/device_groups').catch(() => null);
+  window._deviceGroups = (data && data.items) || [];
+  return window._deviceGroups;
+}
+
 function openPlayMenu(i) {
   const p = (window._playlists || [])[i];
   if (p) playOnDevice({ kind: 'playlist', name: p.name, id: p.id });
@@ -572,7 +672,7 @@ async function playOnDevice(opts) {
   const allowShuffle = opts.shuffle !== false && kind !== 'song';
   let devices;
   try {
-    devices = await ensureAlexaDevices();
+    [devices] = await Promise.all([ensureAlexaDevices(), ensureDeviceGroups()]);
   } catch (e) {
     const msg = /not_authenticated/.test(e.message)
       ? 'Alexa session expired — re-run scripts/alexa_login.py'
@@ -581,9 +681,7 @@ async function playOnDevice(opts) {
   }
   if (!devices.length) return showToast('No Alexa devices found', true);
 
-  const deviceOpts = devices.map(d =>
-    `<option value="${escHtml(d.serial)}">${escHtml(d.name)}${d.online ? '' : ' (offline)'}</option>`
-  ).join('');
+  const deviceOpts = deviceSelectOptions(devices);
   const shuffleRow = allowShuffle
     ? `<label style="display:flex;align-items:center;gap:8px;margin:14px 0">
         <input type="checkbox" id="play-shuffle"> Shuffle
@@ -849,12 +947,17 @@ register('watchfolders', async () => {
 // ── Devices ──────────────────────────────────────────────────────────────────
 register('devices', async () => {
   loading();
-  const [devices, mc] = await Promise.all([
+  const [devices, mc, groups, remote] = await Promise.all([
     API('/api/devices'),
     API('/api/devices/merge_candidates'),
+    API('/api/device_groups'),
+    ensureAlexaRemoteStatus(),
   ]);
   window._devices = devices || [];
   window._mergeCandidates = (mc && mc.candidates) || [];
+  window._deviceGroups = (groups && groups.items) || [];
+  window._devicesRemoteConfigured = !!(remote && remote.configured);
+  if (window._devicesRemoteConfigured) await ensureAlexaDevices().catch(() => []);
   renderDevices();
 });
 
@@ -906,6 +1009,7 @@ function renderDevices() {
       Devices auto-register the first time they stream music via Bock Media. Rename them with the pencil icon, or remove them with the trash icon. If Alexa rotated the deviceId for a device you already named (a duplicate appears), use the merge icon to fold it into the original — history and analytics will follow.
     </div>
     ${candHtml}
+    ${renderDeviceGroupsCard()}
     <div class="card">
       <div class="card-header">
         <h3><i class="fa fa-headphones"></i> Alexa Devices (${devices.length})</h3>
@@ -914,6 +1018,137 @@ function renderDevices() {
         ? `<ul class="device-list">${rows}</ul>`
         : `<div class="empty-state"><i class="fa fa-headphones"></i><p>No devices yet — start streaming from an Echo to register it.</p></div>`}
     </div>`);
+}
+
+function renderDeviceGroupsCard() {
+  const groups = window._deviceGroups || [];
+  const configured = window._devicesRemoteConfigured;
+  const headerBtn = configured
+    ? `<button class="save-btn" onclick="openGroupEditor()"><i class="fa fa-plus"></i> New group</button>`
+    : '';
+  if (!configured) {
+    return `
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-header"><h3><i class="fa fa-layer-group"></i> Device Groups</h3></div>
+      <div class="card-body">
+        <p class="hint" style="margin:0">Alexa remote control is not configured. Add <code>alexaRemote</code> credentials in <code>config.json</code> and run <code>scripts/alexa_login.py --proxy</code> to create groups.</p>
+      </div>
+    </div>`;
+  }
+  const rows = groups.map(g => {
+    const memberNames = (g.members || []).map(m => escHtml(m.name || m.serial)).join(', ');
+    return `
+    <li>
+      <span class="device-icon-col"><i class="fa fa-layer-group"></i></span>
+      <span class="device-name-text">
+        <b>${escHtml(g.name)}</b>
+        <span style="font-size:11px;color:#9aa;margin-left:6px">${(g.members || []).length} device${(g.members || []).length === 1 ? '' : 's'}</span>
+        <div class="auto-list-meta">${memberNames || '<span style="color:#c66">no devices</span>'}</div>
+      </span>
+      <div class="row-actions">
+        ${actionBtn({ kind: 'edit', onclick: `openGroupEditor('${escHtml(g.id)}')`, title: 'Edit group', icon: 'pen' })}
+        ${actionBtn({ kind: 'delete', onclick: `deleteGroup('${escHtml(g.id)}')`, title: 'Delete group', icon: 'trash' })}
+      </div>
+    </li>`;
+  }).join('');
+  return `
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-header" style="display:flex;align-items:center;justify-content:space-between">
+        <h3><i class="fa fa-layer-group"></i> Device Groups (${groups.length})</h3>
+        ${headerBtn}
+      </div>
+      <div class="card-body" style="padding:8px 16px 14px">
+        <p class="hint" style="margin:0 0 8px">Group several Echoes so you can play a playlist or schedule an automation on all of them at once. Groups appear in every device picker.</p>
+        ${rows ? `<ul class="device-list" style="margin:0">${rows}</ul>` : `<div class="empty-state" style="padding:16px"><i class="fa fa-layer-group"></i><p>No groups yet.</p></div>`}
+      </div>
+    </div>`;
+}
+
+async function openGroupEditor(groupId) {
+  let devices;
+  try {
+    devices = await ensureAlexaDevices();
+  } catch (e) {
+    return showToast(e.message || 'Failed to load devices', true);
+  }
+  if (!devices.length) return showToast('No Alexa devices found', true);
+  const group = groupId ? (window._deviceGroups || []).find(g => g.id === groupId) : null;
+  const selected = new Set((group ? group.members : []).map(m => m.serial));
+  const checkboxes = devices.map(d => `
+    <label class="group-dev-option">
+      <input type="checkbox" value="${escHtml(d.serial)}" data-name="${escHtml(d.name)}" ${selected.has(d.serial) ? 'checked' : ''}>
+      <span>${escHtml(d.name)}${d.online ? '' : ' <span style="color:#aab;font-size:11px">(offline)</span>'}</span>
+    </label>`).join('');
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = `
+    <div class="modal-box">
+      <h3 style="margin-top:0"><i class="fa fa-layer-group"></i> ${group ? 'Edit group' : 'New group'}</h3>
+      <label style="display:block;margin:12px 0 4px;font-size:13px;color:#888">Group name</label>
+      <input id="group-name" class="settings-input" style="width:100%" placeholder="Up and Downstairs" value="${escHtml(group ? group.name : '')}">
+      <label style="display:block;margin:14px 0 4px;font-size:13px;color:#888">Devices</label>
+      <div class="group-dev-list">${checkboxes}</div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+        <button class="cancel-btn" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+        <button class="save-btn" id="group-save">${group ? 'Update' : 'Create'}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#group-name').focus();
+  overlay.querySelector('#group-save').onclick = () => saveGroup(overlay, group ? group.id : null);
+}
+
+async function saveGroup(overlay, groupId) {
+  const name = overlay.querySelector('#group-name').value.trim();
+  if (!name) return showToast('Enter a group name', true);
+  const members = [...overlay.querySelectorAll('.group-dev-list input:checked')]
+    .map(cb => ({ serial: cb.value, name: cb.dataset.name || cb.value }));
+  if (!members.length) return showToast('Select at least one device', true);
+  const btn = overlay.querySelector('#group-save');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  const url = groupId ? `/api/device_groups/${encodeURIComponent(groupId)}` : '/api/device_groups';
+  const res = await fetch(url, {
+    method: groupId ? 'PUT' : 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, members }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    btn.disabled = false; btn.textContent = groupId ? 'Update' : 'Create';
+    return showToast(data.error || 'Failed to save group', true);
+  }
+  overlay.remove();
+  showToast(groupId ? 'Group updated' : 'Group created');
+  const groups = await API('/api/device_groups');
+  window._deviceGroups = (groups && groups.items) || [];
+  renderDevices();
+}
+
+async function deleteGroup(id) {
+  if (!confirm('Delete this group? Devices themselves are not affected.')) return;
+  const res = await fetch(`/api/device_groups/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!res.ok) return showToast('Failed to delete group', true);
+  window._deviceGroups = (window._deviceGroups || []).filter(g => g.id !== id);
+  showToast('Group deleted');
+  renderDevices();
+}
+
+// Build <option>s for a device <select>, with a Groups optgroup on top.
+function deviceSelectOptions(devices, { includeGroups = true, selectedValue = '' } = {}) {
+  const groups = window._deviceGroups || [];
+  let html = '';
+  if (includeGroups && groups.length) {
+    html += `<optgroup label="Groups">` + groups.map(g => {
+      const val = `group:${g.id}`;
+      return `<option value="${escHtml(val)}" data-name="${escHtml(g.name)}" ${val === selectedValue ? 'selected' : ''}>${escHtml(g.name)} (${(g.members || []).length})</option>`;
+    }).join('') + `</optgroup>`;
+  }
+  const devOpts = devices.map(d =>
+    `<option value="${escHtml(d.serial)}" data-name="${escHtml(d.name)}" ${d.serial === selectedValue ? 'selected' : ''}>${escHtml(d.name)}${d.online ? '' : ' (offline)'}</option>`
+  ).join('');
+  html += includeGroups && groups.length ? `<optgroup label="Devices">${devOpts}</optgroup>` : devOpts;
+  return html;
 }
 
 async function acceptMergeCandidate(sourceId, targetId, targetName) {
@@ -1076,6 +1311,7 @@ async function loadAutomation() {
     API('/api/automations'),
     ensureAlexaRemoteStatus(),
     ensureAlexaRemoteStatus().then(r => r && r.configured ? ensureAlexaDevices().catch(() => []) : []),
+    ensureDeviceGroups().catch(() => []),
   ]);
   window._automations = (data && data.items) || [];
   window._autoAlexaDevices = alexaDevs || [];
@@ -1088,9 +1324,7 @@ function renderAutomation(remote) {
   const devs = window._autoAlexaDevices || [];
   const editing = window._autoEditing;
 
-  const devOpts = devs.map(d =>
-    `<option value="${escHtml(d.serial)}" data-name="${escHtml(d.name)}">${escHtml(d.name)}${d.online ? '' : ' (offline)'}</option>`
-  ).join('');
+  const devOpts = deviceSelectOptions(devs, { selectedValue: editing ? (editing.device || '') : '' });
 
   const preset = editing ? autoPresetFromDays(editing.days) : 'weekdays';
   const selectedDays = editing ? (editing.days || []) : AUTO_DAY_PRESETS.weekdays;
@@ -1467,8 +1701,17 @@ register('settings', async () => {
         </div>
 
         <div class="settings-section">
+          <h4>Account</h4>
+          <p class="hint">The user and server instance this console is paired with.</p>
+          <div class="settings-row" style="flex-wrap:wrap;gap:10px">
+            <span class="ip-display"><i class="fa fa-user" style="color:#e99d1a"></i> ${escHtml(settings.pairedUser || 'local')}</span>
+            <span class="ip-display"><i class="fa fa-laptop" style="color:#e99d1a"></i> ${escHtml(settings.label || '—')}</span>
+          </div>
+        </div>
+
+        <div class="settings-section">
           <h4>Media Server Label</h4>
-          <p class="hint">Identifies this server instance. Shown in Alexa responses and the sidebar.</p>
+          <p class="hint">Identifies this server instance. Shown in Alexa responses.</p>
           <div class="settings-row">
             <input type="text" id="s-label" class="settings-input" value="${escHtml(settings.label || '')}">
             <button class="btn-sm btn-primary" onclick="saveSetting('label', document.getElementById('s-label').value)">Set</button>
@@ -2083,13 +2326,6 @@ window.addEventListener('resize', () => {
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 async function init() {
-  // Load user info
-  const s = await API('/api/settings');
-  if (s) {
-    document.getElementById('user-label').textContent = s.pairedUser || 'local';
-    document.getElementById('server-label').textContent = s.label || '—';
-  }
-
   // Stop Now Playing poll when navigating away from it
   window.addEventListener('hashchange', () => {
     const hash = window.location.hash.replace('#', '');

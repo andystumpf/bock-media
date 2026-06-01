@@ -185,6 +185,50 @@ async def _play_text(target, text):
         await login.close()
 
 
+async def _set_volume(target, level):
+    """Set device volume. `level` is 0-100; alexapy wants 0.0-1.0."""
+    from alexapy import AlexaAPI
+    login = await _login_from_cookie()
+    try:
+        devices = await AlexaAPI.get_devices(login) or []
+        dev = _match(devices, target)
+        if not dev:
+            raise AlexaRemoteError('device_not_found')
+        api = AlexaAPI(_Device(dev), login)
+        await api.set_volume(max(0.0, min(1.0, level / 100.0)))
+        return {'device': dev.get('accountName'), 'serial': dev.get('serialNumber'),
+                'volume': int(level)}
+    finally:
+        await login.close()
+
+
+def set_volume(target, level):
+    """Set volume (0-100) on the Echo identified by serial or accountName."""
+    return run(_set_volume(target, level))
+
+
+async def _get_volume(target):
+    """Read current volume (0-100) from the device's player state, or None."""
+    from alexapy import AlexaAPI
+    login = await _login_from_cookie()
+    try:
+        devices = await AlexaAPI.get_devices(login) or []
+        dev = _match(devices, target)
+        if not dev:
+            raise AlexaRemoteError('device_not_found')
+        api = AlexaAPI(_Device(dev), login)
+        state = await api.get_state() or {}
+        vol = (((state.get('playerInfo') or {}).get('volume')) or {}).get('volume')
+        return int(vol) if vol is not None else None
+    finally:
+        await login.close()
+
+
+def get_volume(target):
+    """Return current volume 0-100 for the Echo, or None if unavailable."""
+    return run(_get_volume(target))
+
+
 def play_text(target, text):
     """Speak `text` to the Echo identified by serial or accountName `target`."""
     return run(_play_text(target, text))
@@ -196,18 +240,20 @@ def play_text(target, text):
 _TRANSPORT_TEXT = {
     'pause': 'pause',
     'play': 'resume',
+    'stop': 'stop',
     'next': 'next',
     'previous': 'previous',
     'shuffle_on': 'shuffle on',
     'shuffle_off': 'shuffle off',
 }
 
-# Actions that are issued while the target device has LOST audio focus (resume
-# after a pause cleared the session). A bare media verb ("resume") gets routed by
-# Amazon's media domain to the household's last-active device, not the one we
-# targeted — so it must be an explicit skill invocation ("ask <alias> to resume")
-# to deterministically render on the intended Echo, like the play-on-device path.
-_EXPLICIT_INVOCATION_ACTIONS = {'play'}
+# Actions that may be issued while the target device has LOST audio focus (e.g.
+# resume/stop after a pause cleared the session). A bare media verb ("resume",
+# "stop") gets routed by Amazon's media domain to the household's last-active
+# device, not the one we targeted — so it must be an explicit skill invocation
+# ("ask <alias> to resume") to deterministically hit the intended Echo, like the
+# play-on-device path.
+_EXPLICIT_INVOCATION_ACTIONS = {'play', 'stop'}
 
 
 async def _device_control(target, action, alias='bock media'):

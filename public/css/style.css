@@ -99,21 +99,6 @@ ul.sidebar-nav li a .nav-label { overflow: hidden; }
 
 .sidebar-divider { height: 1px; background: #3d5180; margin: 6px 0; }
 
-/* Sidebar user info */
-.sidebar-user {
-  padding: 10px 16px;
-  background: #2d3e63;
-  color: #aab8d0;
-  font-size: 11px;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  white-space: nowrap;
-  overflow: hidden;
-}
-.sidebar-user .user-line { display: flex; align-items: center; gap: 8px; }
-.sidebar-user .user-line i { min-width: 14px; color: #e99d1a; }
-
 /* Header */
 .page-header {
   background: #fff;
@@ -344,6 +329,67 @@ ul.sidebar-nav li a .nav-label { overflow: hidden; }
   flex-wrap: wrap;
 }
 .np-device-row:first-of-type { border-top: none; padding-top: 0; }
+
+/* Full-width volume slider under each Now Playing device */
+.np-volume {
+  flex-basis: 100%;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+.np-volume-icon { color: #9aa; font-size: 13px; flex: 0 0 auto; }
+.np-volume-val { flex: 0 0 auto; min-width: 24px; text-align: right; font-size: 12px; color: #9aa; font-variant-numeric: tabular-nums; }
+.np-volume-slider {
+  flex: 1;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 5px;
+  border-radius: 4px;
+  background: #e0e5ee;
+  outline: none;
+  cursor: pointer;
+}
+.np-volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #e99d1a;
+  cursor: pointer;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 3px rgba(0,0,0,.25);
+}
+.np-volume-slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #e99d1a;
+  cursor: pointer;
+  border: 2px solid #fff;
+}
+
+/* Device group editor */
+.group-dev-list {
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1px solid #e3e8f0;
+  border-radius: 8px;
+  padding: 6px;
+}
+.group-dev-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+}
+.group-dev-option:hover { background: #f4f6fb; }
+.group-dev-option input { width: 16px; height: 16px; }
 .np-device-main {
   display: flex;
   align-items: flex-start;
@@ -536,9 +582,6 @@ ul.sidebar-nav li a .nav-label { overflow: hidden; }
   #sidebar-wrapper.collapsed.mobile-open {
     transform: translateX(0);
   }
-
-  /* Hide clipped user/server lines on mobile */
-  .sidebar-user { display: none !important; }
 
   #content-wrapper,
   #content-wrapper.expanded {

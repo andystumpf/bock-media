@@ -415,7 +415,7 @@ def alexa_remote_control():
     device_id = (data.get('deviceId') or '').strip()
     serial = (data.get('serial') or '').strip()
     action = (data.get('action') or '').strip().lower()
-    allowed = {'pause', 'play', 'next', 'previous', 'shuffle_on', 'shuffle_off'}
+    allowed = {'pause', 'play', 'stop', 'next', 'previous', 'shuffle_on', 'shuffle_off'}
     target = serial or device
     if not target:
         return jsonify({'error': 'device required'}), 400
@@ -433,6 +433,9 @@ def alexa_remote_control():
             elif action == 'play' and st.get('token'):
                 st = {**st, 'playing': True, 'paused': False}
                 write_np_state_for_device(device_id, st)
+            elif action == 'stop':
+                # Device goes home — drop it from Now Playing entirely.
+                write_np_state_for_device(device_id, None)
         return jsonify({'ok': True, **result})
     except ImportError:
         return jsonify({'error': 'alexapy not installed', 'code': 'not_installed'}), 503
@@ -440,6 +443,172 @@ def alexa_remote_control():
         code = str(e)
         status = 400 if code in ('not_configured', 'not_authenticated', 'device_not_found', 'invalid_action') else 500
         return jsonify({'error': code, 'code': code}), status
+
+# ── Device Groups (play/schedule on multiple Echoes at once) ──────────────────
+# A group is a named set of Alexa devices (by stable serialNumber). Selecting a
+# group anywhere a single device is accepted fans the command out to every
+# member — each member then streams independently and shows its own Now Playing
+# row (the custom skill keys state per deviceId). Group ids are referenced in
+# dropdowns / automations as the opaque value "group:<id>".
+
+DEVICE_GROUPS_PATH = os.path.join(HERE, 'device_groups.json')
+_DEVICE_GROUPS_LOCK = threading.Lock()
+GROUP_PREFIX = 'group:'
+
+
+def _load_device_groups():
+    with _DEVICE_GROUPS_LOCK:
+        try:
+            with open(DEVICE_GROUPS_PATH) as f:
+                data = json.load(f)
+            return data if isinstance(data, list) else []
+        except Exception:
+            return []
+
+
+def _save_device_groups(items):
+    with _DEVICE_GROUPS_LOCK:
+        _atomic_json_write(DEVICE_GROUPS_PATH, items, indent=2)
+
+
+def _find_group(group_id):
+    return next((g for g in _load_device_groups() if g.get('id') == group_id), None)
+
+
+def _normalize_group_members(raw):
+    """Accept a list of {serial,name} (or bare serial strings) → de-duped list."""
+    members, seen = [], set()
+    for m in raw or []:
+        if isinstance(m, str):
+            serial, name = m.strip(), ''
+        elif isinstance(m, dict):
+            serial = (m.get('serial') or '').strip()
+            name = (m.get('name') or '').strip()
+        else:
+            continue
+        if not serial or serial in seen:
+            continue
+        seen.add(serial)
+        members.append({'serial': serial, 'name': name or serial})
+    return members
+
+
+def _expand_play_targets(device):
+    """Resolve a dropdown device value to a list of (serial, name) targets.
+
+    A plain serial/name → single target. A "group:<id>" value → every member.
+    """
+    device = (device or '').strip()
+    if device.startswith(GROUP_PREFIX):
+        group = _find_group(device[len(GROUP_PREFIX):])
+        if not group:
+            raise ValueError('group_not_found')
+        members = _normalize_group_members(group.get('members'))
+        if not members:
+            raise ValueError('group_empty')
+        return [(m['serial'], m['name']) for m in members]
+    return [(device, device)]
+
+
+@app.route('/api/device_groups')
+def list_device_groups():
+    items = _load_device_groups()
+    items.sort(key=lambda g: (g.get('name') or '').lower())
+    return jsonify({'items': items})
+
+
+def _validate_group_body(body, existing=None):
+    name = (body.get('name') or '').strip()
+    members = _normalize_group_members(body.get('members'))
+    if not name:
+        return None, ('name required', 400)
+    if not members:
+        return None, ('at least one device required', 400)
+    now = time.time()
+    return {
+        'id': (existing or {}).get('id') or str(uuid.uuid4()),
+        'name': name,
+        'members': members,
+        'createdAt': (existing or {}).get('createdAt', now),
+        'updatedAt': now,
+    }, None
+
+
+@app.route('/api/device_groups', methods=['POST'])
+def create_device_group():
+    item, err = _validate_group_body(request.get_json() or {})
+    if err:
+        return jsonify({'error': err[0]}), err[1]
+    items = _load_device_groups()
+    items.append(item)
+    _save_device_groups(items)
+    return jsonify(item), 201
+
+
+@app.route('/api/device_groups/<group_id>', methods=['PUT'])
+def update_device_group(group_id):
+    items = _load_device_groups()
+    idx = next((i for i, g in enumerate(items) if g.get('id') == group_id), None)
+    if idx is None:
+        return jsonify({'error': 'not found'}), 404
+    item, err = _validate_group_body(request.get_json() or {}, existing=items[idx])
+    if err:
+        return jsonify({'error': err[0]}), err[1]
+    items[idx] = item
+    _save_device_groups(items)
+    return jsonify(item)
+
+
+@app.route('/api/device_groups/<group_id>', methods=['DELETE'])
+def delete_device_group(group_id):
+    items = _load_device_groups()
+    new_items = [g for g in items if g.get('id') != group_id]
+    if len(new_items) == len(items):
+        return jsonify({'error': 'not found'}), 404
+    _save_device_groups(new_items)
+    return jsonify({'ok': True})
+
+
+@app.route('/api/alexa_remote/volume', methods=['GET', 'POST'])
+def alexa_remote_volume():
+    """GET current / POST new volume (0-100) on a specific Echo (unofficial API)."""
+    if request.method == 'GET':
+        target = (request.args.get('serial') or request.args.get('device') or '').strip()
+        if not target:
+            return jsonify({'error': 'device required'}), 400
+        try:
+            import alexa_remote
+            return jsonify({'ok': True, 'volume': alexa_remote.get_volume(target)})
+        except ImportError:
+            return jsonify({'error': 'alexapy not installed', 'code': 'not_installed'}), 503
+        except Exception as e:
+            code = str(e)
+            status = 400 if code in ('not_configured', 'not_authenticated', 'device_not_found') else 500
+            return jsonify({'error': code, 'code': code}), status
+
+    data = request.get_json() or {}
+    serial = (data.get('serial') or '').strip()
+    device = (data.get('device') or '').strip()
+    target = serial or device
+    try:
+        volume = int(data.get('volume'))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'volume must be 0-100'}), 400
+    if not target:
+        return jsonify({'error': 'device required'}), 400
+    if not 0 <= volume <= 100:
+        return jsonify({'error': 'volume must be 0-100'}), 400
+    try:
+        import alexa_remote
+        result = alexa_remote.set_volume(target, volume)
+        return jsonify({'ok': True, **result})
+    except ImportError:
+        return jsonify({'error': 'alexapy not installed', 'code': 'not_installed'}), 503
+    except Exception as e:
+        code = str(e)
+        status = 400 if code in ('not_configured', 'not_authenticated', 'device_not_found') else 500
+        return jsonify({'error': code, 'code': code}), status
+
 
 def _build_play_text(kind, name, shuffle):
     """Build a collision-safe utterance that routes to our custom skill.
@@ -481,9 +650,23 @@ def play_on_device():
         return jsonify({'error': 'name or id required'}), 400
     text = _build_play_text(kind, name, shuffle)
     try:
+        targets = _expand_play_targets(device)
+    except ValueError as e:
+        return jsonify({'error': str(e), 'code': str(e)}), 400
+    try:
         import alexa_remote
-        result = alexa_remote.play_text(device, text)
-        return jsonify({'ok': True, **result})
+        results, errors = [], []
+        for serial, member_name in targets:
+            try:
+                results.append(alexa_remote.play_text(serial, text))
+            except Exception as e:
+                errors.append({'device': member_name, 'error': str(e)})
+        if not results:
+            code = errors[0]['error'] if errors else 'play_failed'
+            status = 400 if code in ('not_configured', 'not_authenticated', 'device_not_found') else 500
+            return jsonify({'error': code, 'code': code, 'errors': errors}), status
+        label = results[0].get('device') if len(results) == 1 else f'{len(results)} devices'
+        return jsonify({'ok': True, 'device': label, 'count': len(results), 'errors': errors})
     except ImportError:
         return jsonify({'error': 'alexapy not installed', 'code': 'not_installed'}), 503
     except Exception as e:
@@ -589,7 +772,16 @@ def _validate_automation_body(body, existing=None):
 def _fire_automation(auto):
     text = _build_play_text('playlist', auto['playlistName'], auto.get('shuffle'))
     import alexa_remote
-    return alexa_remote.play_text(auto['device'], text)
+    targets = _expand_play_targets(auto['device'])
+    results, errors = [], []
+    for serial, member_name in targets:
+        try:
+            results.append(alexa_remote.play_text(serial, text))
+        except Exception as e:
+            errors.append(f'{member_name}: {e}')
+    if not results:
+        raise RuntimeError('; '.join(errors) or 'play_failed')
+    return {'count': len(results), 'errors': errors}
 
 
 def _tick_automations():
@@ -876,11 +1068,23 @@ def clear_cache():
 DEVICES_PATH = os.path.join(HERE, 'devices.json')
 
 def _atomic_json_write(path, data, **dump_kwargs):
-    """Write JSON atomically: write to .tmp then os.replace to avoid corruption on crash."""
-    tmp = path + '.tmp'
-    with open(tmp, 'w') as f:
-        json.dump(data, f, **dump_kwargs)
-    os.replace(tmp, path)
+    """Write JSON atomically: write to a unique .tmp then os.replace.
+
+    The temp name is unique per write (pid + thread + random) so concurrent
+    writers — e.g. two members of a device group whose Echoes hit the skill at
+    the same instant — never share a temp file and clobber each other's replace.
+    """
+    tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.{os.urandom(4).hex()}.tmp"
+    try:
+        with open(tmp, 'w') as f:
+            json.dump(data, f, **dump_kwargs)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
 
 def _load_devices():
     try:
@@ -2056,6 +2260,9 @@ def normalize_track_queue(tracks):
 
 QUEUES_PATH = os.path.join(HERE, 'queues.json')
 _QUEUE_TTL_SECONDS = 24 * 3600
+# Serialize read-modify-write of queues.json so concurrent group-fanout plays
+# don't lose each other's queue entries (last-write-wins on the whole dict).
+_QUEUES_LOCK = threading.RLock()
 
 def _load_queues():
     try:
@@ -2074,25 +2281,27 @@ def _new_queue_id():
     return base64.urlsafe_b64encode(os.urandom(9)).decode().rstrip('=')
 
 def _store_queue(tracks, shuffle=False, loop=False):
-    queues = _load_queues()
-    now = time.time()
-    queues = {k: v for k, v in queues.items() if now - v.get('ts', 0) < _QUEUE_TTL_SECONDS}
-    qid = _new_queue_id()
-    queues[qid] = {'tracks': list(tracks), 'shuffle': bool(shuffle),
-                   'loop': bool(loop), 'ts': now}
-    _save_queues(queues)
-    return qid
+    with _QUEUES_LOCK:
+        queues = _load_queues()
+        now = time.time()
+        queues = {k: v for k, v in queues.items() if now - v.get('ts', 0) < _QUEUE_TTL_SECONDS}
+        qid = _new_queue_id()
+        queues[qid] = {'tracks': list(tracks), 'shuffle': bool(shuffle),
+                       'loop': bool(loop), 'ts': now}
+        _save_queues(queues)
+        return qid
 
 def _update_queue_flags(qid, **kwargs):
     """Update loop/shuffle/tracks on an existing queue entry."""
     if not qid:
         return
-    queues = _load_queues()
-    if qid not in queues:
-        return
-    for k, v in kwargs.items():
-        queues[qid][k] = v
-    _save_queues(queues)
+    with _QUEUES_LOCK:
+        queues = _load_queues()
+        if qid not in queues:
+            return
+        for k, v in kwargs.items():
+            queues[qid][k] = v
+        _save_queues(queues)
 
 def _touch_queue(qid):
     """Refresh a queue's TTL so a long-running / looping stream is never pruned
@@ -2100,12 +2309,13 @@ def _touch_queue(qid):
     Now Playing once a newer play triggers the prune in _store_queue()."""
     if not qid:
         return
-    queues = _load_queues()
-    entry = queues.get(qid)
-    if not entry:
-        return
-    entry['ts'] = time.time()
-    _save_queues(queues)
+    with _QUEUES_LOCK:
+        queues = _load_queues()
+        entry = queues.get(qid)
+        if not entry:
+            return
+        entry['ts'] = time.time()
+        _save_queues(queues)
 
 def encode_token(data):
     qid = data.get('qid')
@@ -2373,6 +2583,10 @@ def general_search_tracks(query, limit=300):
 # ── Now Playing State ─────────────────────────────────────────────────────────
 
 NP_STATE_PATH = os.path.join(HERE, 'nowplaying_state.json')
+# Serialize the read-modify-write of nowplaying_state.json. Without this, two
+# group members' PlaybackStarted events race: both read the same snapshot, each
+# adds only its own device, and the last write drops the other device's row.
+_NP_LOCK = threading.RLock()
 _NP_DEVICE_TTL_SECONDS = 6 * 3600
 
 # MSP (music-skill) playback exposes no device id, so all of it is attributed to
@@ -2495,14 +2709,15 @@ def write_np_state(data):
     did = _np_device_id()
     if did == 'default':
         return
-    payload = _canonicalize_np(_read_all_np() or {'devices': {}})
-    devices = payload.setdefault('devices', {})
-    if not data:
-        devices.pop(did, None)
-    else:
-        devices[did] = data
-    _canonicalize_np(_prune_np(payload))
-    _write_all_np(payload)
+    with _NP_LOCK:
+        payload = _canonicalize_np(_read_all_np() or {'devices': {}})
+        devices = payload.setdefault('devices', {})
+        if not data:
+            devices.pop(did, None)
+        else:
+            devices[did] = data
+        _canonicalize_np(_prune_np(payload))
+        _write_all_np(payload)
 
 def read_np_state():
     payload = _canonicalize_np(_read_all_np())
@@ -2523,13 +2738,14 @@ def write_np_state_for_device(device_id, data):
     if not device_id or device_id == 'default':
         return
     did = _resolve_device_id(device_id)
-    payload = _canonicalize_np(_read_all_np() or {'devices': {}})
-    devices = payload.setdefault('devices', {})
-    if not data:
-        devices.pop(did, None)
-    else:
-        devices[did] = data
-    _write_all_np(_canonicalize_np(_prune_np(payload)))
+    with _NP_LOCK:
+        payload = _canonicalize_np(_read_all_np() or {'devices': {}})
+        devices = payload.setdefault('devices', {})
+        if not data:
+            devices.pop(did, None)
+        else:
+            devices[did] = data
+        _write_all_np(_canonicalize_np(_prune_np(payload)))
 
 def remove_np_state():
     payload = _canonicalize_np(_read_all_np() or {'devices': {}})
