@@ -470,9 +470,15 @@ async function ensureAlexaDevices(force) {
   return window._alexaDevices;
 }
 
-async function openPlayMenu(i) {
+function openPlayMenu(i) {
   const p = (window._playlists || [])[i];
-  if (!p) return;
+  if (p) playOnDevice({ kind: 'playlist', name: p.name, id: p.id });
+}
+
+// Generic "Play on a device" picker. opts: {kind, name, id?, shuffle?(bool, default allowed)}
+async function playOnDevice(opts) {
+  const { kind, name, id } = opts;
+  const allowShuffle = opts.shuffle !== false && kind !== 'song';
   let devices;
   try {
     devices = await ensureAlexaDevices();
@@ -484,20 +490,23 @@ async function openPlayMenu(i) {
   }
   if (!devices.length) return showToast('No Alexa devices found', true);
 
-  const opts = devices.map(d =>
+  const deviceOpts = devices.map(d =>
     `<option value="${escHtml(d.serial)}">${escHtml(d.name)}${d.online ? '' : ' (offline)'}</option>`
   ).join('');
+  const shuffleRow = allowShuffle
+    ? `<label style="display:flex;align-items:center;gap:8px;margin:14px 0">
+        <input type="checkbox" id="play-shuffle"> Shuffle
+      </label>`
+    : '';
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
   overlay.innerHTML = `
     <div class="modal-box">
-      <h3 style="margin-top:0"><i class="fa fa-play"></i> Play "${escHtml(p.name)}"</h3>
+      <h3 style="margin-top:0"><i class="fa fa-play"></i> Play "${escHtml(name)}"</h3>
       <label style="display:block;margin:12px 0 4px;font-size:13px;color:#888">Device</label>
-      <select id="play-device" class="settings-input" style="width:100%">${opts}</select>
-      <label style="display:flex;align-items:center;gap:8px;margin:14px 0">
-        <input type="checkbox" id="play-shuffle"> Shuffle
-      </label>
+      <select id="play-device" class="settings-input" style="width:100%">${deviceOpts}</select>
+      ${shuffleRow}
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
         <button class="cancel-btn" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
         <button class="save-btn" id="play-go">Play</button>
@@ -506,19 +515,33 @@ async function openPlayMenu(i) {
   document.body.appendChild(overlay);
   overlay.querySelector('#play-go').onclick = async () => {
     const device = overlay.querySelector('#play-device').value;
-    const shuffle = overlay.querySelector('#play-shuffle').checked;
+    const shuffleEl = overlay.querySelector('#play-shuffle');
+    const shuffle = shuffleEl ? shuffleEl.checked : false;
     const btn = overlay.querySelector('#play-go');
     btn.disabled = true; btn.textContent = 'Sending…';
-    const res = await fetch('/api/playlists/play', {
+    const res = await fetch('/api/alexa_remote/play', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: p.id, name: p.name, device, shuffle }),
+      body: JSON.stringify({ kind, id, name, device, shuffle }),
     });
     const data = await res.json().catch(() => ({}));
     overlay.remove();
-    if (res.ok) showToast(`Playing "${p.name}" on ${data.device || 'device'}`);
+    if (res.ok) showToast(`Playing "${name}" on ${data.device || 'device'}`);
     else showToast(data.error || 'Failed to start playback', true);
   };
+}
+
+function playArtistAt(i) {
+  const a = (window._artists || [])[i];
+  if (a) playOnDevice({ kind: 'artist', name: a.artist });
+}
+function playAlbumAt(i) {
+  const a = (window._albums || [])[i];
+  if (a) playOnDevice({ kind: 'album', name: a.album });
+}
+function playSongAt(i) {
+  const s = (window._songs || [])[i];
+  if (s) playOnDevice({ kind: 'song', name: s.title || path2name(s.path) });
 }
 
 // ── Artists ──────────────────────────────────────────────────────────────────
@@ -530,14 +553,20 @@ register('artists', async () => {
 });
 
 async function loadArtists() {
-  const data = await API(`/api/artists?page=${_arPage}&limit=50&search=${encodeURIComponent(_arSearch)}`);
+  const [data, remote] = await Promise.all([
+    API(`/api/artists?page=${_arPage}&limit=50&search=${encodeURIComponent(_arSearch)}`),
+    ensureAlexaRemoteStatus(),
+  ]);
   const { items = [], total = 0 } = data || {};
+  window._artists = items;
+  const canPlay = !!(remote && remote.configured);
 
-  const rows = items.map(a => `
+  const rows = items.map((a, i) => `
     <tr class="clickable" onclick="window.location='#songs/artist/${encodeURIComponent(a.artist)}'">
       <td><i class="fa fa-microphone" style="color:#e99d1a;margin-right:8px"></i>${escHtml(a.artist)}</td>
       <td><span class="badge">${fmtNum(a.album_count)}</span></td>
       <td><span class="badge orange">${fmtNum(a.track_count)}</span></td>
+      <td style="width:48px;text-align:right">${canPlay ? `<button class="edit-btn" onclick="event.stopPropagation();playArtistAt(${i})" title="Play on a device"><i class="fa fa-play"></i></button>` : ''}</td>
     </tr>`).join('');
 
   document.getElementById('page-title').textContent = 'Artists';
@@ -555,7 +584,7 @@ async function loadArtists() {
       </div>
       ${rows ? `
       <table class="data-table">
-        <thead><tr><th>Artist</th><th>Albums</th><th>Songs</th></tr></thead>
+        <thead><tr><th>Artist</th><th>Albums</th><th>Songs</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
       </table>` : `<div class="empty-state"><i class="fa fa-microphone"></i><p>No artists found.</p></div>`}
       ${buildPagination(total, _arPage, 50, (p) => { _arPage = p; loadArtists(); })}
@@ -573,14 +602,20 @@ register('albums', async (params) => {
 });
 
 async function loadAlbums() {
-  const data = await API(`/api/albums?page=${_alPage}&limit=50&search=${encodeURIComponent(_alSearch)}&artist=${encodeURIComponent(_alArtist)}`);
+  const [data, remote] = await Promise.all([
+    API(`/api/albums?page=${_alPage}&limit=50&search=${encodeURIComponent(_alSearch)}&artist=${encodeURIComponent(_alArtist)}`),
+    ensureAlexaRemoteStatus(),
+  ]);
   const { items = [], total = 0 } = data || {};
+  window._albums = items;
+  const canPlay = !!(remote && remote.configured);
 
-  const rows = items.map(a => `
+  const rows = items.map((a, i) => `
     <tr class="clickable" onclick="window.location='#songs/album/${encodeURIComponent(a.album)}'">
       <td><i class="fa fa-compact-disc" style="color:#e99d1a;margin-right:8px"></i>${escHtml(a.album)}</td>
       <td class="text-muted">${escHtml(a.artist || '—')}</td>
       <td><span class="badge orange">${fmtNum(a.track_count)}</span></td>
+      <td style="width:48px;text-align:right">${canPlay ? `<button class="edit-btn" onclick="event.stopPropagation();playAlbumAt(${i})" title="Play on a device"><i class="fa fa-play"></i></button>` : ''}</td>
     </tr>`).join('');
 
   const backLink = _alArtist ? `<span class="back-link" onclick="window.location='#artists'"><i class="fa fa-arrow-left"></i> Back to Artists</span><br>` : '';
@@ -601,7 +636,7 @@ async function loadAlbums() {
       </div>
       ${rows ? `
       <table class="data-table">
-        <thead><tr><th>Album</th><th>Artist</th><th>Songs</th></tr></thead>
+        <thead><tr><th>Album</th><th>Artist</th><th>Songs</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
       </table>` : `<div class="empty-state"><i class="fa fa-compact-disc"></i><p>No albums found.</p></div>`}
       ${buildPagination(total, _alPage, 50, (p) => { _alPage = p; loadAlbums(); })}
@@ -625,12 +660,15 @@ register('songs', async (params) => {
 });
 
 async function loadSongs() {
-  const data = await API(
-    `/api/songs?page=${_soPage}&limit=100&search=${encodeURIComponent(_soSearch)}&artist=${encodeURIComponent(_soArtist)}&album=${encodeURIComponent(_soAlbum)}`
-  );
+  const [data, remote] = await Promise.all([
+    API(`/api/songs?page=${_soPage}&limit=100&search=${encodeURIComponent(_soSearch)}&artist=${encodeURIComponent(_soArtist)}&album=${encodeURIComponent(_soAlbum)}`),
+    ensureAlexaRemoteStatus(),
+  ]);
   const { items = [], total = 0 } = data || {};
+  window._songs = items;
+  const canPlay = !!(remote && remote.configured);
 
-  const rows = items.map(s => `
+  const rows = items.map((s, i) => `
     <tr>
       <td class="text-muted" style="width:40px;text-align:right">${s.track_number || ''}</td>
       <td>${escHtml(s.title || path2name(s.path))}</td>
@@ -639,6 +677,7 @@ async function loadSongs() {
       <td class="text-muted">${escHtml(s.genre || '—')}</td>
       <td class="text-muted">${s.year || '—'}</td>
       <td class="text-muted">${fmtDuration(s.duration_seconds)}</td>
+      <td style="width:48px;text-align:right">${canPlay ? `<button class="edit-btn" onclick="playSongAt(${i})" title="Play on a device"><i class="fa fa-play"></i></button>` : ''}</td>
     </tr>`).join('');
 
   let backLink = '';
@@ -665,7 +704,7 @@ async function loadSongs() {
       </div>
       ${rows ? `
       <table class="data-table">
-        <thead><tr><th>#</th><th>Title</th><th>Artist</th><th>Album</th><th>Genre</th><th>Year</th><th>Duration</th></tr></thead>
+        <thead><tr><th>#</th><th>Title</th><th>Artist</th><th>Album</th><th>Genre</th><th>Year</th><th>Duration</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
       </table>` : `<div class="empty-state"><i class="fa fa-music"></i><p>No songs found.</p></div>`}
       ${buildPagination(total, _soPage, 100, (p) => { _soPage = p; loadSongs(); })}

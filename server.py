@@ -405,26 +405,45 @@ def alexa_remote_devices():
         status = 400 if code in ('not_configured', 'not_authenticated') else 500
         return jsonify({'error': code, 'code': code}), status
 
+def _build_play_text(kind, name, shuffle):
+    """Build a collision-safe utterance that routes to our custom skill.
+
+    "play"/"shuffle" get grabbed by Amazon's music domain; "start"/"mix" route
+    to the custom skill (no account linking, serves the library directly). The
+    interaction model declares these verbs for every Play*/Shuffle* intent.
+    See alexa-skill-troubleshooting rule.
+    """
+    alias = _alexa_alias()
+    verb = 'mix' if shuffle else 'start'
+    if kind == 'artist':
+        phrase = f"music by {name}"
+    elif kind == 'album':
+        phrase = f"the album {name}"
+    elif kind == 'song':
+        verb = 'start'  # shuffling a single track is meaningless
+        phrase = f"the song {name}"
+    else:  # playlist
+        phrase = f"the {name} playlist"
+    return f"ask {alias} to {verb} {phrase}"
+
+
 @app.route('/api/playlists/play', methods=['POST'])
-def play_playlist_on_device():
-    """Start a playlist on a specific Echo via the unofficial Alexa API."""
+@app.route('/api/alexa_remote/play', methods=['POST'])
+def play_on_device():
+    """Start a playlist/artist/album/song on a specific Echo (unofficial Alexa API)."""
     data = request.get_json() or {}
     device = (data.get('device') or '').strip()
     name = (data.get('name') or '').strip()
     pid = (data.get('id') or '').strip()
+    kind = (data.get('kind') or 'playlist').strip().lower()
     shuffle = bool(data.get('shuffle'))
     if not device:
         return jsonify({'error': 'device required'}), 400
-    if not name and pid:
+    if not name and pid and kind == 'playlist':
         name, _ = _msp_playlist_by_id(pid)
     if not name:
         return jsonify({'error': 'name or id required'}), 400
-    # Use the custom skill's collision-safe verbs: "play"/"shuffle" get grabbed
-    # by Amazon's music domain (-> the MSP music skill, which needs account
-    # linking). "start"/"mix" route to our custom skill (no linking, serves the
-    # library directly). See alexa-skill-troubleshooting rule.
-    verb = 'mix' if shuffle else 'start'
-    text = f"ask {_alexa_alias()} to {verb} the {name} playlist"
+    text = _build_play_text(kind, name, shuffle)
     try:
         import alexa_remote
         result = alexa_remote.play_text(device, text)
