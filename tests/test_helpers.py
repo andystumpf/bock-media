@@ -173,6 +173,25 @@ class TestNowPlaying:
             server.g.device_id = 'devB'
             assert server.read_np_state()['track'] == 'songB'
 
+    def test_read_np_state_uses_merged_primary(self, isolated_paths):
+        """NextIntent on a merged alias device id must find primary's np slot."""
+        primary = 'dev-primary'
+        alias = 'dev-alias-rotated'
+        server._save_devices({
+            primary: {'name': 'Office Show', 'firstSeen': 1, 'lastSeen': 2},
+            alias: {'aliasOf': primary, 'name': 'Office Show', 'firstSeen': 3, 'lastSeen': 4},
+        })
+        with server.app.test_request_context('/'):
+            server.g.device_id = primary
+            server.g.raw_device_id = primary
+            server.write_np_state({'track': 'Wildflower', 'token': 'q1:0', 'playing': True})
+        with server.app.test_request_context('/'):
+            server.g.device_id = primary
+            server.g.raw_device_id = alias
+            st = server.read_np_state()
+            assert st is not None
+            assert st['track'] == 'Wildflower'
+
     def test_remove_clears_only_that_device(self, isolated_paths):
         """remove_np_state removes only the current device's slot"""
         with server.app.test_request_context('/'):

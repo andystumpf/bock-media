@@ -26,6 +26,17 @@ function escHtml(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+/** Row action button — icon only; kind: play | run | edit | merge | delete | muted */
+function actionBtn({ kind, onclick, title, icon, extraClass, dataAttrs }) {
+  const cls = ['action-btn', `action-${kind}`, extraClass].filter(Boolean).join(' ');
+  return `<button type="button" class="${cls}" onclick="${onclick}"${dataAttrs || ''} title="${escHtml(title)}" aria-label="${escHtml(title)}"><i class="fa fa-${icon}"></i></button>`;
+}
+
+function rowActions(...buttons) {
+  const html = buttons.filter(Boolean).join('');
+  return html ? `<td class="row-actions-cell"><div class="row-actions">${html}</div></td>` : '<td></td>';
+}
+
 // Router
 const routes = {};
 let currentRoute = '';
@@ -248,26 +259,100 @@ register('nowplaying', async () => {
   await loadNowPlaying();
   _npPollTimer = setInterval(async () => {
     const data = await API('/api/nowplaying_devices');
+    window._npItems = (data && data.items) || [];
+    window._npControlsAvailable = !!(data && data.controlsAvailable);
     const card = document.getElementById('np-current-card');
-    if (card) card.outerHTML = buildCurrentCard(data ? data.items : []);
+    if (card) card.outerHTML = buildCurrentCard(window._npItems, window._npControlsAvailable);
     refreshCurrentTrack();
   }, 5000);
 });
 
-function buildDeviceRow(d) {
+function npCanControl(d, controlsAvailable) {
+  return !!(controlsAvailable && d.deviceName && !String(d.deviceId || '').startsWith('msp-'));
+}
+
+function npDeviceIdClass(deviceId) {
+  return 'np-dev-' + String(deviceId || '').replace(/[^a-zA-Z0-9]/g, '_');
+}
+
+function buildDeviceRow(d, controlsAvailable = false) {
+  const devAttr = ` data-device-id="${escHtml(d.deviceId)}"`;
+  const shuffleCls = npDeviceIdClass(d.deviceId);
+  const controls = npCanControl(d, controlsAvailable) ? `
+    <div class="np-controls row-actions">
+      ${actionBtn({ kind: 'muted', onclick: "npControlEl(this,'previous')", title: 'Previous', icon: 'backward-step', dataAttrs: devAttr })}
+      ${actionBtn({ kind: 'play', onclick: "npControlEl(this,'play')", title: 'Play', icon: 'play', dataAttrs: devAttr })}
+      ${actionBtn({ kind: 'muted', onclick: "npControlEl(this,'pause')", title: 'Pause', icon: 'pause', dataAttrs: devAttr })}
+      ${actionBtn({ kind: 'muted', onclick: "npControlEl(this,'next')", title: 'Next', icon: 'forward-step', dataAttrs: devAttr })}
+      ${actionBtn({ kind: 'muted', onclick: 'npToggleShuffleEl(this)', title: 'Shuffle', icon: 'shuffle', extraClass: `np-shuffle-btn np-shuffle-${shuffleCls}`, dataAttrs: devAttr })}
+    </div>` : '';
+  const pausedBadge = d.paused ? '<span class="np-paused-badge">Paused</span>' : '';
   return `
-    <div style="display:flex;align-items:center;gap:16px;padding:10px 0;border-top:1px solid #eef0f4">
-      <div style="font-size:24px;color:#e99d1a"><i class="fa fa-music"></i></div>
-      <div style="flex:1">
-        <div style="font-size:17px;font-weight:700;color:#1a2740">${escHtml(d.track || '—')}</div>
-        ${d.artist ? `<div style="font-size:13px;color:#30426a;margin-top:2px">${escHtml(d.artist)}</div>` : ''}
-        ${d.album ? `<div style="font-size:12px;color:#778;margin-top:1px">${escHtml(d.album)}</div>` : ''}
-        <div style="font-size:11px;color:#9aa;margin-top:4px">Device: ${escHtml(d.deviceName || (d.deviceId || '').slice(-12) || 'default')}</div>
+    <div class="np-device-row${d.paused ? ' np-device-paused' : ''}">
+      <div class="np-device-main">
+        <div class="np-device-icon"><i class="fa fa-music"></i></div>
+        <div class="np-device-meta">
+          <div class="np-track">${escHtml(d.track || '—')} ${pausedBadge}</div>
+          ${d.artist ? `<div class="np-artist">${escHtml(d.artist)}</div>` : ''}
+          ${d.album ? `<div class="np-album">${escHtml(d.album)}</div>` : ''}
+          <div class="np-device-label">Device: ${escHtml(d.deviceName || (d.deviceId || '').slice(-12) || 'default')}</div>
+        </div>
       </div>
+      ${controls}
     </div>`;
 }
 
-function buildCurrentCard(items) {
+async function npControlEl(btn, action) {
+  const deviceId = btn && btn.dataset && btn.dataset.deviceId;
+  if (!deviceId) return;
+  await npControl(deviceId, action);
+}
+
+async function npControl(deviceId, action) {
+  const d = (window._npItems || []).find(x => x.deviceId === deviceId);
+  if (!d || !d.deviceName) return;
+  const devs = window._alexaDevices || [];
+  const match = devs.find(x => (x.name || '').toLowerCase() === (d.deviceName || '').toLowerCase());
+  try {
+    const res = await fetch('/api/alexa_remote/control', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        deviceId: d.deviceId,
+        device: d.deviceName,
+        serial: match?.serial || '',
+        action,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const msg = /not_authenticated/.test(data.error || '')
+        ? 'Alexa session expired — re-run scripts/alexa_login.py'
+        : (data.error || 'Control failed');
+      return showToast(msg, true);
+    }
+    const fresh = await API('/api/nowplaying_devices');
+    window._npItems = (fresh && fresh.items) || window._npItems;
+    const card = document.getElementById('np-current-card');
+    if (card) card.outerHTML = buildCurrentCard(window._npItems, window._npControlsAvailable);
+  } catch (e) {
+    showToast(e.message || 'Control failed', true);
+  }
+}
+
+async function npToggleShuffleEl(btn) {
+  const deviceId = btn && btn.dataset && btn.dataset.deviceId;
+  if (!deviceId) return;
+  const d = (window._npItems || []).find(x => x.deviceId === deviceId);
+  if (!d || !d.deviceName) return;
+  window._npShuffle = window._npShuffle || {};
+  const on = !window._npShuffle[deviceId];
+  window._npShuffle[deviceId] = on;
+  await npControl(deviceId, on ? 'shuffle_on' : 'shuffle_off');
+  btn.classList.toggle('shuffle-on', on);
+}
+
+function buildCurrentCard(items, controlsAvailable = false) {
   const list = Array.isArray(items) ? items : [];
   if (!list.length) {
     return `
@@ -282,24 +367,30 @@ function buildCurrentCard(items) {
         </div>
       </div>`;
   }
-  const header = `<div style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:#e99d1a;margin-bottom:4px">Now Playing (${list.length})</div>`;
+  const header = `<div class="np-card-header">Now Playing (${list.length})</div>`;
   return `
     <div class="card" id="np-current-card" style="border-left:4px solid #e99d1a;margin-bottom:20px">
       <div class="card-body">
         ${header}
-        ${list.map(buildDeviceRow).join('')}
+        ${list.map(d => buildDeviceRow(d, controlsAvailable)).join('')}
       </div>
     </div>`;
 }
 
 async function loadNowPlaying() {
-  const [npDevices, histData] = await Promise.all([
+  const [npDevices, histData, remote] = await Promise.all([
     API('/api/nowplaying_devices'),
     API(`/api/nowplaying?page=${_npPage}&limit=25`),
+    ensureAlexaRemoteStatus(),
   ]);
   const { items = [], total = 0 } = histData || {};
+  window._npItems = (npDevices && npDevices.items) || [];
+  window._npControlsAvailable = !!(npDevices && npDevices.controlsAvailable) && !!(remote && remote.configured);
+  if (window._npControlsAvailable) {
+    await ensureAlexaDevices().catch(() => []);
+  }
 
-  const currentCard = buildCurrentCard(npDevices ? npDevices.items : []);
+  const currentCard = buildCurrentCard(window._npItems, window._npControlsAvailable);
 
   const rows = items.map(e => `
     <tr>
@@ -320,7 +411,7 @@ async function loadNowPlaying() {
         </button>
       </div>
       ${rows ? `
-      <table class="data-table">
+      <table class="data-table np-table">
         <thead><tr><th>Track</th><th>Artist</th><th>Device</th><th>Date</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
@@ -388,10 +479,10 @@ async function loadPlaylists() {
       ? '<span class="badge orange">Bock Media</span>'
       : '<span class="badge">File</span>';
     const editBtn = p.id
-      ? `<button class="edit-btn" onclick="startEditPlaylist(${i})" title="Rename"><i class="fa fa-pencil"></i></button>`
+      ? actionBtn({ kind: 'edit', onclick: `startEditPlaylist(${i})`, title: 'Rename playlist', icon: 'pen' })
       : '';
     const playBtn = canPlay
-      ? `<button class="edit-btn" onclick="openPlayMenu(${i})" title="Play on a device"><i class="fa fa-play"></i></button>`
+      ? actionBtn({ kind: 'play', onclick: `openPlayMenu(${i})`, title: 'Play on a device', icon: 'play' })
       : '';
     return `
     <tr id="pl-row-${i}">
@@ -400,7 +491,7 @@ async function loadPlaylists() {
       <td>${srcDisplay}</td>
       <td>${typeBadge}</td>
       <td><span class="badge orange">${fmtNum(p.trackCount)}</span></td>
-      <td style="width:64px;text-align:right;white-space:nowrap">${playBtn}${editBtn}</td>
+      ${rowActions(playBtn, editBtn)}
     </tr>`;
   }).join('');
 
@@ -418,7 +509,7 @@ async function loadPlaylists() {
         </div>
       </div>
       ${rows ? `
-      <table class="data-table">
+      <table class="data-table playlists-table">
         <thead><tr><th></th><th>Name</th><th>Source</th><th>Type</th><th>Tracks</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
       </table>` : `<div class="empty-state"><i class="fa fa-list"></i><p>No playlists found.</p></div>`}
@@ -566,7 +657,7 @@ async function loadArtists() {
       <td><i class="fa fa-microphone" style="color:#e99d1a;margin-right:8px"></i>${escHtml(a.artist)}</td>
       <td><span class="badge">${fmtNum(a.album_count)}</span></td>
       <td><span class="badge orange">${fmtNum(a.track_count)}</span></td>
-      <td style="width:48px;text-align:right">${canPlay ? `<button class="edit-btn" onclick="event.stopPropagation();playArtistAt(${i})" title="Play on a device"><i class="fa fa-play"></i></button>` : ''}</td>
+      ${rowActions(canPlay ? actionBtn({ kind: 'play', onclick: `event.stopPropagation();playArtistAt(${i})`, title: 'Play on a device', icon: 'play' }) : '')}
     </tr>`).join('');
 
   document.getElementById('page-title').textContent = 'Artists';
@@ -583,7 +674,7 @@ async function loadArtists() {
         </div>
       </div>
       ${rows ? `
-      <table class="data-table">
+      <table class="data-table artists-table">
         <thead><tr><th>Artist</th><th>Albums</th><th>Songs</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
       </table>` : `<div class="empty-state"><i class="fa fa-microphone"></i><p>No artists found.</p></div>`}
@@ -615,7 +706,7 @@ async function loadAlbums() {
       <td><i class="fa fa-compact-disc" style="color:#e99d1a;margin-right:8px"></i>${escHtml(a.album)}</td>
       <td class="text-muted">${escHtml(a.artist || '—')}</td>
       <td><span class="badge orange">${fmtNum(a.track_count)}</span></td>
-      <td style="width:48px;text-align:right">${canPlay ? `<button class="edit-btn" onclick="event.stopPropagation();playAlbumAt(${i})" title="Play on a device"><i class="fa fa-play"></i></button>` : ''}</td>
+      ${rowActions(canPlay ? actionBtn({ kind: 'play', onclick: `event.stopPropagation();playAlbumAt(${i})`, title: 'Play on a device', icon: 'play' }) : '')}
     </tr>`).join('');
 
   const backLink = _alArtist ? `<span class="back-link" onclick="window.location='#artists'"><i class="fa fa-arrow-left"></i> Back to Artists</span><br>` : '';
@@ -635,7 +726,7 @@ async function loadAlbums() {
         </div>
       </div>
       ${rows ? `
-      <table class="data-table">
+      <table class="data-table albums-table">
         <thead><tr><th>Album</th><th>Artist</th><th>Songs</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
       </table>` : `<div class="empty-state"><i class="fa fa-compact-disc"></i><p>No albums found.</p></div>`}
@@ -677,7 +768,7 @@ async function loadSongs() {
       <td class="text-muted">${escHtml(s.genre || '—')}</td>
       <td class="text-muted">${s.year || '—'}</td>
       <td class="text-muted">${fmtDuration(s.duration_seconds)}</td>
-      <td style="width:48px;text-align:right">${canPlay ? `<button class="edit-btn" onclick="playSongAt(${i})" title="Play on a device"><i class="fa fa-play"></i></button>` : ''}</td>
+      ${rowActions(canPlay ? actionBtn({ kind: 'play', onclick: `playSongAt(${i})`, title: 'Play on a device', icon: 'play' }) : '')}
     </tr>`).join('');
 
   let backLink = '';
@@ -703,7 +794,7 @@ async function loadSongs() {
         </div>
       </div>
       ${rows ? `
-      <table class="data-table">
+      <table class="data-table songs-table">
         <thead><tr><th>#</th><th>Title</th><th>Artist</th><th>Album</th><th>Genre</th><th>Year</th><th>Duration</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
       </table>` : `<div class="empty-state"><i class="fa fa-music"></i><p>No songs found.</p></div>`}
@@ -774,9 +865,11 @@ function renderDevices() {
       <span class="device-icon-col"><i class="fa fa-headphones"></i></span>
       <span class="device-name-text">${escHtml(d.name)}</span>
       <span class="device-last-seen" style="font-size:11px;color:#9aa;margin-left:8px">${d.lastSeen ? 'Last seen ' + fmtDateTime(new Date(d.lastSeen * 1000).toISOString()) : ''}</span>
-      <button class="edit-btn" onclick="startEditDevice(${i})" title="Edit name"><i class="fa fa-pencil"></i></button>
-      <button class="edit-btn" onclick="startMergeDevice(${i})" title="Merge into another device"><i class="fa fa-code-branch"></i></button>
-      <button class="edit-btn" onclick="deleteDevice(${i})" title="Remove device" style="color:#c33"><i class="fa fa-trash"></i></button>
+      <div class="row-actions">
+        ${actionBtn({ kind: 'edit', onclick: `startEditDevice(${i})`, title: 'Edit name', icon: 'pen' })}
+        ${actionBtn({ kind: 'merge', onclick: `startMergeDevice(${i})`, title: 'Merge into another device', icon: 'code-branch' })}
+        ${actionBtn({ kind: 'delete', onclick: `deleteDevice(${i})`, title: 'Remove device', icon: 'trash' })}
+      </div>
     </li>`).join('');
 
   const candidates = window._mergeCandidates || [];
@@ -1088,14 +1181,17 @@ function renderAutomation(remote) {
       <td>${escHtml(autoDaysLabel(a.days))}${a.shuffle ? ' · shuffle' : ''}</td>
       <td>${lastRun}</td>
       <td>${status}</td>
-      <td class="auto-actions">
-        ${canPlay ? `<button class="edit-btn" onclick="runAutomationNow('${escHtml(a.id)}')" title="Run now"><i class="fa fa-bolt"></i></button>` : ''}
-        <button class="edit-btn" onclick="toggleAutomation('${escHtml(a.id)}', ${a.enabled !== false})" title="${a.enabled !== false ? 'Disable' : 'Enable'}">
-          <i class="fa fa-${a.enabled !== false ? 'pause' : 'play'}"></i>
-        </button>
-        <button class="edit-btn" onclick="editAutomation(${i})" title="Edit"><i class="fa fa-pencil"></i></button>
-        <button class="edit-btn" onclick="deleteAutomation('${escHtml(a.id)}')" title="Delete" style="color:#c33"><i class="fa fa-trash"></i></button>
-      </td>
+      ${rowActions(
+        canPlay ? actionBtn({ kind: 'run', onclick: `runAutomationNow('${escHtml(a.id)}')`, title: 'Run now', icon: 'bolt' }) : '',
+        actionBtn({
+          kind: 'muted',
+          onclick: `toggleAutomation('${escHtml(a.id)}', ${a.enabled !== false})`,
+          title: a.enabled !== false ? 'Disable' : 'Enable',
+          icon: a.enabled !== false ? 'pause' : 'play',
+        }),
+        actionBtn({ kind: 'edit', onclick: `editAutomation(${i})`, title: 'Edit automation', icon: 'pen' }),
+        actionBtn({ kind: 'delete', onclick: `deleteAutomation('${escHtml(a.id)}')`, title: 'Delete automation', icon: 'trash' }),
+      )}
     </tr>`;
   }).join('');
 
@@ -1108,7 +1204,7 @@ function renderAutomation(remote) {
     <div class="card">
       <div class="card-header"><h3><i class="fa fa-clock"></i> Scheduled automations (${items.length})</h3></div>
       ${rows ? `
-      <table class="data-table">
+      <table class="data-table automation-table">
         <thead><tr><th>Automation</th><th>Time</th><th>Schedule</th><th>Last run</th><th>Status</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
       </table>` : `<div class="empty-state"><i class="fa fa-clock"></i><p>No automations yet.</p></div>`}
@@ -1949,9 +2045,40 @@ function showToast(msg, isError = false) {
 }
 
 // ── Sidebar toggle ───────────────────────────────────────────────────────────
+function isMobileLayout() {
+  return window.matchMedia('(max-width: 768px)').matches;
+}
+
+function closeMobileSidebar() {
+  document.getElementById('sidebar-wrapper').classList.remove('mobile-open');
+  document.body.classList.remove('sidebar-open');
+}
+
 document.getElementById('sidebar-toggle').addEventListener('click', () => {
-  document.getElementById('sidebar-wrapper').classList.toggle('collapsed');
+  const sidebar = document.getElementById('sidebar-wrapper');
+  if (isMobileLayout()) {
+    sidebar.classList.toggle('mobile-open');
+    document.body.classList.toggle('sidebar-open', sidebar.classList.contains('mobile-open'));
+    return;
+  }
+  sidebar.classList.toggle('collapsed');
   document.getElementById('content-wrapper').classList.toggle('expanded');
+});
+
+document.querySelectorAll('.sidebar-nav a').forEach(a => {
+  a.addEventListener('click', () => {
+    if (isMobileLayout()) closeMobileSidebar();
+  });
+});
+
+document.body.addEventListener('click', (e) => {
+  if (!isMobileLayout() || !document.body.classList.contains('sidebar-open')) return;
+  if (e.target.closest('#sidebar-wrapper') || e.target.closest('#sidebar-toggle')) return;
+  closeMobileSidebar();
+});
+
+window.addEventListener('resize', () => {
+  if (!isMobileLayout()) closeMobileSidebar();
 });
 
 // ── Init ─────────────────────────────────────────────────────────────────────

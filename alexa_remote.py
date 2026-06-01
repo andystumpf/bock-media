@@ -188,3 +188,41 @@ async def _play_text(target, text):
 def play_text(target, text):
     """Speak `text` to the Echo identified by serial or accountName `target`."""
     return run(_play_text(target, text))
+
+
+# Voice phrases for transport controls on a device with an active Bock Media
+# AudioPlayer session. Native alexapy pause/next/etc. use /api/np/command and
+# only affect Amazon Music / Spotify — not custom-skill playback.
+_TRANSPORT_TEXT = {
+    'pause': 'pause',
+    'play': 'resume',
+    'next': 'next',
+    'previous': 'previous',
+    'shuffle_on': 'shuffle on',
+    'shuffle_off': 'shuffle off',
+}
+
+# Actions that are issued while the target device has LOST audio focus (resume
+# after a pause cleared the session). A bare media verb ("resume") gets routed by
+# Amazon's media domain to the household's last-active device, not the one we
+# targeted — so it must be an explicit skill invocation ("ask <alias> to resume")
+# to deterministically render on the intended Echo, like the play-on-device path.
+_EXPLICIT_INVOCATION_ACTIONS = {'play'}
+
+
+async def _device_control(target, action, alias='bock media'):
+    verb = _TRANSPORT_TEXT.get(action)
+    if not verb:
+        raise AlexaRemoteError('invalid_action')
+    if action in _EXPLICIT_INVOCATION_ACTIONS:
+        text = f"ask {alias} to {verb}"
+    else:
+        text = verb
+    result = await _play_text(target, text)
+    result['action'] = action
+    return result
+
+
+def device_control(target, action, alias='bock media'):
+    """Send pause/play/next/previous/shuffle to an Echo by serial or name."""
+    return run(_device_control(target, action, alias))

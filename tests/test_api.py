@@ -154,7 +154,9 @@ class TestNowPlayingApi:
 
     def test_devices_endpoint_empty(self, client):
         """/api/nowplaying_devices on cold start has no items"""
-        assert client.get('/api/nowplaying_devices').get_json() == {'items': []}
+        data = client.get('/api/nowplaying_devices').get_json()
+        assert data['items'] == []
+        assert 'controlsAvailable' in data
 
     def test_history_empty(self, client):
         """/api/nowplaying (history) on cold start has 0 total"""

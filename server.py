@@ -407,6 +407,40 @@ def alexa_remote_devices():
         status = 400 if code in ('not_configured', 'not_authenticated') else 500
         return jsonify({'error': code, 'code': code}), status
 
+@app.route('/api/alexa_remote/control', methods=['POST'])
+def alexa_remote_control():
+    """Pause/play/skip/shuffle on a specific Echo (unofficial Alexa API)."""
+    data = request.get_json() or {}
+    device = (data.get('device') or '').strip()
+    device_id = (data.get('deviceId') or '').strip()
+    serial = (data.get('serial') or '').strip()
+    action = (data.get('action') or '').strip().lower()
+    allowed = {'pause', 'play', 'next', 'previous', 'shuffle_on', 'shuffle_off'}
+    target = serial or device
+    if not target:
+        return jsonify({'error': 'device required'}), 400
+    if action not in allowed:
+        return jsonify({'error': 'invalid action'}), 400
+    try:
+        import alexa_remote
+        result = alexa_remote.device_control(target, action, _alexa_alias())
+        # Keep UI state in sync without waiting for the skill round-trip.
+        if device_id:
+            st = read_np_state_for_device(device_id) or {}
+            if action == 'pause' and st:
+                st = {**st, 'playing': False, 'paused': True}
+                write_np_state_for_device(device_id, st)
+            elif action == 'play' and st.get('token'):
+                st = {**st, 'playing': True, 'paused': False}
+                write_np_state_for_device(device_id, st)
+        return jsonify({'ok': True, **result})
+    except ImportError:
+        return jsonify({'error': 'alexapy not installed', 'code': 'not_installed'}), 503
+    except Exception as e:
+        code = str(e)
+        status = 400 if code in ('not_configured', 'not_authenticated', 'device_not_found', 'invalid_action') else 500
+        return jsonify({'error': code, 'code': code}), status
+
 def _build_play_text(kind, name, shuffle):
     """Build a collision-safe utterance that routes to our custom skill.
 
@@ -2373,11 +2407,14 @@ def _current_device_id():
     return getattr(g, 'device_id', '') or 'default'
 
 def _np_device_id():
-    """Now-playing is keyed by the raw Alexa deviceId, not merged aliases."""
+    """Key now-playing by the merged primary device id (not a rotated alias)."""
+    did = _current_device_id()
+    if did and did != 'default':
+        return did
     raw = getattr(g, 'raw_device_id', '') or ''
     if raw and raw != 'default':
-        return raw
-    return _current_device_id()
+        return _resolve_device_id(raw)
+    return 'default'
 
 def _read_all_np():
     try:
@@ -2472,6 +2509,28 @@ def read_np_state():
     devices = payload.get('devices', {}) if payload else {}
     return devices.get(_np_device_id())
 
+def read_np_state_for_device(device_id):
+    """Read now-playing for an explicit skill device id (primary/alias resolved)."""
+    if not device_id or device_id == 'default':
+        return None
+    payload = _canonicalize_np(_read_all_np())
+    devices = payload.get('devices', {}) if payload else {}
+    did = _resolve_device_id(device_id)
+    return devices.get(did)
+
+def write_np_state_for_device(device_id, data):
+    """Write now-playing for an explicit skill device id."""
+    if not device_id or device_id == 'default':
+        return
+    did = _resolve_device_id(device_id)
+    payload = _canonicalize_np(_read_all_np() or {'devices': {}})
+    devices = payload.setdefault('devices', {})
+    if not data:
+        devices.pop(did, None)
+    else:
+        devices[did] = data
+    _write_all_np(_canonicalize_np(_prune_np(payload)))
+
 def remove_np_state():
     payload = _canonicalize_np(_read_all_np() or {'devices': {}})
     payload.get('devices', {}).pop(_np_device_id(), None)
@@ -2527,7 +2586,7 @@ def nowplaying_devices():
     known = set(_load_devices().keys())
     items = []
     for did, st in devices.items():
-        if not st.get('playing'):
+        if not st.get('playing') and not st.get('paused'):
             continue
         if did == 'default' or (did not in known and not _is_msp_pseudo(did)):
             continue
@@ -2539,9 +2598,16 @@ def nowplaying_devices():
             'album':      st.get('album'),
             'filepath':   st.get('filepath'),
             'timestamp':  st.get('timestamp'),
+            'paused':     bool(st.get('paused')) and not st.get('playing'),
         })
-    items.sort(key=lambda x: x.get('timestamp') or 0, reverse=True)
-    return jsonify({'items': items})
+    items.sort(key=lambda x: (x.get('paused'), -(x.get('timestamp') or 0)))
+    controls = False
+    try:
+        import alexa_remote
+        controls = alexa_remote.is_configured()
+    except Exception:
+        pass
+    return jsonify({'items': items, 'controlsAvailable': controls})
 
 # ── Selected State (for "play this" / "play what's showing") ─────────────────
 
@@ -2611,7 +2677,7 @@ def alexa_play(stream_url, token, offset_ms=0, previous_token=None,
     send_meta = get_pref('SendMetadata', 'true').lower() != 'false'
     send_art  = get_pref('SendAlbumArt', 'true').lower() != 'false'
     if send_meta and (title or subtitle or artwork_url):
-        meta = {}
+        meta = {'type': 'MusicDisplay'}
         if title:
             meta['title'] = title
         if subtitle:
@@ -2648,6 +2714,85 @@ def alexa_stop():
 
 def alexa_empty():
     return jsonify({'version': '1.0', 'response': {}})
+
+def _np_play_path(path, token, *, offset_ms=0, previous_token=None,
+                  play_behavior='REPLACE_ALL', speech=None):
+    """AudioPlayer.Play with title/artist/artwork for Echo Show / Spot display."""
+    title, artist, album, artwork_url = track_metadata(path)
+    if artist and album:
+        subtitle = f'{artist} · {album}'
+    else:
+        subtitle = artist or album
+    return alexa_play(file_to_stream_url(path), token,
+                      offset_ms=offset_ms,
+                      previous_token=previous_token,
+                      play_behavior=play_behavior,
+                      speech=speech,
+                      title=title, subtitle=subtitle, artwork_url=artwork_url)
+
+def _np_skip_next(playback_controller=False):
+    """Advance to the next track in the active device queue."""
+    state = read_np_state() or {}
+    token = state.get('token', '')
+    if not token:
+        return alexa_empty() if playback_controller else alexa_speak("Nothing is playing.")
+    data = decode_token(token)
+    tracks = data.get('tracks', [])
+    idx = data.get('idx', 0)
+    if not tracks:
+        return alexa_empty() if playback_controller else alexa_speak("There are no more tracks.")
+    next_idx = (idx + 1) % len(tracks)
+    next_path = tracks[next_idx]
+    next_token = encode_token({**data, 'idx': next_idx})
+    return _np_play_path(next_path, next_token)
+
+def _np_skip_previous(playback_controller=False):
+    """Go back to the previous track in the active device queue."""
+    state = read_np_state() or {}
+    token = state.get('token', '')
+    if not token:
+        return alexa_empty() if playback_controller else alexa_speak("Nothing is playing.")
+    data = decode_token(token)
+    tracks = data.get('tracks', [])
+    if not tracks:
+        return alexa_empty() if playback_controller else alexa_speak("Nothing to go back to.")
+    idx = data.get('idx', 0)
+    prev_idx = max(idx - 1, 0)
+    prev_path = tracks[prev_idx]
+    prev_token = encode_token({**data, 'idx': prev_idx})
+    return _np_play_path(prev_path, prev_token)
+
+def _np_pause_playback(playback_controller=False):
+    state = read_np_state() or {}
+    state['playing'] = False
+    state['paused'] = True
+    write_np_state(state)
+    return alexa_stop()
+
+def _np_resume_playback(playback_controller=False):
+    state = read_np_state() or {}
+    token = state.get('token')
+    path = state.get('filepath')
+    if not token or not path or not os.path.isfile(path):
+        return alexa_empty() if playback_controller else alexa_speak("Nothing to resume.")
+    title, artist, album, artwork_url = track_metadata(path)
+    title = state.get('track') or title
+    artist = state.get('artist') or artist
+    album = state.get('album') or album
+    if artist and album:
+        subtitle = f'{artist} · {album}'
+    else:
+        subtitle = artist or album
+    speech = None
+    if not playback_controller:
+        speech = f"Playing {title}"
+        if artist:
+            speech += f" by {artist}"
+        speech += "."
+    return alexa_play(file_to_stream_url(path), token,
+                      offset_ms=state.get('offset_ms', 0),
+                      speech=speech,
+                      title=title, subtitle=subtitle, artwork_url=artwork_url)
 
 def alexa_can_fulfill(slots=None, can_fulfill='MAYBE'):
     """Respond to Alexa's preflight capability check with a valid schema."""
@@ -2697,8 +2842,7 @@ def start_playing(tracks, shuffle=False, speech=None, loop=False):
     write_np_state({'track': None, 'artist': artist, 'album': album,
                     'filepath': first, 'token': token,
                     'playing': False, 'timestamp': time.time()})
-    return alexa_play(file_to_stream_url(first), token, speech=speech,
-                      title=title, subtitle=artist, artwork_url=artwork_url)
+    return _np_play_path(first, token, speech=speech)
 
 # ── Music Skill (MSP) — scaffolding ───────────────────────────────────────────
 # Account linking + directive handler stubs for migrating to Alexa's Music Skill API.
@@ -3041,6 +3185,7 @@ def _msp_handle_event(req, ctx):
                 'filepath':    path,
                 'token':       f'{queue_id}:{idx}',
                 'playing':     True,
+                'paused':      False,
                 'timestamp':   time.time(),
                 'duration_ms': int(duration_s * 1000) if duration_s else 0,
                 'offset_ms':   (req.get('body') or {}).get('offsetInMilliseconds') or 0,
@@ -3191,6 +3336,7 @@ def alexa_skill():
                 'filepath':    path,
                 'token':       token,
                 'playing':     True,
+                'paused':      False,
                 'timestamp':   time.time(),
                 'duration_ms': int(duration_s * 1000) if duration_s else 0,
             })
@@ -3220,10 +3366,8 @@ def alexa_skill():
         if next_idx < len(tracks):
             next_path  = tracks[next_idx]
             next_token = encode_token({**data, 'idx': next_idx})
-            nt, na, _, nart = track_metadata(next_path)
-            return alexa_play(file_to_stream_url(next_path), next_token,
-                              previous_token=token, play_behavior='ENQUEUE',
-                              title=nt, subtitle=na, artwork_url=nart)
+            return _np_play_path(next_path, next_token,
+                                 previous_token=token, play_behavior='ENQUEUE')
         return alexa_empty()
 
     if rtype == 'AudioPlayer.PlaybackFinished':
@@ -3249,11 +3393,7 @@ def alexa_skill():
         if next_idx < len(tracks):
             next_path = tracks[next_idx]
             next_token = encode_token({**data, 'idx': next_idx})
-            nt, na, _, nart = track_metadata(next_path)
-            # Replace failed stream with next track in queue.
-            return alexa_play(file_to_stream_url(next_path), next_token,
-                              play_behavior='REPLACE_ALL',
-                              title=nt, subtitle=na, artwork_url=nart)
+            return _np_play_path(next_path, next_token, play_behavior='REPLACE_ALL')
         state = read_np_state() or {}
         state['playing'] = False
         write_np_state(state)
@@ -3263,11 +3403,21 @@ def alexa_skill():
         state = read_np_state() or {}
         state['playing'] = False
         state['offset_ms'] = req.get('offsetInMilliseconds', 0)
+        if state.get('token'):
+            state['paused'] = True
         write_np_state(state)
         return alexa_empty()
 
-    if rtype in ('ExceptionEncountered', 'PlaybackController.NextCommandIssued',
-                 'PlaybackController.PreviousCommandIssued'):
+    if rtype == 'PlaybackController.NextCommandIssued':
+        return _np_skip_next(playback_controller=True)
+    if rtype == 'PlaybackController.PreviousCommandIssued':
+        return _np_skip_previous(playback_controller=True)
+    if rtype == 'PlaybackController.PauseCommandIssued':
+        return _np_pause_playback(playback_controller=True)
+    if rtype == 'PlaybackController.PlayCommandIssued':
+        return _np_resume_playback(playback_controller=True)
+
+    if rtype == 'ExceptionEncountered':
         return alexa_empty()
 
     if rtype == 'CanFulfillIntentRequest':
@@ -3635,8 +3785,7 @@ def alexa_skill():
             if next_idx < len(tracks):
                 next_path  = tracks[next_idx]
                 next_token = encode_token({**data, 'idx': next_idx})
-                return alexa_play(file_to_stream_url(next_path), next_token,
-                                  speech="OK, skipping that song.")
+                return _np_play_path(next_path, next_token, speech="OK, skipping that song.")
             return alexa_speak("Song ignored. There are no more tracks.")
 
         # ── Server management ──────────────────────────────────────────────
@@ -3668,49 +3817,19 @@ def alexa_skill():
 
         # ── Pause ──────────────────────────────────────────────────────────
         elif iname == 'AMAZON.PauseIntent':
-            state = read_np_state() or {}
-            state['playing'] = False
-            state['paused'] = True
-            write_np_state(state)
-            return alexa_stop()
+            return _np_pause_playback()
 
         # ── Resume ─────────────────────────────────────────────────────────
         elif iname == 'AMAZON.ResumeIntent':
-            state = read_np_state() or {}
-            token = state.get('token')
-            path  = state.get('filepath')
-            if token and path and os.path.isfile(path):
-                return alexa_play(file_to_stream_url(path), token,
-                                  offset_ms=state.get('offset_ms', 0))
-            return alexa_speak("Nothing to resume.")
+            return _np_resume_playback()
 
         # ── Next ───────────────────────────────────────────────────────────
         elif iname == 'AMAZON.NextIntent':
-            state = read_np_state() or {}
-            token = state.get('token', '')
-            data  = decode_token(token)
-            tracks = data.get('tracks', [])
-            idx    = data.get('idx', 0)
-            next_idx = (idx + 1) % len(tracks) if tracks else 0
-            if next_idx < len(tracks):
-                next_path  = tracks[next_idx]
-                next_token = encode_token({**data, 'idx': next_idx})
-                return alexa_play(file_to_stream_url(next_path), next_token)
-            return alexa_speak("There are no more tracks.")
+            return _np_skip_next()
 
         # ── Previous ───────────────────────────────────────────────────────
         elif iname == 'AMAZON.PreviousIntent':
-            state = read_np_state() or {}
-            token = state.get('token', '')
-            data  = decode_token(token)
-            tracks = data.get('tracks', [])
-            idx    = data.get('idx', 0)
-            prev_idx = max(idx - 1, 0)
-            if tracks:
-                prev_path  = tracks[prev_idx]
-                prev_token = encode_token({**data, 'idx': prev_idx})
-                return alexa_play(file_to_stream_url(prev_path), prev_token)
-            return alexa_speak("Nothing to go back to.")
+            return _np_skip_previous()
 
         # ── Loop ───────────────────────────────────────────────────────────
         elif iname == 'AMAZON.LoopOnIntent':
