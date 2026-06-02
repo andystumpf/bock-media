@@ -1,0 +1,384 @@
+{
+  "interactionModel": {
+    "languageModel": {
+      "invocationName": "bock media",
+      "intents": [
+        {
+          "name": "PlayPlaylistIntent",
+          "slots": [
+            { "name": "PlaylistName", "type": "AMAZON.SearchQuery" }
+          ],
+          "samples": [
+            "play my {PlaylistName} playlist",
+            "play playlist {PlaylistName}",
+            "play the playlist {PlaylistName}",
+            "play the {PlaylistName} playlist",
+            "play {PlaylistName} playlist",
+            "play my {PlaylistName} stream",
+            "play my {PlaylistName} internet stream",
+            "play my {PlaylistName} internet playlist",
+            "play {PlaylistName} internet radio station",
+            "play the {PlaylistName} internet radio station",
+            "play my {PlaylistName} radio station",
+            "play the {PlaylistName} radio station",
+            "queue {PlaylistName}",
+            "queue the {PlaylistName} playlist",
+            "queue my {PlaylistName} playlist",
+            "start {PlaylistName}",
+            "start the {PlaylistName} playlist",
+            "start my {PlaylistName} playlist",
+            "put on {PlaylistName}",
+            "put on the {PlaylistName} playlist",
+            "put on my {PlaylistName} playlist",
+            "load {PlaylistName}",
+            "load the {PlaylistName} playlist",
+            "load my {PlaylistName} playlist"
+          ]
+        },
+        {
+          "name": "ShufflePlaylistIntent",
+          "slots": [
+            { "name": "PlaylistName", "type": "AMAZON.SearchQuery" }
+          ],
+          "samples": [
+            "shuffle my {PlaylistName} playlist",
+            "shuffle the playlist {PlaylistName}",
+            "shuffle the {PlaylistName} playlist",
+            "shuffle playlist {PlaylistName}",
+            "shuffle {PlaylistName} playlist",
+            "mix my {PlaylistName} playlist",
+            "mix the {PlaylistName} playlist",
+            "mix the playlist {PlaylistName}",
+            "mix {PlaylistName} playlist",
+            "randomize the {PlaylistName} playlist",
+            "randomize my {PlaylistName} playlist",
+            "randomize {PlaylistName} playlist"
+          ]
+        },
+        {
+          "name": "PlayArtistIntent",
+          "slots": [
+            { "name": "ArtistName", "type": "AMAZON.MusicGroup" }
+          ],
+          "samples": [
+            "play music by {ArtistName}",
+            "play songs by {ArtistName}",
+            "play some {ArtistName}",
+            "play {ArtistName}",
+            "play artist {ArtistName}",
+            "play the artist {ArtistName}",
+            "start music by {ArtistName}",
+            "start songs by {ArtistName}",
+            "start the artist {ArtistName}",
+            "put on music by {ArtistName}",
+            "put on {ArtistName}",
+            "queue music by {ArtistName}",
+            "queue the artist {ArtistName}"
+          ]
+        },
+        {
+          "name": "ShuffleArtistIntent",
+          "slots": [
+            { "name": "ArtistName", "type": "AMAZON.MusicGroup" }
+          ],
+          "samples": [
+            "shuffle music by {ArtistName}",
+            "shuffle songs by {ArtistName}",
+            "shuffle {ArtistName}",
+            "shuffle some {ArtistName}",
+            "shuffle the artist {ArtistName}",
+            "shuffle artist {ArtistName}",
+            "mix music by {ArtistName}",
+            "mix songs by {ArtistName}",
+            "mix {ArtistName}",
+            "mix the artist {ArtistName}",
+            "randomize music by {ArtistName}",
+            "randomize the artist {ArtistName}"
+          ]
+        },
+        {
+          "name": "PlayAlbumIntent",
+          "slots": [
+            { "name": "AlbumName", "type": "AMAZON.SearchQuery" }
+          ],
+          "samples": [
+            "play the album {AlbumName}",
+            "play album {AlbumName}",
+            "play {AlbumName} album",
+            "play music from the album {AlbumName}",
+            "play songs from the album {AlbumName}",
+            "play the album called {AlbumName}",
+            "start the album {AlbumName}",
+            "start album {AlbumName}",
+            "put on the album {AlbumName}",
+            "queue the album {AlbumName}",
+            "queue album {AlbumName}"
+          ]
+        },
+        {
+          "name": "ShuffleAlbumIntent",
+          "slots": [
+            { "name": "AlbumName", "type": "AMAZON.SearchQuery" }
+          ],
+          "samples": [
+            "shuffle the album {AlbumName}",
+            "shuffle {AlbumName} the album",
+            "shuffle album {AlbumName}",
+            "shuffle {AlbumName} album",
+            "shuffle music from the album {AlbumName}",
+            "shuffle songs from the album {AlbumName}",
+            "mix the album {AlbumName}",
+            "mix album {AlbumName}",
+            "randomize the album {AlbumName}",
+            "randomize album {AlbumName}"
+          ]
+        },
+        {
+          "name": "PlayTrackIntent",
+          "slots": [
+            { "name": "TrackName", "type": "AMAZON.MusicRecording" }
+          ],
+          "samples": [
+            "play the track {TrackName}",
+            "play the song {TrackName}",
+            "play track {TrackName}",
+            "play song {TrackName}",
+            "play {TrackName}",
+            "start the song {TrackName}",
+            "start the track {TrackName}",
+            "start song {TrackName}",
+            "put on the song {TrackName}",
+            "put on {TrackName}",
+            "queue the song {TrackName}",
+            "queue the track {TrackName}"
+          ]
+        },
+        {
+          "name": "PlayTrackByArtistIntent",
+          "slots": [
+            { "name": "TrackName", "type": "AMAZON.MusicRecording" },
+            { "name": "ArtistName", "type": "AMAZON.MusicGroup" }
+          ],
+          "samples": [
+            "play {TrackName} by {ArtistName}",
+            "play the track {TrackName} by {ArtistName}",
+            "play the song {TrackName} by {ArtistName}",
+            "play {TrackName} the song by {ArtistName}",
+            "play {TrackName} the track by {ArtistName}"
+          ]
+        },
+        {
+          "name": "PlayGenreIntent",
+          "slots": [
+            { "name": "GenreName", "type": "AMAZON.Genre" }
+          ],
+          "samples": [
+            "play {GenreName} music",
+            "play some {GenreName} music",
+            "play some {GenreName}",
+            "play {GenreName} songs",
+            "play the genre {GenreName}",
+            "play genre {GenreName}"
+          ]
+        },
+        {
+          "name": "ShuffleGenreIntent",
+          "slots": [
+            { "name": "GenreName", "type": "AMAZON.Genre" }
+          ],
+          "samples": [
+            "shuffle {GenreName} music",
+            "shuffle some {GenreName} music",
+            "shuffle some {GenreName}",
+            "shuffle {GenreName} songs",
+            "shuffle the genre {GenreName}"
+          ]
+        },
+        {
+          "name": "ReadBookIntent",
+          "slots": [
+            { "name": "BookName", "type": "AMAZON.SearchQuery" }
+          ],
+          "samples": [
+            "read {BookName}",
+            "read the book {BookName}",
+            "read the audio book {BookName}",
+            "play the audio book {BookName}",
+            "start reading {BookName}",
+            "begin reading {BookName}"
+          ]
+        },
+        {
+          "name": "PlayCurrentIntent",
+          "slots": [],
+          "samples": [
+            "play this",
+            "play this song",
+            "play this track",
+            "play this music",
+            "play this album",
+            "play this artist",
+            "play what's showing",
+            "play what's on my screen",
+            "play the selection",
+            "play current selection"
+          ]
+        },
+        {
+          "name": "WhatsPlayingIntent",
+          "slots": [],
+          "samples": [
+            "what's playing",
+            "what is playing",
+            "what's this track",
+            "what is this track",
+            "what song is this",
+            "what's this song",
+            "what's the name of this song",
+            "who's singing",
+            "who is singing",
+            "what am I listening to"
+          ]
+        },
+        {
+          "name": "AddToPlaylistIntent",
+          "slots": [
+            { "name": "PlaylistName", "type": "AMAZON.SearchQuery" }
+          ],
+          "samples": [
+            "add this to my {PlaylistName} playlist",
+            "add this song to my {PlaylistName} playlist",
+            "add this track to my {PlaylistName} playlist",
+            "add this to the {PlaylistName} playlist",
+            "add this song to the {PlaylistName} playlist",
+            "add this track to the {PlaylistName} playlist"
+          ]
+        },
+        {
+          "name": "SkipIntent",
+          "slots": [],
+          "samples": [
+            "skip",
+            "skip it",
+            "skip the song",
+            "skip the track",
+            "skip ahead",
+            "next song",
+            "next track"
+          ]
+        },
+        {
+          "name": "BackIntent",
+          "slots": [],
+          "samples": [
+            "go back",
+            "go back a song",
+            "go back a track",
+            "previous song",
+            "previous track",
+            "back a song"
+          ]
+        },
+        {
+          "name": "SleepTimerIntent",
+          "slots": [
+            { "name": "minutes", "type": "AMAZON.NUMBER" }
+          ],
+          "samples": [
+            "set a sleep timer for {minutes} minutes",
+            "sleep in {minutes} minutes",
+            "stop in {minutes} minutes",
+            "stop playing in {minutes} minutes",
+            "turn off in {minutes} minutes",
+            "cancel the sleep timer",
+            "cancel sleep timer"
+          ]
+        },
+        {
+          "name": "StopAfterIntent",
+          "slots": [
+            { "name": "count", "type": "AMAZON.NUMBER" }
+          ],
+          "samples": [
+            "stop after {count} songs",
+            "stop after {count} tracks",
+            "stop after this song",
+            "play {count} more songs",
+            "stop after {count} more songs"
+          ]
+        },
+        {
+          "name": "IgnoreSongIntent",
+          "slots": [],
+          "samples": [
+            "ignore this song",
+            "ignore this track",
+            "not play this again",
+            "don't play this again",
+            "never play this again",
+            "skip this song",
+            "forget this song",
+            "forget this track"
+          ]
+        },
+        {
+          "name": "ListServersIntent",
+          "slots": [],
+          "samples": [
+            "list my servers",
+            "show my servers",
+            "what servers do I have",
+            "what servers can I use",
+            "tell me my servers"
+          ]
+        },
+        {
+          "name": "SwitchServersIntent",
+          "slots": [],
+          "samples": [
+            "switch servers",
+            "change servers",
+            "switch server",
+            "change server",
+            "switch to a different server"
+          ]
+        },
+        {
+          "name": "CurrentServerIntent",
+          "slots": [],
+          "samples": [
+            "what is my current server",
+            "what's my current server",
+            "which server am I using",
+            "what server am I on",
+            "which server is active",
+            "what is my active server"
+          ]
+        },
+        {
+          "name": "ListInvitationsIntent",
+          "slots": [],
+          "samples": [
+            "list my invitations",
+            "show my invitations",
+            "do I have any invitations",
+            "list my invites",
+            "any pending invitations"
+          ]
+        },
+        { "name": "AMAZON.StopIntent",    "samples": [] },
+        { "name": "AMAZON.CancelIntent",  "samples": [] },
+        { "name": "AMAZON.PauseIntent",   "samples": [] },
+        { "name": "AMAZON.ResumeIntent",  "samples": [] },
+        { "name": "AMAZON.NextIntent",    "samples": [] },
+        { "name": "AMAZON.PreviousIntent","samples": [] },
+        { "name": "AMAZON.HelpIntent",    "samples": [] },
+        { "name": "AMAZON.ShuffleOnIntent",  "samples": [] },
+        { "name": "AMAZON.ShuffleOffIntent", "samples": [] },
+        { "name": "AMAZON.LoopOnIntent",     "samples": [] },
+        { "name": "AMAZON.LoopOffIntent",    "samples": [] }
+      ],
+      "types": []
+    }
+  }
+}

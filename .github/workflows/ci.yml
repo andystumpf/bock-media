@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  python-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install dependencies
+        run: pip install pytest flask cryptography mutagen aiohttp
+      - name: Run pytest
+        # DB/XML-backed fixtures pytest.skip when the NAS library is absent, so
+        # the suite is green on a clean runner without the live music index.
+        run: pytest tests/ -ra
+
+  ui-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install UI test deps
+        working-directory: tests/ui
+        run: npm install
+      - name: Run jsdom UI tests
+        working-directory: tests/ui
+        run: node --test test_app.mjs

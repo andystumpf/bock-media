@@ -1,0 +1,21 @@
+{
+  "type": "AMAZON.MusicPlaylist",
+  "version": 2.0,
+  "locales": [{ "country": "US", "language": "en" }],
+  "entities": [
+    {
+      "id": "00000000-0000-0000-0000-000000000001",
+      "names": [{ "language": "en", "value": "Morning Coffee" }],
+      "popularity": { "default": 75 },
+      "lastUpdatedTime": "2026-01-01T00:00:00.000Z",
+      "locales": [{ "country": "US", "language": "en" }]
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000002",
+      "names": [{ "language": "en", "value": "Road Trip" }],
+      "popularity": { "default": 75 },
+      "lastUpdatedTime": "2026-01-01T00:00:00.000Z",
+      "locales": [{ "country": "US", "language": "en" }]
+    }
+  ]
+}

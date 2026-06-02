@@ -1,0 +1,23 @@
+[Unit]
+Description=Bock Media Flask backend
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=youruser
+Group=youruser
+WorkingDirectory=/home/youruser/bock-media
+ExecStart=/usr/bin/python3 /home/youruser/bock-media/server.py
+Environment=PORT=3001
+# External data locations (override here to relocate; no code changes needed)
+Environment=OURMEDIA_DB_PATH=/srv/music/music_organizer.db
+Environment=OURMEDIA_DATA_DIR=/home/youruser/.bockmedia
+Environment=OURMEDIA_MUSIC_ROOT=/srv/music
+Restart=always
+RestartSec=3
+StandardOutput=append:/home/youruser/bock-media/server.log
+StandardError=append:/home/youruser/bock-media/server.log
+
+[Install]
+WantedBy=ourmedia-stack.target

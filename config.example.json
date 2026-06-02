@@ -1,0 +1,29 @@
+{
+  "publicUrl": "https://your-domain.example.com",
+  "launchPlaylistPrompt": true,
+  "identifyPlaylist": "",
+  "msp": {
+    "skillId": "amzn1.ask.skill.YOUR-MSP-SKILL-ID",
+    "catalogId": "amzn1.ask-catalog.cat.YOUR-CATALOG-ID",
+    "alias": "bock media",
+    "endpoint": "https://your-domain.example.com/music"
+  },
+  "mspOauth": {
+    "clientId": "ourmedia-msp-client",
+    "clientSecret": "GENERATE_AND_SET_LOCALLY",
+    "accessToken": "GENERATE_AND_SET_LOCALLY",
+    "refreshToken": "GENERATE_AND_SET_LOCALLY",
+    "redirectUriPrefixes": [
+      "https://alexa.amazon.com/",
+      "https://layla.amazon.com/",
+      "https://pitangui.amazon.com/"
+    ]
+  },
+  "alexaRemote": {
+    "_comment": "Optional. Enables 'Play on device' in the web UI via the unofficial Alexa API (alexapy). Run scripts/alexa_login.py once after filling these in.",
+    "url": "amazon.com",
+    "email": "SET_LOCALLY",
+    "password": "SET_LOCALLY",
+    "otpSecret": ""
+  }
+}

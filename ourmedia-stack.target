@@ -1,0 +1,8 @@
+[Unit]
+Description=ourMedia full stack (Flask + public tunnel for Alexa)
+After=network-online.target
+Wants=network-online.target
+Wants=ourmedia.service ourmedia-tunnel-lt.service
+
+[Install]
+WantedBy=multi-user.target

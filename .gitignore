@@ -1,0 +1,59 @@
+.venv/
+
+# Runtime state (auto-generated, not committed)
+*.bak
+nowplaying_state.json
+streaming_history.jsonl
+queues.json
+automations.json
+device_groups.json
+selected_state.json
+ignored_tracks.json
+server.log
+server.log.*
+msp_slu_poll.log
+cron-ask.log
+cron-catalog.log
+plex-sync.log
+tunnel.log
+health.log
+health_state.json
+
+# Local secrets (use *.example.json templates)
+config.json
+skill/account-linking.json
+
+# Generated MSP voice catalog (contains your real playlist names; rebuild with
+# scripts/build_msp_catalog.py). Ship catalog_playlists.example.json instead.
+skill/catalog_playlists.json
+
+# Runtime device registry (auto-created on first device contact)
+devices.json
+
+# Demo dataset produced by scripts/seed_demo_data.py
+demo-data/
+
+# Extracted / cached artwork (can be regenerated)
+artwork_cache/
+
+# Alexa skill test payloads with real tokens / user IDs
+skill/launch-request.json
+skill/misrouted-playtrack-request.json
+skill/play-yacht-request.json
+
+# Systemd unit (machine-specific, tracked separately)
+ourmedia.service
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Node / UI tests
+tests/ui/node_modules/
+tests/ui/package-lock.json
+
+# Editor
+.cursor/
+*.swp
