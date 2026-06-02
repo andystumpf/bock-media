@@ -69,6 +69,7 @@ def isolated_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(server, 'NP_STATE_PATH', str(state_dir / 'nowplaying_state.json'))
     monkeypatch.setattr(server, 'SELECTED_PATH', str(state_dir / 'selected_state.json'))
     monkeypatch.setattr(server, 'IGNORE_PATH', str(state_dir / 'ignored_tracks.json'))
+    monkeypatch.setattr(server, 'DEVICE_GROUPS_PATH', str(state_dir / 'device_groups.json'))
     monkeypatch.setattr(server, 'LOG_PATH', str(state_dir / 'server.log'))
     return tmp_path
 
@@ -160,7 +161,18 @@ def sample_playlist():
     pytest.skip('no playlist with playable tracks found')
 
 
-# ─────────────────────────── alexa request builders ──────────────────────────
+@pytest.fixture(autouse=True)
+def reset_play_intent_state():
+    """Clear play-intent correlation globals so tests don't leak into each other."""
+    with server._PLAY_INTENT_LOCK:
+        server._PLAY_INTENTS.clear()
+        server._PLAY_GROUP_UNTIL = 0.0
+    yield
+    with server._PLAY_INTENT_LOCK:
+        server._PLAY_INTENTS.clear()
+        server._PLAY_GROUP_UNTIL = 0.0
+
+
 
 def _alexa_envelope(rtype, intent=None, slots=None, device_id='amzn1.ask.device.TESTDEVICE',
                    token=None, error=None):
@@ -172,7 +184,7 @@ def _alexa_envelope(rtype, intent=None, slots=None, device_id='amzn1.ask.device.
                     'deviceId': device_id,
                     'supportedInterfaces': {'AudioPlayer': {}},
                 },
-                'application': {'applicationId': 'amzn1.ask.skill.test'},
+                'application': {'applicationId': server.EXPECTED_SKILL_APP_ID},
                 'user': {'userId': 'amzn1.ask.account.TEST'},
             },
             'AudioPlayer': {'playerActivity': 'IDLE'},

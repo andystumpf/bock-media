@@ -291,7 +291,55 @@ class TestParseM3U:
         assert '/no/such/file.mp3' not in out
 
 
-# ─────────────────────────── device auto-merge ───────────────────────────────
+# ─────────────────────────── playlist fuzzy scoring ──────────────────────────
+
+class TestPlaylistFuzzy:
+    def test_filler_words_stripped(self):
+        assert server._pl_tokens('the yacht rock playlist') == ['yacht', 'rock']
+
+    def test_ampersand_normalized(self):
+        assert 'and' in server._norm_pl('R&B hits')
+
+    def test_exact_match_scores_one(self):
+        assert server._score_playlist('yacht rock', 'Yacht Rock') == 1.0
+
+    def test_spoken_with_filler_beats_unrelated(self):
+        yacht = server._score_playlist('mix the yacht rock playlist', 'Yacht Rock')
+        daily = server._score_playlist('mix the yacht rock playlist', 'Daily Music')
+        assert yacht > daily
+
+    def test_best_playlist_entry_real(self, sample_playlist):
+        entry = server.best_playlist_entry(sample_playlist['name'])
+        assert entry is not None
+        assert entry[1] == sample_playlist['name']
+
+
+# ─────────────────────────── device groups ───────────────────────────────────
+
+class TestDeviceGroups:
+    def test_expand_single_device(self, isolated_paths, monkeypatch):
+        monkeypatch.setattr(server, '_alexa_name_for_serial', lambda s: 'Kitchen Show')
+        targets = server._expand_play_targets('SERIAL123')
+        assert targets == [('SERIAL123', 'Kitchen Show')]
+
+    def test_expand_group(self, isolated_paths):
+        gid = 'grp-1'
+        server._save_device_groups([{
+            'id': gid,
+            'name': 'Up and Downstairs',
+            'members': [
+                {'serial': 'S1', 'name': 'Kitchen Show'},
+                {'serial': 'S2', 'name': 'Office Show'},
+            ],
+        }])
+        targets = server._expand_play_targets(f'group:{gid}')
+        assert len(targets) == 2
+        assert targets[0][0] == 'S1'
+
+    def test_expand_unknown_group_raises(self, isolated_paths):
+        with pytest.raises(ValueError, match='group_not_found'):
+            server._expand_play_targets('group:missing')
+
 
 class TestAutoMerge:
     def test_skips_bare_audioplayer_fingerprint(self, isolated_paths):

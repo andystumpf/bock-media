@@ -42,7 +42,7 @@ class TestLaunchAndUnknown:
         resp = post_alexa('LaunchRequest')
         assert resp['response']['shouldEndSession'] is False
         assert 'reprompt' in resp['response']
-        assert 'Our Media' in _speech(resp) or 'listening' in _speech(resp).lower()
+        assert 'Bock Media' in _speech(resp) or 'listening' in _speech(resp).lower()
 
     def test_unknown_intent(self, post_alexa):
         """unknown intent gets a friendly fallback response"""
