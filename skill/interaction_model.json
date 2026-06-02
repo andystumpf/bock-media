@@ -255,6 +255,31 @@
           ]
         },
         {
+          "name": "SkipIntent",
+          "slots": [],
+          "samples": [
+            "skip",
+            "skip it",
+            "skip the song",
+            "skip the track",
+            "skip ahead",
+            "next song",
+            "next track"
+          ]
+        },
+        {
+          "name": "BackIntent",
+          "slots": [],
+          "samples": [
+            "go back",
+            "go back a song",
+            "go back a track",
+            "previous song",
+            "previous track",
+            "back a song"
+          ]
+        },
+        {
           "name": "IgnoreSongIntent",
           "slots": [],
           "samples": [

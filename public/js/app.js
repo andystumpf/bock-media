@@ -1010,21 +1010,65 @@ function renderDevices() {
     </div>
     ${candHtml}
     ${renderDeviceGroupsCard()}
+    ${renderSpeakersCard()}
     <div class="card">
-      <div class="card-header">
+      <div class="card-header" style="display:flex;align-items:center;justify-content:space-between">
         <h3><i class="fa fa-headphones"></i> Alexa Devices (${devices.length})</h3>
+        ${window._devicesRemoteConfigured
+          ? `<button id="identify-btn" class="btn-sm btn-primary" onclick="startIdentify()"><i class="fa fa-volume-high"></i> Identify devices</button>`
+          : ''}
       </div>
+      <div id="identify-status" style="display:none;padding:8px 16px;font-size:12px;color:#556;border-bottom:1px solid #eef2f8"></div>
       ${rows
         ? `<ul class="device-list">${rows}</ul>`
         : `<div class="empty-state"><i class="fa fa-headphones"></i><p>No devices yet — start streaming from an Echo to register it.</p></div>`}
     </div>`);
 }
 
+function renderSpeakersCard() {
+  if (!window._devicesRemoteConfigured) return '';
+  const speakers = (window._alexaDevices || []).filter(s => s.serial);
+  if (!speakers.length) return '';
+  const rows = speakers.map(s => `
+    <li>
+      <span class="device-icon-col"><i class="fa fa-volume-high"></i></span>
+      <span class="device-name-text">${escHtml(s.name)}${s.online ? '' : ' <span style="font-size:11px;color:#c66">(offline)</span>'}</span>
+      <div class="row-actions">
+        ${actionBtn({ kind: 'play', onclick: `testDevice('${escHtml(s.serial)}', ${JSON.stringify(s.name)})`, title: 'Play a short test clip here', icon: 'play' })}
+      </div>
+    </li>`).join('');
+  return `
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-header"><h3><i class="fa fa-volume-high"></i> Speakers (${speakers.length})</h3></div>
+      <div class="card-body" style="padding:8px 16px 4px">
+        <p class="hint" style="margin:0 0 8px">Press <i class="fa fa-play"></i> to play a short clip on a speaker so you can hear which room it is. It auto-names the matching device in the list below.</p>
+        <ul class="device-list" style="margin:0">${rows}</ul>
+      </div>
+    </div>`;
+}
+
+async function testDevice(serial, name) {
+  const res = await fetch('/api/devices/test', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ serial, name }),
+  });
+  const d = await res.json().catch(() => ({}));
+  if (res.ok && d.ok) {
+    showToast(`Testing ${d.device || name}…`);
+    setTimeout(async () => {
+      window._devices = await API('/api/devices') || [];
+      renderDevices();
+    }, 11000);
+  } else {
+    showToast('Test failed: ' + (d.error || res.status), true);
+  }
+}
+
 function renderDeviceGroupsCard() {
   const groups = window._deviceGroups || [];
   const configured = window._devicesRemoteConfigured;
   const headerBtn = configured
-    ? `<button class="save-btn" onclick="openGroupEditor()"><i class="fa fa-plus"></i> New group</button>`
+    ? `<button class="btn-sm btn-primary" onclick="openGroupEditor()"><i class="fa fa-plus"></i> New group</button>`
     : '';
   if (!configured) {
     return `
@@ -1178,6 +1222,45 @@ async function dismissMergeCandidate(sourceId) {
   await fetch(`/api/devices/${encodeURIComponent(sourceId)}/dismiss_candidate`, { method: 'POST' });
   window._mergeCandidates = (window._mergeCandidates || []).filter(c => c.sourceId !== sourceId);
   renderDevices();
+}
+
+let _identifyPoll = null;
+async function startIdentify() {
+  if (!confirm('Play a short test clip on each Echo, one at a time?\n\nEach plays for a few seconds then stops. Devices get auto-named as the test moves room to room. Listen to confirm which room is which.')) return;
+  const btn = document.getElementById('identify-btn');
+  if (btn) { btn.disabled = true; }
+  const res = await fetch('/api/devices/identify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  if (!res.ok) {
+    const b = await res.json().catch(() => ({}));
+    showToast('Identify failed: ' + (b.error || res.status), true);
+    if (btn) btn.disabled = false;
+    return;
+  }
+  const info = await res.json();
+  showToast(`Identifying ${info.total} devices on "${info.playlist}" (~${info.etaSeconds}s)`);
+  if (_identifyPoll) clearInterval(_identifyPoll);
+  _identifyPoll = setInterval(pollIdentify, 1500);
+  pollIdentify();
+}
+
+async function pollIdentify() {
+  const el = document.getElementById('identify-status');
+  const st = await API('/api/devices/identify/status');
+  if (!st) return;
+  if (el) {
+    el.style.display = '';
+    const cur = st.running ? `▶ Playing on <b>${escHtml(st.current || '…')}</b>` : '✓ Done';
+    el.innerHTML = `${cur} — ${st.done}/${st.total}${st.errors && st.errors.length ? ` · ${st.errors.length} skipped` : ''}`;
+  }
+  if (!st.running) {
+    if (_identifyPoll) { clearInterval(_identifyPoll); _identifyPoll = null; }
+    const devices = await API('/api/devices') || [];
+    window._devices = devices;
+    const mc = await API('/api/devices/merge_candidates');
+    window._mergeCandidates = (mc && mc.candidates) || [];
+    renderDevices();
+    showToast(`Identify complete — ${st.done} devices`);
+  }
 }
 
 async function deleteDevice(i) {
@@ -1389,8 +1472,8 @@ function renderAutomation(remote) {
           </div>
         </div>
         <div style="display:flex;gap:8px;margin-top:16px">
-          <button class="save-btn" onclick="saveAutomation()">${editing ? 'Update' : 'Add automation'}</button>
-          ${editing ? `<button class="cancel-btn" onclick="cancelEditAutomation()">Cancel</button>` : ''}
+          <button class="btn-sm btn-primary" onclick="saveAutomation()">${editing ? 'Update' : 'Add automation'}</button>
+          ${editing ? `<button class="btn-sm btn-default" onclick="cancelEditAutomation()">Cancel</button>` : ''}
         </div>
       </div>
     </div>` : `

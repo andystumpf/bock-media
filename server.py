@@ -220,13 +220,24 @@ def check_auth():
 
 PUBLIC = os.path.join(HERE, 'public')
 
+def _no_cache(resp):
+    """Force revalidation so UI changes show on a normal reload (no hard-refresh)."""
+    resp.headers['Cache-Control'] = 'no-cache, must-revalidate'
+    resp.headers['Pragma'] = 'no-cache'
+    resp.headers['Expires'] = '0'
+    return resp
+
 @app.route('/')
 def index():
-    return send_from_directory(PUBLIC, 'index.html')
+    return _no_cache(send_from_directory(PUBLIC, 'index.html'))
 
 @app.route('/<path:filename>')
 def static_files(filename):
-    return send_from_directory(PUBLIC, filename)
+    resp = send_from_directory(PUBLIC, filename)
+    # App shell (html/js/css) must always revalidate; let images/fonts cache.
+    if filename.rsplit('.', 1)[-1].lower() in ('html', 'js', 'css'):
+        resp = _no_cache(resp)
+    return resp
 
 # ── API: Summary ─────────────────────────────────────────────────────────────
 
@@ -507,7 +518,10 @@ def _expand_play_targets(device):
         if not members:
             raise ValueError('group_empty')
         return [(m['serial'], m['name']) for m in members]
-    return [(device, device)]
+    # Single target: the dropdown value is the serial. Resolve its friendly
+    # Alexa name so play-intent correlation labels the room correctly (not the
+    # raw serial). Falls back to the serial if the lookup is unavailable.
+    return [(device, _alexa_name_for_serial(device) or device)]
 
 
 @app.route('/api/device_groups')
@@ -632,6 +646,104 @@ def _build_play_text(kind, name, shuffle):
     return f"ask {alias} to {verb} {phrase}"
 
 
+# ── Play-intent correlation (rotated deviceId → physical room) ────────────────
+# Amazon never gives a custom skill a stable device id — `deviceId` rotates
+# (notably after a device sits idle). But when WE start playback from the web UI
+# or an automation we command alexapy by the device's STABLE serial + room name.
+# So the next unknown/auto-named deviceId that fires PlaybackStarted right after
+# is almost certainly the room we just targeted: bind it, and the daily manual
+# merge goes away. Single-target plays are unambiguous; group fan-outs are NOT
+# (every room plays the same track at once, Amazon gives no room signal), so we
+# deliberately suppress correlation during a group window.
+_PLAY_INTENTS = []                # [{'name','serial','ts'}]
+_PLAY_INTENT_LOCK = threading.Lock()
+_PLAY_INTENT_TTL = 12.0           # secs a single-play intent stays correlatable
+                                  # (short so back-to-back individual plays each
+                                  #  resolve cleanly instead of overlapping)
+_PLAY_GROUP_TTL = 60.0            # group-suppression window (longer: covers a
+                                  #  full fan-out where slow Echoes start late)
+_PLAY_GROUP_UNTIL = 0.0           # suppress correlation during/after a group play
+
+_ALEXA_DEV_CACHE = {'ts': 0.0, 'by_serial': {}}
+_ALEXA_DEV_CACHE_TTL = 300.0
+_ALEXA_DEV_CACHE_LOCK = threading.Lock()
+
+def _alexa_name_for_serial(serial):
+    """Best-effort friendly Alexa name for a serial (cached ~5min)."""
+    if not serial:
+        return ''
+    now = time.time()
+    with _ALEXA_DEV_CACHE_LOCK:
+        stale = now - _ALEXA_DEV_CACHE['ts'] > _ALEXA_DEV_CACHE_TTL
+        if stale or not _ALEXA_DEV_CACHE['by_serial']:
+            try:
+                import alexa_remote
+                devs = alexa_remote.list_devices() or []
+                _ALEXA_DEV_CACHE['by_serial'] = {
+                    d.get('serial'): d.get('name') for d in devs if d.get('serial')}
+                _ALEXA_DEV_CACHE['ts'] = now
+            except Exception:
+                pass
+        return _ALEXA_DEV_CACHE['by_serial'].get(serial, '') or ''
+
+def _record_play_intent(targets):
+    """targets: list of (serial, name). One target → correlatable; many → mark
+    an ambiguous group window so we don't mis-attribute rooms."""
+    global _PLAY_GROUP_UNTIL
+    now = time.time()
+    with _PLAY_INTENT_LOCK:
+        _PLAY_INTENTS[:] = [i for i in _PLAY_INTENTS if now - i['ts'] < _PLAY_INTENT_TTL]
+        if len(targets) == 1 and (targets[0][1] or '').strip():
+            _PLAY_INTENTS.append({'name': targets[0][1].strip(),
+                                  'serial': targets[0][0], 'ts': now})
+        elif len(targets) > 1:
+            _PLAY_GROUP_UNTIL = now + _PLAY_GROUP_TTL
+
+def _correlate_play_intent(new_device_id):
+    """If exactly one single-device play intent is pending, bind a freshly-seen
+    (auto-named) `new_device_id` to that room. Returns True if it bound."""
+    if not new_device_id or new_device_id == 'default':
+        return False
+    now = time.time()
+    with _PLAY_INTENT_LOCK:
+        if now < _PLAY_GROUP_UNTIL:
+            return False
+        pending = [i for i in _PLAY_INTENTS if now - i['ts'] < _PLAY_INTENT_TTL]
+        if len(pending) != 1:
+            return False
+        intent = pending[0]
+        _PLAY_INTENTS.clear()
+    name = intent['name']
+    store = _load_devices()
+    ent = store.get(new_device_id) or {}
+    if ent.get('aliasOf'):
+        return False  # already mapped
+    cur = (ent.get('name') or '').strip().lower()
+    looks_auto = (not cur) or cur == f"echo {new_device_id[-6:]}".lower()
+    if not looks_auto:
+        return False  # don't relabel a known, named device
+    nl = name.strip().lower()
+    target = next((did for did, e in store.items()
+                   if not e.get('aliasOf') and did != new_device_id
+                   and (e.get('name') or '').strip().lower() == nl), None)
+    if target:
+        _migrate_state_files(new_device_id, target)
+        _alias_to(new_device_id, target, store)
+        store[new_device_id]['serial'] = intent['serial']
+        _save_devices(store)
+        print(f"[DEVICE CORRELATE] {new_device_id[-12:]} -> {name!r} (play intent)", flush=True)
+    elif name != intent['serial']:
+        # Only adopt a real room name — never relabel a device with its serial.
+        ent['name'] = name
+        ent['serial'] = intent['serial']
+        store[new_device_id] = ent
+        _save_devices(store)
+        print(f"[DEVICE CORRELATE] named {new_device_id[-12:]} = {name!r} (play intent)", flush=True)
+    else:
+        return False
+    return True
+
+
 @app.route('/api/playlists/play', methods=['POST'])
 @app.route('/api/alexa_remote/play', methods=['POST'])
 def play_on_device():
@@ -653,6 +765,7 @@ def play_on_device():
         targets = _expand_play_targets(device)
     except ValueError as e:
         return jsonify({'error': str(e), 'code': str(e)}), 400
+    _record_play_intent(targets)
     try:
         import alexa_remote
         results, errors = [], []
@@ -673,6 +786,124 @@ def play_on_device():
         code = str(e)
         status = 400 if code in ('not_configured', 'not_authenticated', 'device_not_found') else 500
         return jsonify({'error': code, 'code': code}), status
+
+# ── Device identify (play a short test on each Echo to name/merge them) ───────
+# Plays a brief clip on every audio Echo in turn. Each single-device play feeds
+# the play-intent correlation, so devices get auto-named as it goes — and you
+# hear the test move room-to-room to confirm/merge the rest.
+_IDENTIFY = {'running': False, 'total': 0, 'done': 0, 'current': '',
+             'named': [], 'errors': []}
+_IDENTIFY_LOCK = threading.Lock()
+_IDENTIFY_AUDIO_FAMILIES = {'ECHO', 'ROOK', 'KNIGHT', 'WHA'}
+
+def _identify_worker(devices, text, alias, dwell):
+    import alexa_remote
+    try:
+        for d in devices:
+            serial, name = d['serial'], d['name']
+            with _IDENTIFY_LOCK:
+                _IDENTIFY['current'] = name
+            _record_play_intent([(serial, name)])  # single → correlatable
+            try:
+                alexa_remote.play_text(serial, text)
+            except Exception as e:
+                with _IDENTIFY_LOCK:
+                    _IDENTIFY['errors'].append(f'{name}: {e}')
+                    _IDENTIFY['done'] += 1
+                continue
+            time.sleep(dwell)                       # let PlaybackStarted correlate
+            try:
+                alexa_remote.device_control(serial, 'stop', alias)
+            except Exception:
+                pass
+            with _IDENTIFY_LOCK:
+                _IDENTIFY['named'].append(name)
+                _IDENTIFY['done'] += 1
+            time.sleep(1.0)
+    finally:
+        with _IDENTIFY_LOCK:
+            _IDENTIFY['running'] = False
+            _IDENTIFY['current'] = ''
+
+@app.route('/api/devices/identify', methods=['POST'])
+def identify_devices():
+    body = request.get_json(silent=True) or {}
+    with _IDENTIFY_LOCK:
+        if _IDENTIFY['running']:
+            return jsonify({'error': 'already_running', **_IDENTIFY}), 409
+    try:
+        import alexa_remote
+        devs = alexa_remote.list_devices() or []
+    except ImportError:
+        return jsonify({'error': 'not_installed', 'code': 'not_installed'}), 503
+    except Exception as e:
+        code = str(e)
+        status = 400 if code in ('not_configured', 'not_authenticated') else 500
+        return jsonify({'error': code, 'code': code}), status
+    # Only real, online audio Echoes (skip Fire TVs, Fitbits, Echo Auto, …).
+    targets = [d for d in devs
+               if d.get('online') and d.get('family') in _IDENTIFY_AUDIO_FAMILIES]
+    if not targets:
+        return jsonify({'error': 'no_devices', 'code': 'no_devices'}), 400
+    # Test clip = a real playlist (reliably resolved by the skill); stopped after
+    # a few seconds so it's just a brief blip per room.
+    pls = _load_playlist_entries()
+    name = (body.get('playlist') or '').strip() or (pls[0][1] if pls else '')
+    if not name:
+        return jsonify({'error': 'no_playlist', 'code': 'no_playlist'}), 400
+    text = _build_play_text('playlist', name, False)
+    dwell = max(5.0, min(20.0, float(body.get('dwell') or 9.0)))
+    with _IDENTIFY_LOCK:
+        _IDENTIFY.update({'running': True, 'total': len(targets), 'done': 0,
+                          'current': '', 'named': [], 'errors': []})
+    threading.Thread(target=_identify_worker,
+                     args=(targets, text, _alexa_alias(), dwell),
+                     daemon=True).start()
+    eta = int(len(targets) * (dwell + 1.5))
+    return jsonify({'ok': True, 'total': len(targets), 'playlist': name, 'etaSeconds': eta})
+
+@app.route('/api/devices/identify/status')
+def identify_status():
+    with _IDENTIFY_LOCK:
+        return jsonify(dict(_IDENTIFY))
+
+@app.route('/api/devices/test', methods=['POST'])
+def test_device():
+    """Play a short clip on ONE speaker (by serial) then stop — for identifying
+    and auto-naming a single Echo. Runs in the background; returns immediately."""
+    body = request.get_json(silent=True) or {}
+    serial = (body.get('serial') or body.get('device') or '').strip()
+    if not serial:
+        return jsonify({'error': 'serial required'}), 400
+    name = (body.get('name') or '').strip() or _alexa_name_for_serial(serial) or serial
+    pls = _load_playlist_entries()
+    pl = (body.get('playlist') or '').strip() or (pls[0][1] if pls else '')
+    if not pl:
+        return jsonify({'error': 'no_playlist', 'code': 'no_playlist'}), 400
+    text = _build_play_text('playlist', pl, False)
+    dwell = max(4.0, min(20.0, float(body.get('dwell') or 8.0)))
+    alias = _alexa_alias()
+
+    def worker():
+        import alexa_remote
+        _record_play_intent([(serial, name)])   # single → correlatable
+        try:
+            alexa_remote.play_text(serial, text)
+        except Exception as e:
+            print(f"[DEVICE TEST] play failed for {name!r}: {e}", flush=True)
+            return
+        time.sleep(dwell)
+        try:
+            alexa_remote.device_control(serial, 'stop', alias)
+        except Exception:
+            pass
+
+    try:
+        import alexa_remote  # noqa: F401 — surface not-installed before threading
+    except ImportError:
+        return jsonify({'error': 'not_installed', 'code': 'not_installed'}), 503
+    threading.Thread(target=worker, daemon=True).start()
+    return jsonify({'ok': True, 'device': name})
 
 # ── Automations (scheduled playlist playback) ────────────────────────────────
 
@@ -773,6 +1004,7 @@ def _fire_automation(auto):
     text = _build_play_text('playlist', auto['playlistName'], auto.get('shuffle'))
     import alexa_remote
     targets = _expand_play_targets(auto['device'])
+    _record_play_intent(targets)
     results, errors = [], []
     for serial, member_name in targets:
         try:
@@ -2769,12 +3001,20 @@ def current_track():
 # drops, or skill rotation; without this guard the UI sticks on the last track.
 _NP_DURATION_GRACE_SECONDS = 60        # tolerate ~1min of drift after track end
 _NP_FALLBACK_STALE_SECONDS = 10 * 60   # used when duration is unknown
+_NP_PAUSED_STALE_SECONDS = 30 * 60     # drop a paused row that's never resumed
 
 def _expire_stale_playing(payload):
     now = time.time()
     devices = payload.get('devices', {}) or {}
     changed = False
     for st in devices.values():
+        # A device left paused and never resumed shouldn't linger in the UI.
+        if not st.get('playing') and st.get('paused'):
+            ts = st.get('timestamp') or 0
+            if ts and now - ts > _NP_PAUSED_STALE_SECONDS:
+                st['paused'] = False
+                changed = True
+            continue
         if not st.get('playing'):
             continue
         ts = st.get('timestamp') or 0
@@ -2893,7 +3133,7 @@ def alexa_play(stream_url, token, offset_ms=0, previous_token=None,
     send_meta = get_pref('SendMetadata', 'true').lower() != 'false'
     send_art  = get_pref('SendAlbumArt', 'true').lower() != 'false'
     if send_meta and (title or subtitle or artwork_url):
-        meta = {'type': 'MusicDisplay'}
+        meta = {}
         if title:
             meta['title'] = title
         if subtitle:
@@ -3533,6 +3773,10 @@ def alexa_skill():
     # ── AudioPlayer events ─────────────────────────────────────────────────
 
     if rtype == 'AudioPlayer.PlaybackStarted':
+        # Bind a rotated/auto-named deviceId back to the room we just commanded
+        # by serial, so this stream lands on the right device (not a new dupe).
+        if g.raw_device_id != 'default' and _correlate_play_intent(g.raw_device_id):
+            g.device_id = _resolve_device_id(g.raw_device_id)
         token = req.get('token', '')
         data  = decode_token(token)
         tracks = data.get('tracks', [])
@@ -3616,12 +3860,16 @@ def alexa_skill():
         return alexa_empty()
 
     if rtype == 'AudioPlayer.PlaybackStopped':
-        state = read_np_state() or {}
-        state['playing'] = False
-        state['offset_ms'] = req.get('offsetInMilliseconds', 0)
-        if state.get('token'):
-            state['paused'] = True
-        write_np_state(state)
+        # PlaybackStopped is ambiguous — it fires on pause, on stop, and when a
+        # new track replaces the current one. It must NOT decide `paused`; only
+        # the explicit pause handlers (PauseIntent / PauseCommandIssued) set that.
+        # Don't synthesize a row for a device we aren't already tracking, or a
+        # stop/replace would leave a trackless stuck row.
+        state = read_np_state()
+        if state and state.get('token'):
+            state['playing'] = False
+            state['offset_ms'] = req.get('offsetInMilliseconds', 0)
+            write_np_state(state)
         return alexa_empty()
 
     if rtype == 'PlaybackController.NextCommandIssued':
@@ -3987,6 +4235,13 @@ def alexa_skill():
                 print(f'AddToPlaylist error: {e}')
                 return alexa_speak(f"Sorry, I couldn't add to {name}.")
 
+        # ── Skip / Back (one-shot transport, collision-safe) ────────────────
+        elif iname == 'SkipIntent':
+            return _np_skip_next()
+
+        elif iname == 'BackIntent':
+            return _np_skip_previous()
+
         # ── Ignore/skip current song ───────────────────────────────────────
         elif iname == 'IgnoreSongIntent':
             state = read_np_state() or {}
@@ -4026,9 +4281,9 @@ def alexa_skill():
 
         # ── Stop / Cancel ──────────────────────────────────────────────────
         elif iname in ('AMAZON.StopIntent', 'AMAZON.CancelIntent'):
-            state = read_np_state() or {}
-            state['playing'] = False
-            write_np_state(state)
+            # Stop = device goes home. Clear the row so it doesn't linger in
+            # Now Playing (pause keeps the row; stop removes it).
+            remove_np_state()
             return alexa_stop()
 
         # ── Pause ──────────────────────────────────────────────────────────

@@ -241,8 +241,8 @@ _TRANSPORT_TEXT = {
     'pause': 'pause',
     'play': 'resume',
     'stop': 'stop',
-    'next': 'next',
-    'previous': 'previous',
+    'next': 'skip',
+    'previous': 'go back',
     'shuffle_on': 'shuffle on',
     'shuffle_off': 'shuffle off',
 }
@@ -253,7 +253,7 @@ _TRANSPORT_TEXT = {
 # device, not the one we targeted — so it must be an explicit skill invocation
 # ("ask <alias> to resume") to deterministically hit the intended Echo, like the
 # play-on-device path.
-_EXPLICIT_INVOCATION_ACTIONS = {'play', 'stop'}
+_EXPLICIT_INVOCATION_ACTIONS = {'play', 'stop', 'next', 'previous'}
 
 
 async def _device_control(target, action, alias='bock media'):
