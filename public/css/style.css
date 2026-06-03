@@ -475,6 +475,7 @@ ul.sidebar-nav li a .nav-label { overflow: hidden; }
 .np-artist { font-size: 13px; color: #30426a; margin-top: 2px; }
 .np-album { font-size: 12px; color: #778; margin-top: 1px; word-break: break-word; }
 .np-device-label { font-size: 11px; color: #9aa; margin-top: 4px; }
+.np-time { font-variant-numeric: tabular-nums; color: #8a93a6; }
 .np-device-paused { opacity: 0.85; }
 .np-paused-badge {
   display: inline-block;

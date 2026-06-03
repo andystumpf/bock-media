@@ -394,11 +394,13 @@ async function loadHealth() {
 // ── Now Playing ──────────────────────────────────────────────────────────────
 let _npPage = 1;
 let _npPollTimer = null;
+let _npTickTimer = null;
 
 register('nowplaying', async () => {
   _npPage = 1;
   loading();
   clearInterval(_npPollTimer);
+  clearInterval(_npTickTimer);
   await loadNowPlaying();
   _npPollTimer = setInterval(async () => {
     const data = await API('/api/nowplaying_devices');
@@ -409,6 +411,7 @@ register('nowplaying', async () => {
     refreshCurrentTrack();
     npLoadVolumes();
   }, 5000);
+  _npTickTimer = setInterval(npTickTimes, 1000);
 });
 
 function npResolveSerial(d) {
@@ -429,6 +432,39 @@ function npCanControl(d, controlsAvailable) {
 
 function npDeviceIdClass(deviceId) {
   return 'np-dev-' + String(deviceId || '').replace(/[^a-zA-Z0-9]/g, '_');
+}
+
+function npFmtSec(sec) {
+  sec = Math.max(0, Math.floor(sec || 0));
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}:${s < 10 ? '0' : ''}${s}`;
+}
+
+// Elapsed seconds since the track started: server reports offset_ms at the time
+// it last wrote `timestamp`, so we extrapolate in real time while playing.
+function npElapsedSec(d) {
+  const base = (d.offset_ms || 0) / 1000;
+  const since = d.paused ? 0 : Math.max(0, Date.now() / 1000 - (d.timestamp || 0));
+  let elapsed = base + (d.timestamp ? since : 0);
+  const dur = (d.duration_ms || 0) / 1000;
+  if (dur) elapsed = Math.min(elapsed, dur);
+  return elapsed;
+}
+
+function npTimeText(d) {
+  const dur = (d.duration_ms || 0) / 1000;
+  const cur = npFmtSec(npElapsedSec(d));
+  return dur ? ` &nbsp; ${cur} / ${npFmtSec(dur)}` : ` &nbsp; ${cur}`;
+}
+
+// Tick the time displays in place (smooth) between the 5s data polls.
+function npTickTimes() {
+  const items = window._npItems || [];
+  document.querySelectorAll('.np-time').forEach(el => {
+    const d = items.find(x => x.deviceId === el.dataset.deviceId);
+    if (d) el.innerHTML = npTimeText(d);
+  });
 }
 
 function buildDeviceRow(d, controlsAvailable = false) {
@@ -467,7 +503,7 @@ function buildDeviceRow(d, controlsAvailable = false) {
           <div class="np-track">${escHtml(d.track || '—')} ${pausedBadge} ${sleepBadge}</div>
           ${d.artist ? `<div class="np-artist">${escHtml(d.artist)}</div>` : ''}
           ${d.album ? `<div class="np-album">${escHtml(d.album)}</div>` : ''}
-          <div class="np-device-label">Device: ${escHtml(d.deviceName || (d.deviceId || '').slice(-12) || 'default')}</div>
+          <div class="np-device-label">Device: ${escHtml(d.deviceName || (d.deviceId || '').slice(-12) || 'default')}<span class="np-time" data-device-id="${escHtml(d.deviceId)}">${npTimeText(d)}</span></div>
         </div>
       </div>
       ${controls}
@@ -2877,6 +2913,8 @@ async function init() {
     if (!hash.startsWith('nowplaying')) {
       clearInterval(_npPollTimer);
       _npPollTimer = null;
+      clearInterval(_npTickTimer);
+      _npTickTimer = null;
     }
     navigate(hash);
   });

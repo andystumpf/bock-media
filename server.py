@@ -3259,6 +3259,9 @@ def nowplaying_devices():
             continue
         if did == 'default' or (did not in known and not _is_msp_pseudo(did)):
             continue
+        duration_ms = st.get('duration_ms') or 0
+        if not duration_ms and st.get('filepath'):
+            duration_ms = _duration_ms_for_path(st.get('filepath'))
         items.append({
             'deviceId':   did,
             'deviceName': _device_label(did) or did[-6:],
@@ -3267,6 +3270,8 @@ def nowplaying_devices():
             'album':      st.get('album'),
             'filepath':   st.get('filepath'),
             'timestamp':  st.get('timestamp'),
+            'duration_ms': duration_ms,
+            'offset_ms':   st.get('offset_ms') or 0,
             'paused':     bool(st.get('paused')) and not st.get('playing'),
             'sleep':      _sleep_info_for_token(st.get('token')),
         })
@@ -3537,6 +3542,33 @@ def alexa_can_fulfill(slots=None, can_fulfill='MAYBE'):
     })
 
 # ── Play from track list ──────────────────────────────────────────────────────
+
+_DURATION_MS_CACHE = {}  # path -> (mtime, duration_ms)
+
+def _duration_ms_for_path(path):
+    """Track length in ms: songs_cache first, else mutagen on the file."""
+    if not path:
+        return 0
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return 0
+    cached = _DURATION_MS_CACHE.get(path)
+    if cached and cached[0] == mtime:
+        return cached[1]
+    row = db_one('SELECT duration_seconds FROM songs_cache WHERE path = ?', [path]) or {}
+    duration_s = row.get('duration_seconds') or 0
+    if not duration_s and os.path.isfile(path):
+        try:
+            from mutagen import File as MutaFile
+            mf = MutaFile(path)
+            if mf and mf.info and mf.info.length:
+                duration_s = float(mf.info.length)
+        except Exception:
+            duration_s = 0
+    duration_ms = int(duration_s * 1000) if duration_s else 0
+    _DURATION_MS_CACHE[path] = (mtime, duration_ms)
+    return duration_ms
 
 def track_metadata(path):
     """Return (title, artist, album, artwork_url) for a file path."""
@@ -3906,12 +3938,11 @@ def _msp_handle_event(req, ctx):
         idx = _msp_parse_idx(item_id)
         if idx is not None and 0 <= idx < len(tracks):
             path = tracks[idx]
-            row = db_one('SELECT title, artist, album, duration_seconds FROM songs_cache WHERE path = ?', [path]) or {}
+            row = db_one('SELECT title, artist, album FROM songs_cache WHERE path = ?', [path]) or {}
             fname = os.path.splitext(os.path.basename(path))[0]
             track_title = row.get('title', fname) or fname
             artist = row.get('artist')
             album = row.get('album')
-            duration_s = row.get('duration_seconds') or 0
             write_np_state({
                 'track':       track_title,
                 'artist':      artist,
@@ -3921,7 +3952,7 @@ def _msp_handle_event(req, ctx):
                 'playing':     True,
                 'paused':      False,
                 'timestamp':   time.time(),
-                'duration_ms': int(duration_s * 1000) if duration_s else 0,
+                'duration_ms': _duration_ms_for_path(path),
                 'offset_ms':   (req.get('body') or {}).get('offsetInMilliseconds') or 0,
             })
             append_stream_history({
@@ -4064,11 +4095,10 @@ def alexa_skill():
         if 0 <= idx < len(tracks):
             path = tracks[idx]
             fname = os.path.splitext(os.path.basename(path))[0]
-            row = db_one('SELECT title, artist, album, duration_seconds FROM songs_cache WHERE path = ?', [path]) or {}
+            row = db_one('SELECT title, artist, album FROM songs_cache WHERE path = ?', [path]) or {}
             track_title = row.get('title', fname) or fname
             artist = row.get('artist')
             album = row.get('album')
-            duration_s = row.get('duration_seconds') or 0
             write_np_state({
                 'track':       track_title,
                 'artist':      artist,
@@ -4078,7 +4108,7 @@ def alexa_skill():
                 'playing':     True,
                 'paused':      False,
                 'timestamp':   time.time(),
-                'duration_ms': int(duration_s * 1000) if duration_s else 0,
+                'duration_ms': _duration_ms_for_path(path),
             })
             device_label = _device_label(_np_device_id())
             entry = {
