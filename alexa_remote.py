@@ -62,6 +62,36 @@ def is_configured():
     return bool(c.get('password')) or _cookie_session_exists()
 
 
+# is_configured() only proves credentials/cookie EXIST, not that the session is
+# still valid (cookies expire). is_authenticated() actually attempts a login to
+# confirm, but that is a network round-trip — so the result is cached. NEVER call
+# this inline in a request hot path; the health-check timer refreshes it.
+_AUTH_CACHE = {'ts': 0.0, 'ok': None}
+_AUTH_CACHE_TTL = 120.0
+
+
+def is_authenticated(max_age=_AUTH_CACHE_TTL):
+    """Cached check that the saved Alexa session is still valid. Returns
+    True/False, or None if not configured. Swallows all errors -> False."""
+    if not is_configured():
+        return None
+    import time as _time
+    now = _time.time()
+    if _AUTH_CACHE['ok'] is not None and (now - _AUTH_CACHE['ts']) < max_age:
+        return _AUTH_CACHE['ok']
+    async def _probe():
+        login = await _login_from_cookie()  # raises if not authenticated
+        await login.close()
+        return True
+    try:
+        ok = run(_probe())
+    except Exception:
+        ok = False
+    _AUTH_CACHE['ts'] = now
+    _AUTH_CACHE['ok'] = ok
+    return ok
+
+
 def _outputpath(filename):
     return os.path.join(DATA_DIR, filename)
 

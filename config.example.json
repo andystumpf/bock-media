@@ -1,6 +1,7 @@
 {
   "publicUrl": "https://alexa.morejava.bid",
   "launchPlaylistPrompt": true,
+  "identifyPlaylist": "",
   "msp": {
     "skillId": "amzn1.ask.skill.5a3f1b96-1e0d-4a39-ac7a-1bacd6f4438a",
     "catalogId": "amzn1.ask-catalog.cat.8d881399-7f6b-4d02-93c9-6c4b44043406",

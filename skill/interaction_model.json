@@ -280,6 +280,34 @@
           ]
         },
         {
+          "name": "SleepTimerIntent",
+          "slots": [
+            { "name": "minutes", "type": "AMAZON.NUMBER" }
+          ],
+          "samples": [
+            "set a sleep timer for {minutes} minutes",
+            "sleep in {minutes} minutes",
+            "stop in {minutes} minutes",
+            "stop playing in {minutes} minutes",
+            "turn off in {minutes} minutes",
+            "cancel the sleep timer",
+            "cancel sleep timer"
+          ]
+        },
+        {
+          "name": "StopAfterIntent",
+          "slots": [
+            { "name": "count", "type": "AMAZON.NUMBER" }
+          ],
+          "samples": [
+            "stop after {count} songs",
+            "stop after {count} tracks",
+            "stop after this song",
+            "play {count} more songs",
+            "stop after {count} more songs"
+          ]
+        },
+        {
           "name": "IgnoreSongIntent",
           "slots": [],
           "samples": [

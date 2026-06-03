@@ -29,6 +29,11 @@ from flask import Flask, jsonify, request, send_from_directory, send_file, Respo
 HERE = os.path.dirname(os.path.abspath(__file__))
 app = Flask(__name__, static_folder=os.path.join(HERE, 'public'))
 
+# Service-health bookkeeping (surfaced by /api/health + the dashboard card).
+_START_TIME = time.time()
+_LAST_ALEXA_HIT = 0.0
+HEALTH_STATE_PATH = os.path.join(HERE, 'health_state.json')
+
 # External data locations are machine-specific and live outside this repo, so they
 # are configurable via environment variables (the defaults preserve the original
 # deployment). Override in the systemd unit / shell to relocate without code changes.
@@ -403,8 +408,64 @@ def alexa_remote_status():
     try:
         import alexa_remote
     except Exception as e:
-        return jsonify({'available': False, 'configured': False, 'reason': str(e)})
-    return jsonify({'available': True, 'configured': alexa_remote.is_configured()})
+        return jsonify({'available': False, 'configured': False, 'authenticated': None, 'reason': str(e)})
+    configured = alexa_remote.is_configured()
+    # authenticated uses a cached probe (never logs in inline); None when not configured.
+    authenticated = alexa_remote.is_authenticated() if configured else None
+    return jsonify({'available': True, 'configured': configured, 'authenticated': authenticated})
+
+def _read_health_state():
+    try:
+        with open(HEALTH_STATE_PATH) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+@app.route('/api/health')
+def health():
+    """Single-pane service health for the dashboard. Merges the out-of-process
+    watchdog snapshot (health_state.json: tunnel/backend reachability, public
+    latency, alexapy auth) with in-process facts (uptime, last /alexa hit)."""
+    hs = _read_health_state()
+    now = time.time()
+    state_age = (now - hs.get('ts', 0)) if hs.get('ts') else None
+    # The watchdog runs every 60s; treat a >180s-old snapshot as stale/unknown.
+    fresh = state_age is not None and state_age < 180
+    last_hit = _LAST_ALEXA_HIT or None
+
+    # Skill testing-enablement: the 6-hourly cron can drop a small marker; if
+    # absent we report unknown rather than guessing.
+    skill_testing = 'unknown'
+    try:
+        with open(os.path.join(HERE, 'skill_enablement_state.json')) as f:
+            skill_testing = bool((json.load(f) or {}).get('enabled'))
+    except Exception:
+        pass
+
+    plex = {'configured': False, 'reachable': None}
+    try:
+        import plex_client
+        plex = plex_client.status()
+    except Exception:
+        pass
+
+    return jsonify({
+        'uptimeSeconds':   int(now - _START_TIME),
+        'lastAlexaHit':    last_hit,
+        'lastAlexaHitAgo': int(now - last_hit) if last_hit else None,
+        'watchdogFresh':   fresh,
+        'watchdogAgeSeconds': int(state_age) if state_age is not None else None,
+        'backend':         hs.get('backend') if fresh else None,
+        'tunnel':          hs.get('tunnel') if fresh else None,
+        'backendHttp':     hs.get('backendHttp') if fresh else None,
+        'tunnelReachable': hs.get('tunnelReachable') if fresh else None,
+        'publicLatencyMs': hs.get('publicLatencyMs') if fresh else None,
+        'publicStatus':    hs.get('publicStatus') if fresh else None,
+        'alexaAuth':       hs.get('alexaAuth') if fresh else None,
+        'skillTesting':    skill_testing,
+        'plexConfigured':  plex.get('configured'),
+        'plexReachable':   plex.get('reachable'),
+    })
 
 @app.route('/api/alexa_remote/devices')
 def alexa_remote_devices():
@@ -686,6 +747,37 @@ def _alexa_name_for_serial(serial):
                 pass
         return _ALEXA_DEV_CACHE['by_serial'].get(serial, '') or ''
 
+# Identify/test sweeps play a real playlist on a device just to hear it; those
+# plays must NOT pollute analytics. We mark the serial as "test" for a short
+# window, and the PlaybackStarted handler tags the resulting history row.
+_TEST_SERIALS = {}                # serial -> expiry epoch
+_TEST_SERIAL_TTL = 30.0
+_TEST_SERIAL_LOCK = threading.Lock()
+
+def _mark_test_serial(serial):
+    if not serial:
+        return
+    with _TEST_SERIAL_LOCK:
+        _TEST_SERIALS[serial] = time.time() + _TEST_SERIAL_TTL
+
+def _is_test_serial(serial):
+    if not serial:
+        return False
+    now = time.time()
+    with _TEST_SERIAL_LOCK:
+        for s in [k for k, exp in _TEST_SERIALS.items() if exp < now]:
+            _TEST_SERIALS.pop(s, None)
+        return serial in _TEST_SERIALS
+
+def _identify_playlist_name():
+    """Dedicated short clip for identify/test, configurable via config.json
+    `identifyPlaylist`; falls back to the first available playlist."""
+    name = (load_config().get('identifyPlaylist') or '').strip()
+    if name:
+        return name
+    pls = _load_playlist_entries()
+    return pls[0][1] if pls else ''
+
 def _record_play_intent(targets):
     """targets: list of (serial, name). One target → correlatable; many → mark
     an ambiguous group window so we don't mis-attribute rooms."""
@@ -714,14 +806,36 @@ def _correlate_play_intent(new_device_id):
         intent = pending[0]
         _PLAY_INTENTS.clear()
     name = intent['name']
+    serial = intent.get('serial')
     store = _load_devices()
     ent = store.get(new_device_id) or {}
     if ent.get('aliasOf'):
         return False  # already mapped
+
+    # Serial-first: if this hardware serial is already bound to a primary device
+    # (a different deviceId), this is a rotation — fold the new id onto it
+    # deterministically, regardless of current name. This is the strongest
+    # signal we have and beats name/fingerprint matching.
+    serial_primary = _primary_by_serial(serial, store)
+    if serial_primary and serial_primary != new_device_id:
+        _migrate_state_files(new_device_id, serial_primary)
+        _alias_to(new_device_id, serial_primary, store)
+        store[new_device_id]['serial'] = serial
+        store[serial_primary]['serial'] = serial
+        _save_devices(store)
+        print(f"[DEVICE CORRELATE] {new_device_id[-12:]} -> serial {serial} == {name!r}", flush=True)
+        return True
+
     cur = (ent.get('name') or '').strip().lower()
     looks_auto = (not cur) or cur == f"echo {new_device_id[-6:]}".lower()
     if not looks_auto:
-        return False  # don't relabel a known, named device
+        # Known, named device — don't relabel, but still record the serial so
+        # future rotations can be folded deterministically.
+        if serial and ent.get('serial') != serial:
+            ent['serial'] = serial
+            store[new_device_id] = ent
+            _save_devices(store)
+        return False
     nl = name.strip().lower()
     target = next((did for did, e in store.items()
                    if not e.get('aliasOf') and did != new_device_id
@@ -730,6 +844,8 @@ def _correlate_play_intent(new_device_id):
         _migrate_state_files(new_device_id, target)
         _alias_to(new_device_id, target, store)
         store[new_device_id]['serial'] = intent['serial']
+        if serial:
+            store[target]['serial'] = serial  # index serial on the primary
         _save_devices(store)
         print(f"[DEVICE CORRELATE] {new_device_id[-12:]} -> {name!r} (play intent)", flush=True)
     elif name != intent['serial']:
@@ -804,6 +920,7 @@ def _identify_worker(devices, text, alias, dwell):
             with _IDENTIFY_LOCK:
                 _IDENTIFY['current'] = name
             _record_play_intent([(serial, name)])  # single → correlatable
+            _mark_test_serial(serial)               # keep out of analytics
             try:
                 alexa_remote.play_text(serial, text)
             except Exception as e:
@@ -845,10 +962,9 @@ def identify_devices():
                if d.get('online') and d.get('family') in _IDENTIFY_AUDIO_FAMILIES]
     if not targets:
         return jsonify({'error': 'no_devices', 'code': 'no_devices'}), 400
-    # Test clip = a real playlist (reliably resolved by the skill); stopped after
-    # a few seconds so it's just a brief blip per room.
-    pls = _load_playlist_entries()
-    name = (body.get('playlist') or '').strip() or (pls[0][1] if pls else '')
+    # Test clip = a dedicated short playlist (config identifyPlaylist), stopped
+    # after a few seconds. Tagged so these plays stay out of analytics.
+    name = (body.get('playlist') or '').strip() or _identify_playlist_name()
     if not name:
         return jsonify({'error': 'no_playlist', 'code': 'no_playlist'}), 400
     text = _build_play_text('playlist', name, False)
@@ -876,8 +992,7 @@ def test_device():
     if not serial:
         return jsonify({'error': 'serial required'}), 400
     name = (body.get('name') or '').strip() or _alexa_name_for_serial(serial) or serial
-    pls = _load_playlist_entries()
-    pl = (body.get('playlist') or '').strip() or (pls[0][1] if pls else '')
+    pl = (body.get('playlist') or '').strip() or _identify_playlist_name()
     if not pl:
         return jsonify({'error': 'no_playlist', 'code': 'no_playlist'}), 400
     text = _build_play_text('playlist', pl, False)
@@ -887,6 +1002,7 @@ def test_device():
     def worker():
         import alexa_remote
         _record_play_intent([(serial, name)])   # single → correlatable
+        _mark_test_serial(serial)               # keep out of analytics
         try:
             alexa_remote.play_text(serial, text)
         except Exception as e:
@@ -1355,6 +1471,28 @@ def _resolve_device_id(device_id, store=None):
         seen.add(cur)
         cur = nxt
     return cur
+
+def _primary_by_serial(serial, store=None):
+    """Return the primary (non-alias) deviceId already bound to this Alexa
+    hardware serial, or None.
+
+    Alexa skill/AudioPlayer events never carry a serial — only an opaque,
+    occasionally-rotating deviceId. But alexapy-initiated plays (identify, test,
+    Play-on-device) DO know the serial, and we persist it on the device entry
+    when we correlate. That makes the serial the one stable hardware key we
+    have: a rotated deviceId for the same speaker can be folded onto its
+    original room deterministically, without guessing by name or fingerprint.
+    """
+    if not serial:
+        return None
+    if store is None:
+        store = _load_devices()
+    for did, e in store.items():
+        if e.get('aliasOf'):
+            continue
+        if e.get('serial') == serial:
+            return did
+    return None
 
 def _fingerprint_interfaces(supported_interfaces):
     """Stable fingerprint of an Alexa device's supportedInterfaces.
@@ -1862,7 +2000,9 @@ def analytics():
         rows = filtered
 
     # Strip test/placeholder rows that were never real device plays
-    rows = [r for r in rows if r.get('deviceId', '') not in ('DEVICE_ALPHA', 'DEVICE_BETA')]
+    rows = [r for r in rows
+            if r.get('deviceId', '') not in ('DEVICE_ALPHA', 'DEVICE_BETA')
+            and not r.get('test')]
 
     total = len(rows)
     EMPTY = {
@@ -2192,7 +2332,7 @@ def now_playing():
     page = int(request.args.get('page', 1))
     limit = int(request.args.get('limit', 20))
     try:
-        rows = _read_stream_history()
+        rows = [r for r in _read_stream_history() if not r.get('test')]
         rows.reverse()
         total = len(rows)
         start = (page - 1) * limit
@@ -2535,6 +2675,37 @@ def _update_queue_flags(qid, **kwargs):
             queues[qid][k] = v
         _save_queues(queues)
 
+def _set_queue_stop(qid, minutes=None, songs=None, current_idx=0):
+    """Arm (or clear) a sleep timer / stop-after-N on a queue.
+
+    Both are enforced at the next track boundary (PlaybackNearlyFinished) so the
+    current song always finishes cleanly — Alexa gives us no mid-track cutoff.
+      * minutes -> stopAt epoch (time-based sleep timer)
+      * songs   -> stopAfterIdx = current_idx + songs - 1 (the last idx allowed
+                   to play; songs counts the currently-playing track, so
+                   songs=1 means "stop after this song").
+    Pass minutes=0/songs=0 (or None for both with clear semantics) to cancel.
+    """
+    if not qid:
+        return None
+    with _QUEUES_LOCK:
+        queues = _load_queues()
+        entry = queues.get(qid)
+        if not entry:
+            return None
+        if minutes:
+            entry['stopAt'] = time.time() + float(minutes) * 60.0
+            entry.pop('stopAfterIdx', None)
+        elif songs:
+            entry['stopAfterIdx'] = int(current_idx) + int(songs) - 1
+            entry.pop('stopAt', None)
+        else:
+            entry.pop('stopAt', None)
+            entry.pop('stopAfterIdx', None)
+        entry['ts'] = time.time()
+        _save_queues(queues)
+        return entry
+
 def _touch_queue(qid):
     """Refresh a queue's TTL so a long-running / looping stream is never pruned
     out from under us — otherwise we lose the track mapping needed to show it in
@@ -2573,6 +2744,8 @@ def decode_token(token):
                 'idx': int(idx),
                 'shuffle': entry.get('shuffle', False),
                 'loop': entry.get('loop', False),
+                'stopAt': entry.get('stopAt'),
+                'stopAfterIdx': entry.get('stopAfterIdx'),
             }
         padding = 4 - len(token) % 4
         return json.loads(base64.urlsafe_b64decode(token + '=' * padding))
@@ -3033,6 +3206,46 @@ def _expire_stale_playing(payload):
             changed = True
     return changed
 
+def _sleep_info_for_token(token):
+    """Describe an armed sleep timer / stop-after-N for a now-playing token,
+    or None. Used to badge the row in the web Now Playing UI."""
+    if not token or ':' not in token:
+        return None
+    data = decode_token(token)
+    stop_at = data.get('stopAt')
+    stop_after_idx = data.get('stopAfterIdx')
+    if stop_at:
+        rem = max(0, int((float(stop_at) - time.time()) / 60.0 + 0.5))
+        return {'type': 'time', 'remainingMin': rem}
+    if stop_after_idx is not None:
+        rem = max(0, int(stop_after_idx) - int(data.get('idx', 0)) + 1)
+        return {'type': 'songs', 'remaining': rem}
+    return None
+
+@app.route('/api/nowplaying/sleep', methods=['POST'])
+def nowplaying_sleep():
+    """Arm/cancel a sleep timer or stop-after-N on a device's current queue.
+    Body: {deviceId, minutes?, songs?}. Omit both (or 0) to cancel."""
+    body = request.get_json(silent=True) or {}
+    device_id = (body.get('deviceId') or '').strip()
+    if not device_id:
+        return jsonify({'error': 'deviceId required'}), 400
+    st = read_np_state_for_device(device_id)
+    token = (st or {}).get('token', '')
+    if not token or ':' not in token:
+        return jsonify({'error': 'nothing_playing', 'code': 'nothing_playing'}), 409
+    qid, _, idx = token.partition(':')
+    try:
+        cur_idx = int(idx)
+    except ValueError:
+        cur_idx = 0
+    minutes = body.get('minutes')
+    songs = body.get('songs')
+    entry = _set_queue_stop(qid, minutes=minutes, songs=songs, current_idx=cur_idx)
+    if entry is None:
+        return jsonify({'error': 'nothing_playing', 'code': 'nothing_playing'}), 409
+    return jsonify({'ok': True, 'sleep': _sleep_info_for_token(token)})
+
 @app.route('/api/nowplaying_devices')
 def nowplaying_devices():
     payload = _canonicalize_np(_prune_np(_read_all_np() or {'devices': {}}))
@@ -3055,6 +3268,7 @@ def nowplaying_devices():
             'filepath':   st.get('filepath'),
             'timestamp':  st.get('timestamp'),
             'paused':     bool(st.get('paused')) and not st.get('playing'),
+            'sleep':      _sleep_info_for_token(st.get('token')),
         })
     items.sort(key=lambda x: (x.get('paused'), -(x.get('timestamp') or 0)))
     controls = False
@@ -3098,12 +3312,44 @@ def get_ignored():
     except:
         return []
 
+def _save_ignored(ignored):
+    _atomic_json_write(IGNORE_PATH, ignored)
+
 def add_ignored(path):
     ignored = get_ignored()
-    if path not in ignored:
+    if path and path not in ignored:
         ignored.append(path)
-        with open(IGNORE_PATH, 'w') as f:
-            json.dump(ignored, f)
+        _save_ignored(ignored)
+
+def remove_ignored(path):
+    ignored = get_ignored()
+    if path in ignored:
+        ignored.remove(path)
+        _save_ignored(ignored)
+        return True
+    return False
+
+def ignored_with_metadata():
+    """Ignored paths annotated with title/artist/album for the Analytics UI."""
+    out = []
+    for p in get_ignored():
+        title, artist, album, _ = track_metadata(p)
+        out.append({'path': p, 'title': title, 'artist': artist, 'album': album})
+    return out
+
+@app.route('/api/ignored', methods=['GET', 'POST', 'DELETE'])
+def ignored_endpoint():
+    if request.method == 'GET':
+        return jsonify({'items': ignored_with_metadata()})
+    body = request.get_json(silent=True) or {}
+    path = (body.get('path') or '').strip()
+    if not path:
+        return jsonify({'error': 'path required'}), 400
+    if request.method == 'POST':
+        add_ignored(path)
+        return jsonify({'ok': True})
+    removed = remove_ignored(path)
+    return jsonify({'ok': removed})
 
 # ── Alexa Response Helpers ────────────────────────────────────────────────────
 
@@ -3218,6 +3464,28 @@ def _np_skip_previous(playback_controller=False):
     prev_token = encode_token({**data, 'idx': prev_idx})
     return _np_play_path(prev_path, prev_token)
 
+def _np_arm_sleep(minutes=None, songs=None):
+    """Arm a sleep timer / stop-after-N on the active device's current queue.
+    Returns a spoken confirmation. minutes/songs falsy clears any timer."""
+    state = read_np_state() or {}
+    token = state.get('token', '')
+    if not token or ':' not in token:
+        return alexa_speak("Nothing is playing right now.")
+    qid, _, idx = token.partition(':')
+    try:
+        cur_idx = int(idx)
+    except ValueError:
+        cur_idx = 0
+    entry = _set_queue_stop(qid, minutes=minutes, songs=songs, current_idx=cur_idx)
+    if entry is None:
+        return alexa_speak("Nothing is playing right now.")
+    if minutes:
+        return alexa_speak(f"Okay, I'll stop playing in {int(minutes)} minutes.")
+    if songs:
+        n = int(songs)
+        return alexa_speak(f"Okay, I'll stop after {n} more {'song' if n == 1 else 'songs'}.")
+    return alexa_speak("Sleep timer cancelled.")
+
 def _np_pause_playback(playback_controller=False):
     state = read_np_state() or {}
     state['playing'] = False
@@ -3284,8 +3552,18 @@ def track_metadata(path):
     )
     return title, artist, album, artwork_url
 
+def _filter_ignored_queue(queue):
+    """Drop "never play again" tracks at queue-build time so they never start —
+    but if the WHOLE queue is ignored (e.g. a one-song ignored selection), keep
+    it rather than failing silently."""
+    ignored = set(get_ignored())
+    if not ignored:
+        return queue
+    filtered = [t for t in queue if t not in ignored]
+    return filtered if filtered else queue
+
 def start_playing(tracks, shuffle=False, speech=None, loop=False):
-    queue = normalize_track_queue(tracks)
+    queue = _filter_ignored_queue(normalize_track_queue(tracks))
     if not queue:
         return alexa_speak("Sorry, I couldn't find any tracks to play.")
     if shuffle:
@@ -3727,6 +4005,8 @@ def music_skill():
 
 @app.route('/alexa', methods=['POST'])
 def alexa_skill():
+    global _LAST_ALEXA_HIT
+    _LAST_ALEXA_HIT = time.time()
     raw_body = request.get_data(cache=True)
     body = request.get_json(force=True) or {}
 
@@ -3801,7 +4081,7 @@ def alexa_skill():
                 'duration_ms': int(duration_s * 1000) if duration_s else 0,
             })
             device_label = _device_label(_np_device_id())
-            append_stream_history({
+            entry = {
                 'track':    track_title,
                 'artist':   artist,
                 'album':    album,
@@ -3809,7 +4089,12 @@ def alexa_skill():
                 'device':   device_label,
                 'deviceId': _np_device_id(),
                 'date':     datetime.datetime.now().isoformat(timespec='seconds'),
-            })
+            }
+            # Identify/test sweeps shouldn't pollute analytics.
+            dev_serial = (_load_devices().get(_np_device_id()) or {}).get('serial')
+            if _is_test_serial(dev_serial):
+                entry['test'] = True
+            append_stream_history(entry)
         return alexa_empty()
 
     if rtype == 'AudioPlayer.PlaybackNearlyFinished':
@@ -3818,6 +4103,14 @@ def alexa_skill():
         tracks = data.get('tracks', [])
         idx    = data.get('idx', 0)
         next_idx = idx + 1
+        # Sleep timer / stop-after-N: enforced at the track boundary so the
+        # current song finishes, then we simply stop enqueuing.
+        stop_at = data.get('stopAt')
+        stop_after_idx = data.get('stopAfterIdx')
+        if stop_at and time.time() >= float(stop_at):
+            return alexa_empty()
+        if stop_after_idx is not None and next_idx > int(stop_after_idx):
+            return alexa_empty()
         if next_idx >= len(tracks):
             if data.get('loop'):
                 next_idx = 0
@@ -4226,14 +4519,27 @@ def alexa_skill():
             name, source = fuzzy_find_playlist(playlist_q)
             if not name or not source:
                 return alexa_speak(f"I couldn't find a playlist called {playlist_q}.")
+            track_name = state.get('track', 'the current track')
+            # Two-way sync: if this is a Plex-sourced playlist, write the add
+            # back to Plex (authoritative). Always also append to the local .m3u
+            # for instant reflection in the UI; the next Plex sync run dedupes
+            # by rebuilding the .m3u from Plex.
+            plex_ok = False
+            try:
+                import plex_client
+                pl_rk = plex_client.playlist_ratingkey_from_source(source)
+                if pl_rk:
+                    plex_ok = plex_client.add_track_to_playlist(pl_rk, current_path)
+            except Exception as e:
+                print(f'AddToPlaylist Plex write-back error: {e}', flush=True)
             try:
                 with open(source, 'a') as f:
                     f.write(f'\n{current_path}')
-                track_name = state.get('track', 'the current track')
-                return alexa_speak(f"Added {track_name} to {name}.")
             except Exception as e:
-                print(f'AddToPlaylist error: {e}')
-                return alexa_speak(f"Sorry, I couldn't add to {name}.")
+                print(f'AddToPlaylist error: {e}', flush=True)
+                if not plex_ok:
+                    return alexa_speak(f"Sorry, I couldn't add to {name}.")
+            return alexa_speak(f"Added {track_name} to {name}.")
 
         # ── Skip / Back (one-shot transport, collision-safe) ────────────────
         elif iname == 'SkipIntent':
@@ -4241,6 +4547,25 @@ def alexa_skill():
 
         elif iname == 'BackIntent':
             return _np_skip_previous()
+
+        # ── Sleep timer / stop after N songs ────────────────────────────────
+        elif iname == 'SleepTimerIntent':
+            raw = (slots.get('minutes', {}).get('value') or '').strip()
+            try:
+                minutes = int(raw)
+            except ValueError:
+                minutes = 0
+            if minutes <= 0:
+                return _np_arm_sleep(minutes=None)  # cancel
+            return _np_arm_sleep(minutes=minutes)
+
+        elif iname == 'StopAfterIntent':
+            raw = (slots.get('count', {}).get('value') or '').strip()
+            try:
+                count = int(raw)
+            except ValueError:
+                count = 1
+            return _np_arm_sleep(songs=max(1, count))
 
         # ── Ignore/skip current song ───────────────────────────────────────
         elif iname == 'IgnoreSongIntent':

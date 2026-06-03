@@ -137,6 +137,45 @@ class TestPlayIntentCorrelation:
         assert server._correlate_play_intent(did) is False
         assert server._load_devices()[did]['name'] == 'Guest bathroom'
 
+    def test_already_named_device_records_serial(self, isolated_paths):
+        """Even when we don't relabel, capture the serial for future rotations."""
+        did = 'amzn1.ask.device.NAMEDSERIAL'
+        server.register_device(did, default_name='Office')
+        server._record_play_intent([('SERIAL-OFFICE', 'Office')])
+        server._correlate_play_intent(did)
+        assert server._load_devices()[did]['serial'] == 'SERIAL-OFFICE'
+
+
+class TestSerialIndexedAliasing:
+    """A rotated deviceId reporting a known hardware serial folds onto its room."""
+
+    def test_serial_first_aliases_rotated_id(self, isolated_paths):
+        old = 'amzn1.ask.device.KITCHENORIG'
+        server.register_device(old, default_name='Kitchen Show')
+        # bind the serial to the original room
+        server._record_play_intent([('SERIAL-K', 'Kitchen Show')])
+        server._correlate_play_intent(old)
+        assert server._load_devices()[old]['serial'] == 'SERIAL-K'
+
+        # Alexa rotates the id; a later play for the SAME serial uses a NEW name
+        new = 'amzn1.ask.device.KITCHENROT'
+        server.register_device(new)
+        server._record_play_intent([('SERIAL-K', 'Totally Different Label')])
+        assert server._correlate_play_intent(new) is True
+        store = server._load_devices()
+        assert store[new]['aliasOf'] == old           # folded onto original
+        assert server._resolve_device_id(new) == old
+
+    def test_primary_by_serial_skips_aliases(self, isolated_paths):
+        a = 'amzn1.ask.device.AAAA'
+        b = 'amzn1.ask.device.BBBB'
+        server.register_device(a, default_name='Den')
+        store = server._load_devices()
+        store[a]['serial'] = 'S1'
+        store[b] = {'aliasOf': a, 'name': 'Den', 'serial': 'S1'}
+        server._save_devices(store)
+        assert server._primary_by_serial('S1') == a
+
 
 # ─────────────────────────── collision-safe play verbs ─────────────────────────
 
@@ -168,6 +207,243 @@ class TestCacheBusting:
     def test_app_js_no_cache(self, client):
         rv = client.get('/js/app.js')
         assert rv.headers.get('Cache-Control') == 'no-cache, must-revalidate'
+
+
+# ─────────────────────────── plex two-way sync ─────────────────────────────────
+
+class TestPlexClient:
+    def test_ratingkey_from_synced_m3u(self):
+        import plex_client
+        src = '/mnt/bock/Music/exportedPlaylists/plex/Daily Music.123456.m3u'
+        assert plex_client.playlist_ratingkey_from_source(src) == '123456'
+
+    def test_ratingkey_none_for_mymedia_playlist(self):
+        import plex_client
+        assert plex_client.playlist_ratingkey_from_source('/x/some_playlist.m3u') is None
+        assert plex_client.playlist_ratingkey_from_source('') is None
+
+    def test_add_track_falls_back_without_token(self, monkeypatch):
+        import plex_client
+        monkeypatch.setattr(plex_client, 'token', lambda: None)
+        assert plex_client.add_track_to_playlist('123', '/x/a.mp3') is False
+
+    def test_status_unconfigured(self, monkeypatch):
+        import plex_client
+        monkeypatch.setattr(plex_client, 'token', lambda: None)
+        s = plex_client.status()
+        assert s['configured'] is False and s['reachable'] is False
+
+
+class TestAddToPlaylistWriteBack:
+    def test_plex_writeback_attempted_for_plex_playlist(self, client, post_alexa, sample_track, isolated_paths, tmp_path, monkeypatch):
+        import plex_client
+        # A Plex-sourced .m3u (ratingKey-encoded filename)
+        m3u = tmp_path / 'My List.987.m3u'
+        m3u.write_text('#EXTM3U\n')
+        monkeypatch.setattr(server, 'fuzzy_find_playlist', lambda q: ('My List', str(m3u)))
+        calls = {}
+        monkeypatch.setattr(plex_client, 'add_track_to_playlist',
+                            lambda rk, path: calls.setdefault('args', (rk, path)) or True)
+        # Set up a now-playing track on the request device.
+        did = 'amzn1.ask.device.ADDDEV'
+        token = server.encode_token({'tracks': [sample_track['path']], 'idx': 0})
+        server.write_np_state_for_device(did, {'filepath': sample_track['path'],
+                                               'track': 'X', 'token': token, 'playing': True})
+        post_alexa('IntentRequest', 'AddToPlaylistIntent',
+                   slots={'PlaylistName': 'my list'},
+                   device_id=did)
+        assert calls.get('args') == ('987', sample_track['path'])
+        # Local .m3u also appended (instant reflection)
+        assert sample_track['path'] in m3u.read_text()
+
+
+# ─────────────────────────── ignore / never play again ─────────────────────────
+
+class TestIgnoreIntegration:
+    def test_crud_add_list_remove(self, client, isolated_paths):
+        client.post('/api/ignored', json={'path': '/music/a.mp3'})
+        client.post('/api/ignored', json={'path': '/music/b.mp3'})
+        items = client.get('/api/ignored').get_json()['items']
+        paths = {it['path'] for it in items}
+        assert paths == {'/music/a.mp3', '/music/b.mp3'}
+        r = client.delete('/api/ignored', json={'path': '/music/a.mp3'})
+        assert r.get_json()['ok'] is True
+        items = client.get('/api/ignored').get_json()['items']
+        assert {it['path'] for it in items} == {'/music/b.mp3'}
+
+    def test_add_requires_path(self, client, isolated_paths):
+        assert client.post('/api/ignored', json={}).status_code == 400
+
+    def test_remove_unknown_is_falsey(self, client, isolated_paths):
+        r = client.delete('/api/ignored', json={'path': '/nope.mp3'})
+        assert r.get_json()['ok'] is False
+
+    def test_filter_ignored_queue_drops_ignored(self, isolated_paths):
+        server.add_ignored('/x/1.mp3')
+        out = server._filter_ignored_queue(['/x/1.mp3', '/x/2.mp3', '/x/3.mp3'])
+        assert out == ['/x/2.mp3', '/x/3.mp3']
+
+    def test_filter_ignored_queue_all_ignored_falls_back(self, isolated_paths):
+        server.add_ignored('/x/only.mp3')
+        # Don't fail silently: a fully-ignored queue still plays.
+        assert server._filter_ignored_queue(['/x/only.mp3']) == ['/x/only.mp3']
+
+    def test_filter_ignored_queue_no_ignores_noop(self, isolated_paths):
+        q = ['/x/1.mp3', '/x/2.mp3']
+        assert server._filter_ignored_queue(q) == q
+
+
+# ─────────────────────────── sleep timer / stop-after-N ────────────────────────
+
+class TestSleepTimer:
+    def test_stop_after_n_songs_halts_enqueue(self, post_alexa, sample_tracks, isolated_paths):
+        """stop-after-N stops enqueuing once the boundary is crossed."""
+        qid = server._store_queue(sample_tracks, shuffle=False, loop=False)
+        # currently playing idx 0; stop after 2 songs -> last allowed idx = 1
+        server._set_queue_stop(qid, songs=2, current_idx=0)
+        # boundary at idx 0 -> next_idx 1 (<= 1): should enqueue
+        r1 = post_alexa('AudioPlayer.PlaybackNearlyFinished', token=f'{qid}:0')
+        assert r1.get('response', {}).get('directives'), 'should enqueue track 1'
+        # boundary at idx 1 -> next_idx 2 (> 1): should stop
+        r2 = post_alexa('AudioPlayer.PlaybackNearlyFinished', token=f'{qid}:1')
+        assert not r2.get('response', {}).get('directives'), 'should stop after song 2'
+
+    def test_time_sleep_in_past_halts_enqueue(self, post_alexa, sample_tracks, isolated_paths):
+        import time as _t
+        qid = server._store_queue(sample_tracks, shuffle=False, loop=False)
+        with server._QUEUES_LOCK:
+            q = server._load_queues(); q[qid]['stopAt'] = _t.time() - 1; server._save_queues(q)
+        r = post_alexa('AudioPlayer.PlaybackNearlyFinished', token=f'{qid}:0')
+        assert not r.get('response', {}).get('directives')
+
+    def test_future_timer_still_enqueues(self, post_alexa, sample_tracks, isolated_paths):
+        import time as _t
+        qid = server._store_queue(sample_tracks, shuffle=False, loop=False)
+        with server._QUEUES_LOCK:
+            q = server._load_queues(); q[qid]['stopAt'] = _t.time() + 3600; server._save_queues(q)
+        r = post_alexa('AudioPlayer.PlaybackNearlyFinished', token=f'{qid}:0')
+        assert r.get('response', {}).get('directives')
+
+    def test_set_queue_stop_clears(self, isolated_paths, sample_tracks):
+        qid = server._store_queue(sample_tracks)
+        server._set_queue_stop(qid, minutes=30)
+        assert server._load_queues()[qid].get('stopAt')
+        server._set_queue_stop(qid)  # clear
+        assert 'stopAt' not in server._load_queues()[qid]
+        assert 'stopAfterIdx' not in server._load_queues()[qid]
+
+    def test_sleep_endpoint_requires_active_queue(self, client, isolated_paths):
+        r = client.post('/api/nowplaying/sleep', json={'deviceId': 'amzn1.ask.device.NOPE', 'minutes': 30})
+        assert r.status_code == 409
+
+    def test_sleep_endpoint_arms_on_active_device(self, client, post_alexa, sample_tracks, isolated_paths):
+        did = 'amzn1.ask.device.SLEEPDEV'
+        post_alexa('IntentRequest', 'AMAZON.HelpIntent', device_id=did)
+        qid = server._store_queue(sample_tracks)
+        post_alexa('AudioPlayer.PlaybackStarted', token=f'{qid}:0', device_id=did)
+        r = client.post('/api/nowplaying/sleep', json={'deviceId': did, 'minutes': 30})
+        assert r.status_code == 200
+        assert r.get_json()['sleep']['type'] == 'time'
+
+
+# ─────────────────────────── service health endpoint ───────────────────────────
+
+class TestHealthEndpoint:
+    def test_missing_state_is_unknown_not_500(self, client, isolated_paths):
+        """No watchdog snapshot yet -> unknowns, never a 500."""
+        data = client.get('/api/health').get_json()
+        assert data['watchdogFresh'] is False
+        assert data['tunnel'] is None
+        assert data['skillTesting'] == 'unknown'
+        assert data['uptimeSeconds'] >= 0
+
+    def test_fresh_state_surfaces_signals(self, client, isolated_paths):
+        import time as _t
+        with open(server.HEALTH_STATE_PATH, 'w') as f:
+            json.dump({'ts': _t.time(), 'backend': True, 'tunnel': False,
+                       'backendHttp': True, 'tunnelReachable': False,
+                       'publicLatencyMs': 90, 'publicStatus': 403,
+                       'alexaAuth': True}, f)
+        data = client.get('/api/health').get_json()
+        assert data['watchdogFresh'] is True
+        assert data['tunnel'] is False
+        assert data['tunnelReachable'] is False
+        assert data['alexaAuth'] is True
+
+    def test_stale_state_marked_not_fresh(self, client, isolated_paths):
+        import time as _t
+        with open(server.HEALTH_STATE_PATH, 'w') as f:
+            json.dump({'ts': _t.time() - 9999, 'tunnel': True}, f)
+        data = client.get('/api/health').get_json()
+        assert data['watchdogFresh'] is False
+        assert data['tunnel'] is None  # stale -> not trusted
+
+    def test_last_alexa_hit_tracked(self, client, post_alexa, isolated_paths):
+        post_alexa('IntentRequest', 'AMAZON.HelpIntent', device_id='amzn1.ask.device.HITTRACK')
+        data = client.get('/api/health').get_json()
+        assert data['lastAlexaHit'] is not None
+        assert data['lastAlexaHitAgo'] is not None
+
+
+# ─────────────────────────── identify/test analytics exclusion ─────────────────
+
+class TestTestPlayExclusion:
+    def test_test_serial_tags_history_and_excluded(self, client, post_alexa, sample_track, isolated_paths):
+        """A play on a serial marked as 'test' is tagged and kept out of analytics + history."""
+        did = 'amzn1.ask.device.TESTSWEEP'
+        # Register and attach a serial to the device, mark that serial as test.
+        post_alexa('IntentRequest', 'AMAZON.HelpIntent', device_id=did)
+        store = server._load_devices()
+        store[did]['serial'] = 'SERIAL-SWEEP'
+        server._save_devices(store)
+        server._mark_test_serial('SERIAL-SWEEP')
+
+        token = server.encode_token({'tracks': [sample_track['path']], 'idx': 0})
+        post_alexa('AudioPlayer.PlaybackStarted', token=token, device_id=did)
+
+        rows = server._read_stream_history()
+        assert rows, 'history row should be written'
+        assert rows[-1].get('test') is True
+
+        # Excluded from the history list endpoint
+        hist = client.get('/api/nowplaying?page=1&limit=10').get_json()
+        assert all(not it.get('test') for it in hist['items'])
+        assert hist['total'] == 0
+
+    def test_normal_play_not_tagged(self, client, post_alexa, sample_track, isolated_paths):
+        did = 'amzn1.ask.device.NORMALPLAY'
+        post_alexa('IntentRequest', 'AMAZON.HelpIntent', device_id=did)
+        token = server.encode_token({'tracks': [sample_track['path']], 'idx': 0})
+        post_alexa('AudioPlayer.PlaybackStarted', token=token, device_id=did)
+        rows = server._read_stream_history()
+        assert rows and not rows[-1].get('test')
+
+
+# ─────────────────────────── alexapy auth status ───────────────────────────────
+
+class TestAlexaRemoteStatus:
+    def test_status_reports_authenticated(self, client, monkeypatch):
+        import alexa_remote
+        monkeypatch.setattr(alexa_remote, 'is_configured', lambda: True)
+        monkeypatch.setattr(alexa_remote, 'is_authenticated', lambda *a, **k: True)
+        data = client.get('/api/alexa_remote/status').get_json()
+        assert data['configured'] is True
+        assert data['authenticated'] is True
+
+    def test_status_reports_expired_session(self, client, monkeypatch):
+        import alexa_remote
+        monkeypatch.setattr(alexa_remote, 'is_configured', lambda: True)
+        monkeypatch.setattr(alexa_remote, 'is_authenticated', lambda *a, **k: False)
+        data = client.get('/api/alexa_remote/status').get_json()
+        assert data['configured'] is True
+        assert data['authenticated'] is False
+
+    def test_status_not_configured(self, client, monkeypatch):
+        import alexa_remote
+        monkeypatch.setattr(alexa_remote, 'is_configured', lambda: False)
+        data = client.get('/api/alexa_remote/status').get_json()
+        assert data['configured'] is False
+        assert data['authenticated'] is None
 
 
 # ─────────────────────────── skip/back intents ─────────────────────────────────

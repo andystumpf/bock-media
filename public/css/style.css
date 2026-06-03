@@ -136,6 +136,48 @@ ul.sidebar-nav li a .nav-label { overflow: hidden; }
 /* Main content area */
 .page-content { padding: 24px; flex: 1; }
 
+#global-banner:empty { display: none; }
+.global-alert {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 16px 24px 0;
+  padding: 10px 14px;
+  background: #fdf1e3;
+  border: 1px solid #e6a14e;
+  border-left: 4px solid #e6a14e;
+  border-radius: 6px;
+  color: #8a5a17;
+  font-size: 13px;
+}
+.global-alert code { background: #f6e6cf; padding: 1px 5px; border-radius: 3px; }
+
+.health-card { margin-bottom: 20px; }
+.health-meta { font-size: 11px; color: #8a97b3; font-weight: 400; }
+.health-stale { color: #9a6520; margin-left: 6px; }
+.health-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.health-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 10px;
+  border-radius: 14px;
+  border: 1px solid transparent;
+}
+.health-chip.ok      { background: #e8f6ee; color: #1f8a4c; border-color: #b6e2c6; }
+.health-chip.bad     { background: #fdeaea; color: #c0392b; border-color: #f1b9b3; }
+.health-chip.unknown { background: #eef1f6; color: #7a8aa8; border-color: #dde3ee; }
+.global-alert button {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: #8a5a17;
+  cursor: pointer;
+  font-size: 14px;
+}
+
 /* Cards */
 .card {
   background: #fff;
@@ -330,6 +372,31 @@ ul.sidebar-nav li a .nav-label { overflow: hidden; }
 }
 .np-device-row:first-of-type { border-top: none; padding-top: 0; }
 
+/* Group-aware Now Playing: a parent row with indented member sub-rows */
+.np-group {
+  border-top: 1px solid #eef0f4;
+  padding: 8px 0;
+}
+.np-group:first-of-type { border-top: none; }
+.np-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #30426a;
+  padding: 4px 0;
+}
+.np-group-header .fa-layer-group { color: #7c4dbd; }
+.np-group-count { font-size: 11px; font-weight: 600; color: #7c4dbd; background: #f0e9fa; border-radius: 10px; padding: 1px 8px; }
+.np-group-track { font-size: 12px; font-weight: 400; color: #8a97b3; margin-left: 4px; }
+.np-group-members {
+  margin-left: 14px;
+  padding-left: 12px;
+  border-left: 2px solid #ece6f7;
+}
+.np-group-members .np-device-row:first-of-type { border-top: none; padding-top: 8px; }
+
 /* Full-width volume slider under each Now Playing device */
 .np-volume {
   flex-basis: 100%;
@@ -423,6 +490,31 @@ ul.sidebar-nav li a .nav-label { overflow: hidden; }
   margin-left: 6px;
   vertical-align: middle;
 }
+.np-sleep-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  color: #5b4b9a;
+  background: #f0ecfa;
+  border: 1px solid #d6cbef;
+  border-radius: 4px;
+  padding: 1px 6px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+.rt-phrase-box {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 10px 12px;
+  background: #f0ecfa;
+  border: 1px solid #d6cbef;
+  border-radius: 6px;
+}
+.rt-phrase-box code { flex: 1; font-size: 13px; color: #30426a; }
+.sleep-opts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.sleep-opt { width: 100%; }
 .np-controls { flex-shrink: 0; }
 
 /* Search bar */

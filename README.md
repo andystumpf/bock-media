@@ -1,5 +1,7 @@
 # ourMedia
 
+![CI](https://github.com/andystumpf/ourMedia/actions/workflows/ci.yml/badge.svg)
+
 A self-hosted local music server and **custom Alexa skill** that lets any Echo
 device stream music straight off your NAS — playlists, artists, albums, tracks,
 genres, audiobooks — using your own voice commands instead of a paid streaming

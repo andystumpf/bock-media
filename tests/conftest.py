@@ -70,6 +70,7 @@ def isolated_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(server, 'SELECTED_PATH', str(state_dir / 'selected_state.json'))
     monkeypatch.setattr(server, 'IGNORE_PATH', str(state_dir / 'ignored_tracks.json'))
     monkeypatch.setattr(server, 'DEVICE_GROUPS_PATH', str(state_dir / 'device_groups.json'))
+    monkeypatch.setattr(server, 'HEALTH_STATE_PATH', str(state_dir / 'health_state.json'))
     monkeypatch.setattr(server, 'LOG_PATH', str(state_dir / 'server.log'))
     return tmp_path
 
@@ -131,6 +132,13 @@ def sample_track(db_conn):
     return dict(row)
 
 
+@pytest.fixture
+def sample_tracks(sample_track):
+    """A few real, on-disk track paths for queue/sleep-timer tests."""
+    p = sample_track['path']
+    return [p, p, p, p]
+
+
 @pytest.fixture(scope='session')
 def sample_playlist():
     """First playlist from real ServerPlaylists.xml whose m3u has at least one playable track."""
@@ -167,10 +175,14 @@ def reset_play_intent_state():
     with server._PLAY_INTENT_LOCK:
         server._PLAY_INTENTS.clear()
         server._PLAY_GROUP_UNTIL = 0.0
+    if hasattr(server, '_TEST_SERIALS'):
+        server._TEST_SERIALS.clear()
     yield
     with server._PLAY_INTENT_LOCK:
         server._PLAY_INTENTS.clear()
         server._PLAY_GROUP_UNTIL = 0.0
+    if hasattr(server, '_TEST_SERIALS'):
+        server._TEST_SERIALS.clear()
 
 
 

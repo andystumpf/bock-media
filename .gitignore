@@ -14,6 +14,8 @@ cron-ask.log
 cron-catalog.log
 plex-sync.log
 tunnel.log
+health.log
+health_state.json
 
 # Local secrets (use *.example.json templates)
 config.json

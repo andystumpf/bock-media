@@ -135,6 +135,90 @@ const ROUTINE_SUGGESTIONS = [
   'Alexa, play [playlist]   (after you map the phrase in a Routine)',
 ];
 
+// The custom skill's invocation name (collision-safe; see project rules).
+const BOCK_INVOCATION = 'bock media';
+
+// Build the exact phrase to put in an Alexa Routine's custom-action box. We use
+// "start"/"mix" (NOT play/shuffle) because the music domain hijacks play/shuffle
+// + a music-like name before our custom skill is considered.
+function buildRoutinePhrase(playlist, shuffle) {
+  const verb = shuffle ? 'mix' : 'start';
+  return `ask ${BOCK_INVOCATION} to ${verb} the ${playlist} playlist`;
+}
+
+register('routines', async () => {
+  loading();
+  const data = await API('/api/playlists?page=1&limit=500&search=');
+  window._routinePlaylists = (data && data.items) || [];
+  renderRoutinesBuilder();
+});
+
+function renderRoutinesBuilder() {
+  const pls = window._routinePlaylists || [];
+  const options = pls.map(p => `<option value="${escHtml(p.name)}">${escHtml(p.name)}</option>`).join('');
+  renderPage('Routines', `
+    <div class="page-desc">
+      Amazon doesn't let apps create Routines, so this builds the exact wording for you.
+      Pick a playlist and trigger phrase, copy the generated line, then paste it into the
+      Alexa app under <b>More &rarr; Routines &rarr; +</b>. We use <b>start</b>/<b>mix</b> (never
+      play/shuffle) so the music providers don't hijack the command.
+    </div>
+    <div class="card" style="max-width:640px">
+      <div class="card-header"><h3><i class="fa fa-bolt"></i> Routine Builder</h3></div>
+      <div class="card-body">
+        ${pls.length ? `
+        <label style="display:block;margin:4px 0 4px;font-size:13px;color:#888">Trigger phrase (what you say)</label>
+        <input id="rt-trigger" class="settings-input" style="width:100%" placeholder="play my morning music" value="play my morning music">
+
+        <label style="display:block;margin:14px 0 4px;font-size:13px;color:#888">Playlist</label>
+        <select id="rt-playlist" class="settings-input" style="width:100%">${options}</select>
+
+        <label style="display:block;margin:14px 0 4px;font-size:13px;color:#888">
+          <input type="checkbox" id="rt-shuffle"> Shuffle (uses "mix")
+        </label>
+
+        <div style="margin-top:16px">
+          <button class="btn-sm btn-primary" onclick="updateRoutineOutput()"><i class="fa fa-wand-magic-sparkles"></i> Generate</button>
+        </div>
+
+        <div id="rt-output" style="margin-top:18px"></div>
+        ` : `<p class="hint">No playlists found yet.</p>`}
+      </div>
+    </div>`);
+  if (pls.length) updateRoutineOutput();
+}
+
+function updateRoutineOutput() {
+  const trigger = (document.getElementById('rt-trigger').value || '').trim() || 'play my music';
+  const playlist = document.getElementById('rt-playlist').value;
+  const shuffle = document.getElementById('rt-shuffle').checked;
+  const phrase = buildRoutinePhrase(playlist, shuffle);
+  const out = document.getElementById('rt-output');
+  out.innerHTML = `
+    <div class="rt-steps">
+      <ol style="margin:0;padding-left:20px;line-height:1.8">
+        <li>Open the <b>Alexa app</b> &rarr; <b>More</b> &rarr; <b>Routines</b> &rarr; <b>+</b>.</li>
+        <li><b>When this happens</b> &rarr; <b>Voice</b> &rarr; type: <code>${escHtml(trigger)}</code></li>
+        <li><b>Add action</b> &rarr; <b>Custom</b> &rarr; paste the line below.</li>
+        <li>(Optional) set the device(s) the routine should run on.</li>
+        <li>Save. Then say: <b>"Alexa, ${escHtml(trigger)}"</b></li>
+      </ol>
+      <div class="rt-phrase-box">
+        <code id="rt-phrase">${escHtml(phrase)}</code>
+        <button class="btn-sm btn-default" onclick="copyRoutinePhrase()"><i class="fa fa-copy"></i> Copy</button>
+      </div>
+    </div>`;
+}
+
+function copyRoutinePhrase() {
+  const text = (document.getElementById('rt-phrase') || {}).textContent || '';
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(() => showToast('Copied'), () => showToast('Copy failed', true));
+  } else {
+    showToast('Copy not supported');
+  }
+}
+
 let _dashPage = 1;
 
 register('dashboard', async () => {
@@ -176,6 +260,8 @@ async function loadDashboard() {
 
   const recentPager = buildPagination(recentTotal, _dashPage, 10, (p) => { _dashPage = p; loadDashboard(); });
 
+  loadHealth();
+
   document.getElementById('page-title').textContent = 'Dashboard';
   document.getElementById('main-content').innerHTML = `
     <div class="stats-grid">
@@ -208,6 +294,8 @@ async function loadDashboard() {
         </div>
       </div>
     </div>
+
+    <div id="health-card-wrap"></div>
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
       <div class="card">
@@ -246,6 +334,61 @@ async function loadDashboard() {
       </table>
       ${recentPager}` : `<div class="empty-state"><i class="fa fa-history"></i><p>No recent play requests.</p></div>`}
     </div>`;
+}
+
+// ── Service health card ──────────────────────────────────────────────────────
+let _healthTimer = null;
+
+function healthChip(label, state, detail) {
+  // state: true=ok(green), false=bad(red), null/undefined=unknown(grey)
+  let cls = 'health-chip unknown', icon = 'fa-circle-question';
+  if (state === true)  { cls = 'health-chip ok';  icon = 'fa-circle-check'; }
+  if (state === false) { cls = 'health-chip bad'; icon = 'fa-circle-xmark'; }
+  return `<span class="${cls}" title="${escHtml(detail || '')}"><i class="fa ${icon}"></i> ${escHtml(label)}</span>`;
+}
+
+function fmtAgo(secs) {
+  if (secs == null) return 'never';
+  if (secs < 60) return `${secs}s ago`;
+  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
+  if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
+  return `${Math.floor(secs / 86400)}d ago`;
+}
+
+function buildHealthCard(h) {
+  if (!h) return '';
+  const latency = h.publicLatencyMs != null ? `${h.publicLatencyMs}ms` : '—';
+  const skill = h.skillTesting === true ? true : (h.skillTesting === false ? false : null);
+  const chips = [
+    healthChip('Backend', h.backendHttp, 'Local Flask responding'),
+    healthChip('Tunnel', h.tunnelReachable, `Public endpoint (${latency}, status ${h.publicStatus ?? '—'})`),
+    healthChip('Alexa session', h.alexaAuth, 'alexapy login valid (Play on device / controls)'),
+    healthChip('Skill testing', skill, 'Developer testing enablement'),
+    h.plexConfigured ? healthChip('Plex sync', h.plexReachable, 'Plex two-way playlist sync') : '',
+  ].filter(Boolean).join('');
+  const stale = h.watchdogFresh === false
+    ? `<span class="health-stale" title="Watchdog snapshot is stale or missing">watchdog ${fmtAgo(h.watchdogAgeSeconds)}</span>`
+    : '';
+  return `
+    <div class="card health-card">
+      <div class="card-header" style="display:flex;align-items:center;justify-content:space-between">
+        <h3><i class="fa fa-heart-pulse"></i> Service Health</h3>
+        <span class="health-meta">uptime ${fmtAgo(h.uptimeSeconds)} · last Alexa hit ${fmtAgo(h.lastAlexaHitAgo)} ${stale}</span>
+      </div>
+      <div class="card-body health-chips">${chips}</div>
+    </div>`;
+}
+
+async function loadHealth() {
+  const wrap = document.getElementById('health-card-wrap');
+  if (!wrap) return;
+  const h = await API('/api/health');
+  wrap.innerHTML = buildHealthCard(h);
+  clearTimeout(_healthTimer);
+  // Re-poll only while the dashboard is mounted.
+  _healthTimer = setTimeout(() => {
+    if (document.getElementById('health-card-wrap')) loadHealth();
+  }, 30000);
 }
 
 // ── Now Playing ──────────────────────────────────────────────────────────────
@@ -298,9 +441,13 @@ function buildDeviceRow(d, controlsAvailable = false) {
       ${actionBtn({ kind: 'muted', onclick: "npControlEl(this,'pause')", title: 'Pause', icon: 'pause', dataAttrs: devAttr })}
       ${actionBtn({ kind: 'muted', onclick: "npControlEl(this,'next')", title: 'Next', icon: 'forward-step', dataAttrs: devAttr })}
       ${actionBtn({ kind: 'muted', onclick: 'npToggleShuffleEl(this)', title: 'Shuffle', icon: 'shuffle', extraClass: `np-shuffle-btn np-shuffle-${shuffleCls}`, dataAttrs: devAttr })}
+      ${actionBtn({ kind: 'muted', onclick: 'npOpenSleepEl(this)', title: 'Sleep timer', icon: 'moon', dataAttrs: devAttr })}
+      ${d.filepath ? actionBtn({ kind: 'muted', onclick: 'npNeverAgainEl(this)', title: 'Never play this song again', icon: 'ban', dataAttrs: devAttr }) : ''}
       ${actionBtn({ kind: 'delete', onclick: "npControlEl(this,'stop')", title: 'Stop', icon: 'stop', dataAttrs: devAttr })}
     </div>` : '';
   const pausedBadge = d.paused ? '<span class="np-paused-badge">Paused</span>' : '';
+  const sleepBadge = d.sleep ? `<span class="np-sleep-badge" title="Sleep timer armed"><i class="fa fa-moon"></i> ${
+    d.sleep.type === 'time' ? `${d.sleep.remainingMin}m` : `${d.sleep.remaining} left`}</span>` : '';
   const canControl = npCanControl(d, controlsAvailable);
   window._npVolume = window._npVolume || {};
   const knownVol = window._npVolume[d.deviceId];
@@ -317,7 +464,7 @@ function buildDeviceRow(d, controlsAvailable = false) {
       <div class="np-device-main">
         <div class="np-device-icon"><i class="fa fa-music"></i></div>
         <div class="np-device-meta">
-          <div class="np-track">${escHtml(d.track || '—')} ${pausedBadge}</div>
+          <div class="np-track">${escHtml(d.track || '—')} ${pausedBadge} ${sleepBadge}</div>
           ${d.artist ? `<div class="np-artist">${escHtml(d.artist)}</div>` : ''}
           ${d.album ? `<div class="np-album">${escHtml(d.album)}</div>` : ''}
           <div class="np-device-label">Device: ${escHtml(d.deviceName || (d.deviceId || '').slice(-12) || 'default')}</div>
@@ -432,6 +579,79 @@ async function npControl(deviceId, action) {
   }
 }
 
+async function npNeverAgainEl(btn) {
+  const deviceId = btn && btn.dataset && btn.dataset.deviceId;
+  const d = (window._npItems || []).find(x => x.deviceId === deviceId);
+  if (!d || !d.filepath) return;
+  if (!confirm(`Never play "${d.track || 'this song'}" again? It will be skipped in future playback.`)) return;
+  const res = await fetch('/api/ignored', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: d.filepath }),
+  });
+  if (!res.ok) return showToast('Failed to ignore track', true);
+  showToast(`"${d.track || 'Song'}" won't play again`);
+  // Skip it now on the device if we can control it.
+  if (npCanControl(d, window._npControlsAvailable)) npControl(deviceId, 'next');
+}
+
+function npOpenSleepEl(btn) {
+  const deviceId = btn && btn.dataset && btn.dataset.deviceId;
+  if (!deviceId) return;
+  npOpenSleep(deviceId);
+}
+
+function npOpenSleep(deviceId) {
+  const d = (window._npItems || []).find(x => x.deviceId === deviceId);
+  const armed = d && d.sleep;
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay sleep-modal';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  const opt = (label, payload) =>
+    `<button class="btn-sm btn-default sleep-opt" data-payload='${JSON.stringify(payload)}'>${label}</button>`;
+  overlay.innerHTML = `
+    <div class="modal-box" style="max-width:360px">
+      <h3 style="margin-top:0"><i class="fa fa-moon"></i> Sleep timer</h3>
+      <p class="hint" style="margin:0 0 10px">Playback stops at the end of the current song.</p>
+      <div class="sleep-opts">
+        ${opt('15 min', { minutes: 15 })}
+        ${opt('30 min', { minutes: 30 })}
+        ${opt('45 min', { minutes: 45 })}
+        ${opt('60 min', { minutes: 60 })}
+        ${opt('After this song', { songs: 1 })}
+        ${opt('After 3 songs', { songs: 3 })}
+      </div>
+      <div style="display:flex;gap:8px;justify-content:space-between;margin-top:16px">
+        ${armed ? `<button class="cancel-btn" id="sleep-cancel">Cancel timer</button>` : '<span></span>'}
+        <button class="cancel-btn" onclick="this.closest('.modal-overlay').remove()">Close</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelectorAll('.sleep-opt').forEach(b => {
+    b.onclick = () => npSetSleep(deviceId, JSON.parse(b.dataset.payload), overlay);
+  });
+  const cancel = overlay.querySelector('#sleep-cancel');
+  if (cancel) cancel.onclick = () => npSetSleep(deviceId, {}, overlay);
+}
+
+async function npSetSleep(deviceId, payload, overlay) {
+  const res = await fetch('/api/nowplaying/sleep', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ deviceId, ...payload }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    return showToast(data.error === 'nothing_playing' ? 'Nothing is playing on that device' : (data.error || 'Failed'), true);
+  }
+  if (overlay) overlay.remove();
+  showToast(payload.minutes ? `Sleeping in ${payload.minutes} min`
+    : payload.songs ? `Stopping after ${payload.songs} song${payload.songs === 1 ? '' : 's'}`
+    : 'Sleep timer cancelled');
+  const fresh = await API('/api/nowplaying_devices');
+  window._npItems = (fresh && fresh.items) || window._npItems;
+  const card = document.getElementById('np-current-card');
+  if (card) card.outerHTML = buildCurrentCard(window._npItems, window._npControlsAvailable);
+}
+
 async function npToggleShuffleEl(btn) {
   const deviceId = btn && btn.dataset && btn.dataset.deviceId;
   if (!deviceId) return;
@@ -442,6 +662,54 @@ async function npToggleShuffleEl(btn) {
   window._npShuffle[deviceId] = on;
   await npControl(deviceId, on ? 'shuffle_on' : 'shuffle_off');
   btn.classList.toggle('shuffle-on', on);
+}
+
+// Map a now-playing row to the device group it belongs to (by serial), so
+// multi-room playback of the same track collapses into one parent row.
+function npGroupNameForItem(d) {
+  const serial = npResolveSerial(d);
+  if (!serial) return '';
+  const g = (window._deviceGroups || []).find(grp =>
+    (grp.members || []).some(m => m.serial === serial));
+  return g ? g.name : '';
+}
+
+// Collapse rows that share a device group AND the same track into a group
+// entry; everything else stays a single row. Preserves input order.
+function groupNowPlaying(list) {
+  const out = [];
+  const byKey = new Map();
+  for (const d of list) {
+    const gname = npGroupNameForItem(d);
+    const track = (d.track || '').trim();
+    const key = gname && track ? `${gname}\u0000${track}` : null;
+    if (!key) { out.push({ type: 'single', item: d }); continue; }
+    if (byKey.has(key)) {
+      byKey.get(key).members.push(d);
+    } else {
+      const entry = { type: 'group', name: gname, track,
+                      artist: d.artist, album: d.album, members: [d] };
+      byKey.set(key, entry);
+      out.push(entry);
+    }
+  }
+  // A "group" of one isn't a group — demote back to a single row.
+  return out.map(e => (e.type === 'group' && e.members.length < 2)
+    ? { type: 'single', item: e.members[0] } : e);
+}
+
+function buildGroupRow(g, controlsAvailable) {
+  const sub = g.members.map(d => buildDeviceRow(d, controlsAvailable)).join('');
+  return `
+    <div class="np-group">
+      <div class="np-group-header">
+        <i class="fa fa-layer-group"></i>
+        <span class="np-group-name">${escHtml(g.name)}</span>
+        <span class="np-group-count">${g.members.length} speakers</span>
+        <span class="np-group-track">${escHtml(g.track || '—')}${g.artist ? ' — ' + escHtml(g.artist) : ''}</span>
+      </div>
+      <div class="np-group-members">${sub}</div>
+    </div>`;
 }
 
 function buildCurrentCard(items, controlsAvailable = false) {
@@ -460,11 +728,15 @@ function buildCurrentCard(items, controlsAvailable = false) {
       </div>`;
   }
   const header = `<div class="np-card-header">Now Playing (${list.length})</div>`;
+  const entries = groupNowPlaying(list);
+  const body = entries.map(e => e.type === 'group'
+    ? buildGroupRow(e, controlsAvailable)
+    : buildDeviceRow(e.item, controlsAvailable)).join('');
   return `
     <div class="card" id="np-current-card" style="border-left:4px solid #e99d1a;margin-bottom:20px">
       <div class="card-body">
         ${header}
-        ${list.map(d => buildDeviceRow(d, controlsAvailable)).join('')}
+        ${body}
       </div>
     </div>`;
 }
@@ -480,6 +752,11 @@ async function loadNowPlaying() {
   window._npControlsAvailable = !!(npDevices && npDevices.controlsAvailable) && !!(remote && remote.configured);
   if (window._npControlsAvailable) {
     await ensureAlexaDevices().catch(() => []);
+    // Device groups drive group-aware Now Playing (collapse multi-room playback).
+    if (!window._deviceGroups) {
+      const g = await API('/api/device_groups').catch(() => null);
+      window._deviceGroups = (g && g.items) || [];
+    }
   }
 
   const currentCard = buildCurrentCard(window._npItems, window._npControlsAvailable);
@@ -1014,9 +1291,14 @@ function renderDevices() {
     <div class="card">
       <div class="card-header" style="display:flex;align-items:center;justify-content:space-between">
         <h3><i class="fa fa-headphones"></i> Alexa Devices (${devices.length})</h3>
-        ${window._devicesRemoteConfigured
-          ? `<button id="identify-btn" class="btn-sm btn-primary" onclick="startIdentify()"><i class="fa fa-volume-high"></i> Identify devices</button>`
-          : ''}
+        <div style="display:flex;gap:8px;align-items:center">
+          ${window._devicesRemoteConfigured && unnamedCount(devices) > 0
+            ? `<button class="btn-sm btn-primary" onclick="startFixDevices()"><i class="fa fa-wand-magic-sparkles"></i> Fix my devices (${unnamedCount(devices)})</button>`
+            : ''}
+          ${window._devicesRemoteConfigured
+            ? `<button id="identify-btn" class="btn-sm btn-default" onclick="startIdentify()"><i class="fa fa-volume-high"></i> Identify all</button>`
+            : ''}
+        </div>
       </div>
       <div id="identify-status" style="display:none;padding:8px 16px;font-size:12px;color:#556;border-bottom:1px solid #eef2f8"></div>
       ${rows
@@ -1045,6 +1327,105 @@ function renderSpeakersCard() {
         <ul class="device-list" style="margin:0">${rows}</ul>
       </div>
     </div>`;
+}
+
+// An auto-name is the placeholder we assign on first contact: "Echo AB12CD".
+function isAutoName(name) {
+  return !name || /^Echo [A-Za-z0-9]{6}$/.test((name || '').trim());
+}
+
+function unnamedCount(devices) {
+  return (devices || []).filter(d => isAutoName(d.name)).length;
+}
+
+// ── Guided "Fix my devices" ───────────────────────────────────────────────────
+// Walks online speakers one at a time: plays a short clip on each so the user
+// can hear the room, then names the matching device. Naming a device via a
+// test play reuses the serial-correlation path (the room name becomes the
+// device name automatically), so this also folds rotated ids onto the room.
+async function startFixDevices() {
+  let speakers;
+  try {
+    speakers = (await ensureAlexaDevices()).filter(s => s.serial && s.online);
+  } catch (e) {
+    return showToast(e.message || 'Failed to load speakers', true);
+  }
+  if (!speakers.length) return showToast('No online speakers found', true);
+  window._fix = { queue: speakers, idx: 0 };
+  renderFixStep();
+}
+
+function renderFixStep() {
+  const fx = window._fix;
+  if (!fx) return;
+  document.querySelectorAll('.modal-overlay.fix-modal').forEach(o => o.remove());
+  if (fx.idx >= fx.queue.length) {
+    showToast('All speakers reviewed');
+    refreshDevicesThenRender();
+    return;
+  }
+  const s = fx.queue[fx.idx];
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay fix-modal';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = `
+    <div class="modal-box">
+      <h3 style="margin-top:0"><i class="fa fa-wand-magic-sparkles"></i> Fix my devices</h3>
+      <p class="hint" style="margin:0 0 10px">Speaker ${fx.idx + 1} of ${fx.queue.length}. Press <b>Play here</b> to hear which room this is, then give it a name.</p>
+      <div style="font-weight:600;margin-bottom:6px"><i class="fa fa-volume-high" style="color:#e99d1a"></i> ${escHtml(s.name)}</div>
+      <button class="btn-sm btn-default" id="fix-play"><i class="fa fa-play"></i> Play here</button>
+      <label style="display:block;margin:14px 0 4px;font-size:13px;color:#888">Room name</label>
+      <input id="fix-name" class="settings-input" style="width:100%" value="${escHtml(s.name)}">
+      <div style="display:flex;gap:8px;justify-content:space-between;margin-top:16px">
+        <button class="cancel-btn" onclick="this.closest('.modal-overlay').remove()">Close</button>
+        <div style="display:flex;gap:8px">
+          <button class="cancel-btn" id="fix-skip">Skip</button>
+          <button class="save-btn" id="fix-save">Save &amp; next</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#fix-play').onclick = () => fixPlayClip(s);
+  overlay.querySelector('#fix-skip').onclick = () => { fx.idx++; renderFixStep(); };
+  overlay.querySelector('#fix-save').onclick = () => fixSaveAndNext(overlay, s);
+  const nameInput = overlay.querySelector('#fix-name');
+  nameInput.focus();
+  nameInput.select();
+}
+
+async function fixPlayClip(s) {
+  // Play under the current room-name guess so correlation can bind immediately.
+  const name = (document.getElementById('fix-name') || {}).value || s.name;
+  await fetch('/api/devices/test', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ serial: s.serial, name }),
+  }).catch(() => {});
+  showToast(`Playing on ${s.name}…`);
+}
+
+async function fixSaveAndNext(overlay, s) {
+  const name = (overlay.querySelector('#fix-name').value || '').trim();
+  if (!name) return showToast('Enter a room name', true);
+  const btn = overlay.querySelector('#fix-save');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  // Naming via a test play: the room name becomes the device name through the
+  // serial-correlation path, and a brief clip confirms the right speaker.
+  const res = await fetch('/api/devices/test', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ serial: s.serial, name }),
+  });
+  const d = await res.json().catch(() => ({}));
+  if (!res.ok || !d.ok) {
+    btn.disabled = false; btn.textContent = 'Save & next';
+    return showToast('Failed: ' + (d.error || res.status), true);
+  }
+  window._fix.idx++;
+  renderFixStep();
+}
+
+async function refreshDevicesThenRender() {
+  window._devices = await API('/api/devices') || [];
+  renderDevices();
 }
 
 async function testDevice(serial, name) {
@@ -1684,10 +2065,11 @@ async function runAutomationNow(id) {
 // ── Settings ─────────────────────────────────────────────────────────────────
 register('settings', async () => {
   loading();
-  const [s, cfg, ipData] = await Promise.all([
+  const [s, cfg, ipData, health] = await Promise.all([
     API('/api/settings') || {},
     API('/api/config'),
     API('/api/localip'),
+    API('/api/health').catch(() => null),
   ]);
   const settings = s || {};
   const publicUrl = (cfg || {}).publicUrl || '';
@@ -1745,8 +2127,17 @@ register('settings', async () => {
         </div>
 
         <div class="settings-section">
-          <h4>Watch Folder Scanning</h4>
-          <p class="hint">These settings are read by the background scanner service that keeps the music index up to date.</p>
+          <h4>Plex Playlist Sync</h4>
+          <p class="hint">Playlists are pulled from Plex every 5 minutes, and voice "add this to &lt;playlist&gt;" writes back to Plex. Status: ${
+            !health ? '<span style="color:#9aa">unknown</span>'
+            : !health.plexConfigured ? '<span style="color:#9aa">not configured</span>'
+            : health.plexReachable ? '<span style="color:#1f8a4c;font-weight:600">connected</span>'
+            : '<span style="color:#c0392b;font-weight:600">unreachable</span>'}</p>
+        </div>
+
+        <div class="settings-section" style="opacity:.6">
+          <h4>Watch Folder Scanning <span style="font-size:11px;font-weight:600;color:#9a6520;background:#fdf1e3;border:1px solid #e6a14e;border-radius:3px;padding:1px 6px;margin-left:6px">LEGACY</span></h4>
+          <p class="hint">Not used by this server. The original My Media scanner is stalled; playlists are now kept current by the Plex sync (<code>scripts/sync_plex_playlists.py</code>, every 5 min). These toggles are kept for reference only and have no effect.</p>
           ${toggle('s-autoscan', 'Enable Watch Folder Autoscan', !chk(settings.suppressAutoScan))}
           ${toggle('s-autoimport', 'Automatically Import Playlists', chk(settings.autoImportPlaylists))}
           <div class="settings-row" style="margin-top:8px">
@@ -1941,6 +2332,7 @@ async function _loadAnalytics() {
   _restoreDateInputs();
   _initAnalyticsCharts(data);
   if (Object.keys(data.playsPerDay || {}).length >= 7) _initEntityActivityCharts(data);
+  loadIgnoredPanel();
 }
 
 function _restoreDateInputs() {
@@ -2108,7 +2500,50 @@ function _buildAnalyticsHTML(d) {
         <div class="card-body"><canvas id="an-device-chart" height="160"></canvas></div>
       </div>
     </div>` : ''}
+
+    <div class="card" style="margin-top:20px">
+      <div class="card-header"><h3><i class="fa fa-ban"></i> Never Play Again</h3></div>
+      <div class="card-body" id="an-ignored-body">
+        <p class="hint" style="margin:0">Loading…</p>
+      </div>
+    </div>
 `;
+}
+
+async function loadIgnoredPanel() {
+  const body = document.getElementById('an-ignored-body');
+  if (!body) return;
+  const data = await API('/api/ignored');
+  const items = (data && data.items) || [];
+  if (!items.length) {
+    body.innerHTML = `<p class="hint" style="margin:0">No ignored tracks. Use the <i class="fa fa-ban"></i> button in Now Playing to never play a song again.</p>`;
+    return;
+  }
+  body.innerHTML = `
+    <ul class="device-list" style="margin:0">
+      ${items.map(it => `
+        <li>
+          <span class="device-icon-col"><i class="fa fa-ban" style="color:#c0392b"></i></span>
+          <span class="device-name-text">
+            <b>${escHtml(it.title || (it.path || '').split('/').pop())}</b>
+            ${it.artist ? `<span style="font-size:11px;color:#9aa;margin-left:6px">${escHtml(it.artist)}</span>` : ''}
+          </span>
+          <div class="row-actions">
+            <button class="btn-sm btn-default" onclick="unignoreTrack('${escHtml(encodeURIComponent(it.path))}')">Allow again</button>
+          </div>
+        </li>`).join('')}
+    </ul>`;
+}
+
+async function unignoreTrack(encodedPath) {
+  const path = decodeURIComponent(encodedPath);
+  const res = await fetch('/api/ignored', {
+    method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+  });
+  if (!res.ok) return showToast('Failed', true);
+  showToast('Track allowed again');
+  loadIgnoredPanel();
 }
 
 function _buildHeatmapHTML(matrix) {
@@ -2407,6 +2842,33 @@ window.addEventListener('resize', () => {
   if (!isMobileLayout()) closeMobileSidebar();
 });
 
+// ── Global banner (alexapy session expiry, etc.) ─────────────────────────────
+let _bannerDismissed = false;
+
+async function refreshGlobalBanner() {
+  const el = document.getElementById('global-banner');
+  if (!el || _bannerDismissed) return;
+  const s = await API('/api/alexa_remote/status');
+  // Only warn when remote control is configured but the session has expired.
+  if (s && s.configured && s.authenticated === false) {
+    el.innerHTML = `
+      <div class="global-alert">
+        <i class="fa fa-triangle-exclamation"></i>
+        <span>Alexa session expired — "Play on device" and Now Playing controls won't work.
+        Re-run <code>scripts/alexa_login.py</code> to fix.</span>
+        <button onclick="dismissBanner()" title="Dismiss"><i class="fa fa-xmark"></i></button>
+      </div>`;
+  } else {
+    el.innerHTML = '';
+  }
+}
+
+function dismissBanner() {
+  _bannerDismissed = true;
+  const el = document.getElementById('global-banner');
+  if (el) el.innerHTML = '';
+}
+
 // ── Init ─────────────────────────────────────────────────────────────────────
 async function init() {
   // Stop Now Playing poll when navigating away from it
@@ -2426,6 +2888,10 @@ async function init() {
   // Global header poll — update "now playing" bar every 6s regardless of page
   refreshCurrentTrack();
   setInterval(refreshCurrentTrack, 6000);
+
+  // Surface alexapy session expiry without blocking the UI
+  refreshGlobalBanner();
+  setInterval(refreshGlobalBanner, 120000);
 }
 
 init();
