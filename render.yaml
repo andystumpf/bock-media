@@ -20,3 +20,5 @@ services:
         value: demo-data/music_organizer.db
       - key: OURMEDIA_MUSIC_ROOT
         value: demo-data/music
+      - key: OURMEDIA_ALLOW_PUBLIC_CONSOLE
+        value: "true"

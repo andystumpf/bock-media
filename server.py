@@ -123,6 +123,15 @@ def _is_tunnel_request():
         or request.headers.get('Cf-Ray')
     )
 
+
+def _public_console_allowed():
+    """LAN-only console lock is skipped for intentional public demo hosts (Render)."""
+    if os.environ.get('RENDER'):
+        return True
+    return os.environ.get('OURMEDIA_ALLOW_PUBLIC_CONSOLE', '').strip().lower() in (
+        '1', 'true', 'yes', 'on',
+    )
+
 # Alexa request-signature verification per
 # https://developer.amazon.com/en-US/docs/alexa/custom-skills/host-a-custom-skill-as-a-web-service.html
 EXPECTED_SKILL_APP_ID = 'amzn1.ask.skill.YOUR-CUSTOM-SKILL-ID'
@@ -204,7 +213,7 @@ def check_auth():
 
     is_public_path = any(request.path.startswith(p) for p in _PUBLIC_PREFIXES)
 
-    if _is_tunnel_request() and not is_public_path:
+    if _is_tunnel_request() and not is_public_path and not _public_console_allowed():
         return Response('Forbidden ', 403,
                         {'Content-Type': 'text/plain; charset=utf-8'})
 

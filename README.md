@@ -237,6 +237,10 @@ is for browsing the UI and API with test data only.
 3. Apply the blueprint — service name **bock-media-demo**, Free plan is fine.
 4. Wait for the build (`seed_demo_data.py` + `pip install`) and open the `.onrender.com` URL.
 
+Render sits behind a CDN that sends Cloudflare-style headers; the app detects `RENDER`
+and allows the web console (home installs still block tunneled access to `/` unless
+you set `OURMEDIA_ALLOW_PUBLIC_CONSOLE=true`).
+
 Health check: `GET /api/summary`. On first boot, `scripts/render_start.sh` re-seeds
 if the DB is missing (ephemeral disk on Free tier is wiped on redeploy; the build
 step seeds again each deploy).
