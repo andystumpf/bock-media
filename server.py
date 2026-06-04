@@ -2372,7 +2372,10 @@ def cfg_bool(key, default=False):
 
 
 def get_public_url():
-    return load_config().get('publicUrl', '').rstrip('/')
+    url = load_config().get('publicUrl', '').rstrip('/')
+    if url:
+        return url
+    return os.environ.get('RENDER_EXTERNAL_URL', '').rstrip('/')
 
 @app.route('/api/localip')
 def local_ip():

@@ -225,6 +225,22 @@ Open <http://localhost:3001/> and click through every page. The screenshots
 above are exactly what you'll see. (The demo data lives in `demo-data/` and is
 gitignored; delete the folder to remove it.)
 
+### Live demo on Render
+
+The repo includes a [Render Blueprint](https://render.com/docs/blueprint-spec)
+(`render.yaml`) that builds the fictional demo library on deploy and serves the
+web console. Alexa skill / tunnel features are **not** available on Render — this
+is for browsing the UI and API with test data only.
+
+1. Sign in at [render.com](https://render.com) and choose **New → Blueprint**.
+2. Connect the public `andystumpf/bock-media` repo (Render reads `render.yaml`).
+3. Apply the blueprint — service name **bock-media-demo**, Free plan is fine.
+4. Wait for the build (`seed_demo_data.py` + `pip install`) and open the `.onrender.com` URL.
+
+Health check: `GET /api/summary`. On first boot, `scripts/render_start.sh` re-seeds
+if the DB is missing (ephemeral disk on Free tier is wiped on redeploy; the build
+step seeds again each deploy).
+
 ---
 
 ## Architecture
