@@ -19,11 +19,18 @@
       "https://pitangui.amazon.com/"
     ]
   },
+  "claude": {
+    "_comment": "Optional. Powers AI playlist creation on the Playlists page (Anthropic API).",
+    "apiKey": "SET_LOCALLY",
+    "model": "claude-sonnet-4-20250514"
+  },
   "alexaRemote": {
-    "_comment": "Optional. Enables 'Play on device' in the web UI via the unofficial Alexa API (alexapy). Run scripts/alexa_login.py once after filling these in.",
+    "_comment": "Optional. Enables 'Play on device' in the web UI via the unofficial Alexa API (alexapy). Use Settings → Start browser login, or scripts/alexa_login.py --proxy.",
     "url": "amazon.com",
     "email": "SET_LOCALLY",
     "password": "SET_LOCALLY",
-    "otpSecret": ""
+    "otpSecret": "",
+    "loginProxyHost": "",
+    "loginProxyPort": 3005
   }
 }

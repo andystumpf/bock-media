@@ -392,3 +392,78 @@ curl -s "http://127.0.0.1:3001/api/nowplaying_devices"
 ```
 
 See also `.cursor/rules/alexa-skill-troubleshooting.mdc` for the full issue/fix history.
+
+---
+
+## 18. Library metadata pipeline (`songs_cache` enrichment)
+
+The external **music_organizer** indexer is the primary writer of `songs_cache`,
+but it derives some columns from the folder layout rather than the files' own
+tags. Confirmed on this library: **album** is stored as `"[YEAR] Folder Name"`
+(differs from the real album for ~90% of audio), **album_artist** is empty for
+**100%** of rows, and **track_number / disc_number** are largely unset. Title and
+artist are well populated.
+
+Maintenance scripts read embedded tags (mutagen) and treat the file's own tags as
+authoritative, keeping `songs_cache` and the files in sync. All tag logic lives in
+one place: [`scripts/lib/tag_io.py`](scripts/lib/tag_io.py) (read/write + normalization
++ shared SQLite lock handling). `backfill_genres.py` also reads through it.
+
+```bash
+# 1. Audit (read-only). DB coverage is instant; the tag pass samples files.
+python3 scripts/audit_metadata.py --no-tags          # coverage + case-duplicate report
+python3 scripts/audit_metadata.py --sample 20000     # + tag-vs-DB drift on a sample
+python3 scripts/audit_metadata.py --json             # machine-readable
+
+# 2. Backfill. ALWAYS dry-run first; it reads every audio file (hours on ~400k).
+python3 scripts/backfill_metadata.py --dry-run --limit 5000      # pilot
+python3 scripts/backfill_metadata.py                            # realign DB + files on diff
+python3 scripts/backfill_metadata.py --no-write-files           # DB only, leave files alone
+python3 scripts/backfill_metadata.py --only-missing             # fast: only fill empty fields
+python3 scripts/backfill_metadata.py --fields album,album_artist
+python3 scripts/backfill_metadata.py --overwrite-artist         # opt-in: tags override artist too
+
+# Genre/year/duration (unchanged, still useful):
+python3 scripts/backfill_genres.py
+python3 scripts/backfill_duration.py
+```
+
+### Behavior & safety
+
+- **Tags win, but never blank a field.** A column changes only when the file has a
+  non-empty tag value that differs from the DB. Empty tags are ignored.
+- **`artist` is fill-only by default.** The indexed artist is clean and fully
+  populated; raw artist tags are often multi-value (`A/B`, `feat.`) and can't be
+  split safely (`AC/DC`). Use `--overwrite-artist` only after reviewing the audit.
+- **Files are modified in place.** `mutagen` rewrites tags (it does **not**
+  re-encode audio). **Back up the library before the first full run.** Use
+  `--no-write-files` to update only the DB.
+- **`title`** has any leading track-number prefix (`"01 - "`) stripped;
+  `--strip-remaster` additionally drops trailing `(Remastered…)` on title/album.
+
+### Ordering vs the indexer (IMPORTANT)
+
+`music_organizer` is the upstream writer; if it re-scans after a backfill it can
+**overwrite** these columns back to the folder-derived values. Run backfills
+**after** the indexer's scan, or pause/disable the indexer's metadata write while
+validating. Long-term, schedule the backfills (cron) to run after the indexer and
+treat them as the source of truth for `album` / `album_artist` / track numbers.
+`server.py` re-queries `songs_cache` per request, so corrected metadata appears in
+the web UI, Now Playing, and Alexa speech with no restart.
+
+---
+
+## 19. Picard (MusicBrainz) — tag the ~11% gap
+
+Files with **no embedded tags** cannot be fixed by `backfill_*.py`. Use
+[MusicBrainz Picard](https://picard.musicbrainz.org/) to write tags to disk, then
+sync into the DB.
+
+```bash
+python3 scripts/picard_queue.py              # ~/.bockmedia/picard-queue-dirs.tsv
+# Picard GUI: load folders from TSV → Cluster → Lookup → Save (see docs/PICARD.md)
+./scripts/after_picard.sh                    # genres + album_artist/track → songs_cache
+```
+
+Full walkthrough: [`docs/PICARD.md`](docs/PICARD.md). Album stays `[YEAR] …` in the DB;
+Picard tags files; `after_picard.sh` uses `--no-write-files` for metadata backfill.

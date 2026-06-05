@@ -328,6 +328,13 @@ def playlists():
     page = int(request.args.get('page', 1))
     limit = int(request.args.get('limit', 50))
     search = request.args.get('search', '').lower()
+    sort_by = (request.args.get('sortBy') or 'name').strip().lower()
+    order = (request.args.get('order') or 'asc').strip().lower()
+    if sort_by in ('tracks', 'track', 'trackcount', 'count'):
+        sort_by = 'trackCount'
+    elif sort_by != 'name':
+        sort_by = 'name'
+    reverse = order == 'desc'
 
     try:
         tree = ET.parse(os.path.join(DATA_DIR, 'ServerPlaylists.xml'))
@@ -348,13 +355,21 @@ def playlists():
                 'createDate': xml_text(key, 'CreateDate'),
                 'lastUsed': xml_text(key, 'LastUsed'),
                 'source': xml_text(key, 'SourceID'),
+                'sourceName': xml_text(key, 'SourceName'),
                 'isAudioBook': xml_text(key, 'IsAudioBook') == 'true',
             })
+
+        if sort_by == 'trackCount':
+            all_playlists.sort(key=lambda x: (x.get('trackCount') or 0, (x.get('name') or '').lower()),
+                               reverse=reverse)
+        else:
+            all_playlists.sort(key=lambda x: (x.get('name') or '').lower(),
+                               reverse=reverse)
 
         total = len(all_playlists)
         start = (page - 1) * limit
         items = all_playlists[start:start + limit]
-        return jsonify({'items': items, 'total': total})
+        return jsonify({'items': items, 'total': total, 'sortBy': sort_by, 'order': 'desc' if reverse else 'asc'})
     except Exception as e:
         print(f'Playlists error: {e}')
         return jsonify({'items': [], 'total': 0})
@@ -412,7 +427,60 @@ def alexa_remote_status():
     configured = alexa_remote.is_configured()
     # authenticated uses a cached probe (never logs in inline); None when not configured.
     authenticated = alexa_remote.is_authenticated() if configured else None
-    return jsonify({'available': True, 'configured': configured, 'authenticated': authenticated})
+    login = alexa_remote.proxy_login_state() if configured else {}
+    host = login.get('host') or alexa_remote.lan_ip()
+    port = login.get('port') or int((alexa_remote.cfg() or {}).get('loginProxyPort') or 3005)
+    return jsonify({
+        'available': True,
+        'configured': configured,
+        'authenticated': authenticated,
+        'loginCommand': f'python3 scripts/alexa_login.py --proxy --host {host} --port {port}',
+        'loginProxyPort': port,
+        'loginProxyHost': host,
+        'loginUrl': login.get('url') or f'http://{host}:{port}',
+        'loginStatus': login.get('status') or 'idle',
+        'loginError': login.get('error'),
+    })
+
+
+@app.route('/api/alexa_remote/login', methods=['GET'])
+def alexa_remote_login_state():
+    try:
+        import alexa_remote
+    except Exception as e:
+        return jsonify({'error': str(e)}), 503
+    st = alexa_remote.proxy_login_state()
+    st['configured'] = alexa_remote.is_configured()
+    st['authenticated'] = alexa_remote.is_authenticated() if st['configured'] else None
+    return jsonify(st)
+
+
+@app.route('/api/alexa_remote/login/start', methods=['POST'])
+def alexa_remote_login_start():
+    body = request.get_json(silent=True) or {}
+    try:
+        import alexa_remote
+        st = alexa_remote.start_proxy_login(
+            host=(body.get('host') or '').strip() or None,
+            port=body.get('port'),
+        )
+        return jsonify({'ok': True, **st})
+    except ImportError:
+        return jsonify({'error': 'alexapy not installed', 'code': 'not_installed'}), 503
+    except Exception as e:
+        code = str(e)
+        status = 400 if code in ('not_configured', 'password_required') else 500
+        return jsonify({'error': code, 'code': code.split(' — ')[0]}), status
+
+
+@app.route('/api/alexa_remote/login/stop', methods=['POST'])
+def alexa_remote_login_stop():
+    try:
+        import alexa_remote
+        st = alexa_remote.stop_proxy_login()
+        return jsonify({'ok': True, **st})
+    except ImportError:
+        return jsonify({'error': 'alexapy not installed'}), 503
 
 def _read_health_state():
     try:
@@ -465,6 +533,160 @@ def health():
         'skillTesting':    skill_testing,
         'plexConfigured':  plex.get('configured'),
         'plexReachable':   plex.get('reachable'),
+    })
+
+# ── Plex sync status (dashboard panel) ───────────────────────────────────────
+
+PLEX_SYNC_LOG = os.path.join(HERE, 'plex-sync.log')
+PLEX_SYNC_STATE = os.path.join(
+    os.environ.get('OURMEDIA_MUSIC_ROOT', '/mnt/bock/Music'),
+    'exportedPlaylists', 'plex', '.plex_sync_state.json',
+)
+
+@app.route('/api/plex_sync/status')
+def plex_sync_status():
+    state = {}
+    state_mtime = None
+    if os.path.isfile(PLEX_SYNC_STATE):
+        try:
+            state_mtime = os.path.getmtime(PLEX_SYNC_STATE)
+            with open(PLEX_SYNC_STATE) as f:
+                state = json.load(f) or {}
+        except Exception:
+            pass
+    log_lines = []
+    log_mtime = None
+    if os.path.isfile(PLEX_SYNC_LOG):
+        try:
+            log_mtime = os.path.getmtime(PLEX_SYNC_LOG)
+            with open(PLEX_SYNC_LOG, encoding='utf-8', errors='replace') as f:
+                log_lines = f.readlines()[-15:]
+        except Exception:
+            pass
+    return jsonify({
+        'playlistCount': len(state) if isinstance(state, dict) else 0,
+        'statePath': PLEX_SYNC_STATE,
+        'stateUpdatedAt': state_mtime,
+        'logPath': PLEX_SYNC_LOG,
+        'logUpdatedAt': log_mtime,
+        'logTail': [ln.rstrip() for ln in log_lines],
+        'cronHint': '*/5 * * * * scripts/sync_plex_playlists.py',
+    })
+
+# ── Favorites (starred tracks) ───────────────────────────────────────────────
+
+FAVORITES_PATH = os.path.join(HERE, 'favorites.json')
+_FAVORITES_LOCK = threading.Lock()
+
+def _load_favorites():
+    with _FAVORITES_LOCK:
+        try:
+            with open(FAVORITES_PATH) as f:
+                data = json.load(f)
+            return data if isinstance(data, list) else []
+        except Exception:
+            return []
+
+def _save_favorites(items):
+    with _FAVORITES_LOCK:
+        _atomic_json_write(FAVORITES_PATH, items)
+
+@app.route('/api/favorites', methods=['GET'])
+def list_favorites():
+    return jsonify({'items': _load_favorites()})
+
+@app.route('/api/favorites', methods=['POST'])
+def add_favorite():
+    body = request.get_json(silent=True) or {}
+    path = (body.get('path') or '').strip()
+    if not path:
+        return jsonify({'error': 'path required'}), 400
+    title, artist, album, _ = track_metadata(path)
+    item = {
+        'path': path,
+        'title': body.get('title') or title,
+        'artist': body.get('artist') or artist,
+        'album': body.get('album') or album,
+        'addedAt': time.time(),
+    }
+    items = _load_favorites()
+    if not any(x.get('path') == path for x in items):
+        items.insert(0, item)
+        _save_favorites(items[:200])
+    return jsonify({'ok': True, 'item': item})
+
+@app.route('/api/favorites', methods=['DELETE'])
+def remove_favorite():
+    body = request.get_json(silent=True) or {}
+    path = (body.get('path') or '').strip()
+    if not path:
+        return jsonify({'error': 'path required'}), 400
+    items = [x for x in _load_favorites() if x.get('path') != path]
+    _save_favorites(items)
+    return jsonify({'ok': True})
+
+@app.route('/api/dashboard/quick')
+def dashboard_quick():
+    """Recent unique plays + favorites for the dashboard."""
+    seen = set()
+    recent = []
+    for row in reversed(_read_stream_history()):
+        if row.get('test'):
+            continue
+        key = row.get('filepath') or f"{row.get('track')}|{row.get('artist')}"
+        if key in seen:
+            continue
+        seen.add(key)
+        recent.append({
+            'track': row.get('track'),
+            'artist': row.get('artist'),
+            'album': row.get('album'),
+            'filepath': row.get('filepath'),
+            'device': row.get('device'),
+            'date': row.get('date') or row.get('timestamp'),
+        })
+        if len(recent) >= 5:
+            break
+    return jsonify({'recent': recent, 'favorites': _load_favorites()[:20]})
+
+# ── Library search ─────────────────────────────────────────────────────────────
+
+@app.route('/api/search')
+def library_search():
+    q = (request.args.get('q') or '').strip()
+    limit = min(max(int(request.args.get('limit', 15) or 15), 1), 30)
+    if len(q) < 2:
+        return jsonify({'query': q, 'playlists': [], 'artists': [], 'albums': [], 'songs': []})
+    like = f'%{q.lower()}%'
+    songs = db_query(
+        'SELECT title, artist, album, path FROM songs_cache '
+        'WHERE (LOWER(title) LIKE ? OR LOWER(artist) LIKE ? OR LOWER(album) LIKE ?) '
+        'AND path IS NOT NULL LIMIT ?',
+        [like, like, like, limit],
+    ) or []
+    artists = db_query(
+        'SELECT DISTINCT artist FROM songs_cache WHERE LOWER(artist) LIKE ? '
+        'AND artist IS NOT NULL AND artist != "" LIMIT ?',
+        [like, limit],
+    ) or []
+    albums = db_query(
+        'SELECT DISTINCT album, artist FROM songs_cache WHERE LOWER(album) LIKE ? '
+        'AND album IS NOT NULL AND album != "" LIMIT ?',
+        [like, limit],
+    ) or []
+    playlists = []
+    for pid, name, src in _load_playlist_entries():
+        if _score_playlist(q, name) >= 0.5:
+            playlists.append({'id': pid, 'name': name, 'source': src})
+        if len(playlists) >= limit:
+            break
+    playlists.sort(key=lambda x: _score_playlist(q, x['name']), reverse=True)
+    return jsonify({
+        'query': q,
+        'playlists': playlists[:limit],
+        'artists': [{'name': r['artist']} for r in artists],
+        'albums': [{'name': r['album'], 'artist': r.get('artist')} for r in albums],
+        'songs': [{'title': r['title'], 'artist': r['artist'], 'album': r['album'], 'path': r['path']} for r in songs],
     })
 
 @app.route('/api/alexa_remote/devices')
@@ -685,7 +907,47 @@ def alexa_remote_volume():
         return jsonify({'error': code, 'code': code}), status
 
 
-def _build_play_text(kind, name, shuffle):
+# Short-lived tokens map UI song plays (known file path) to a unique utterance
+# Alexa cannot misroute as a playlist. Populated by /api/alexa_remote/play.
+_PLAY_FILE_TOKENS = {}
+_PLAY_FILE_TOKEN_LOCK = threading.Lock()
+_PLAY_FILE_TOKEN_TTL = 180.0
+
+
+def _register_play_file_token(path, title, artist=''):
+    token = uuid.uuid4().hex[:8]
+    now = time.time()
+    with _PLAY_FILE_TOKEN_LOCK:
+        for k in [k for k, v in _PLAY_FILE_TOKENS.items() if v['exp'] < now]:
+            del _PLAY_FILE_TOKENS[k]
+        _PLAY_FILE_TOKENS[token] = {
+            'path': path,
+            'title': title or os.path.basename(path),
+            'artist': (artist or '').strip(),
+            'exp': now + _PLAY_FILE_TOKEN_TTL,
+        }
+    return token
+
+
+def _consume_play_file_token(raw):
+    token = re.sub(r'[^a-f0-9]', '', (raw or '').lower())
+    if not token:
+        return None
+    with _PLAY_FILE_TOKEN_LOCK:
+        entry = _PLAY_FILE_TOKENS.get(token)
+        if not entry or entry['exp'] < time.time():
+            return None
+        return dict(entry)
+
+
+def _play_file_token_from_query(query):
+    """Parse 'file token <hex>' / 'token <hex>' from a misrouted slot value."""
+    q = (query or '').strip().lower()
+    m = re.search(r'(?:file\s+)?token\s+([a-f0-9]{6,12})\b', q)
+    return _consume_play_file_token(m.group(1)) if m else None
+
+
+def _build_play_text(kind, name, shuffle, artist=None, path=None):
     """Build a collision-safe utterance that routes to our custom skill.
 
     "play"/"shuffle" get grabbed by Amazon's music domain; "start"/"mix" route
@@ -700,8 +962,16 @@ def _build_play_text(kind, name, shuffle):
     elif kind == 'album':
         phrase = f"the album {name}"
     elif kind == 'song':
-        verb = 'start'  # shuffling a single track is meaningless
-        phrase = f"the song {name}"
+        verb = 'start'
+        artist = (artist or '').strip()
+        fpath = (path or '').strip()
+        if fpath and os.path.isfile(fpath):
+            token = _register_play_file_token(fpath, name, artist)
+            phrase = f"file token {token}"
+        elif artist:
+            phrase = f"the song {name} by {artist}"
+        else:
+            phrase = f"the song {name}"
     else:  # playlist
         phrase = f"the {name} playlist"
     return f"ask {alias} to {verb} {phrase}"
@@ -724,6 +994,10 @@ _PLAY_INTENT_TTL = 12.0           # secs a single-play intent stays correlatable
 _PLAY_GROUP_TTL = 60.0            # group-suppression window (longer: covers a
                                   #  full fan-out where slow Echoes start late)
 _PLAY_GROUP_UNTIL = 0.0           # suppress correlation during/after a group play
+# Recent web/automation play context keyed by Echo serial (playlist name for NP UI).
+_DEVICE_PLAY_CONTEXT = {}
+_PLAY_CONTEXT_LOCK = threading.Lock()
+_PLAY_CONTEXT_TTL = 120.0
 
 _ALEXA_DEV_CACHE = {'ts': 0.0, 'by_serial': {}}
 _ALEXA_DEV_CACHE_TTL = 300.0
@@ -778,11 +1052,63 @@ def _identify_playlist_name():
     pls = _load_playlist_entries()
     return pls[0][1] if pls else ''
 
-def _record_play_intent(targets):
+def _record_play_context(targets, *, playlist=None, playlist_id=None, context=None):
+    """Remember what we asked Alexa to play (for Now Playing before queue events)."""
+    now = time.time()
+    with _PLAY_CONTEXT_LOCK:
+        for serial, _name in targets or []:
+            if not serial:
+                continue
+            _DEVICE_PLAY_CONTEXT[serial] = {
+                'playlist': playlist,
+                'playlistId': playlist_id,
+                'context': context,
+                'ts': now,
+            }
+
+
+def _play_context_for_device(device_id):
+    store = _load_devices()
+    ent = store.get(_resolve_device_id(device_id)) or {}
+    serial = ent.get('serial')
+    if not serial:
+        return {}
+    now = time.time()
+    with _PLAY_CONTEXT_LOCK:
+        ctx = _DEVICE_PLAY_CONTEXT.get(serial)
+    if not ctx or now - ctx.get('ts', 0) > _PLAY_CONTEXT_TTL:
+        return {}
+    return ctx
+
+
+def _np_source_fields(token=None, device_id=None):
+    """Display label + ids for the active queue (playlist or artist/album context)."""
+    playlist, playlist_id, context = None, None, None
+    if token:
+        data = decode_token(token) if isinstance(token, str) else (token or {})
+        playlist = data.get('playlist')
+        playlist_id = data.get('playlist_id')
+        context = data.get('context')
+    if not playlist and not context and device_id:
+        ctx = _play_context_for_device(device_id)
+        playlist = ctx.get('playlist')
+        playlist_id = ctx.get('playlistId')
+        context = ctx.get('context')
+    label = playlist or context or ''
+    return {
+        'playlist': playlist,
+        'playlistId': playlist_id,
+        'context': context,
+        'sourceLabel': label,
+    }
+
+
+def _record_play_intent(targets, *, playlist=None, playlist_id=None, context=None):
     """targets: list of (serial, name). One target → correlatable; many → mark
     an ambiguous group window so we don't mis-attribute rooms."""
     global _PLAY_GROUP_UNTIL
     now = time.time()
+    _record_play_context(targets, playlist=playlist, playlist_id=playlist_id, context=context)
     with _PLAY_INTENT_LOCK:
         _PLAY_INTENTS[:] = [i for i in _PLAY_INTENTS if now - i['ts'] < _PLAY_INTENT_TTL]
         if len(targets) == 1 and (targets[0][1] or '').strip():
@@ -870,18 +1196,31 @@ def play_on_device():
     pid = (data.get('id') or '').strip()
     kind = (data.get('kind') or 'playlist').strip().lower()
     shuffle = bool(data.get('shuffle'))
+    artist = (data.get('artist') or '').strip()
+    fpath = (data.get('path') or '').strip()
     if not device:
         return jsonify({'error': 'device required'}), 400
     if not name and pid and kind == 'playlist':
         name, _ = _msp_playlist_by_id(pid)
     if not name:
         return jsonify({'error': 'name or id required'}), 400
-    text = _build_play_text(kind, name, shuffle)
+    text = _build_play_text(kind, name, shuffle, artist=artist, path=fpath)
     try:
         targets = _expand_play_targets(device)
     except ValueError as e:
         return jsonify({'error': str(e), 'code': str(e)}), 400
-    _record_play_intent(targets)
+    pl_label = name if kind == 'playlist' else None
+    ctx_label = None if kind == 'playlist' else (
+        f'Artist · {name}' if kind == 'artist' else
+        f'Album · {name}' if kind == 'album' else
+        (f'Song · {name}' + (f' by {artist}' if artist else '') if kind == 'song' else name)
+    )
+    _record_play_intent(
+        targets,
+        playlist=pl_label,
+        playlist_id=pid if kind == 'playlist' and pid else None,
+        context=ctx_label,
+    )
     try:
         import alexa_remote
         results, errors = [], []
@@ -902,6 +1241,120 @@ def play_on_device():
         code = str(e)
         status = 400 if code in ('not_configured', 'not_authenticated', 'device_not_found') else 500
         return jsonify({'error': code, 'code': code}), status
+
+
+@app.route('/api/playback/status')
+def playback_status():
+    """Playback reliability snapshot for the dashboard."""
+    remote_cfg = False
+    remote_auth = None
+    device_count = 0
+    try:
+        import alexa_remote
+        remote_cfg = alexa_remote.is_configured()
+        remote_auth = alexa_remote.is_authenticated() if remote_cfg else None
+        if remote_cfg and remote_auth:
+            device_count = len(alexa_remote.list_devices() or [])
+    except Exception:
+        pass
+    skill_testing = None
+    try:
+        with open(os.path.join(HERE, 'skill_enablement_state.json')) as f:
+            skill_testing = bool((json.load(f) or {}).get('enabled'))
+    except Exception:
+        pass
+    return jsonify({
+        'alexaRemote': {'configured': remote_cfg, 'authenticated': remote_auth, 'deviceCount': device_count},
+        'skillTesting': skill_testing,
+        'verbs': {'playlist': 'start', 'shuffle': 'mix'},
+        'tips': [
+            'Use "start" / "mix" in web Play on device (not play/shuffle) to avoid Spotify hijacking.',
+            'Alexa app → Music & Podcasts → set default Music to Amazon Music for better voice routing.',
+            'Say "Alexa, open bock media" then only the playlist name when one-shots fail.',
+        ],
+    })
+
+
+@app.route('/api/rooms')
+def list_rooms():
+    """Per-Echo snapshot: now playing, automations, quick play targets."""
+    devs = []
+    controls = False
+    try:
+        import alexa_remote
+        controls = alexa_remote.is_configured()
+        if controls and alexa_remote.is_authenticated():
+            devs = alexa_remote.list_devices() or []
+    except Exception:
+        pass
+    store = _load_devices()
+    serial_to_did = {}
+    for did, ent in store.items():
+        s = ent.get('serial')
+        if s:
+            serial_to_did[s] = _resolve_device_id(did)
+
+    np_payload = _canonicalize_np(_prune_np(_read_all_np() or {'devices': {}}))
+    np_by_id = np_payload.get('devices') or {}
+    autos = _load_automations()
+
+    rooms = []
+    for d in devs:
+        serial = d.get('serial')
+        name = d.get('name') or serial
+        did = serial_to_did.get(serial)
+        np_row = None
+        if did and did in np_by_id:
+            st = np_by_id[did]
+            if st.get('playing') or st.get('paused'):
+                tok = st.get('token') or ''
+                src = _np_source_fields(tok, did)
+                np_row = {
+                    'track': st.get('track'),
+                    'artist': st.get('artist'),
+                    'album': st.get('album'),
+                    'paused': bool(st.get('paused')) and not st.get('playing'),
+                    'sourceLabel': src.get('sourceLabel'),
+                    'playlist': src.get('playlist'),
+                }
+        room_autos = [
+            a for a in autos
+            if a.get('device') == serial
+            or a.get('deviceName') == name
+            or (did and a.get('device') == did)
+        ]
+        rooms.append({
+            'serial': serial,
+            'name': name,
+            'deviceId': did,
+            'nowPlaying': np_row,
+            'automations': [{'id': a.get('id'), 'name': a.get('name'),
+                             'time': a.get('time'), 'playlistName': a.get('playlistName'),
+                             'enabled': a.get('enabled')} for a in room_autos],
+        })
+    # MSP pseudo streams (no real room)
+    for did, st in np_by_id.items():
+        if not _is_msp_pseudo(did):
+            continue
+        if not (st.get('playing') or st.get('paused')):
+            continue
+        tok = st.get('token') or ''
+        src = _np_source_fields(tok, did)
+        rooms.append({
+            'serial': None,
+            'name': _device_label(did),
+            'deviceId': did,
+            'nowPlaying': {
+                'track': st.get('track'),
+                'artist': st.get('artist'),
+                'paused': bool(st.get('paused')) and not st.get('playing'),
+                'sourceLabel': src.get('sourceLabel'),
+                'playlist': src.get('playlist'),
+            },
+            'automations': [],
+            'pseudo': True,
+        })
+    return jsonify({'rooms': rooms, 'controlsAvailable': controls})
 
 # ── Device identify (play a short test on each Echo to name/merge them) ───────
 # Plays a brief clip on every audio Echo in turn. Each single-device play feeds
@@ -1080,6 +1533,18 @@ def _validate_automation_body(body, existing=None):
     days = _normalize_days(body.get('days'))
     shuffle = bool(body.get('shuffle'))
     enabled = bool(body.get('enabled')) if 'enabled' in body else (existing.get('enabled', True) if existing else True)
+    volume = (existing or {}).get('volume') if existing else None
+    if 'volume' in body:
+        raw_vol = body.get('volume')
+        if raw_vol is None or raw_vol == '':
+            volume = None
+        else:
+            try:
+                volume = int(raw_vol)
+            except (TypeError, ValueError):
+                return None, ('volume must be 0-100', 400)
+            if not 0 <= volume <= 100:
+                return None, ('volume must be 0-100', 400)
 
     if not playlist_name and playlist_id:
         playlist_name, _ = _msp_playlist_by_id(playlist_id)
@@ -1106,6 +1571,8 @@ def _validate_automation_body(body, existing=None):
         'days': days,
         'updatedAt': now,
     }
+    if volume is not None:
+        item['volume'] = volume
     if existing:
         item['createdAt'] = existing.get('createdAt', now)
         item['lastFiredAt'] = existing.get('lastFiredAt')
@@ -1120,9 +1587,20 @@ def _fire_automation(auto):
     text = _build_play_text('playlist', auto['playlistName'], auto.get('shuffle'))
     import alexa_remote
     targets = _expand_play_targets(auto['device'])
-    _record_play_intent(targets)
+    _record_play_intent(
+        targets,
+        playlist=auto.get('playlistName'),
+        playlist_id=auto.get('playlistId'),
+    )
+    vol = auto.get('volume')
     results, errors = [], []
     for serial, member_name in targets:
+        if vol is not None:
+            try:
+                alexa_remote.set_volume(serial, int(vol))
+                time.sleep(0.4)
+            except Exception as e:
+                errors.append(f'{member_name} volume: {e}')
         try:
             results.append(alexa_remote.play_text(serial, text))
         except Exception as e:
@@ -1172,7 +1650,13 @@ def _automation_scheduler_loop():
         time.sleep(30)
 
 
+_automation_scheduler_started = False
+
 def _start_automation_scheduler():
+    global _automation_scheduler_started
+    if _automation_scheduler_started:
+        return
+    _automation_scheduler_started = True
     t = threading.Thread(target=_automation_scheduler_loop, daemon=True, name='automation-scheduler')
     t.start()
 
@@ -1229,7 +1713,8 @@ def run_automation_now(auto_id):
         return jsonify({'error': 'not found'}), 404
     try:
         result = _fire_automation(auto)
-        auto['lastRunStatus'] = 'ok (manual)'
+        errs = result.get('errors') or []
+        auto['lastRunStatus'] = 'ok (manual)' + (f'; {"; ".join(errs)}' if errs else '')
         auto['lastRunAt'] = time.time()
         _save_automations(items)
         return jsonify({'ok': True, **result})
@@ -1965,6 +2450,56 @@ def _row_dt(row):
         return None
 
 
+@app.route('/api/analytics/export')
+def analytics_export():
+    """CSV download of streaming history for the optional date range."""
+    import csv
+    from io import StringIO
+    from_str = request.args.get('from', '').strip()
+    to_str   = request.args.get('to', '').strip()
+    rows = _read_stream_history()
+    from_dt = to_dt = None
+    try:
+        if from_str:
+            from_dt = datetime.datetime.fromisoformat(from_str)
+        if to_str:
+            to_dt = datetime.datetime.fromisoformat(to_str).replace(hour=23, minute=59, second=59)
+    except Exception:
+        pass
+    if from_dt or to_dt:
+        filtered = []
+        for r in rows:
+            ts = _row_dt(r)
+            if not ts:
+                continue
+            if from_dt and ts < from_dt:
+                continue
+            if to_dt and ts > to_dt:
+                continue
+            filtered.append(r)
+        rows = filtered
+    rows = [r for r in rows
+            if r.get('deviceId', '') not in ('DEVICE_ALPHA', 'DEVICE_BETA')
+            and not r.get('test')]
+    buf = StringIO()
+    w = csv.writer(buf)
+    w.writerow(['date', 'track', 'artist', 'album', 'device', 'filepath'])
+    for r in rows:
+        w.writerow([
+            r.get('date') or r.get('timestamp') or '',
+            r.get('track') or '',
+            r.get('artist') or '',
+            r.get('album') or '',
+            r.get('device') or '',
+            r.get('filepath') or '',
+        ])
+    return Response(
+        buf.getvalue(),
+        mimetype='text/csv',
+        headers={'Content-Disposition': 'attachment; filename=bock_media_streams.csv'},
+    )
+
+
 @app.route('/api/analytics')
 def analytics():
     from collections import Counter, defaultdict
@@ -2652,14 +3187,21 @@ def _save_queues(queues):
 def _new_queue_id():
     return base64.urlsafe_b64encode(os.urandom(9)).decode().rstrip('=')
 
-def _store_queue(tracks, shuffle=False, loop=False):
+def _store_queue(tracks, shuffle=False, loop=False, playlist=None, playlist_id=None, context=None):
     with _QUEUES_LOCK:
         queues = _load_queues()
         now = time.time()
         queues = {k: v for k, v in queues.items() if now - v.get('ts', 0) < _QUEUE_TTL_SECONDS}
         qid = _new_queue_id()
-        queues[qid] = {'tracks': list(tracks), 'shuffle': bool(shuffle),
-                       'loop': bool(loop), 'ts': now}
+        entry = {'tracks': list(tracks), 'shuffle': bool(shuffle),
+                 'loop': bool(loop), 'ts': now}
+        if playlist:
+            entry['playlist'] = playlist
+        if playlist_id:
+            entry['playlist_id'] = playlist_id
+        if context:
+            entry['context'] = context
+        queues[qid] = entry
         _save_queues(queues)
         return qid
 
@@ -2724,9 +3266,14 @@ def encode_token(data):
     qid = data.get('qid')
     idx = int(data.get('idx', 0) or 0)
     if not qid:
-        qid = _store_queue(data.get('tracks', []),
-                           data.get('shuffle', False),
-                           data.get('loop', False))
+        qid = _store_queue(
+            data.get('tracks', []),
+            data.get('shuffle', False),
+            data.get('loop', False),
+            playlist=data.get('playlist'),
+            playlist_id=data.get('playlist_id'),
+            context=data.get('context'),
+        )
     return f"{qid}:{idx}"
 
 def decode_token(token):
@@ -2744,6 +3291,9 @@ def decode_token(token):
                 'idx': int(idx),
                 'shuffle': entry.get('shuffle', False),
                 'loop': entry.get('loop', False),
+                'playlist': entry.get('playlist'),
+                'playlist_id': entry.get('playlist_id'),
+                'context': entry.get('context'),
                 'stopAt': entry.get('stopAt'),
                 'stopAfterIdx': entry.get('stopAfterIdx'),
             }
@@ -2751,6 +3301,28 @@ def decode_token(token):
         return json.loads(base64.urlsafe_b64decode(token + '=' * padding))
     except:
         return {}
+
+
+def _upcoming_tracks_for_token(token, limit=5):
+    """Next tracks in the active queue for Now Playing UI."""
+    data = decode_token(token)
+    tracks = data.get('tracks') or []
+    if not tracks:
+        return []
+    try:
+        idx = int(data.get('idx', 0))
+    except (TypeError, ValueError):
+        idx = 0
+    out = []
+    for path in tracks[idx + 1:idx + 1 + limit]:
+        row = db_one('SELECT title, artist FROM songs_cache WHERE path = ?', [path]) or {}
+        fname = os.path.splitext(os.path.basename(path))[0]
+        out.append({
+            'title': row.get('title') or fname,
+            'artist': row.get('artist'),
+            'path': path,
+        })
+    return out
 
 # ── M3U Parser ───────────────────────────────────────────────────────────────
 
@@ -2769,6 +3341,729 @@ def parse_m3u(filepath):
     except Exception as e:
         print(f'M3U parse error {filepath}: {e}')
     return tracks
+
+# ── Playlist library (create / merge / sort / AI) ────────────────────────────
+
+PLAYLISTS_XML = os.path.join(DATA_DIR, 'ServerPlaylists.xml')
+BOCK_PLAYLIST_DIR = os.path.join(
+    os.environ.get('OURMEDIA_MUSIC_ROOT', '/mnt/bock/Music'),
+    'exportedPlaylists', 'bockmedia',
+)
+BOCK_SOURCE_NAME = 'bockmedia'
+_PLAYLIST_XML_LOCK = threading.Lock()
+# Enriched track lists for large playlists (keyed by playlist id + m3u mtime).
+_PLAYLIST_TRACKS_CACHE = {}
+_XSI = 'http://www.w3.org/2001/XMLSchema-instance'
+_XSD = 'http://www.w3.org/2001/XMLSchema'
+
+
+def _backup_playlists_xml():
+    if not os.path.isfile(PLAYLISTS_XML):
+        return None
+    bak = f'{PLAYLISTS_XML}.{datetime.datetime.now():%Y%m%d-%H%M%S}.bak'
+    shutil.copy2(PLAYLISTS_XML, bak)
+    return bak
+
+
+def _load_playlists_tree():
+    ET.register_namespace('xsd', _XSD)
+    ET.register_namespace('xsi', _XSI)
+    return ET.parse(PLAYLISTS_XML)
+
+
+def _save_playlists_tree(tree):
+    with _PLAYLIST_XML_LOCK:
+        _backup_playlists_xml()
+        tree.write(PLAYLISTS_XML, xml_declaration=True, encoding='utf-8')
+
+
+def _find_playlist_key(root, pid):
+    for entry in root.findall('Entry'):
+        key = entry.find('Key')
+        if key is not None and (key.findtext('ID') or '') == str(pid):
+            return key, entry
+    return None, None
+
+
+def _playlist_meta_from_key(key):
+    source = xml_text(key, 'SourceID')
+    return {
+        'id': xml_text(key, 'ID'),
+        'name': xml_text(key, 'Name'),
+        'trackCount': xml_int(key, 'TrackCount'),
+        'shuffle': xml_text(key, 'Shuffle') == 'true',
+        'loop': xml_text(key, 'Loop') == 'true',
+        'createDate': xml_text(key, 'CreateDate'),
+        'lastUsed': xml_text(key, 'LastUsed'),
+        'source': source,
+        'sourceName': xml_text(key, 'SourceName'),
+        'isAudioBook': xml_text(key, 'IsAudioBook') == 'true',
+        'editable': bool(source and os.path.isfile(source)),
+    }
+
+
+def _safe_playlist_filename(name):
+    s = re.sub(r'[^\w\-. ]', '_', (name or '').strip()) or 'playlist'
+    return s[:120]
+
+
+def _write_m3u_file(path, track_paths):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write('#EXTM3U\n')
+        for p in track_paths:
+            if p and os.path.isfile(p):
+                f.write(p + '\n')
+
+
+def _enrich_track_paths(paths):
+    """Attach title/artist/album from songs_cache (batched IN queries, not one per row)."""
+    if not paths:
+        return []
+    by_path = {}
+    chunk_size = 400
+    for i in range(0, len(paths), chunk_size):
+        chunk = [p for p in paths[i:i + chunk_size] if p]
+        if not chunk:
+            continue
+        ph = ','.join('?' * len(chunk))
+        rows = db_query(
+            f'SELECT path, title, artist, album, duration_seconds FROM songs_cache WHERE path IN ({ph})',
+            chunk,
+        ) or []
+        for row in rows:
+            by_path[row['path']] = row
+    out = []
+    for path in paths:
+        if not path:
+            continue
+        row = by_path.get(path) or {}
+        fname = os.path.splitext(os.path.basename(path))[0]
+        out.append({
+            'path': path,
+            'title': row.get('title') or fname,
+            'artist': row.get('artist') or '',
+            'album': row.get('album') or '',
+            'duration_seconds': row.get('duration_seconds') or 0,
+        })
+    return out
+
+
+def _m3u_path_for_bock(pid, name):
+    short = re.sub(r'[^a-zA-Z0-9]', '', pid)[:8] or 'pl'
+    return os.path.join(BOCK_PLAYLIST_DIR, f'{_safe_playlist_filename(name)}.{short}.m3u')
+
+
+def _append_bock_entry(root, pid, name, m3u_path, track_count):
+    now = datetime.datetime.now().astimezone().isoformat()
+    xml = (
+        f'<Entry xmlns:xsi="{_XSI}">\n'
+        f'    <Key xsi:type="Playlist">\n'
+        f'      <ID>{pid}</ID>\n'
+        f'      <MediaClientID>{uuid.uuid4()}</MediaClientID>\n'
+        f'      <Name>{name}</Name>\n'
+        f'      <Shuffle>false</Shuffle>\n'
+        f'      <Loop>false</Loop>\n'
+        f'      <Temporary>false</Temporary>\n'
+        f'      <CreateDate>{now}</CreateDate>\n'
+        f'      <Type>File</Type>\n'
+        f'      <IsAudioBook>false</IsAudioBook>\n'
+        f'      <TrackCount>{track_count}</TrackCount>\n'
+        f'      <LastUsed>{now}</LastUsed>\n'
+        f'      <DeviceID />\n'
+        f'      <SearchHash />\n'
+        f'      <SourceID>{m3u_path}</SourceID>\n'
+        f'      <SourceName>{BOCK_SOURCE_NAME}</SourceName>\n'
+        f'    </Key>\n'
+        f'    <Value xsi:type="ArrayOfGuid" />\n'
+        f'  </Entry>'
+    )
+    from xml.sax.saxutils import escape
+    xml = xml.replace(f'<Name>{name}</Name>', f'<Name>{escape(name)}</Name>')
+    xml = xml.replace(f'<SourceID>{m3u_path}</SourceID>', f'<SourceID>{escape(m3u_path)}</SourceID>')
+    root.append(ET.fromstring(xml))
+
+
+def _update_playlist_key(key, name, m3u_path, track_count):
+    now = datetime.datetime.now().astimezone().isoformat()
+    for tag, val in (
+        ('Name', name),
+        ('SourceID', m3u_path),
+        ('TrackCount', str(track_count)),
+        ('LastUsed', now),
+    ):
+        el = key.find(tag)
+        if el is None:
+            el = ET.SubElement(key, tag)
+        el.text = val
+
+
+def _persist_playlist(pid, name, track_paths, *, create=False):
+    """Write .m3u + ServerPlaylists.xml entry for a Bock-managed playlist."""
+    paths = [p for p in track_paths if p and os.path.isfile(p)]
+    m3u_path = _m3u_path_for_bock(pid, name)
+    _write_m3u_file(m3u_path, paths)
+    tree = _load_playlists_tree()
+    root = tree.getroot()
+    key, entry = _find_playlist_key(root, pid)
+    if key is None:
+        if not create:
+            return None
+        _append_bock_entry(root, pid, name, m3u_path, len(paths))
+    else:
+        _update_playlist_key(key, name, m3u_path, len(paths))
+    _save_playlists_tree(tree)
+    return {'id': pid, 'name': name, 'source': m3u_path, 'trackCount': len(paths)}
+
+
+def _sort_track_dicts(tracks, field, order):
+    reverse = (order or 'asc').lower() == 'desc'
+    key_map = {
+        'title': lambda t: (t.get('title') or '').lower(),
+        'artist': lambda t: (t.get('artist') or '').lower(),
+        'album': lambda t: (t.get('album') or '').lower(),
+        'path': lambda t: (t.get('path') or '').lower(),
+    }
+    key_fn = key_map.get((field or 'title').lower(), key_map['title'])
+    return sorted(tracks, key=key_fn, reverse=reverse)
+
+
+def _claude_config():
+    cfg = load_config().get('claude') or {}
+    return (cfg.get('apiKey') or os.environ.get('ANTHROPIC_API_KEY') or '').strip(), (
+        cfg.get('model') or 'claude-sonnet-4-20250514'
+    ).strip()
+
+
+def _library_candidates_for_prompt(prompt, limit=250):
+    """Narrow the catalog sent to Claude using simple keyword search."""
+    words = [w for w in re.split(r'\W+', (prompt or '').lower()) if len(w) > 2][:8]
+    if not words:
+        rows = db_query(
+            'SELECT path, title, artist, album, genre FROM songs_cache '
+            'WHERE path IS NOT NULL AND title IS NOT NULL ORDER BY RANDOM() LIMIT ?',
+            [limit],
+        ) or []
+        return rows
+    clauses, params = [], []
+    for w in words:
+        like = f'%{w}%'
+        clauses.append(
+            '(LOWER(title) LIKE ? OR LOWER(artist) LIKE ? OR LOWER(album) LIKE ? OR LOWER(genre) LIKE ?)'
+        )
+        params.extend([like, like, like, like])
+    sql = (
+        'SELECT path, title, artist, album, genre FROM songs_cache WHERE path IS NOT NULL '
+        f'AND ({" OR ".join(clauses)}) LIMIT ?'
+    )
+    params.append(limit)
+    return db_query(sql, params) or []
+
+
+def _call_claude_pick_tracks(prompt, candidates, max_tracks):
+    api_key, model = _claude_config()
+    if not api_key:
+        raise ValueError('claude_api_key_not_configured')
+    if not candidates:
+        raise ValueError('no_library_matches')
+    lines = []
+    for i, r in enumerate(candidates):
+        lines.append(
+            f'{i}: {r.get("title") or "?"} | {r.get("artist") or ""} | {r.get("album") or ""} | {r.get("genre") or ""}'
+        )
+    catalog = '\n'.join(lines)
+    user_msg = (
+        f'Create a music playlist for this request: "{prompt}"\n\n'
+        f'Pick up to {max_tracks} tracks ONLY from the numbered list below. '
+        'Reply with JSON only: {"indices":[0,1,2], "name":"Short Playlist Title"}\n\n'
+        f'{catalog}'
+    )
+    body = json.dumps({
+        'model': model,
+        'max_tokens': 1024,
+        'messages': [{'role': 'user', 'content': user_msg}],
+    }).encode('utf-8')
+    req = __import__('urllib.request', fromlist=['Request']).Request(
+        'https://api.anthropic.com/v1/messages',
+        data=body,
+        headers={
+            'Content-Type': 'application/json',
+            'x-api-key': api_key,
+            'anthropic-version': '2023-06-01',
+        },
+        method='POST',
+    )
+    with urlopen(req, timeout=90) as resp:
+        data = json.loads(resp.read().decode('utf-8', errors='replace'))
+    text = ''
+    for block in data.get('content') or []:
+        if block.get('type') == 'text':
+            text += block.get('text') or ''
+    m = re.search(r'\{.*\}', text, re.DOTALL)
+    if not m:
+        raise ValueError('claude_invalid_response')
+    parsed = json.loads(m.group(0))
+    indices = parsed.get('indices') or []
+    name = (parsed.get('name') or '').strip() or 'AI Playlist'
+    paths = []
+    for idx in indices:
+        try:
+            i = int(idx)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= i < len(candidates) and candidates[i].get('path'):
+            p = candidates[i]['path']
+            if p not in paths:
+                paths.append(p)
+        if len(paths) >= max_tracks:
+            break
+    return name, paths
+
+
+def _playlist_paths_cached(playlist_id, source):
+    """Parse .m3u once per file mtime."""
+    try:
+        mtime = os.path.getmtime(source) if source and os.path.isfile(source) else 0
+    except OSError:
+        mtime = 0
+    ent = _PLAYLIST_TRACKS_CACHE.get(playlist_id)
+    if ent and ent.get('mtime') == mtime and ent.get('paths') is not None:
+        return ent['paths']
+    paths = _tracks_from_source(source) if source else []
+    prev = _PLAYLIST_TRACKS_CACHE.get(playlist_id) or {}
+    _PLAYLIST_TRACKS_CACHE[playlist_id] = {
+        'mtime': mtime, 'paths': paths, 'tracks': prev.get('tracks'),
+    }
+    return paths
+
+
+def _playlist_all_tracks_enriched(playlist_id, source):
+    """Full metadata for every path; cached after first build."""
+    try:
+        mtime = os.path.getmtime(source) if source and os.path.isfile(source) else 0
+    except OSError:
+        mtime = 0
+    ent = _PLAYLIST_TRACKS_CACHE.get(playlist_id)
+    if ent and ent.get('mtime') == mtime and ent.get('tracks') is not None:
+        return ent['tracks']
+    paths = _playlist_paths_cached(playlist_id, source)
+    tracks = _enrich_track_paths(paths)
+    _PLAYLIST_TRACKS_CACHE[playlist_id] = {'mtime': mtime, 'paths': paths, 'tracks': tracks}
+    return tracks
+
+
+def _sort_paths_by_field(paths, field, order):
+    reverse = order == 'desc'
+    if field == 'title':
+        return sorted(paths, key=lambda p: os.path.basename(p).lower(), reverse=reverse)
+    tracks = _sort_track_dicts(
+        [{'path': p, 'title': os.path.splitext(os.path.basename(p))[0], 'artist': '', 'album': ''} for p in paths],
+        field, order,
+    )
+    return [t['path'] for t in tracks]
+
+
+@app.route('/api/playlists/<playlist_id>')
+def playlist_detail(playlist_id):
+    page = max(1, int(request.args.get('page', 1)))
+    limit = min(max(int(request.args.get('limit', 100)), 1), 500)
+    sort_by = (request.args.get('sortBy') or 'title').strip().lower()
+    order = (request.args.get('order') or 'asc').strip().lower()
+    if sort_by in ('track',):
+        sort_by = 'title'
+    if sort_by not in ('title', 'artist', 'album', 'path'):
+        sort_by = 'title'
+    if order not in ('asc', 'desc'):
+        order = 'asc'
+
+    key, _entry = _find_playlist_key(_load_playlists_tree().getroot(), playlist_id)
+    if key is None:
+        return jsonify({'error': 'not_found'}), 404
+    meta = _playlist_meta_from_key(key)
+    source = meta.get('source') or ''
+    paths = _playlist_paths_cached(playlist_id, source)
+
+    if sort_by == 'title':
+        ordered_paths = _sort_paths_by_field(paths, 'title', order)
+    else:
+        ordered_paths = [t['path'] for t in _sort_track_dicts(
+            _playlist_all_tracks_enriched(playlist_id, source), sort_by, order)]
+
+    q = (request.args.get('q') or '').strip().lower()
+    if q:
+        if sort_by == 'title':
+            ordered_paths = [
+                p for p in ordered_paths
+                if q in os.path.basename(p).lower()
+                or q in os.path.splitext(os.path.basename(p))[0].lower()
+            ]
+        else:
+            enriched = _playlist_all_tracks_enriched(playlist_id, source)
+            ordered_paths = [
+                t['path'] for t in enriched
+                if q in (t.get('title') or '').lower()
+                or q in (t.get('artist') or '').lower()
+                or q in (t.get('album') or '').lower()
+            ]
+    total = len(ordered_paths)
+    start = (page - 1) * limit
+    page_paths = ordered_paths[start:start + limit]
+    tracks = _enrich_track_paths(page_paths)
+
+    return jsonify({
+        **meta,
+        'tracks': tracks,
+        'total': total,
+        'page': page,
+        'limit': limit,
+        'sortBy': sort_by,
+        'order': order,
+        'q': q or None,
+    })
+
+
+def _tracks_from_source(source):
+    return parse_m3u(source) if source and os.path.isfile(source) else []
+
+
+@app.route('/api/playlists', methods=['POST'])
+def create_playlist():
+    body = request.get_json(silent=True) or {}
+    name = (body.get('name') or '').strip()
+    if not name:
+        return jsonify({'error': 'name required'}), 400
+    tracks = body.get('tracks') or []
+    if not isinstance(tracks, list):
+        return jsonify({'error': 'tracks must be a list'}), 400
+    pid = str(uuid.uuid4())
+    result = _persist_playlist(pid, name, tracks, create=True)
+    if not result:
+        return jsonify({'error': 'create_failed'}), 500
+    return jsonify(result), 201
+
+
+@app.route('/api/playlists/merge', methods=['POST'])
+def merge_playlists():
+    body = request.get_json(silent=True) or {}
+    source_ids = body.get('sourceIds') or body.get('ids') or []
+    if not isinstance(source_ids, list) or len(source_ids) < 2:
+        return jsonify({'error': 'sourceIds must list at least 2 playlist ids'}), 400
+    target_id = (body.get('targetId') or '').strip()
+    new_name = (body.get('name') or '').strip()
+    tree = _load_playlists_tree()
+    root = tree.getroot()
+    merged_paths, names = [], []
+    for sid in source_ids:
+        key, _ = _find_playlist_key(root, sid)
+        if key is None:
+            continue
+        meta = _playlist_meta_from_key(key)
+        names.append(meta.get('name') or sid)
+        for p in _tracks_from_source(meta.get('source')):
+            if p not in merged_paths:
+                merged_paths.append(p)
+    if not merged_paths:
+        return jsonify({'error': 'no_tracks'}), 400
+    if target_id:
+        key, _ = _find_playlist_key(root, target_id)
+        if key is None:
+            return jsonify({'error': 'target_not_found'}), 404
+        existing = _tracks_from_source(xml_text(key, 'SourceID'))
+        for p in merged_paths:
+            if p not in existing:
+                existing.append(p)
+        name = new_name or xml_text(key, 'Name')
+        result = _persist_playlist(target_id, name, existing, create=False)
+    else:
+        name = new_name or f"{' + '.join(names[:2])}" + (' …' if len(names) > 2 else '')
+        pid = str(uuid.uuid4())
+        result = _persist_playlist(pid, name, merged_paths, create=True)
+    return jsonify(result)
+
+
+@app.route('/api/playlists/<playlist_id>', methods=['PUT'])
+def update_playlist(playlist_id):
+    body = request.get_json(silent=True) or {}
+    tree = _load_playlists_tree()
+    key, _ = _find_playlist_key(tree.getroot(), playlist_id)
+    if key is None:
+        return jsonify({'error': 'not_found'}), 404
+    meta = _playlist_meta_from_key(key)
+    name = (body.get('name') or meta.get('name') or '').strip()
+    if body.get('tracks') is not None:
+        tracks = body.get('tracks') or []
+        if not isinstance(tracks, list):
+            return jsonify({'error': 'tracks must be a list'}), 400
+        track_paths = tracks
+    else:
+        track_paths = _tracks_from_source(meta.get('source'))
+    if meta.get('sourceName') != BOCK_SOURCE_NAME:
+        # Allow reorder/sort on Plex playlists by rewriting local .m3u only.
+        source = meta.get('source') or ''
+        if not source:
+            return jsonify({'error': 'not_editable'}), 403
+        _write_m3u_file(source, track_paths)
+        _update_playlist_key(key, name, source, len([p for p in track_paths if os.path.isfile(p)]))
+        _save_playlists_tree(tree)
+        _PLAYLIST_TRACKS_CACHE.pop(playlist_id, None)
+        return jsonify({'id': playlist_id, 'name': name, 'trackCount': len(track_paths)})
+    result = _persist_playlist(playlist_id, name, track_paths, create=False)
+    _PLAYLIST_TRACKS_CACHE.pop(playlist_id, None)
+    return jsonify(result)
+
+
+@app.route('/api/playlists/<playlist_id>/sort', methods=['POST'])
+def sort_playlist(playlist_id):
+    body = request.get_json(silent=True) or {}
+    field = (body.get('by') or body.get('field') or 'title').strip().lower()
+    order = (body.get('order') or 'asc').strip().lower()
+    if order not in ('asc', 'desc'):
+        return jsonify({'error': 'order must be asc or desc'}), 400
+    tree = _load_playlists_tree()
+    key, _ = _find_playlist_key(tree.getroot(), playlist_id)
+    if key is None:
+        return jsonify({'error': 'not_found'}), 404
+    meta = _playlist_meta_from_key(key)
+    paths = _tracks_from_source(meta.get('source'))
+    tracks = _sort_track_dicts(_enrich_track_paths(paths), field, order)
+    sorted_paths = [t['path'] for t in tracks]
+    source = meta.get('source') or ''
+    if meta.get('sourceName') == BOCK_SOURCE_NAME:
+        result = _persist_playlist(playlist_id, meta.get('name'), sorted_paths, create=False)
+    else:
+        _write_m3u_file(source, sorted_paths)
+        _update_playlist_key(key, meta.get('name'), source, len(sorted_paths))
+        _save_playlists_tree(tree)
+        result = {'id': playlist_id, 'name': meta.get('name'), 'trackCount': len(sorted_paths)}
+    _PLAYLIST_TRACKS_CACHE.pop(playlist_id, None)
+    return jsonify({**result, 'sortedBy': field, 'order': order, 'ok': True})
+
+
+@app.route('/api/playlists/<playlist_id>/tracks/remove', methods=['POST'])
+def remove_playlist_track(playlist_id):
+    body = request.get_json(silent=True) or {}
+    path = (body.get('path') or '').strip()
+    if not path:
+        return jsonify({'error': 'path required'}), 400
+    tree = _load_playlists_tree()
+    key, _ = _find_playlist_key(tree.getroot(), playlist_id)
+    if key is None:
+        return jsonify({'error': 'not_found'}), 404
+    meta = _playlist_meta_from_key(key)
+    source = meta.get('source') or ''
+    paths = [p for p in _playlist_paths_cached(playlist_id, source) if p != path]
+    if meta.get('sourceName') == BOCK_SOURCE_NAME:
+        _persist_playlist(playlist_id, meta.get('name'), paths, create=False)
+    elif source:
+        _write_m3u_file(source, paths)
+        _update_playlist_key(key, meta.get('name'), source, len(paths))
+        _save_playlists_tree(tree)
+    _PLAYLIST_TRACKS_CACHE.pop(playlist_id, None)
+    return jsonify({'ok': True, 'trackCount': len(paths)})
+
+
+# ── Smart playlists (rule-based, auto-refresh) ───────────────────────────────
+
+SMART_PLAYLISTS_PATH = os.path.join(HERE, 'smart_playlists.json')
+_SMART_LOCK = threading.Lock()
+
+
+def _load_smart_playlists():
+    with _SMART_LOCK:
+        if not os.path.isfile(SMART_PLAYLISTS_PATH):
+            return []
+        try:
+            with open(SMART_PLAYLISTS_PATH) as f:
+                data = json.load(f)
+            return data if isinstance(data, list) else []
+        except Exception:
+            return []
+
+
+def _save_smart_playlists(items):
+    with _SMART_LOCK:
+        tmp = SMART_PLAYLISTS_PATH + '.tmp'
+        with open(tmp, 'w') as f:
+            json.dump(items, f, indent=2)
+        os.replace(tmp, SMART_PLAYLISTS_PATH)
+
+
+def _paths_for_smart_rules(rules):
+    """Build a track list from declarative rules against songs_cache."""
+    rules = rules if isinstance(rules, list) else []
+    clauses, params = ['path IS NOT NULL'], []
+    order = 'RANDOM()'
+    limit = 50
+    for rule in rules:
+        if not isinstance(rule, dict):
+            continue
+        rtype = (rule.get('type') or '').strip().lower()
+        val = rule.get('value')
+        if rtype == 'genre' and val:
+            clauses.append('LOWER(COALESCE(genre,"")) LIKE ?')
+            params.append(f'%{str(val).lower()}%')
+        elif rtype == 'artist' and val:
+            clauses.append('LOWER(COALESCE(artist,"")) LIKE ?')
+            params.append(f'%{str(val).lower()}%')
+        elif rtype == 'year_min' and val is not None:
+            clauses.append('CAST(year AS INTEGER) >= ?')
+            params.append(int(val))
+        elif rtype == 'year_max' and val is not None:
+            clauses.append('CAST(year AS INTEGER) <= ?')
+            params.append(int(val))
+        elif rtype == 'limit' and val:
+            limit = min(max(int(val), 1), 500)
+        elif rtype == 'order' and str(val).lower() == 'title':
+            order = 'title COLLATE NOCASE'
+    sql = (
+        'SELECT path FROM songs_cache WHERE ' + ' AND '.join(clauses) +
+        f' ORDER BY {order} LIMIT ?'
+    )
+    params.append(limit)
+    rows = db_query(sql, params) or []
+    seen, paths = set(), []
+    for r in rows:
+        p = r.get('path')
+        if p and os.path.isfile(p) and p not in seen:
+            seen.add(p)
+            paths.append(p)
+    return paths
+
+
+def _refresh_smart_playlist(item):
+    paths = _paths_for_smart_rules(item.get('rules'))
+    pid = item.get('linkedPlaylistId')
+    name = (item.get('name') or 'Smart playlist').strip()
+    if pid:
+        result = _persist_playlist(pid, name, paths, create=False)
+    else:
+        pid = str(uuid.uuid4())
+        result = _persist_playlist(pid, name, paths, create=True)
+        item['linkedPlaylistId'] = pid
+    item['trackCount'] = len(paths)
+    item['lastRefresh'] = datetime.datetime.now().isoformat(timespec='seconds')
+    _PLAYLIST_TRACKS_CACHE.pop(pid, None)
+    return item, result
+
+
+@app.route('/api/smart_playlists')
+def list_smart_playlists():
+    return jsonify({'items': _load_smart_playlists()})
+
+
+@app.route('/api/smart_playlists', methods=['POST'])
+def create_smart_playlist():
+    body = request.get_json() or {}
+    name = (body.get('name') or '').strip()
+    if not name:
+        return jsonify({'error': 'name required'}), 400
+    rules = body.get('rules') or []
+    if not isinstance(rules, list) or not rules:
+        return jsonify({'error': 'rules required'}), 400
+    item = {
+        'id': str(uuid.uuid4()),
+        'name': name,
+        'rules': rules,
+        'enabled': bool(body.get('enabled', True)),
+        'linkedPlaylistId': None,
+        'trackCount': 0,
+        'createdAt': time.time(),
+    }
+    if body.get('refresh'):
+        item, _ = _refresh_smart_playlist(item)
+    items = _load_smart_playlists()
+    items.append(item)
+    _save_smart_playlists(items)
+    return jsonify(item), 201
+
+
+@app.route('/api/smart_playlists/<smart_id>', methods=['PUT'])
+def update_smart_playlist(smart_id):
+    body = request.get_json() or {}
+    items = _load_smart_playlists()
+    for i, item in enumerate(items):
+        if item.get('id') != smart_id:
+            continue
+        if body.get('name'):
+            item['name'] = body['name'].strip()
+        if 'rules' in body:
+            item['rules'] = body['rules']
+        if 'enabled' in body:
+            item['enabled'] = bool(body['enabled'])
+        if body.get('refresh'):
+            item, _ = _refresh_smart_playlist(item)
+        items[i] = item
+        _save_smart_playlists(items)
+        return jsonify(item)
+    return jsonify({'error': 'not_found'}), 404
+
+
+@app.route('/api/smart_playlists/<smart_id>', methods=['DELETE'])
+def delete_smart_playlist(smart_id):
+    items = [x for x in _load_smart_playlists() if x.get('id') != smart_id]
+    _save_smart_playlists(items)
+    return jsonify({'ok': True})
+
+
+@app.route('/api/smart_playlists/<smart_id>/refresh', methods=['POST'])
+def refresh_smart_playlist(smart_id):
+    items = _load_smart_playlists()
+    for i, item in enumerate(items):
+        if item.get('id') != smart_id:
+            continue
+        item, result = _refresh_smart_playlist(item)
+        items[i] = item
+        _save_smart_playlists(items)
+        return jsonify({**item, 'playlist': result})
+    return jsonify({'error': 'not_found'}), 404
+
+
+@app.route('/api/playlists/ai', methods=['POST'])
+def ai_playlist():
+    body = request.get_json(silent=True) or {}
+    prompt = (body.get('prompt') or '').strip()
+    if not prompt:
+        return jsonify({'error': 'prompt required'}), 400
+    max_tracks = min(max(int(body.get('maxTracks') or 25), 1), 80)
+    save = bool(body.get('save'))
+    try:
+        candidates = _library_candidates_for_prompt(prompt, limit=400)
+        ai_name, paths = _call_claude_pick_tracks(prompt, candidates, max_tracks)
+    except ValueError as e:
+        code = str(e)
+        status = 503 if code == 'claude_api_key_not_configured' else 400
+        return jsonify({'error': code}), status
+    except Exception as e:
+        print(f'AI playlist error: {e}', flush=True)
+        return jsonify({'error': 'claude_request_failed', 'detail': str(e)}), 502
+    name = (body.get('name') or '').strip() or ai_name
+    tracks = _enrich_track_paths(paths)
+    out = {'name': name, 'tracks': tracks, 'trackCount': len(tracks)}
+    if save:
+        pid = str(uuid.uuid4())
+        saved = _persist_playlist(pid, name, paths, create=True)
+        out.update(saved or {})
+    return jsonify(out)
+
+
+@app.route('/api/playlists/<playlist_id>', methods=['DELETE'])
+def delete_playlist(playlist_id):
+    tree = _load_playlists_tree()
+    root = tree.getroot()
+    key, entry = _find_playlist_key(root, playlist_id)
+    if key is None:
+        return jsonify({'error': 'not_found'}), 404
+    if xml_text(key, 'SourceName') != BOCK_SOURCE_NAME:
+        return jsonify({'error': 'only_bockmedia_playlists_deletable'}), 403
+    m3u = xml_text(key, 'SourceID')
+    root.remove(entry)
+    _save_playlists_tree(tree)
+    if m3u and os.path.isfile(m3u):
+        try:
+            os.remove(m3u)
+        except OSError:
+            pass
+    return jsonify({'ok': True})
 
 # ── Fuzzy Search ─────────────────────────────────────────────────────────────
 
@@ -2871,6 +4166,55 @@ def fuzzy_find_album(query):
     matches = difflib.get_close_matches(query, names, n=1, cutoff=0.5)
     return matches[0] if matches else None
 
+def _resolve_song_tracks(title, artist=None):
+    """Best-effort title/artist -> file paths (handles NLU-mangled titles)."""
+    title = (title or '').strip()
+    artist = (artist or '').strip() or None
+    if not title:
+        return []
+    tracks = fuzzy_find_track(title, artist)
+    if tracks:
+        return tracks
+    if artist:
+        tracks = fuzzy_find_track(title)
+        if tracks:
+            return tracks
+    words = _norm_pl(title).split()
+    for n in range(min(len(words), 8), 0, -1):
+        chunk = ' '.join(words[:n])
+        tracks = fuzzy_find_track(chunk, artist) or fuzzy_find_track(chunk)
+        if tracks:
+            return tracks
+    return []
+
+
+def _try_play_misrouted_song(query):
+    """Recover when NLU sends a song utterance to PlayPlaylistIntent."""
+    if not query:
+        return None
+    token_entry = _play_file_token_from_query(query)
+    if token_entry and os.path.isfile(token_entry['path']):
+        label = token_entry['title']
+        if token_entry.get('artist'):
+            label = f"{label} by {token_entry['artist']}"
+        return [token_entry['path']], label
+    t = re.sub(r'^(?:the\s+)?(?:song|track)\s+', '', query.strip(), flags=re.I).strip()
+    if not t:
+        return None
+    lower = t.lower()
+    if ' by ' in lower:
+        idx = lower.rfind(' by ')
+        title, artist = t[:idx].strip(), t[idx + 4:].strip()
+        tracks = _resolve_song_tracks(title, artist or None)
+        label = f"{title} by {artist}" if artist else title
+    else:
+        tracks = _resolve_song_tracks(t)
+        label = t
+    if not tracks:
+        return None
+    return tracks, label
+
+
 def fuzzy_find_track(title, artist=None):
     """Return list of file paths matching title, optionally narrowed by artist."""
     q = title.lower()
@@ -2954,12 +4298,14 @@ def fuzzy_find_genre(query):
     return matches[0] if matches else None
 
 def general_search_tracks(query, limit=300):
-    """Try playlist → artist → album → track and return (tracks, description)."""
-    name, source = fuzzy_find_playlist(query)
-    if name and source and os.path.isfile(source):
-        tracks = parse_m3u(source)
+    """Try playlist → artist → album → track. Returns (tracks, speech, shuffle, meta)."""
+    entry = best_playlist_entry(query)
+    if entry and entry[2] and os.path.isfile(entry[2]):
+        tracks = parse_m3u(entry[2])
         if tracks:
-            return tracks, f"Playing playlist {name}.", False
+            return tracks, f"Playing playlist {entry[1]}.", False, {
+                'playlist': entry[1], 'playlist_id': entry[0],
+            }
     artist = fuzzy_find_artist(query)
     if artist:
         rows = db_query(
@@ -2969,7 +4315,7 @@ def general_search_tracks(query, limit=300):
         )
         tracks = [r['path'] for r in rows]
         if tracks:
-            return tracks, f"Playing music by {artist}.", True
+            return tracks, f"Playing music by {artist}.", True, {'context': f'Artist · {artist}'}
     album = fuzzy_find_album(query)
     if album:
         rows = db_query(
@@ -2979,11 +4325,11 @@ def general_search_tracks(query, limit=300):
         )
         tracks = [r['path'] for r in rows]
         if tracks:
-            return tracks, f"Playing the album {album}.", False
+            return tracks, f"Playing the album {album}.", False, {'context': f'Album · {album}'}
     tracks = fuzzy_find_track(query)
     if tracks:
-        return tracks, f"Playing {query}.", False
-    return [], None, False
+        return tracks, f"Playing {query}.", False, {'context': f'Song · {query}'}
+    return [], None, False, {}
 
 # ── Now Playing State ─────────────────────────────────────────────────────────
 
@@ -3262,6 +4608,15 @@ def nowplaying_devices():
         duration_ms = st.get('duration_ms') or 0
         if not duration_ms and st.get('filepath'):
             duration_ms = _duration_ms_for_path(st.get('filepath'))
+        token = st.get('token') or ''
+        src = _np_source_fields(token, did)
+        if not src.get('sourceLabel'):
+            src = {
+                'playlist': st.get('playlist'),
+                'playlistId': st.get('playlistId'),
+                'context': st.get('context'),
+                'sourceLabel': st.get('sourceLabel') or st.get('playlist') or st.get('context') or '',
+            }
         items.append({
             'deviceId':   did,
             'deviceName': _device_label(did) or did[-6:],
@@ -3273,7 +4628,12 @@ def nowplaying_devices():
             'duration_ms': duration_ms,
             'offset_ms':   st.get('offset_ms') or 0,
             'paused':     bool(st.get('paused')) and not st.get('playing'),
-            'sleep':      _sleep_info_for_token(st.get('token')),
+            'sleep':      _sleep_info_for_token(token),
+            'upcoming':   _upcoming_tracks_for_token(token, limit=5),
+            'playlist': src.get('playlist'),
+            'playlistId': src.get('playlistId'),
+            'context': src.get('context'),
+            'sourceLabel': src.get('sourceLabel'),
         })
     items.sort(key=lambda x: (x.get('paused'), -(x.get('timestamp') or 0)))
     controls = False
@@ -3491,8 +4851,17 @@ def _np_arm_sleep(minutes=None, songs=None):
         return alexa_speak(f"Okay, I'll stop after {n} more {'song' if n == 1 else 'songs'}.")
     return alexa_speak("Sleep timer cancelled.")
 
+def _np_accumulate_offset(state):
+    """Fold elapsed time since last timestamp into offset_ms (pause/stop)."""
+    if state.get('playing') and state.get('timestamp'):
+        elapsed_ms = int(max(0, time.time() - float(state['timestamp'])) * 1000)
+        state['offset_ms'] = (state.get('offset_ms') or 0) + elapsed_ms
+        state['timestamp'] = time.time()
+    return state
+
 def _np_pause_playback(playback_controller=False):
     state = read_np_state() or {}
+    state = _np_accumulate_offset(state)
     state['playing'] = False
     state['paused'] = True
     write_np_state(state)
@@ -3504,6 +4873,10 @@ def _np_resume_playback(playback_controller=False):
     path = state.get('filepath')
     if not token or not path or not os.path.isfile(path):
         return alexa_empty() if playback_controller else alexa_speak("Nothing to resume.")
+    state['playing'] = True
+    state['paused'] = False
+    state['timestamp'] = time.time()
+    write_np_state(state)
     title, artist, album, artwork_url = track_metadata(path)
     title = state.get('track') or title
     artist = state.get('artist') or artist
@@ -3594,20 +4967,26 @@ def _filter_ignored_queue(queue):
     filtered = [t for t in queue if t not in ignored]
     return filtered if filtered else queue
 
-def start_playing(tracks, shuffle=False, speech=None, loop=False):
+def start_playing(tracks, shuffle=False, speech=None, loop=False,
+                  playlist=None, playlist_id=None, context=None):
     queue = _filter_ignored_queue(normalize_track_queue(tracks))
     if not queue:
         return alexa_speak("Sorry, I couldn't find any tracks to play.")
     if shuffle:
         random.shuffle(queue)
     first = queue[0]
-    token_data = {'tracks': queue[:300], 'idx': 0, 'shuffle': shuffle, 'loop': loop}
+    token_data = {
+        'tracks': queue[:300], 'idx': 0, 'shuffle': shuffle, 'loop': loop,
+        'playlist': playlist, 'playlist_id': playlist_id, 'context': context,
+    }
     token = encode_token(token_data)
     title, artist, album, artwork_url = track_metadata(first)
+    src = _np_source_fields(token)
     # playing=False until Alexa confirms PlaybackStarted
     write_np_state({'track': None, 'artist': artist, 'album': album,
                     'filepath': first, 'token': token,
-                    'playing': False, 'timestamp': time.time()})
+                    'playing': False, 'timestamp': time.time(),
+                    **src})
     return _np_play_path(first, token, speech=speech)
 
 # ── Music Skill (MSP) — scaffolding ───────────────────────────────────────────
@@ -3836,7 +5215,7 @@ def _msp_handle(namespace, name, payload, header):
             return _msp_error(header, 'CONTENT_NOT_FOUND', 'Playlist has no playable tracks')
         if shuffle:
             random.shuffle(tracks)
-        qid = _store_queue(tracks, shuffle, loop)
+        qid = _store_queue(tracks, shuffle, loop, playlist=pname, playlist_id=content_id)
         return _msp_event('Alexa.Media.Playback', 'Initiate.Response', header, {
             'playbackMethod': {
                 'type': 'ALEXA_AUDIO_PLAYER_QUEUE',
@@ -3943,17 +5322,20 @@ def _msp_handle_event(req, ctx):
             track_title = row.get('title', fname) or fname
             artist = row.get('artist')
             album = row.get('album')
+            tok = f'{queue_id}:{idx}'
+            src = _np_source_fields(tok, _np_device_id())
             write_np_state({
                 'track':       track_title,
                 'artist':      artist,
                 'album':       album,
                 'filepath':    path,
-                'token':       f'{queue_id}:{idx}',
+                'token':       tok,
                 'playing':     True,
                 'paused':      False,
                 'timestamp':   time.time(),
                 'duration_ms': _duration_ms_for_path(path),
                 'offset_ms':   (req.get('body') or {}).get('offsetInMilliseconds') or 0,
+                **src,
             })
             append_stream_history({
                 'track':    track_title,
@@ -3962,6 +5344,8 @@ def _msp_handle_event(req, ctx):
                 'filepath': path,
                 'device':   _device_label(_np_device_id()),
                 'deviceId': _np_device_id(),
+                'playlist': src.get('playlist'),
+                'sourceLabel': src.get('sourceLabel'),
                 'date':     datetime.datetime.now().isoformat(timespec='seconds'),
             })
         return ('', 200)
@@ -4099,6 +5483,7 @@ def alexa_skill():
             track_title = row.get('title', fname) or fname
             artist = row.get('artist')
             album = row.get('album')
+            src = _np_source_fields(token, _np_device_id())
             write_np_state({
                 'track':       track_title,
                 'artist':      artist,
@@ -4109,6 +5494,7 @@ def alexa_skill():
                 'paused':      False,
                 'timestamp':   time.time(),
                 'duration_ms': _duration_ms_for_path(path),
+                **src,
             })
             device_label = _device_label(_np_device_id())
             entry = {
@@ -4118,6 +5504,8 @@ def alexa_skill():
                 'filepath': path,
                 'device':   device_label,
                 'deviceId': _np_device_id(),
+                'playlist': src.get('playlist'),
+                'sourceLabel': src.get('sourceLabel'),
                 'date':     datetime.datetime.now().isoformat(timespec='seconds'),
             }
             # Identify/test sweeps shouldn't pollute analytics.
@@ -4226,13 +5614,18 @@ def alexa_skill():
             )
         default_pl = get_pref('DefaultPlaylist', '').strip()
         if default_pl:
-            name, source = fuzzy_find_playlist(default_pl)
+            entry = best_playlist_entry(default_pl)
+            if entry:
+                name, source, pid = entry[1], entry[2], entry[0]
+            else:
+                name, source, pid = None, None, None
             if name and source and os.path.isfile(source):
                 tracks = parse_m3u(source)
                 if tracks:
                     do_shuffle = get_pref('DefaultPlaylistShuffle', '').lower() == 'true'
                     return start_playing(tracks, shuffle=do_shuffle,
-                                        speech=f"Playing {name}.")
+                                        speech=f"Playing {name}.",
+                                        playlist=name, playlist_id=pid)
         return alexa_speak(
             "Welcome to Bock Media. Say play followed by a playlist name, "
             "play music by an artist, or play an album name.",
@@ -4253,28 +5646,52 @@ def alexa_skill():
             query = sv('PlaylistName')
             if not query:
                 return alexa_speak("Which playlist would you like to play?", end_session=False)
-            name, source = fuzzy_find_playlist(query)
+            token_entry = _play_file_token_from_query(query)
+            if token_entry and os.path.isfile(token_entry['path']):
+                label = token_entry['title']
+                if token_entry.get('artist'):
+                    label = f"{label} by {token_entry['artist']}"
+                return start_playing([token_entry['path']], speech=f"Playing {label}.",
+                                    context=f'Song · {label}')
+            if re.search(r'\bby\b', query, re.I) or re.match(r'^(?:the\s+)?(?:song|track)\s+', query, re.I):
+                recovered = _try_play_misrouted_song(query)
+                if recovered:
+                    tracks, label = recovered
+                    return start_playing(tracks, speech=f"Playing {label}.", context=f'Song · {label}')
+            entry = best_playlist_entry(query)
+            name = entry[1] if entry else None
+            source = entry[2] if entry else None
+            pid = entry[0] if entry else None
             print(f'[ALEXA DEBUG] PlayPlaylistIntent query={repr(query)} -> name={repr(name)} source={repr(source)}', flush=True)
             if not name:
+                recovered = _try_play_misrouted_song(query)
+                if recovered:
+                    tracks, label = recovered
+                    return start_playing(tracks, speech=f"Playing {label}.", context=f'Song · {label}')
                 return alexa_speak(f"Sorry, I couldn't find a playlist called {query}.")
             tracks = parse_m3u(source) if source and os.path.isfile(source) else []
             if not tracks:
                 return alexa_speak(f"The playlist {name} has no playable tracks.")
-            return start_playing(tracks, speech=f"Playing {name}.")
+            return start_playing(tracks, speech=f"Playing {name}.",
+                                playlist=name, playlist_id=pid)
 
         # ── Shuffle playlist ───────────────────────────────────────────────
         elif iname == 'ShufflePlaylistIntent':
             query = sv('PlaylistName')
             if not query:
                 return alexa_speak("Which playlist would you like to shuffle?", end_session=False)
-            name, source = fuzzy_find_playlist(query)
+            entry = best_playlist_entry(query)
+            name = entry[1] if entry else None
+            source = entry[2] if entry else None
+            pid = entry[0] if entry else None
             print(f'[ALEXA DEBUG] ShufflePlaylistIntent query={repr(query)} -> name={repr(name)} source={repr(source)}', flush=True)
             if not name:
                 return alexa_speak(f"Sorry, I couldn't find a playlist called {query}.")
             tracks = parse_m3u(source) if source and os.path.isfile(source) else []
             if not tracks:
                 return alexa_speak(f"The playlist {name} has no playable tracks.")
-            return start_playing(tracks, shuffle=True, speech=f"Shuffling {name}.")
+            return start_playing(tracks, shuffle=True, speech=f"Shuffling {name}.",
+                                playlist=name, playlist_id=pid)
 
         # ── Play artist ────────────────────────────────────────────────────
         elif iname == 'PlayArtistIntent':
@@ -4284,11 +5701,12 @@ def alexa_skill():
             if 'playlist' in query.lower():
                 pl_q = re.sub(r'\s+playlist$', '', query, flags=re.IGNORECASE).strip()
                 pl_q = re.sub(r'^(?:play\s+)?(?:my\s+)?(?:the\s+)?playlist\s+', '', pl_q, flags=re.IGNORECASE).strip() or query
-                name, source = fuzzy_find_playlist(pl_q)
-                if name and source and os.path.isfile(source):
-                    tracks = parse_m3u(source)
+                entry = best_playlist_entry(pl_q)
+                if entry and entry[2] and os.path.isfile(entry[2]):
+                    tracks = parse_m3u(entry[2])
                     if tracks:
-                        return start_playing(tracks, speech=f"Playing {name}.")
+                        return start_playing(tracks, speech=f"Playing {entry[1]}.",
+                                            playlist=entry[1], playlist_id=entry[0])
             artist = fuzzy_find_artist(query)
             if not artist:
                 return alexa_speak(f"Sorry, I couldn't find any music by {query}.")
@@ -4300,7 +5718,8 @@ def alexa_skill():
             tracks = [r['path'] for r in rows]
             if not tracks:
                 return alexa_speak(f"I found {artist} but no playable files.")
-            return start_playing(tracks, shuffle=True, speech=f"Playing music by {artist}.")
+            return start_playing(tracks, shuffle=True, speech=f"Playing music by {artist}.",
+                                context=f'Artist · {artist}')
 
         # ── Shuffle artist ─────────────────────────────────────────────────
         elif iname == 'ShuffleArtistIntent':
@@ -4310,11 +5729,12 @@ def alexa_skill():
             if 'playlist' in query.lower():
                 pl_q = re.sub(r'\s+playlist$', '', query, flags=re.IGNORECASE).strip()
                 pl_q = re.sub(r'^(?:shuffle\s+)?(?:play\s+)?(?:my\s+)?(?:the\s+)?playlist\s+', '', pl_q, flags=re.IGNORECASE).strip() or query
-                name, source = fuzzy_find_playlist(pl_q)
-                if name and source and os.path.isfile(source):
-                    tracks = parse_m3u(source)
+                entry = best_playlist_entry(pl_q)
+                if entry and entry[2] and os.path.isfile(entry[2]):
+                    tracks = parse_m3u(entry[2])
                     if tracks:
-                        return start_playing(tracks, shuffle=True, speech=f"Shuffling {name}.")
+                        return start_playing(tracks, shuffle=True, speech=f"Shuffling {entry[1]}.",
+                                            playlist=entry[1], playlist_id=entry[0])
             artist = fuzzy_find_artist(query)
             if not artist:
                 return alexa_speak(f"Sorry, I couldn't find any music by {query}.")
@@ -4326,7 +5746,8 @@ def alexa_skill():
             tracks = [r['path'] for r in rows]
             if not tracks:
                 return alexa_speak(f"I found {artist} but no playable files.")
-            return start_playing(tracks, shuffle=True, speech=f"Shuffling music by {artist}.")
+            return start_playing(tracks, shuffle=True, speech=f"Shuffling music by {artist}.",
+                                context=f'Artist · {artist}')
 
         # ── Play album ─────────────────────────────────────────────────────
         elif iname == 'PlayAlbumIntent':
@@ -4344,7 +5765,8 @@ def alexa_skill():
             tracks = [r['path'] for r in rows]
             if not tracks:
                 return alexa_speak(f"I found {album} but no playable files.")
-            return start_playing(tracks, speech=f"Playing the album {album}.")
+            return start_playing(tracks, speech=f"Playing the album {album}.",
+                                context=f'Album · {album}')
 
         # ── Shuffle album ──────────────────────────────────────────────────
         elif iname == 'ShuffleAlbumIntent':
@@ -4362,7 +5784,20 @@ def alexa_skill():
             tracks = [r['path'] for r in rows]
             if not tracks:
                 return alexa_speak(f"I found {album} but no playable files.")
-            return start_playing(tracks, shuffle=True, speech=f"Shuffling the album {album}.")
+            return start_playing(tracks, shuffle=True, speech=f"Shuffling the album {album}.",
+                                context=f'Album · {album}')
+
+        # ── Play file by UI token (exact path, no fuzzy match) ─────────────
+        elif iname == 'PlayFileTokenIntent':
+            token_raw = sv('FileToken')
+            entry = _consume_play_file_token(token_raw)
+            if not entry or not os.path.isfile(entry['path']):
+                return alexa_speak("Sorry, I couldn't find that track.")
+            label = entry['title']
+            if entry.get('artist'):
+                label = f"{label} by {entry['artist']}"
+            return start_playing([entry['path']], speech=f"Playing {label}.",
+                                context=f'Song · {label}')
 
         # ── Play specific track ────────────────────────────────────────────
         elif iname == 'PlayTrackIntent':
@@ -4379,16 +5814,17 @@ def alexa_skill():
                 pl_q = re.sub(r'\s+playlist$', '', pl_q, flags=re.IGNORECASE).strip()
                 if not pl_q:
                     pl_q = q
-                name, source = fuzzy_find_playlist(pl_q)
-                if name and source and os.path.isfile(source):
-                    tracks = parse_m3u(source)
+                entry = best_playlist_entry(pl_q)
+                if entry and entry[2] and os.path.isfile(entry[2]):
+                    tracks = parse_m3u(entry[2])
                     if tracks:
-                        return start_playing(tracks, speech=f"Playing {name}.")
+                        return start_playing(tracks, speech=f"Playing {entry[1]}.",
+                                            playlist=entry[1], playlist_id=entry[0])
 
             tracks = fuzzy_find_track(query)
             if not tracks:
                 return alexa_speak(f"Sorry, I couldn't find a track called {query}.")
-            return start_playing(tracks, speech=f"Playing {query}.")
+            return start_playing(tracks, speech=f"Playing {query}.", context=f'Song · {query}')
 
         # ── Play track by artist ───────────────────────────────────────────
         elif iname == 'PlayTrackByArtistIntent':
@@ -4401,7 +5837,7 @@ def alexa_skill():
                 msg = f"{track_q} by {artist_q}" if artist_q else track_q
                 return alexa_speak(f"Sorry, I couldn't find {msg}.")
             label = f"{track_q} by {artist_q}" if artist_q else track_q
-            return start_playing(tracks, speech=f"Playing {label}.")
+            return start_playing(tracks, speech=f"Playing {label}.", context=f'Song · {label}')
 
         # ── Play genre ─────────────────────────────────────────────────────
         elif iname == 'PlayGenreIntent':
@@ -4417,13 +5853,14 @@ def alexa_skill():
                 )
                 tracks = [r['path'] for r in rows]
                 if tracks:
-                    return start_playing(tracks, shuffle=True, speech=f"Playing {genre} music.")
-            # Fall back to playlist name matching (e.g. "Jazz Classics", "Soft Rock")
-            name, source = fuzzy_find_playlist(query)
-            if name and source and os.path.isfile(source):
-                tracks = parse_m3u(source)
+                    return start_playing(tracks, shuffle=True, speech=f"Playing {genre} music.",
+                                        context=f'Genre · {genre}')
+            entry = best_playlist_entry(query)
+            if entry and entry[2] and os.path.isfile(entry[2]):
+                tracks = parse_m3u(entry[2])
                 if tracks:
-                    return start_playing(tracks, shuffle=True, speech=f"Playing {name}.")
+                    return start_playing(tracks, shuffle=True, speech=f"Playing {entry[1]}.",
+                                        playlist=entry[1], playlist_id=entry[0])
             return alexa_speak(f"Sorry, I couldn't find music in the genre {query}.")
 
         # ── Shuffle genre ──────────────────────────────────────────────────
@@ -4440,12 +5877,14 @@ def alexa_skill():
                 )
                 tracks = [r['path'] for r in rows]
                 if tracks:
-                    return start_playing(tracks, shuffle=True, speech=f"Shuffling {genre} music.")
-            name, source = fuzzy_find_playlist(query)
-            if name and source and os.path.isfile(source):
-                tracks = parse_m3u(source)
+                    return start_playing(tracks, shuffle=True, speech=f"Shuffling {genre} music.",
+                                        context=f'Genre · {genre}')
+            entry = best_playlist_entry(query)
+            if entry and entry[2] and os.path.isfile(entry[2]):
+                tracks = parse_m3u(entry[2])
                 if tracks:
-                    return start_playing(tracks, shuffle=True, speech=f"Shuffling {name}.")
+                    return start_playing(tracks, shuffle=True, speech=f"Shuffling {entry[1]}.",
+                                        playlist=entry[1], playlist_id=entry[0])
             return alexa_speak(f"Sorry, I couldn't find music in the genre {query}.")
 
         # ── General "play X" — tries playlist → artist → album → track ────
@@ -4453,10 +5892,10 @@ def alexa_skill():
             query = sv('Query')
             if not query:
                 return alexa_speak("What would you like to play?", end_session=False)
-            tracks, speech, do_shuffle = general_search_tracks(query)
+            tracks, speech, do_shuffle, meta = general_search_tracks(query)
             if not tracks:
                 return alexa_speak(f"Sorry, I couldn't find anything matching {query}.")
-            return start_playing(tracks, shuffle=do_shuffle, speech=speech)
+            return start_playing(tracks, shuffle=do_shuffle, speech=speech, **meta)
 
         # ── Read audio book ────────────────────────────────────────────────
         elif iname == 'ReadBookIntent':
@@ -4475,12 +5914,16 @@ def alexa_skill():
                     )
                     tracks = [r['path'] for r in rows]
                     if tracks:
-                        return start_playing(tracks, speech=f"Reading {album}.")
+                        return start_playing(tracks, speech=f"Reading {album}.",
+                                            context=f'Audiobook · {album}')
                 return alexa_speak(f"Sorry, I couldn't find an audio book called {query}.")
             tracks = parse_m3u(source)
             if not tracks:
                 return alexa_speak(f"The book {name} has no playable tracks.")
-            return start_playing(tracks, speech=f"Reading {name}.")
+            entry = best_playlist_entry(query)
+            pid = entry[0] if entry else None
+            return start_playing(tracks, speech=f"Reading {name}.",
+                                playlist=name, playlist_id=pid, context=f'Audiobook · {name}')
 
         # ── Play current selection (set via web UI) ────────────────────────
         elif iname == 'PlayCurrentIntent':
@@ -4495,7 +5938,7 @@ def alexa_skill():
             if sel_type == 'track':
                 path = sel.get('path', '')
                 if path and os.path.isfile(path):
-                    return start_playing([path], speech=f"Playing {query}.")
+                    return start_playing([path], speech=f"Playing {query}.", context=f'Song · {query}')
             elif sel_type == 'album':
                 rows = db_query(
                     "SELECT path FROM songs_cache WHERE album = ? AND path IS NOT NULL "
@@ -4504,7 +5947,8 @@ def alexa_skill():
                 )
                 tracks = [r['path'] for r in rows]
                 if tracks:
-                    return start_playing(tracks, speech=f"Playing the album {query}.")
+                    return start_playing(tracks, speech=f"Playing the album {query}.",
+                                        context=f'Album · {query}')
             elif sel_type == 'artist':
                 rows = db_query(
                     "SELECT path FROM songs_cache WHERE artist = ? AND path IS NOT NULL "
@@ -4513,13 +5957,15 @@ def alexa_skill():
                 )
                 tracks = [r['path'] for r in rows]
                 if tracks:
-                    return start_playing(tracks, shuffle=True, speech=f"Playing music by {query}.")
+                    return start_playing(tracks, shuffle=True, speech=f"Playing music by {query}.",
+                                        context=f'Artist · {query}')
             elif sel_type == 'playlist':
                 source = sel.get('source', '')
                 if source and os.path.isfile(source):
                     tracks = parse_m3u(source)
                     if tracks:
-                        return start_playing(tracks, speech=f"Playing {query}.")
+                        return start_playing(tracks, speech=f"Playing {query}.",
+                                            playlist=query, playlist_id=sel.get('id'))
             return alexa_speak(f"I couldn't play what's showing. Try selecting something in the console.")
 
         # ── What's playing ─────────────────────────────────────────────────
@@ -4530,11 +5976,14 @@ def alexa_skill():
             track  = state.get('track', 'Unknown')
             artist = state.get('artist', '')
             album  = state.get('album', '')
+            src = state.get('sourceLabel') or state.get('playlist') or state.get('context')
             msg = f"You're listening to {track}"
             if artist:
                 msg += f" by {artist}"
             if album:
                 msg += f" from the album {album}"
+            if src:
+                msg += f" from {src}"
             return alexa_speak(msg + ".", end_session=False)
 
         # ── Add current track to playlist ──────────────────────────────────
@@ -4715,9 +6164,10 @@ def alexa_skill():
 
 # ── Run ──────────────────────────────────────────────────────────────────────
 
+_start_automation_scheduler()
+
 if __name__ == '__main__':
     apply_logging()
-    _start_automation_scheduler()
     port = int(os.environ.get('PORT', 3001))
     print(f'Bock Media running at http://localhost:{port}')
     app.run(host='0.0.0.0', port=port, debug=False)

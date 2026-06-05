@@ -240,3 +240,58 @@ class TestStreamRoutes:
     def test_artwork_missing_file(self, client):
         rv = client.get('/artwork/no/such/file.jpg')
         assert rv.status_code in (404, 403, 400)
+
+
+class TestNewFeatures:
+    def test_search_short_query(self, client):
+        data = client.get('/api/search?q=a').get_json()
+        assert data['playlists'] == [] and data['songs'] == []
+
+    def test_search_returns_shape(self, client):
+        data = client.get('/api/search?q=test&limit=5').get_json()
+        assert 'playlists' in data and 'songs' in data
+
+    def test_plex_sync_status(self, client):
+        data = client.get('/api/plex_sync/status').get_json()
+        assert 'playlistCount' in data and 'logPath' in data
+
+    def test_favorites_crud(self, client, isolated_paths):
+        rv = client.post('/api/favorites', data=json.dumps({'path': '/tmp/x.mp3', 'title': 'T'}),
+                         content_type='application/json')
+        assert rv.status_code == 200
+        items = client.get('/api/favorites').get_json()['items']
+        assert any(x['path'] == '/tmp/x.mp3' for x in items)
+        client.delete('/api/favorites', data=json.dumps({'path': '/tmp/x.mp3'}),
+                      content_type='application/json')
+        assert not client.get('/api/favorites').get_json()['items']
+
+    def test_dashboard_quick(self, client):
+        data = client.get('/api/dashboard/quick').get_json()
+        assert 'recent' in data and 'favorites' in data
+
+    def test_analytics_export_csv(self, client, isolated_paths):
+        rv = client.get('/api/analytics/export')
+        assert rv.status_code == 200
+        assert b'track' in rv.data and b'date' in rv.data
+
+    def test_create_and_detail_playlist(self, client, isolated_paths, tmp_path, monkeypatch):
+        import server
+        pl_xml = tmp_path / 'ServerPlaylists.xml'
+        pl_xml.write_text(
+            '<?xml version="1.0" encoding="utf-8"?><ArrayOfEntry xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"></ArrayOfEntry>',
+            encoding='utf-8',
+        )
+        bock_dir = tmp_path / 'bock'
+        monkeypatch.setattr(server, 'PLAYLISTS_XML', str(pl_xml))
+        monkeypatch.setattr(server, 'DATA_DIR', str(tmp_path))
+        monkeypatch.setattr(server, 'BOCK_PLAYLIST_DIR', str(bock_dir))
+        rv = client.post('/api/playlists', data=json.dumps({'name': 'Test PL', 'tracks': []}),
+                         content_type='application/json')
+        assert rv.status_code == 201
+        pid = rv.get_json()['id']
+        detail = client.get(f'/api/playlists/{pid}').get_json()
+        assert detail['name'] == 'Test PL'
+        sort_rv = client.post(f'/api/playlists/{pid}/sort',
+                              data=json.dumps({'by': 'title', 'order': 'asc'}),
+                              content_type='application/json')
+        assert sort_rv.status_code == 200

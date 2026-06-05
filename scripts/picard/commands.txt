@@ -1,0 +1,12 @@
+# Picard executable commands (requires Picard 2.9+).
+# Ubuntu 22.04 ships 2.7 — use the GUI workflow in docs/PICARD.md instead,
+# or install a newer Picard (Flatpak / pip) to run:
+#   picard -e "LOAD /path/to/music/folder" -e FROM_FILE scripts/picard/commands.txt
+
+CLUSTER
+LOOKUP_CLUSTERED
+SAVE_MATCHED
+SCAN
+SAVE_MATCHED
+REMOVE_SAVED
+REMOVE_EMPTY

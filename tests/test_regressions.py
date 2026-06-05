@@ -194,6 +194,20 @@ class TestCollisionSafePlayText:
         assert 'ask bock media to mix' in text
         assert 'shuffle' not in text
 
+    def test_song_with_path_uses_file_token(self, isolated_paths, monkeypatch, tmp_path):
+        monkeypatch.setattr(server, '_alexa_alias', lambda: 'bock media')
+        f = tmp_path / 'dancing.mp3'
+        f.write_bytes(b'x')
+        text = server._build_play_text('song', 'Dancing Queen', shuffle=False,
+                                       artist='ABBA', path=str(f))
+        assert 'ask bock media to start file token' in text
+        assert 'playlist' not in text
+
+    def test_song_without_path_uses_the_song_phrase(self, isolated_paths, monkeypatch):
+        monkeypatch.setattr(server, '_alexa_alias', lambda: 'bock media')
+        text = server._build_play_text('song', 'Dancing Queen', shuffle=False, artist='ABBA')
+        assert 'ask bock media to start the song Dancing Queen by ABBA' in text
+
 
 # ─────────────────────────── static cache busting ──────────────────────────────
 

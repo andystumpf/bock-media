@@ -221,6 +221,28 @@ function copyRoutinePhrase() {
 
 let _dashPage = 1;
 
+async function dashReplayRecent(i) {
+  const r = (window._dashQuickRecent || [])[i];
+  if (!r) return;
+  const opts = songPlayOpts({ title: r.track, artist: r.artist, path: r.filepath, track: r.track });
+  if (opts) return playOnDevice(opts);
+}
+
+async function dashPlayFavorite(i) {
+  const r = (window._dashQuickFavs || [])[i];
+  if (!r || !r.path) return;
+  const opts = songPlayOpts(r);
+  if (opts) return playOnDevice(opts);
+}
+
+async function dashRemoveFavorite(i) {
+  const r = (window._dashQuickFavs || [])[i];
+  if (!r || !r.path) return;
+  await fetch('/api/favorites', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: r.path }) });
+  showToast('Removed from favorites');
+  loadDashboard();
+}
+
 register('dashboard', async () => {
   _dashPage = 1;
   loading();
@@ -228,9 +250,11 @@ register('dashboard', async () => {
 });
 
 async function loadDashboard() {
-  const [summary, recentData] = await Promise.all([
+  const [summary, recentData, quick, plexSync] = await Promise.all([
     API('/api/summary'),
     API(`/api/recent?page=${_dashPage}&limit=10`),
+    API('/api/dashboard/quick').catch(() => ({ recent: [], favorites: [] })),
+    API('/api/plex_sync/status').catch(() => null),
   ]);
 
   const s = summary || {};
@@ -261,6 +285,49 @@ async function loadDashboard() {
   const recentPager = buildPagination(recentTotal, _dashPage, 10, (p) => { _dashPage = p; loadDashboard(); });
 
   loadHealth();
+  loadPlaybackCard();
+
+  const quickRecent = (quick && quick.recent) || [];
+  const quickFavs = (quick && quick.favorites) || [];
+  const recentQuickHtml = quickRecent.length
+    ? quickRecent.map((r, i) => `
+      <div class="dash-quick-item">
+        <div>
+          <strong>${escHtml(r.track || '—')}</strong>
+          <div class="auto-list-meta">${escHtml(r.artist || '')}${r.device ? ' · ' + escHtml(r.device) : ''}</div>
+        </div>
+        ${actionBtn({ kind: 'play', onclick: `dashReplayRecent(${i})`, title: 'Play again', icon: 'play' })}
+      </div>`).join('')
+    : '<p class="hint" style="margin:0">No recent plays yet.</p>';
+  const favQuickHtml = quickFavs.length
+    ? quickFavs.map((r, i) => `
+      <div class="dash-quick-item">
+        <div>
+          <strong>${escHtml(r.title || '—')}</strong>
+          <div class="auto-list-meta">${escHtml(r.artist || '')}</div>
+        </div>
+        <div style="display:flex;gap:4px">
+          ${actionBtn({ kind: 'play', onclick: `dashPlayFavorite(${i})`, title: 'Play', icon: 'play' })}
+          ${actionBtn({ kind: 'delete', onclick: `dashRemoveFavorite(${i})`, title: 'Remove star', icon: 'star' })}
+        </div>
+      </div>`).join('')
+    : '<p class="hint" style="margin:0">Star tracks from Now Playing (★) or Search.</p>';
+  window._dashQuickRecent = quickRecent;
+  window._dashQuickFavs = quickFavs;
+
+  const plexUpdated = plexSync && plexSync.stateUpdatedAt
+    ? fmtDateTime(new Date(plexSync.stateUpdatedAt * 1000).toISOString()) : '—';
+  const plexLog = (plexSync && plexSync.logTail && plexSync.logTail.length)
+    ? `<div class="plex-log-tail">${plexSync.logTail.map(l => escHtml(l)).join('<br>')}</div>` : '';
+  const plexCard = plexSync ? `
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-header"><h3><i class="fa fa-arrows-rotate"></i> Plex playlist sync</h3></div>
+      <div class="card-body">
+        <p style="margin:0 0 6px"><b>${fmtNum(plexSync.playlistCount)}</b> playlists tracked · state updated ${plexUpdated}</p>
+        <p class="hint" style="margin:0">Cron: <code>${escHtml(plexSync.cronHint || '')}</code> · log: <code>plex-sync.log</code></p>
+        ${plexLog}
+      </div>
+    </div>` : '';
 
   document.getElementById('page-title').textContent = 'Dashboard';
   document.getElementById('main-content').innerHTML = `
@@ -296,6 +363,18 @@ async function loadDashboard() {
     </div>
 
     <div id="health-card-wrap"></div>
+    <div id="playback-card-wrap"></div>
+    ${plexCard}
+    <div class="dash-quick-grid">
+      <div class="card">
+        <div class="card-header"><h3><i class="fa fa-clock-rotate-left"></i> Quick replay</h3></div>
+        <div class="card-body">${recentQuickHtml}</div>
+      </div>
+      <div class="card">
+        <div class="card-header"><h3><i class="fa fa-star"></i> Favorites</h3></div>
+        <div class="card-body">${favQuickHtml}</div>
+      </div>
+    </div>
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
       <div class="card">
@@ -355,7 +434,7 @@ function fmtAgo(secs) {
   return `${Math.floor(secs / 86400)}d ago`;
 }
 
-function buildHealthCard(h) {
+function buildHealthCard(h, remote) {
   if (!h) return '';
   const latency = h.publicLatencyMs != null ? `${h.publicLatencyMs}ms` : '—';
   const skill = h.skillTesting === true ? true : (h.skillTesting === false ? false : null);
@@ -369,21 +448,33 @@ function buildHealthCard(h) {
   const stale = h.watchdogFresh === false
     ? `<span class="health-stale" title="Watchdog snapshot is stale or missing">watchdog ${fmtAgo(h.watchdogAgeSeconds)}</span>`
     : '';
+  const needLogin = remote && remote.configured && remote.authenticated === false;
+  const host = window.location.hostname || 'localhost';
+  const loginBtn = needLogin
+    ? `<div style="margin-top:12px;padding-top:12px;border-top:1px solid #eef1f6">
+        <p class="hint" style="margin:0 0 8px">Alexa session expired. Re-login so Play on device and automations work.</p>
+        <button class="btn-sm btn-primary" onclick="startAlexaLogin()"><i class="fa fa-key"></i> Start browser login</button>
+        <a class="btn-sm btn-default" href="#settings" style="margin-left:8px">Settings</a>
+      </div>`
+    : '';
   return `
     <div class="card health-card">
       <div class="card-header" style="display:flex;align-items:center;justify-content:space-between">
         <h3><i class="fa fa-heart-pulse"></i> Service Health</h3>
         <span class="health-meta">uptime ${fmtAgo(h.uptimeSeconds)} · last Alexa hit ${fmtAgo(h.lastAlexaHitAgo)} ${stale}</span>
       </div>
-      <div class="card-body health-chips">${chips}</div>
+      <div class="card-body health-chips">${chips}${loginBtn}</div>
     </div>`;
 }
 
 async function loadHealth() {
   const wrap = document.getElementById('health-card-wrap');
   if (!wrap) return;
-  const h = await API('/api/health');
-  wrap.innerHTML = buildHealthCard(h);
+  const [h, remote] = await Promise.all([
+    API('/api/health'),
+    ensureAlexaRemoteStatus().catch(() => ({})),
+  ]);
+  wrap.innerHTML = buildHealthCard(h, remote);
   clearTimeout(_healthTimer);
   // Re-poll only while the dashboard is mounted.
   _healthTimer = setTimeout(() => {
@@ -391,10 +482,129 @@ async function loadHealth() {
   }, 30000);
 }
 
+function buildPlaybackCard(pb, remote) {
+  if (!pb) return '';
+  const ar = pb.alexaRemote || {};
+  const authOk = ar.authenticated === true;
+  const cfgOk = ar.configured === true;
+  const tips = (pb.tips || []).map(t => `<li>${escHtml(t)}</li>`).join('');
+  const host = window.location.hostname || 'localhost';
+  const loginBlock = cfgOk && !authOk
+    ? `<p class="hint" style="margin:8px 0 0"><code>python3 scripts/alexa_login.py --proxy --host ${escHtml(host)} --port 3005</code></p>`
+    : '';
+  return `
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-header"><h3><i class="fa fa-tower-broadcast"></i> Playback</h3></div>
+      <div class="card-body">
+        <p style="margin:0 0 8px">
+          Web play: <b>${cfgOk ? (authOk ? `${ar.deviceCount || 0} Echoes ready` : 'login required') : 'not configured'}</b>
+          · Skill testing: <b>${pb.skillTesting === true ? 'on' : (pb.skillTesting === false ? 'off' : 'unknown')}</b>
+        </p>
+        <ul class="hint" style="margin:0;padding-left:18px">${tips}</ul>
+        ${loginBlock}
+        <a href="#rooms" class="btn-sm btn-default" style="margin-top:10px;display:inline-block"><i class="fa fa-house"></i> Room dashboard</a>
+      </div>
+    </div>`;
+}
+
+async function loadPlaybackCard() {
+  const wrap = document.getElementById('playback-card-wrap');
+  if (!wrap) return;
+  const [pb, remote] = await Promise.all([
+    API('/api/playback/status').catch(() => null),
+    ensureAlexaRemoteStatus().catch(() => ({})),
+  ]);
+  wrap.innerHTML = buildPlaybackCard(pb, remote);
+}
+
 // ── Now Playing ──────────────────────────────────────────────────────────────
 let _npPage = 1;
 let _npPollTimer = null;
 let _npTickTimer = null;
+
+register('rooms', async () => {
+  loading();
+  await loadRooms();
+  if (!window._roomsPoll) {
+    window._roomsPoll = setInterval(() => {
+      if (currentRoute === 'rooms') loadRooms(true);
+    }, 8000);
+  }
+});
+
+async function loadRooms(quiet) {
+  const [data, remote] = await Promise.all([
+    API('/api/rooms'),
+    ensureAlexaRemoteStatus(),
+  ]);
+  const rooms = (data && data.rooms) || [];
+  const canPlay = !!(data && data.controlsAvailable) && !!(remote && remote.configured);
+  if (!quiet) document.getElementById('page-title').textContent = 'Rooms';
+  const cards = rooms.map(r => {
+    const np = r.nowPlaying;
+    const npHtml = np
+      ? `<div class="room-np-track">${escHtml(np.track || '—')}</div>
+         ${np.artist ? `<div class="room-np-meta">${escHtml(np.artist)}</div>` : ''}
+         ${(np.sourceLabel || np.playlist) ? `<div class="room-np-pl"><i class="fa fa-list"></i> ${escHtml(np.sourceLabel || np.playlist)}</div>` : ''}
+         ${np.paused ? '<span class="np-paused-badge">Paused</span>' : ''}`
+      : '<div class="room-np-idle">Idle</div>';
+    const autos = (r.automations || []).slice(0, 3).map(a =>
+      `<div class="room-auto">${escHtml(a.time || '')} · ${escHtml(a.playlistName || '')}${a.enabled === false ? ' (off)' : ''}</div>`
+    ).join('') || '<div class="room-auto text-muted">No automations</div>';
+    const playBtn = canPlay && r.serial && !r.pseudo
+      ? `<button class="btn-sm btn-default" onclick="roomQuickPlay('${escHtml(r.serial)}','${escHtml(r.name)}')"><i class="fa fa-play"></i> Play…</button>`
+      : '';
+    return `
+      <div class="room-card${r.pseudo ? ' room-pseudo' : ''}">
+        <div class="room-card-head">
+          <i class="fa fa-${r.pseudo ? 'tower-broadcast' : 'volume-high'}"></i>
+          <strong>${escHtml(r.name)}</strong>
+        </div>
+        <div class="room-card-body">${npHtml}</div>
+        <div class="room-card-foot">
+          <div class="room-autos-label">Schedules</div>
+          ${autos}
+          <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
+            ${playBtn}
+            <a href="#automation" class="btn-sm btn-default">Automations</a>
+            <a href="#nowplaying" class="btn-sm btn-default">Now Playing</a>
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+  const inner = cards || '<div class="empty-state"><p>No Echo devices found — configure alexaRemote and run alexa_login.py.</p></div>';
+  if (quiet) {
+    const grid = document.querySelector('.rooms-grid');
+    if (grid) grid.outerHTML = `<div class="rooms-grid">${inner}</div>`;
+  } else {
+    document.getElementById('main-content').innerHTML = `
+      <p class="page-desc">Per-speaker view: what’s playing, scheduled playlists, and quick play (when Alexa remote is logged in).</p>
+      <div class="rooms-grid">${inner}</div>`;
+  }
+}
+
+async function roomQuickPlay(serial, name) {
+  const pl = prompt(`Playlist to start on ${name}:`, '');
+  if (!pl || !pl.trim()) return;
+  try {
+    const res = await fetch('/api/playlists/play', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device: serial, name: pl.trim(), kind: 'playlist' }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const msg = /not_authenticated/.test(data.error || '')
+        ? 'Alexa session expired — re-run scripts/alexa_login.py'
+        : (data.error || 'Play failed');
+      return showToast(msg, true);
+    }
+    showToast(`Playing on ${data.device || name}`);
+    loadRooms(true);
+  } catch (e) {
+    showToast(e.message || 'Play failed', true);
+  }
+}
 
 register('nowplaying', async () => {
   _npPage = 1;
@@ -458,12 +668,40 @@ function npTimeText(d) {
   return dur ? ` &nbsp; ${cur} / ${npFmtSec(dur)}` : ` &nbsp; ${cur}`;
 }
 
+function npProgressPct(d) {
+  const dur = (d.duration_ms || 0) / 1000;
+  if (!dur) return 0;
+  return Math.min(100, (npElapsedSec(d) / dur) * 100);
+}
+
+function npProgressHtml(d) {
+  const dur = (d.duration_ms || 0) / 1000;
+  if (!dur) return '';
+  const pct = npProgressPct(d);
+  return `<div class="np-progress" data-device-id="${escHtml(d.deviceId)}"><div class="np-progress-fill" style="width:${pct.toFixed(1)}%"></div></div>`;
+}
+
+function npUpcomingHtml(d) {
+  const up = d.upcoming || [];
+  if (!up.length) return '';
+  const rows = up.map((t, i) =>
+    `<li>${i + 2}. ${escHtml(t.title || '—')}${t.artist ? ' — ' + escHtml(t.artist) : ''}</li>`
+  ).join('');
+  return `<div class="np-upcoming"><div class="np-upcoming-label">Up next</div><ol>${rows}</ol></div>`;
+}
+
 // Tick the time displays in place (smooth) between the 5s data polls.
 function npTickTimes() {
   const items = window._npItems || [];
   document.querySelectorAll('.np-time').forEach(el => {
     const d = items.find(x => x.deviceId === el.dataset.deviceId);
     if (d) el.innerHTML = npTimeText(d);
+  });
+  document.querySelectorAll('.np-progress').forEach(el => {
+    const d = items.find(x => x.deviceId === el.dataset.deviceId);
+    if (!d) return;
+    const fill = el.querySelector('.np-progress-fill');
+    if (fill) fill.style.width = `${npProgressPct(d).toFixed(1)}%`;
   });
 }
 
@@ -478,6 +716,7 @@ function buildDeviceRow(d, controlsAvailable = false) {
       ${actionBtn({ kind: 'muted', onclick: "npControlEl(this,'next')", title: 'Next', icon: 'forward-step', dataAttrs: devAttr })}
       ${actionBtn({ kind: 'muted', onclick: 'npToggleShuffleEl(this)', title: 'Shuffle', icon: 'shuffle', extraClass: `np-shuffle-btn np-shuffle-${shuffleCls}`, dataAttrs: devAttr })}
       ${actionBtn({ kind: 'muted', onclick: 'npOpenSleepEl(this)', title: 'Sleep timer', icon: 'moon', dataAttrs: devAttr })}
+      ${d.filepath ? actionBtn({ kind: 'muted', onclick: 'npFavoriteEl(this)', title: 'Add to favorites', icon: 'star', dataAttrs: devAttr }) : ''}
       ${d.filepath ? actionBtn({ kind: 'muted', onclick: 'npNeverAgainEl(this)', title: 'Never play this song again', icon: 'ban', dataAttrs: devAttr }) : ''}
       ${actionBtn({ kind: 'delete', onclick: "npControlEl(this,'stop')", title: 'Stop', icon: 'stop', dataAttrs: devAttr })}
     </div>` : '';
@@ -503,12 +742,28 @@ function buildDeviceRow(d, controlsAvailable = false) {
           <div class="np-track">${escHtml(d.track || '—')} ${pausedBadge} ${sleepBadge}</div>
           ${d.artist ? `<div class="np-artist">${escHtml(d.artist)}</div>` : ''}
           ${d.album ? `<div class="np-album">${escHtml(d.album)}</div>` : ''}
+          ${(d.sourceLabel || d.playlist) ? `<div class="np-playlist"><i class="fa fa-list"></i> ${escHtml(d.sourceLabel || d.playlist)}</div>` : ''}
           <div class="np-device-label">Device: ${escHtml(d.deviceName || (d.deviceId || '').slice(-12) || 'default')}<span class="np-time" data-device-id="${escHtml(d.deviceId)}">${npTimeText(d)}</span></div>
+          ${npProgressHtml(d)}
+          ${npUpcomingHtml(d)}
         </div>
       </div>
       ${controls}
       ${volume}
     </div>`;
+}
+
+async function npFavoriteEl(btn) {
+  const deviceId = btn && btn.dataset && btn.dataset.deviceId;
+  const d = (window._npItems || []).find(x => x.deviceId === deviceId);
+  if (!d || !d.filepath) return;
+  const res = await fetch('/api/favorites', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: d.filepath, title: d.track, artist: d.artist, album: d.album }),
+  });
+  if (res.ok) showToast(`Starred "${d.track || 'track'}"`);
+  else showToast((await res.json().catch(() => ({}))).error || 'Failed', true);
 }
 
 let _npVolumeTimers = {};
@@ -742,7 +997,7 @@ function buildGroupRow(g, controlsAvailable) {
         <i class="fa fa-layer-group"></i>
         <span class="np-group-name">${escHtml(g.name)}</span>
         <span class="np-group-count">${g.members.length} speakers</span>
-        <span class="np-group-track">${escHtml(g.track || '—')}${g.artist ? ' — ' + escHtml(g.artist) : ''}</span>
+        <span class="np-group-track">${escHtml(g.track || '—')}${g.artist ? ' — ' + escHtml(g.artist) : ''}${g.members[0] && (g.members[0].sourceLabel || g.members[0].playlist) ? ' · <i class="fa fa-list"></i> ' + escHtml(g.members[0].sourceLabel || g.members[0].playlist) : ''}</span>
       </div>
       <div class="np-group-members">${sub}</div>
     </div>`;
@@ -801,6 +1056,7 @@ async function loadNowPlaying() {
     <tr>
       <td>${escHtml(e.track || '—')}</td>
       <td class="text-muted">${escHtml(e.artist || '—')}</td>
+      <td class="text-muted">${escHtml(e.sourceLabel || e.playlist || '—')}</td>
       <td><span class="badge">${escHtml(e.device || '—')}</span></td>
       <td class="text-muted" style="font-size:11px">${fmtDateTime(e.date)}</td>
     </tr>`).join('');
@@ -817,7 +1073,7 @@ async function loadNowPlaying() {
       </div>
       ${rows ? `
       <table class="data-table np-table">
-        <thead><tr><th>Track</th><th>Artist</th><th>Device</th><th>Date</th></tr></thead>
+        <thead><tr><th>Track</th><th>Artist</th><th>Source</th><th>Device</th><th>Date</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
       ${buildPagination(total, _npPage, 25, (p) => { _npPage = p; loadNowPlaying(); })}
@@ -833,7 +1089,11 @@ async function refreshCurrentTrack() {
   if (!bar || !txt) return;
   const items = (data && data.items) || [];
   if (items.length) {
-    const labels = items.map(c => c.artist ? `${c.track} — ${c.artist}` : c.track);
+    const labels = items.map(c => {
+      const base = c.artist ? `${c.track} — ${c.artist}` : c.track;
+      const pl = c.sourceLabel || c.playlist;
+      return pl ? `${base} (${pl})` : base;
+    });
     txt.textContent = labels.length === 1
       ? labels[0]
       : `${labels[0]} (+${labels.length - 1} more)`;
@@ -845,12 +1105,505 @@ async function refreshCurrentTrack() {
 
 
 // ── Playlists ────────────────────────────────────────────────────────────────
-let _plPage = 1, _plSearch = '';
+let _plPage = 1, _plSearch = '', _plMergeSel = new Set(), _plDetailId = null;
+let _plDetailSort = { by: 'title', order: 'asc' };
+let _plDetailPage = 1;
+let _plDetailQ = '';
+const _plDetailPageSize = 100;
+let _plListSort = { by: 'name', order: 'asc' };
+const _plPageSize = 100;
+let _plAllCache = null;
+let _plAllCacheSearch = null;
+
+function plSortPlaylistsInMemory(list, by, order) {
+  const desc = order === 'desc';
+  const out = (list || []).slice();
+  if (by === 'trackCount') {
+    out.sort((a, b) => {
+      const d = (a.trackCount || 0) - (b.trackCount || 0);
+      return desc ? -d : d;
+    });
+  } else {
+    out.sort((a, b) => {
+      const d = (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' });
+      return desc ? -d : d;
+    });
+  }
+  return out;
+}
+
+function plSortIndicator(active, order) {
+  if (!active) return '<span class="pl-sort-icon">↕</span>';
+  return order === 'desc' ? '<span class="pl-sort-icon active">↓</span>' : '<span class="pl-sort-icon active">↑</span>';
+}
+
+function plListSort(by) {
+  if (_plListSort.by === by) {
+    _plListSort.order = _plListSort.order === 'asc' ? 'desc' : 'asc';
+  } else {
+    _plListSort = { by, order: 'asc' };
+  }
+  _plPage = 1;
+  const label = by === 'trackCount' ? 'Tracks' : 'Name';
+  const arrow = _plListSort.order === 'desc' ? 'Z→A' : 'A→Z';
+  showToast(`Sorted by ${label} (${arrow})`);
+  renderPlaylistsPage();
+}
+window.plListSort = plListSort;
+
+function plSortTracksInMemory(tracks, by, order) {
+  const desc = order === 'desc';
+  const out = (tracks || []).slice();
+  const key = by === 'title' ? 'title' : by;
+  out.sort((a, b) => {
+    const av = (a[key] || '').toString();
+    const bv = (b[key] || '').toString();
+    const d = av.localeCompare(bv, undefined, { sensitivity: 'base' });
+    return desc ? -d : d;
+  });
+  return out;
+}
+
+function plSortDetailCol(by) {
+  const field = by === 'track' ? 'title' : by;
+  const order = (_plDetailSort.by === field && _plDetailSort.order === 'asc') ? 'desc' : 'asc';
+  plApplyDetailSort(field, order);
+}
+window.plSortDetailCol = plSortDetailCol;
+
+function plApplyDetailSort(by, order) {
+  _plDetailSort = { by, order };
+  _plDetailPage = 1;
+  const label = by === 'title' ? 'Track' : (by.charAt(0).toUpperCase() + by.slice(1));
+  showToast(`Sorting by ${label} (${order === 'desc' ? 'Z→A' : 'A→Z'})…`);
+  loadPlaylistDetailPage(true).then(() => plPersistDetailSort(by, order));
+}
+
+async function plPersistDetailSort(by, order) {
+  const id = _plDetailId || (window._plDetail && window._plDetail.id);
+  if (!id) return;
+  try {
+    const res = await fetch(`/api/playlists/${encodeURIComponent(id)}/sort`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ by, order }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      showToast(data.error || 'Could not save sort to playlist file', true);
+    }
+  } catch (e) {
+    showToast(e.message || 'Could not save sort', true);
+  }
+}
+
+function setupPlaylistSortDelegation() {
+  if (window._plSortDelegation) return;
+  window._plSortDelegation = true;
+  document.addEventListener('click', (e) => {
+    if (currentRoute !== 'playlists') return;
+    const listTh = e.target.closest('th[data-pl-sort]');
+    if (listTh) {
+      e.preventDefault();
+      e.stopPropagation();
+      plListSort(listTh.getAttribute('data-pl-sort'));
+      return;
+    }
+    const detailTh = e.target.closest('th[data-pl-sort-col]');
+    if (detailTh) {
+      e.preventDefault();
+      e.stopPropagation();
+      plSortDetailCol(detailTh.getAttribute('data-pl-sort-col'));
+    }
+  }, true);
+}
+
 register('playlists', async (params) => {
+  if (params && params.startsWith('detail/')) {
+    _plDetailId = params.slice(7);
+    _plDetailPage = 1;
+    _plDetailQ = '';
+    _plDetailSort = { by: 'title', order: 'asc' };
+    loading();
+    document.getElementById('main-content').innerHTML =
+      '<div class="spinner-wrap"><div class="spinner"></div><p style="text-align:center;color:#888;margin-top:12px">Loading playlist…</p></div>';
+    return loadPlaylistDetail(_plDetailId);
+  }
+  _plDetailId = null;
   if (params) { _plPage = 1; _plSearch = ''; }
   loading();
   await loadPlaylists();
 });
+
+function plToggleMerge(id, checked) {
+  if (checked) _plMergeSel.add(id);
+  else _plMergeSel.delete(id);
+}
+
+function openNewPlaylistModal() {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = `
+    <div class="modal-box" style="max-width:420px">
+      <h3 style="margin-top:0"><i class="fa fa-plus"></i> New playlist</h3>
+      <label style="display:block;margin:8px 0 4px;font-size:13px;color:#888">Name</label>
+      <input type="text" id="pl-new-name" class="settings-input" style="width:100%" placeholder="My playlist">
+      <p class="hint" style="margin:12px 0 0">Starts empty — open it to add tracks from Search, or merge other playlists.</p>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+        <button class="cancel-btn" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+        <button class="save-btn" id="pl-new-go">Create</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#pl-new-go').onclick = async () => {
+    const name = overlay.querySelector('#pl-new-name').value.trim();
+    if (!name) return showToast('Name required', true);
+    const res = await fetch('/api/playlists', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, tracks: [] }),
+    });
+    const data = await res.json().catch(() => ({}));
+    overlay.remove();
+    if (!res.ok) return showToast(data.error || 'Create failed', true);
+    showToast(`Created "${data.name}"`);
+    window.location.hash = `playlists/detail/${data.id}`;
+  };
+  overlay.querySelector('#pl-new-name').focus();
+}
+
+function openSmartPlaylistModal() {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = `
+    <div class="modal-box" style="max-width:440px">
+      <h3 style="margin-top:0"><i class="fa fa-wand-magic-sparkles"></i> Smart playlist</h3>
+      <label style="display:block;margin:8px 0 4px;font-size:13px;color:#888">Name</label>
+      <input type="text" id="sp-name" class="settings-input" style="width:100%" placeholder="Evening jazz">
+      <label style="display:block;margin:8px 0 4px;font-size:13px;color:#888">Genre contains</label>
+      <input type="text" id="sp-genre" class="settings-input" style="width:100%" placeholder="jazz">
+      <label style="display:block;margin:8px 0 4px;font-size:13px;color:#888">Artist contains</label>
+      <input type="text" id="sp-artist" class="settings-input" style="width:100%" placeholder="">
+      <label style="display:block;margin:8px 0 4px;font-size:13px;color:#888">Max tracks</label>
+      <input type="number" id="sp-limit" class="settings-input" style="width:100%" value="40" min="1" max="500">
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+        <button class="cancel-btn" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+        <button class="save-btn" id="sp-go">Create & refresh</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#sp-go').onclick = async () => {
+    const name = overlay.querySelector('#sp-name').value.trim();
+    if (!name) return showToast('Name required', true);
+    const rules = [{ type: 'limit', value: parseInt(overlay.querySelector('#sp-limit').value, 10) || 40 }];
+    const genre = overlay.querySelector('#sp-genre').value.trim();
+    const artist = overlay.querySelector('#sp-artist').value.trim();
+    if (genre) rules.unshift({ type: 'genre', value: genre });
+    if (artist) rules.unshift({ type: 'artist', value: artist });
+    const res = await fetch('/api/smart_playlists', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, rules, refresh: true }),
+    });
+    const data = await res.json().catch(() => ({}));
+    overlay.remove();
+    if (!res.ok) return showToast(data.error || 'Failed', true);
+    showToast(`Smart playlist "${data.name}" — ${fmtNum(data.trackCount)} tracks`);
+    _plAllCache = null;
+    loadPlaylists();
+  };
+}
+
+async function refreshSmartPlaylist(id) {
+  const res = await fetch(`/api/smart_playlists/${encodeURIComponent(id)}/refresh`, { method: 'POST' });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) return showToast(data.error || 'Refresh failed', true);
+  showToast(`Refreshed — ${fmtNum(data.trackCount)} tracks`);
+  _plAllCache = null;
+  loadPlaylists();
+}
+
+async function deleteSmartPlaylist(id) {
+  if (!confirm('Delete this smart playlist rule? (Linked playlist file is kept.)')) return;
+  const res = await fetch(`/api/smart_playlists/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!res.ok) return showToast('Delete failed', true);
+  loadPlaylists();
+}
+
+function openMergePlaylistsModal() {
+  const ids = [..._plMergeSel];
+  if (ids.length < 2) return showToast('Select at least 2 playlists (checkboxes)', true);
+  const names = ids.map(id => (window._playlists || []).find(p => p.id === id)?.name || id);
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = `
+    <div class="modal-box" style="max-width:480px">
+      <h3 style="margin-top:0"><i class="fa fa-code-merge"></i> Merge playlists</h3>
+      <p class="hint" style="margin:0 0 10px">Merging: ${names.map(n => escHtml(n)).join(', ')}</p>
+      <label style="display:block;margin:8px 0 4px;font-size:13px;color:#888">New playlist name (optional)</label>
+      <input type="text" id="pl-merge-name" class="settings-input" style="width:100%" placeholder="Combined playlist">
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+        <button class="cancel-btn" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+        <button class="save-btn" id="pl-merge-go">Merge</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#pl-merge-go').onclick = async () => {
+    const name = overlay.querySelector('#pl-merge-name').value.trim();
+    const res = await fetch('/api/playlists/merge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sourceIds: ids, name: name || undefined }),
+    });
+    const data = await res.json().catch(() => ({}));
+    overlay.remove();
+    if (!res.ok) return showToast(data.error || 'Merge failed', true);
+    _plMergeSel.clear();
+    showToast(`Merged into "${data.name}" (${data.trackCount} tracks)`);
+    window.location.hash = `playlists/detail/${data.id}`;
+  };
+}
+
+function openAiPlaylistModal() {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = `
+    <div class="modal-box" style="max-width:520px">
+      <h3 style="margin-top:0"><i class="fa fa-wand-magic-sparkles"></i> AI playlist (Claude)</h3>
+      <p class="hint" style="margin:0 0 8px">Describe the vibe — Claude picks tracks from your library. Set <code>claude.apiKey</code> in config.json.</p>
+      <label style="display:block;margin:8px 0 4px;font-size:13px;color:#888">Prompt</label>
+      <textarea id="pl-ai-prompt" class="settings-input" rows="3" style="width:100%" placeholder="Upbeat yacht rock for a summer drive…"></textarea>
+      <label style="display:block;margin:12px 0 4px;font-size:13px;color:#888">Playlist name (optional)</label>
+      <input type="text" id="pl-ai-name" class="settings-input" style="width:100%">
+      <label style="display:block;margin:12px 0 4px;font-size:13px;color:#888">Max tracks</label>
+      <input type="number" id="pl-ai-max" class="settings-input" value="25" min="5" max="80" style="width:80px">
+      <div id="pl-ai-preview" style="margin-top:12px;max-height:200px;overflow:auto;font-size:12px"></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;flex-wrap:wrap">
+        <button class="cancel-btn" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+        <button class="btn-sm btn-default" id="pl-ai-preview-btn">Preview</button>
+        <button class="save-btn" id="pl-ai-save">Create playlist</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const preview = () => overlay.querySelector('#pl-ai-preview');
+  overlay.querySelector('#pl-ai-preview-btn').onclick = async () => {
+    const prompt = overlay.querySelector('#pl-ai-prompt').value.trim();
+    if (!prompt) return showToast('Enter a prompt', true);
+    preview().innerHTML = '<i class="fa fa-spinner fa-spin"></i> Thinking…';
+    const res = await fetch('/api/playlists/ai', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt,
+        name: overlay.querySelector('#pl-ai-name').value.trim() || undefined,
+        maxTracks: parseInt(overlay.querySelector('#pl-ai-max').value, 10) || 25,
+        save: false,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      preview().innerHTML = `<span style="color:#c44">${escHtml(data.error || data.detail || 'Failed')}</span>`;
+      return;
+    }
+    window._plAiPreview = data;
+    if (!overlay.querySelector('#pl-ai-name').value.trim()) overlay.querySelector('#pl-ai-name').value = data.name || '';
+    preview().innerHTML = `<b>${escHtml(data.name)}</b> — ${data.trackCount} tracks<ul style="margin:6px 0;padding-left:18px">${
+      (data.tracks || []).slice(0, 15).map(t => `<li>${escHtml(t.title)}${t.artist ? ' — ' + escHtml(t.artist) : ''}</li>`).join('')
+    }${data.trackCount > 15 ? '<li>…</li>' : ''}</ul>`;
+  };
+  overlay.querySelector('#pl-ai-save').onclick = async () => {
+    const prompt = overlay.querySelector('#pl-ai-prompt').value.trim();
+    if (!prompt) return showToast('Enter a prompt', true);
+    const res = await fetch('/api/playlists/ai', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt,
+        name: overlay.querySelector('#pl-ai-name').value.trim() || undefined,
+        maxTracks: parseInt(overlay.querySelector('#pl-ai-max').value, 10) || 25,
+        save: true,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    overlay.remove();
+    if (!res.ok) return showToast(data.error || data.detail || 'AI failed', true);
+    showToast(`Created "${data.name}" (${data.trackCount} tracks)`);
+    window.location.hash = `playlists/detail/${data.id}`;
+  };
+}
+
+async function loadPlaylistDetail(id) {
+  _plDetailId = id;
+  const remote = await ensureAlexaRemoteStatus();
+  window._plRemote = remote || {};
+  await loadPlaylistDetailPage(false);
+}
+
+async function loadPlaylistDetailPage(quiet) {
+  const id = _plDetailId;
+  if (!id) return;
+  if (!quiet) {
+    const mc = document.getElementById('main-content');
+    if (mc) mc.style.opacity = '0.6';
+  }
+  const q = `page=${_plDetailPage}&limit=${_plDetailPageSize}&sortBy=${encodeURIComponent(_plDetailSort.by)}&order=${encodeURIComponent(_plDetailSort.order)}${_plDetailQ ? '&q=' + encodeURIComponent(_plDetailQ) : ''}`;
+  const data = await fetch(`/api/playlists/${encodeURIComponent(id)}?${q}`).then(r => r.json()).catch(() => null);
+  if (!data || data.error) {
+    renderPage('Playlist', '<div class="empty-state"><p>Playlist not found.</p></div>');
+    return;
+  }
+  window._plDetail = data;
+  renderPlaylistDetailBody();
+  const mc = document.getElementById('main-content');
+  if (mc) mc.style.opacity = '1';
+}
+
+function renderPlaylistDetailBody() {
+  const data = window._plDetail;
+  if (!data) return;
+  const remote = window._plRemote || {};
+  const canPlay = !!(remote.configured);
+  const tracks = data.tracks || [];
+  const total = data.total != null ? data.total : tracks.length;
+  const pageSize = data.limit || _plDetailPageSize;
+  const page = data.page || _plDetailPage;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  if (_plDetailPage > totalPages) _plDetailPage = totalPages;
+  const start = (page - 1) * pageSize;
+  const pageTracks = tracks;
+  const sortBtn = (label, by, order) => {
+    const active = _plDetailSort.by === by && _plDetailSort.order === order;
+    return `<button class="btn-sm btn-default${active ? ' active' : ''}" onclick="plApplyDetailSort('${by}','${order}')">${label}</button>`;
+  };
+  const sortLabel = _plDetailSort.by === 'title' ? 'Track' : (_plDetailSort.by.charAt(0).toUpperCase() + _plDetailSort.by.slice(1));
+  const sortArrow = _plDetailSort.order === 'desc' ? '↓' : '↑';
+  const trackRows = pageTracks.map((t, i) => {
+    const globalIdx = start + i;
+    const pathArg = JSON.stringify(t.path || '');
+    return `
+    <tr data-idx="${globalIdx}">
+      <td class="text-muted" style="width:36px">${globalIdx + 1}</td>
+      <td>${escHtml(t.title || '—')}</td>
+      <td class="text-muted">${escHtml(t.artist || '—')}</td>
+      <td class="text-muted">${escHtml(t.album || '—')}</td>
+      <td class="text-muted">${fmtDuration(t.duration_seconds)}</td>
+      <td>${rowActions(
+        canPlay ? actionBtn({ kind: 'play', onclick: `plPlayTrackAt(${pathArg})`, title: 'Play on device', icon: 'play' }) : '',
+        data.editable !== false ? actionBtn({ kind: 'delete', onclick: `plRemoveTrackAt(${pathArg})`, title: 'Remove from playlist', icon: 'trash' }) : ''
+      )}</td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('page-title').textContent = data.name || 'Playlist';
+  document.getElementById('main-content').innerHTML = `
+    <div class="pl-detail-header">
+      <div>
+        <a href="#playlists" class="btn-sm btn-default" style="margin-right:8px"><i class="fa fa-arrow-left"></i> All playlists</a>
+        <span style="font-size:18px;font-weight:600">${escHtml(data.name)}</span>
+        <span class="badge orange" style="margin-left:8px">${fmtNum(total)} tracks</span>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        ${canPlay ? `<button class="btn-sm btn-primary" onclick="plPlayPlaylist()"><i class="fa fa-play"></i> Play</button>` : ''}
+        ${actionBtn({ kind: 'edit', onclick: 'plRenameDetail()', title: 'Rename', icon: 'pen' })}
+        ${data.sourceName === 'bockmedia' ? actionBtn({ kind: 'delete', onclick: 'plDeleteDetail()', title: 'Delete playlist', icon: 'trash' }) : ''}
+      </div>
+    </div>
+    <p class="page-desc" style="margin:0 0 12px">
+      Sorted by <b>${sortLabel}</b> ${sortArrow} — page ${_plDetailPage} of ${totalPages}
+      (showing ${start + 1}–${Math.min(start + pageSize, total)}). Click column headers to re-sort.
+    </p>
+    <div class="search-bar" style="margin-bottom:12px">
+      <input type="text" placeholder="Filter tracks in this playlist…" value="${escHtml(_plDetailQ)}"
+        oninput="clearTimeout(window._pldq);window._pldq=setTimeout(()=>{plDetailFilter(this.value)},400)">
+    </div>
+    <div class="card">
+      <div class="card-header"><h3><i class="fa fa-sort"></i> Sort tracks</h3></div>
+      <div class="card-body pl-sort-bar">
+        ${sortBtn('Track A→Z', 'title', 'asc')}
+        ${sortBtn('Track Z→A', 'title', 'desc')}
+        ${sortBtn('Artist A→Z', 'artist', 'asc')}
+        ${sortBtn('Artist Z→A', 'artist', 'desc')}
+        ${sortBtn('Album A→Z', 'album', 'asc')}
+        ${sortBtn('Album Z→A', 'album', 'desc')}
+      </div>
+    </div>
+    <div class="card">
+      <table class="data-table pl-tracks-table">
+        <thead><tr>
+          <th>#</th>
+          <th class="pl-sort-th" data-pl-sort-col="track" title="Sort by track">Track ${plSortIndicator(_plDetailSort.by === 'title', _plDetailSort.order)}</th>
+          <th class="pl-sort-th" data-pl-sort-col="artist" title="Sort by artist">Artist ${plSortIndicator(_plDetailSort.by === 'artist', _plDetailSort.order)}</th>
+          <th class="pl-sort-th" data-pl-sort-col="album" title="Sort by album">Album ${plSortIndicator(_plDetailSort.by === 'album', _plDetailSort.order)}</th>
+          <th>Length</th>
+          <th></th>
+        </tr></thead>
+        <tbody>${trackRows || '<tr><td colspan="6" class="text-muted">No tracks</td></tr>'}</tbody>
+      </table>
+      ${buildPagination(total, _plDetailPage, _plDetailPageSize, (p) => { _plDetailPage = p; loadPlaylistDetailPage(true); })}
+    </div>`;
+}
+
+function plDetailFilter(val) {
+  _plDetailQ = (val || '').trim();
+  _plDetailPage = 1;
+  loadPlaylistDetailPage(true);
+}
+
+async function plSortDetail(by, order) {
+  plApplyDetailSort(by, order);
+}
+
+function plPlayPlaylist() {
+  const d = window._plDetail;
+  if (d) playOnDevice({ kind: 'playlist', name: d.name, id: d.id });
+}
+
+function plPlayTrackAt(path) {
+  const t = (window._plDetail && window._plDetail.tracks || []).find(x => x.path === path);
+  if (!t) return;
+  const opts = songPlayOpts(t);
+  if (opts) playOnDevice(opts);
+}
+
+async function plRemoveTrackAt(path) {
+  const d = window._plDetail;
+  if (!d || d.editable === false) return showToast('This playlist cannot be edited here', true);
+  const res = await fetch(`/api/playlists/${encodeURIComponent(d.id)}/tracks/remove`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+  });
+  if (!res.ok) return showToast((await res.json().catch(() => ({}))).error || 'Failed', true);
+  showToast('Track removed');
+  await loadPlaylistDetailPage(true);
+}
+
+async function plRenameDetail() {
+  const d = window._plDetail;
+  if (!d) return;
+  const name = prompt('Playlist name', d.name);
+  if (!name || name === d.name) return;
+  const res = await fetch('/api/playlists/rename', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: d.id, name }),
+  });
+  if (!res.ok) return showToast((await res.json().catch(() => ({}))).error || 'Rename failed', true);
+  loadPlaylistDetail(d.id);
+}
+
+async function plDeleteDetail() {
+  const d = window._plDetail;
+  if (!d || !confirm(`Delete "${d.name}"?`)) return;
+  const res = await fetch(`/api/playlists/${encodeURIComponent(d.id)}`, { method: 'DELETE' });
+  if (!res.ok) return showToast((await res.json().catch(() => ({}))).error || 'Delete failed', true);
+  showToast('Deleted');
+  window.location.hash = 'playlists';
+}
 
 async function ensureAlexaRemoteStatus() {
   if (window._alexaRemote) return window._alexaRemote;
@@ -862,65 +1615,251 @@ async function ensureAlexaRemoteStatus() {
   return window._alexaRemote;
 }
 
-async function loadPlaylists() {
-  const [data, remote] = await Promise.all([
-    API(`/api/playlists?page=${_plPage}&limit=100&search=${encodeURIComponent(_plSearch)}`),
+function invalidateAlexaRemoteStatus() {
+  window._alexaRemote = null;
+}
+
+let _alexaLoginPoll = null;
+
+function alexaLoginStatusLabel(st) {
+  const s = st || 'idle';
+  if (s === 'waiting' || s === 'starting') return 'Waiting for sign-in…';
+  if (s === 'success') return 'Logged in — session saved';
+  if (s === 'error') return 'Login failed';
+  if (s === 'stopped') return 'Cancelled';
+  return 'Not started';
+}
+
+function updateAlexaLoginPanel(st) {
+  const panel = document.getElementById('alexa-login-panel');
+  if (!panel || !st) return;
+  const status = st.status || st.loginStatus || 'idle';
+  const url = st.url || st.loginUrl;
+  const err = st.error || st.loginError;
+  const auth = st.authenticated === true;
+  const waiting = status === 'waiting' || status === 'starting';
+  panel.innerHTML = `
+    <p style="margin:0 0 8px">
+      Status: <b>${auth ? 'Connected' : escHtml(alexaLoginStatusLabel(status))}</b>
+      ${auth ? ` · ${st.deviceCount != null ? st.deviceCount + ' Echoes' : ''}` : ''}
+    </p>
+    ${err ? `<p style="color:#c44;font-size:13px;margin:0 0 8px">${escHtml(err)}</p>` : ''}
+    ${waiting && url ? `<p class="hint" style="margin:0 0 8px">Open this URL on the same network, sign in to Amazon, and choose <b>password</b> if passkey is offered:</p>
+      <a class="btn-sm btn-primary" href="${escHtml(url)}" target="_blank" rel="noopener" style="margin-bottom:8px;display:inline-block"><i class="fa fa-key"></i> Open Amazon login</a>
+      <code style="display:block;font-size:11px;word-break:break-all;margin-bottom:8px">${escHtml(url)}</code>` : ''}
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      ${!auth && !waiting
+        ? `<button class="btn-sm btn-primary" onclick="startAlexaLogin()"><i class="fa fa-key"></i> Start browser login</button>`
+        : ''}
+      ${waiting ? `<button class="btn-sm btn-default" onclick="stopAlexaLogin()">Cancel</button>` : ''}
+      ${auth ? `<button class="btn-sm btn-default" onclick="startAlexaLogin()"><i class="fa fa-rotate"></i> Re-login</button>` : ''}
+    </div>`;
+}
+
+async function pollAlexaLogin() {
+  clearInterval(_alexaLoginPoll);
+  _alexaLoginPoll = setInterval(async () => {
+    const st = await API('/api/alexa_remote/login').catch(() => null);
+    if (!st) return;
+    updateAlexaLoginPanel(st);
+    if (st.authenticated === true) {
+      clearInterval(_alexaLoginPoll);
+      invalidateAlexaRemoteStatus();
+      showToast('Alexa login successful');
+      if (document.getElementById('alexa-login-panel')) {
+        const remote = await ensureAlexaRemoteStatus();
+        updateAlexaLoginPanel({ ...remote, ...st, authenticated: true });
+      }
+      loadHealth();
+      return;
+    }
+    if (st.status === 'success') {
+      clearInterval(_alexaLoginPoll);
+      invalidateAlexaRemoteStatus();
+      showToast('Alexa login successful');
+      return;
+    }
+    if (st.status === 'error' || st.status === 'stopped') {
+      clearInterval(_alexaLoginPoll);
+      showToast(st.error || 'Login cancelled', st.status === 'error');
+    }
+  }, 2000);
+}
+
+async function startAlexaLogin() {
+  const res = await fetch('/api/alexa_remote/login/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    return showToast(data.error || 'Could not start login', true);
+  }
+  updateAlexaLoginPanel(data);
+  pollAlexaLogin();
+  if (data.url) window.open(data.url, '_blank', 'noopener');
+}
+
+async function stopAlexaLogin() {
+  clearInterval(_alexaLoginPoll);
+  await fetch('/api/alexa_remote/login/stop', { method: 'POST' });
+  const st = await API('/api/alexa_remote/login').catch(() => ({}));
+  updateAlexaLoginPanel(st);
+  showToast('Login cancelled');
+}
+
+function buildAlexaRemoteSettingsSection(remote, localIp) {
+  if (!remote || !remote.available) {
+    return `<div class="settings-section">
+      <h4>Alexa Remote — Play on device</h4>
+      <p class="hint" style="color:#c44">alexapy is not installed on this server (<code>pip3 install --user alexapy "aiohttp>=3.10,&lt;3.11"</code>).</p>
+    </div>`;
+  }
+  if (!remote.configured) {
+    return `<div class="settings-section">
+      <h4>Alexa Remote — Play on device</h4>
+      <p class="hint">Add <code>alexaRemote.email</code> and <code>alexaRemote.password</code> to <code>config.json</code>, then use browser login below.</p>
+    </div>`;
+  }
+  const auth = remote.authenticated === true;
+  const host = remote.loginProxyHost || localIp || window.location.hostname;
+  const port = remote.loginProxyPort || 3005;
+  return `<div class="settings-section">
+    <h4>Alexa Remote — Play on device</h4>
+    <p class="hint">Sign in to Amazon so the web UI can start playlists on a specific Echo and run automations. Uses a short-lived login page on this machine (${escHtml(host)}:${port}).</p>
+    <div id="alexa-login-panel"></div>
+    <p class="hint" style="margin-top:10px;font-size:11px">CLI fallback: <code>python3 scripts/alexa_login.py --proxy --host ${escHtml(host)} --port ${port}</code></p>
+  </div>`;
+}
+
+async function loadPlaylists(showSpinner) {
+  if (showSpinner && document.querySelector('.playlists-table')) {
+    document.querySelector('.playlists-table').style.opacity = '0.55';
+  }
+  const searchKey = (_plSearch || '').trim().toLowerCase();
+  const needFetch = !_plAllCache || _plAllCacheSearch !== searchKey;
+  const [listData, remoteStatus, smartData] = await Promise.all([
+    needFetch
+      ? API(`/api/playlists?page=1&limit=10000&search=${encodeURIComponent(_plSearch)}`)
+      : Promise.resolve(null),
     ensureAlexaRemoteStatus(),
+    API('/api/smart_playlists').catch(() => ({ items: [] })),
   ]);
-  const { items = [], total = 0 } = data || {};
+  window._smartPlaylists = (smartData && smartData.items) || [];
+  if (needFetch) {
+    _plAllCache = (listData && listData.items) || [];
+    _plAllCacheSearch = searchKey;
+  }
+  window._plRemote = remoteStatus || window._plRemote || {};
+  renderPlaylistsPage();
+}
+
+function renderPlaylistsPage() {
+  const remote = window._plRemote || {};
+  const canPlay = !!(remote.configured);
+  const sorted = plSortPlaylistsInMemory(_plAllCache || [], _plListSort.by, _plListSort.order);
+  const total = sorted.length;
+  const start = (_plPage - 1) * _plPageSize;
+  const items = sorted.slice(start, start + _plPageSize);
   window._playlists = items;
-  const canPlay = !!(remote && remote.configured);
 
   const rows = items.map((p, i) => {
-    // SourceID in the library XML still tags indexed playlists as "MyMedia";
-    // match the raw data value, but display it under the Bock Media brand.
     const isLibraryPlaylist = !p.source || p.source.includes('MyMedia');
     const typeIcon = p.isAudioBook
       ? `<i class="fa fa-book" title="Audiobook" style="color:#7c4dbd"></i>`
       : `<i class="fa fa-music" title="Music" style="color:#e99d1a"></i>`;
-    const srcDisplay = p.source
-      ? `<span class="source-path" title="${escHtml(p.source)}">${escHtml(p.source)}</span>`
-      : '<span class="text-muted">—</span>';
-    const typeBadge = isLibraryPlaylist
-      ? '<span class="badge orange">Bock Media</span>'
-      : '<span class="badge">File</span>';
+    const srcDisplay = p.sourceName === 'bockmedia'
+      ? '<span class="badge green">Custom</span>'
+      : (p.source && p.source.includes('plex') ? '<span class="badge">Plex</span>' : (
+        isLibraryPlaylist ? '<span class="badge orange">Bock Media</span>' : '<span class="badge">File</span>'));
+    const checked = _plMergeSel.has(p.id) ? 'checked' : '';
+    const mergeCb = p.id
+      ? `<input type="checkbox" class="pl-merge-cb" ${checked} onchange="plToggleMerge('${escHtml(p.id)}', this.checked)">`
+      : '';
     const editBtn = p.id
       ? actionBtn({ kind: 'edit', onclick: `startEditPlaylist(${i})`, title: 'Rename playlist', icon: 'pen' })
+      : '';
+    const viewBtn = p.id
+      ? actionBtn({ kind: 'muted', onclick: `window.location.hash='playlists/detail/${escHtml(p.id)}'`, title: 'View tracks', icon: 'list' })
       : '';
     const playBtn = canPlay
       ? actionBtn({ kind: 'play', onclick: `openPlayMenu(${i})`, title: 'Play on a device', icon: 'play' })
       : '';
+    const nameCell = p.id
+      ? `<a href="#playlists/detail/${escHtml(p.id)}" class="pl-name-link">${escHtml(p.name)}</a>`
+      : `<span class="pl-name-text">${escHtml(p.name)}</span>`;
     return `
     <tr id="pl-row-${i}">
-      <td style="width:32px;text-align:center">${typeIcon}</td>
-      <td><span class="pl-name-text">${escHtml(p.name)}</span></td>
-      <td>${srcDisplay}</td>
-      <td>${typeBadge}</td>
-      <td><span class="badge orange">${fmtNum(p.trackCount)}</span></td>
-      ${rowActions(playBtn, editBtn)}
+      <td class="pl-col-merge" style="width:28px">${mergeCb}</td>
+      <td class="pl-col-icon" style="width:32px;text-align:center">${typeIcon}</td>
+      <td class="pl-col-name">${nameCell}</td>
+      <td class="pl-col-source">${srcDisplay}</td>
+      <td class="pl-col-tracks"><span class="badge orange">${fmtNum(p.trackCount)}</span></td>
+      ${rowActions(playBtn, viewBtn, editBtn)}
     </tr>`;
   }).join('');
+
+  const sortLabel = _plListSort.by === 'trackCount' ? 'Tracks' : 'Name';
+  const sortArrow = _plListSort.order === 'desc' ? '↓' : '↑';
+  const smart = window._smartPlaylists || [];
+  const smartRows = smart.map(s => `
+    <tr>
+      <td><strong>${escHtml(s.name)}</strong></td>
+      <td class="text-muted">${fmtNum(s.trackCount || 0)}</td>
+      <td class="text-muted" style="font-size:11px">${s.lastRefresh ? fmtDateTime(s.lastRefresh) : '—'}</td>
+      <td>${rowActions(
+        s.linkedPlaylistId ? actionBtn({ kind: 'muted', onclick: `window.location.hash='playlists/detail/${escHtml(s.linkedPlaylistId)}'`, title: 'Open', icon: 'list' }) : '',
+        actionBtn({ kind: 'edit', onclick: `refreshSmartPlaylist('${escHtml(s.id)}')`, title: 'Refresh from rules', icon: 'rotate' }),
+        actionBtn({ kind: 'delete', onclick: `deleteSmartPlaylist('${escHtml(s.id)}')`, title: 'Delete', icon: 'trash' })
+      )}</td>
+    </tr>`).join('');
 
   document.getElementById('page-title').textContent = 'Playlists';
   document.getElementById('main-content').innerHTML = `
     <div class="page-desc">
-      This page shows playlists that have been indexed by Bock Media. File based playlists (M3U, M3U8, PLS) are automatically indexed if Bock Media finds them during a scan of a Watch Folder. Use the pencil icon to rename a playlist — Alexa will recognize the new name immediately.
+      ${fmtNum(total)} playlists — sorted by <b>${sortLabel}</b> ${sortArrow} (all pages).
+      Click column headers to re-sort. Page ${_plPage} of ${Math.max(1, Math.ceil(total / _plPageSize))}.
+    </div>
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-header" style="flex-wrap:wrap;gap:8px">
+        <h3><i class="fa fa-wand-magic-sparkles"></i> Smart playlists</h3>
+        <button class="btn-sm btn-primary" onclick="openSmartPlaylistModal()"><i class="fa fa-plus"></i> New rule set</button>
+      </div>
+      <div class="card-body">
+        <p class="hint" style="margin:0 0 10px">Auto-builds a Bock Media playlist from genre, artist, year, and limit rules. Refresh to update tracks.</p>
+        ${smartRows ? `<table class="data-table"><thead><tr><th>Name</th><th>Tracks</th><th>Refreshed</th><th></th></tr></thead><tbody>${smartRows}</tbody></table>`
+          : '<p class="hint" style="margin:0">No smart playlists yet.</p>'}
+      </div>
     </div>
     <div class="card">
-      <div class="card-header">
+      <div class="card-header" style="flex-wrap:wrap;gap:10px">
         <h3><i class="fa fa-list"></i> Playlists (${fmtNum(total)})</h3>
-        <div class="search-bar" style="margin:0">
-          <input type="text" placeholder="Search playlists…" value="${escHtml(_plSearch)}"
-            oninput="clearTimeout(window._sd);window._sd=setTimeout(()=>{_plSearch=this.value;_plPage=1;loadPlaylists()},350)">
+        <div class="pl-toolbar">
+          <div class="search-bar" style="margin:0">
+            <input type="text" placeholder="Search playlists…" value="${escHtml(_plSearch)}"
+              oninput="clearTimeout(window._sd);window._sd=setTimeout(()=>{_plSearch=this.value;_plPage=1;_plAllCache=null;loadPlaylists()},350)">
+          </div>
+          <button class="btn-sm btn-primary" onclick="openNewPlaylistModal()"><i class="fa fa-plus"></i> New</button>
+          <button class="btn-sm btn-default" onclick="openMergePlaylistsModal()"><i class="fa fa-code-merge"></i> Merge</button>
+          <button class="btn-sm btn-default" onclick="openAiPlaylistModal()"><i class="fa fa-wand-magic-sparkles"></i> AI</button>
         </div>
       </div>
       ${rows ? `
       <table class="data-table playlists-table">
-        <thead><tr><th></th><th>Name</th><th>Source</th><th>Type</th><th>Tracks</th><th></th></tr></thead>
+        <thead><tr>
+          <th class="pl-col-merge"></th><th class="pl-col-icon"></th>
+          <th class="pl-sort-th pl-col-name" data-pl-sort="name" title="Sort by name">Name ${plSortIndicator(_plListSort.by === 'name', _plListSort.order)}</th>
+          <th class="pl-col-source">Source</th>
+          <th class="pl-sort-th pl-col-tracks" data-pl-sort="trackCount" title="Sort by track count">Tracks ${plSortIndicator(_plListSort.by === 'trackCount', _plListSort.order)}</th>
+          <th></th>
+        </tr></thead>
         <tbody>${rows}</tbody>
       </table>` : `<div class="empty-state"><i class="fa fa-list"></i><p>No playlists found.</p></div>`}
-      ${buildPagination(total, _plPage, 100, (p) => { _plPage = p; loadPlaylists(); })}
+      ${buildPagination(total, _plPage, _plPageSize, (p) => { _plPage = p; renderPlaylistsPage(); })}
     </div>`;
+  const tbl = document.querySelector('.playlists-table');
+  if (tbl) tbl.style.opacity = '1';
 }
 
 function startEditPlaylist(i) {
@@ -980,8 +1919,16 @@ function openPlayMenu(i) {
 }
 
 // Generic "Play on a device" picker. opts: {kind, name, id?, shuffle?(bool, default allowed)}
+function songPlayOpts(s) {
+  if (!s) return null;
+  const path = s.path || s.filepath || '';
+  const title = s.title || s.track || (path ? path2name(path) : '');
+  if (!title && !path) return null;
+  return { kind: 'song', name: title, artist: s.artist || '', path };
+}
+
 async function playOnDevice(opts) {
-  const { kind, name, id } = opts;
+  const { kind, name, id, artist, path } = opts;
   const allowShuffle = opts.shuffle !== false && kind !== 'song';
   let devices;
   try {
@@ -1006,7 +1953,8 @@ async function playOnDevice(opts) {
   overlay.innerHTML = `
     <div class="modal-box">
       <h3 style="margin-top:0"><i class="fa fa-play"></i> Play "${escHtml(name)}"</h3>
-      <label style="display:block;margin:12px 0 4px;font-size:13px;color:#888">Device</label>
+      <p class="hint" style="margin:0 0 8px">Pick a speaker or a <b>group</b> to play on every member at once.</p>
+      <label style="display:block;margin:12px 0 4px;font-size:13px;color:#888">Device or group</label>
       <select id="play-device" class="settings-input" style="width:100%">${deviceOpts}</select>
       ${shuffleRow}
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
@@ -1024,7 +1972,7 @@ async function playOnDevice(opts) {
     const res = await fetch('/api/alexa_remote/play', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind, id, name, device, shuffle }),
+      body: JSON.stringify({ kind, id, name, artist: artist || '', path: path || '', device, shuffle }),
     });
     const data = await res.json().catch(() => ({}));
     overlay.remove();
@@ -1042,8 +1990,8 @@ function playAlbumAt(i) {
   if (a) playOnDevice({ kind: 'album', name: a.album });
 }
 function playSongAt(i) {
-  const s = (window._songs || [])[i];
-  if (s) playOnDevice({ kind: 'song', name: s.title || path2name(s.path) });
+  const opts = songPlayOpts((window._songs || [])[i]);
+  if (opts) playOnDevice(opts);
 }
 
 // ── Artists ──────────────────────────────────────────────────────────────────
@@ -1836,6 +2784,8 @@ function renderAutomation(remote) {
   }).join('');
 
   const formTitle = editing ? 'Edit automation' : 'New automation';
+  const volEnabled = editing && editing.volume != null && editing.volume !== undefined;
+  const volValue = volEnabled ? editing.volume : 30;
   const formHtml = canPlay ? `
     <div class="card" style="margin-bottom:16px">
       <div class="card-header"><h3><i class="fa fa-plus-circle"></i> ${formTitle}</h3></div>
@@ -1865,6 +2815,18 @@ function renderAutomation(remote) {
           <div class="auto-field">
             <label>Time</label>
             <input type="time" id="auto-time" class="settings-input" value="${escHtml(editing ? (editing.time || '08:00') : '08:00')}">
+          </div>
+          <div class="auto-field" style="grid-column:1/-1">
+            <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+              <input type="checkbox" id="auto-volume-enable" ${volEnabled ? 'checked' : ''}
+                onchange="autoToggleVolumeField()"> Set volume before playlist starts
+            </label>
+            <div class="np-volume" id="auto-volume-row" style="${volEnabled ? '' : 'opacity:0.45'}">
+              <i class="fa fa-volume-low np-volume-icon"></i>
+              <input type="range" id="auto-volume" class="np-volume-slider" min="0" max="100" value="${volValue}"
+                ${volEnabled ? '' : 'disabled'} oninput="autoUpdateVolumeLabel(); autoEnableVolumeOnSlide()">
+              <span class="np-volume-val" id="auto-volume-val">${volValue}</span>
+            </div>
           </div>
           <div class="auto-field" style="grid-column:1/-1">
             <label>Repeat</label>
@@ -1912,7 +2874,7 @@ function renderAutomation(remote) {
         <div class="auto-list-meta">${escHtml(a.playlistName)} · ${escHtml(a.deviceName || a.device)}</div>
       </td>
       <td>${escHtml(a.time)}</td>
-      <td>${escHtml(autoDaysLabel(a.days))}${a.shuffle ? ' · shuffle' : ''}</td>
+      <td>${escHtml(autoDaysLabel(a.days))}${a.shuffle ? ' · shuffle' : ''}${a.volume != null ? ` · vol ${a.volume}` : ''}</td>
       <td>${lastRun}</td>
       <td>${status}</td>
       ${rowActions(
@@ -2010,6 +2972,28 @@ function autoSyncDayPreset() {
   row.style.display = preset === 'custom' ? '' : 'none';
 }
 
+function autoToggleVolumeField() {
+  const on = !!(document.getElementById('auto-volume-enable') || {}).checked;
+  const slider = document.getElementById('auto-volume');
+  const row = document.getElementById('auto-volume-row');
+  if (slider) slider.disabled = !on;
+  if (row) row.style.opacity = on ? '' : '0.45';
+}
+
+function autoEnableVolumeOnSlide() {
+  const cb = document.getElementById('auto-volume-enable');
+  if (cb && !cb.checked) {
+    cb.checked = true;
+    autoToggleVolumeField();
+  }
+}
+
+function autoUpdateVolumeLabel() {
+  const slider = document.getElementById('auto-volume');
+  const valEl = document.getElementById('auto-volume-val');
+  if (slider && valEl) valEl.textContent = slider.value;
+}
+
 function autoCollectDays() {
   const preset = (document.querySelector('input[name=auto-preset]:checked') || {}).value || 'weekdays';
   if (preset !== 'custom') return AUTO_DAY_PRESETS[preset] || AUTO_DAY_PRESETS.weekdays;
@@ -2036,6 +3020,9 @@ async function saveAutomation() {
     days: autoCollectDays(),
     shuffle: !!(document.getElementById('auto-shuffle') || {}).checked,
     enabled: !!(document.getElementById('auto-enabled') || {}).checked,
+    volume: (document.getElementById('auto-volume-enable') || {}).checked
+      ? parseInt((document.getElementById('auto-volume') || {}).value, 10)
+      : null,
   };
   if (!body.playlistName) return showToast('Select a playlist', true);
   if (!body.device) return showToast('Select a device', true);
@@ -2101,11 +3088,12 @@ async function runAutomationNow(id) {
 // ── Settings ─────────────────────────────────────────────────────────────────
 register('settings', async () => {
   loading();
-  const [s, cfg, ipData, health] = await Promise.all([
+  const [s, cfg, ipData, health, remote] = await Promise.all([
     API('/api/settings') || {},
     API('/api/config'),
     API('/api/localip'),
     API('/api/health').catch(() => null),
+    ensureAlexaRemoteStatus().catch(() => ({})),
   ]);
   const settings = s || {};
   const publicUrl = (cfg || {}).publicUrl || '';
@@ -2210,6 +3198,8 @@ register('settings', async () => {
           <span class="ip-display"><i class="fa fa-network-wired" style="color:#e99d1a"></i> ${escHtml(localIp)}</span>
         </div>
 
+        ${buildAlexaRemoteSettingsSection(remote, localIp)}
+
         <div class="settings-section">
           <h4>Account</h4>
           <p class="hint">The user and server instance this console is paired with.</p>
@@ -2248,6 +3238,9 @@ register('settings', async () => {
         </div>
       </div>
     </div>`);
+  updateAlexaLoginPanel(remote);
+  const loginSt = remote.loginStatus || 'idle';
+  if (loginSt === 'waiting' || loginSt === 'starting') pollAlexaLogin();
 });
 
 async function saveSetting(key, value) {
@@ -2388,10 +3381,156 @@ function _anDatePickerHtml(data) {
     <input type="date" id="an-date-to" style="padding:4px 8px;border:1px solid #ccd;border-radius:4px;font-size:12px" onchange="_anTo=this.value;_loadAnalytics()">
     ${activeFilter ? `<button class="btn-sm btn-default" onclick="_anFrom='';_anTo='';_loadAnalytics()"><i class="fa fa-times"></i> Clear</button>` : ''}
     ${activeFilter ? `<span style="font-size:11px;color:#e99d1a"><i class="fa fa-filter"></i> Filtered</span>` : ''}
+    <a class="btn-sm btn-default" href="${anExportUrl()}" style="margin-left:auto"><i class="fa fa-download"></i> Export CSV</a>
   </div>`;
 }
 
+function anExportUrl() {
+  let url = '/api/analytics/export?';
+  if (_anFrom) url += `from=${encodeURIComponent(_anFrom)}&`;
+  if (_anTo) url += `to=${encodeURIComponent(_anTo)}&`;
+  return url;
+}
+
 register('analytics', async () => { _anFrom = ''; _anTo = ''; await _loadAnalytics(); });
+
+// ── Library search ───────────────────────────────────────────────────────────
+let _searchTimer = null;
+
+register('search', async () => {
+  loading();
+  document.getElementById('page-title').textContent = 'Search';
+  document.getElementById('main-content').innerHTML = `
+    <div class="card">
+      <div class="card-body">
+        <input type="search" id="lib-search-q" class="settings-input" style="width:100%;max-width:480px"
+          placeholder="Search songs, artists, albums, playlists…" autofocus
+          oninput="libSearchDebounced(this.value)">
+      </div>
+    </div>
+    <div id="lib-search-results"></div>`;
+  const q = (window._lastSearchQ || '').trim();
+  if (q.length >= 2) libSearchDebounced(q);
+});
+
+function libSearchDebounced(q) {
+  window._lastSearchQ = q;
+  clearTimeout(_searchTimer);
+  _searchTimer = setTimeout(() => libSearchRun(q), 280);
+}
+
+function libSearchPlayOptsFromBtn(btn) {
+  const kind = btn.getAttribute('data-play-kind');
+  const name = btn.getAttribute('data-play-name');
+  const id = btn.getAttribute('data-play-id');
+  const artist = btn.getAttribute('data-play-artist') || '';
+  const path = btn.getAttribute('data-play-path') || '';
+  if (!kind || !name) return null;
+  const opts = { kind, name };
+  if (id) opts.id = id;
+  if (artist) opts.artist = artist;
+  if (path) opts.path = path;
+  return opts;
+}
+
+function libSearchHit(icon, labelHtml, playOpts, extraActions, canPlay) {
+  let playBtn = '';
+  if (canPlay && playOpts) {
+    const idAttr = playOpts.id ? ` data-play-id="${escHtml(playOpts.id)}"` : '';
+    const artistAttr = playOpts.artist ? ` data-play-artist="${escHtml(playOpts.artist)}"` : '';
+    const pathAttr = playOpts.path ? ` data-play-path="${escHtml(playOpts.path)}"` : '';
+    playBtn = `<button type="button" class="action-btn action-play lib-search-play" data-play-kind="${escHtml(playOpts.kind)}" data-play-name="${escHtml(playOpts.name)}"${idAttr}${artistAttr}${pathAttr} title="Play on a device" aria-label="Play on a device"><i class="fa fa-play"></i></button>`;
+  }
+  return `<div class="search-hit">
+    <span class="search-hit-label">${icon} ${labelHtml}</span>
+    <div class="search-hit-actions row-actions">${extraActions || ''}${playBtn}</div>
+  </div>`;
+}
+
+function libSearchLink(href, text) {
+  return `<a href="${href}" class="search-hit-link">${escHtml(text)}</a>`;
+}
+
+function setupSearchDelegation() {
+  if (window._searchDelegation) return;
+  window._searchDelegation = true;
+  document.addEventListener('click', (e) => {
+    const playBtn = e.target.closest('.lib-search-play');
+    if (playBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      const opts = libSearchPlayOptsFromBtn(playBtn);
+      if (!opts) return showToast('Invalid search result', true);
+      playOnDevice(opts).catch((err) => showToast(err.message || 'Failed to open player', true));
+      return;
+    }
+    const starBtn = e.target.closest('.lib-search-star');
+    if (starBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      const path = starBtn.getAttribute('data-fav-path');
+      const title = starBtn.getAttribute('data-fav-title');
+      const artist = starBtn.getAttribute('data-fav-artist') || '';
+      if (!path) return;
+      libFavorite(path, title, artist);
+    }
+  });
+}
+
+async function libSearchRun(q) {
+  const el = document.getElementById('lib-search-results');
+  if (!el) return;
+  q = (q || '').trim();
+  if (q.length < 2) {
+    el.innerHTML = '<p class="hint" style="padding:12px">Type at least 2 characters.</p>';
+    return;
+  }
+  el.innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
+  const [data, remote] = await Promise.all([
+    API(`/api/search?q=${encodeURIComponent(q)}`),
+    ensureAlexaRemoteStatus(),
+  ]);
+  if (!data) {
+    el.innerHTML = '<p class="hint" style="padding:12px">Search failed — try again.</p>';
+    return;
+  }
+  const canPlay = !!(remote && remote.configured);
+  const sec = (title, rows) => rows.length
+    ? `<div class="search-section"><h3 style="font-size:13px;color:#7a8aa8;margin:0 0 8px">${title}</h3>${rows}</div>`
+    : '';
+  const pl = (data.playlists || []).map((p) => {
+    const href = p.id ? `#playlists/detail/${encodeURIComponent(p.id)}` : '';
+    const label = href ? libSearchLink(href, p.name) : escHtml(p.name);
+    return libSearchHit('<i class="fa fa-list"></i>', label, { kind: 'playlist', name: p.name, id: p.id }, '', canPlay);
+  }).join('');
+  const ar = (data.artists || []).map((a) => {
+    const href = `#songs/artist/${encodeURIComponent(a.name)}`;
+    return libSearchHit('<i class="fa fa-microphone"></i>', libSearchLink(href, a.name), { kind: 'artist', name: a.name }, '', canPlay);
+  }).join('');
+  const al = (data.albums || []).map((a) => {
+    const href = `#songs/album/${encodeURIComponent(a.name)}`;
+    const label = `${libSearchLink(href, a.name)}${a.artist ? ` <span class="text-muted">— ${escHtml(a.artist)}</span>` : ''}`;
+    return libSearchHit('<i class="fa fa-compact-disc"></i>', label, { kind: 'album', name: a.name }, '', canPlay);
+  }).join('');
+  const sg = (data.songs || []).map((s) => {
+    const label = `${escHtml(s.title)}${s.artist ? ` <span class="text-muted">— ${escHtml(s.artist)}</span>` : ''}`;
+    const star = `<button type="button" class="action-btn action-muted lib-search-star" data-fav-path="${escHtml(s.path || '')}" data-fav-title="${escHtml(s.title || '')}" data-fav-artist="${escHtml(s.artist || '')}" title="Star" aria-label="Star"><i class="fa fa-star"></i></button>`;
+    return libSearchHit('<i class="fa fa-music"></i>', label, { kind: 'song', name: s.title, artist: s.artist || '', path: s.path || '' }, star, canPlay);
+  }).join('');
+  const body = sec('Playlists', pl) + sec('Artists', ar) + sec('Albums', al) + sec('Songs', sg);
+  const noPlayHint = canPlay ? '' : '<p class="hint" style="padding:0 12px 12px">Configure Alexa remote in Settings to play on a device.</p>';
+  el.innerHTML = (body || '<p class="hint" style="padding:12px">No matches.</p>') + noPlayHint;
+}
+
+async function libFavorite(path, title, artist) {
+  const res = await fetch('/api/favorites', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path, title, artist }),
+  });
+  if (res.ok) showToast(`Starred "${title}"`);
+  else showToast('Failed', true);
+}
 
 function _buildAnalyticsHTML(d) {
   const sk  = d.listeningStreak  || {current: d.currentStreak || 0, longest: d.longestStreak || 0};
@@ -2918,6 +4057,9 @@ async function init() {
     }
     navigate(hash);
   });
+
+  setupPlaylistSortDelegation();
+  setupSearchDelegation();
 
   // Initial route
   const hash = window.location.hash.replace('#', '') || 'dashboard';
