@@ -34,8 +34,9 @@
     "loginProxyPort": 3005
   },
   "mobileApi": {
-    "_comment": "Optional. Lets the native Android app reach /api/* through the Cloudflare tunnel. Set the same token in the app Setup screen.",
+    "_comment": "Required for Android app over port-forward or Cloudflare tunnel. Generate token: python3 -c \"import secrets; print(secrets.token_urlsafe(32))\"",
     "token": "GENERATE_AND_SET_LOCALLY",
-    "allowTunnelApi": false
+    "allowTunnelApi": false,
+    "allowExternalAccess": true
   }
 }

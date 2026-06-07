@@ -83,15 +83,17 @@ in slot values.
 
 ### Security
 
-- The Flask app is exposed publicly only via the Cloudflare tunnel; the
-  `check_auth` hook hard-rejects any tunneled request that isn't under
-  `/alexa`, `/stream/`, `/artwork/`, `/music`, or `/oauth/`.
-- All Alexa requests get full **request-signature verification**: cert URL
-  validation, SAN check for `echo-api.amazon.com`, RSA-SHA1 signature
-  validation, ±150 s timestamp window, and `applicationId` pinning to the
-  skill ID.
-- LAN requests can be optionally protected with HTTP Basic auth driven by
-  the `WebPassword` preference.
+- **Cloudflare tunnel** (`alexa.morejava.bid`): Alexa/stream paths only; admin
+  UI and `/api/*` blocked unless `mobileApi.allowTunnelApi` + Bearer token.
+- **Direct port-forward** (public IP `:3001`): All requests require **HTTP Basic
+  auth** (admin + `WebPassword`) and/or **`mobileApi` Bearer token** with
+  `allowExternalAccess: true`. Anonymous `/stream/` and `/artwork/` are blocked
+  from the internet. Alexa skill endpoints refuse direct-IP access (tunnel only).
+- Alexa requests over the tunnel get full **request-signature verification**:
+  cert URL validation, SAN check for `echo-api.amazon.com`, RSA-SHA1 signature
+  validation, ±150 s timestamp window, and `applicationId` pinning to the skill ID.
+- LAN requests can optionally use HTTP Basic auth (`RequirePassword` /
+  `WebPassword`). `/api/config` secrets are redacted for Bearer-only clients.
 
 ### Music Skill API (experimental)
 

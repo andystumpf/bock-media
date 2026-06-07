@@ -17,6 +17,7 @@ import socket
 import datetime
 import threading
 import uuid
+import ipaddress
 from logging.handlers import RotatingFileHandler
 from urllib.parse import quote, urlparse
 from urllib.request import urlopen
@@ -109,10 +110,9 @@ def apply_logging():
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
-# Paths Alexa fetches over the public tunnel — must remain publicly reachable.
-# Everything else is LAN-only; Cloudflare-tunneled requests to other paths are
-# rejected with 403 so the admin console is never exposed to the internet.
-_PUBLIC_PREFIXES = ('/alexa', '/stream/', '/artwork/', '/music', '/oauth/')
+# Paths Alexa fetches over the Cloudflare tunnel — reachable without admin login.
+# Direct port-forward hits (public IP :3001) must NOT treat these as public.
+_ALEXA_TUNNEL_PREFIXES = ('/alexa', '/stream/', '/artwork/', '/music', '/oauth/')
 
 def _is_tunnel_request():
     # Cloudflare cloudflared adds Cf-Connecting-Ip (and Cf-Ray) on every tunneled
@@ -122,6 +122,84 @@ def _is_tunnel_request():
         request.headers.get('Cf-Connecting-Ip')
         or request.headers.get('Cf-Ray')
     )
+
+def _client_ip():
+    """Best-effort client IP. Trust Cf-Connecting-Ip only on Cloudflare tunnel hits."""
+    if _is_tunnel_request():
+        cf = (request.headers.get('Cf-Connecting-Ip') or '').strip()
+        if cf:
+            return cf.split(',')[0].strip()
+    return (request.remote_addr or '').strip()
+
+def _is_private_ip(ip):
+    if not ip:
+        return False
+    ip = ip.split('%')[0].strip()
+    try:
+        addr = ipaddress.ip_address(ip)
+        return addr.is_private or addr.is_loopback or addr.is_link_local
+    except ValueError:
+        return False
+
+def _is_external_request():
+    """True for direct internet hits (e.g. router port-forward to :3001), not LAN."""
+    return not _is_private_ip(_client_ip())
+
+def _cfg_flag(section, key, default=False):
+    try:
+        v = (load_config().get(section) or {}).get(key, default)
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, str):
+            return v.strip().lower() in ('true', '1', 'yes', 'on')
+        return bool(v)
+    except Exception:
+        return default
+
+def _basic_auth_ok():
+    stored = get_pref('WebPassword', '').strip()
+    if not stored:
+        return False
+    auth = request.authorization
+    return bool(auth and auth.username == 'admin' and auth.password == stored)
+
+def _mobile_api_token_ok():
+    auth_header = request.headers.get('Authorization', '')
+    if not auth_header.startswith('Bearer '):
+        return False
+    try:
+        ma = load_config().get('mobileApi') or {}
+        expected = ma.get('token', '').strip()
+        token = auth_header[7:].strip()
+        if not expected or token != expected:
+            return False
+        ext = _is_external_request() and not _is_tunnel_request()
+        tun = _is_tunnel_request()
+        if ext:
+            return _cfg_flag('mobileApi', 'allowExternalAccess')
+        if tun:
+            return _cfg_flag('mobileApi', 'allowTunnelApi')
+        return True
+    except Exception:
+        return False
+
+def _mobile_api_only():
+    """True when this request authenticated via Bearer token (not Basic)."""
+    return _mobile_api_token_ok() and not _basic_auth_ok()
+
+def _redact_config(cfg):
+    redacted = dict(cfg)
+    for key in ('alexaRemote', 'mspOauth', 'claude', 'mobileApi'):
+        if key in redacted:
+            redacted[key] = {'_redacted': True}
+    return redacted
+
+def _auth_required():
+    return Response('Authentication required', 401,
+                    {'WWW-Authenticate': 'Basic realm="Bock Media"'})
+
+def _forbidden(msg='Forbidden'):
+    return Response(msg, 403, {'Content-Type': 'text/plain; charset=utf-8'})
 
 # Alexa request-signature verification per
 # https://developer.amazon.com/en-US/docs/alexa/custom-skills/host-a-custom-skill-as-a-web-service.html
@@ -202,35 +280,39 @@ def check_auth():
         rng = request.headers.get('Range', '')
         print(f"[STREAM] {request.method} {request.path} ua={ua!r} range={rng!r}", flush=True)
 
-    is_public_path = any(request.path.startswith(p) for p in _PUBLIC_PREFIXES)
+    is_alexa_tunnel_path = any(request.path.startswith(p) for p in _ALEXA_TUNNEL_PREFIXES)
+    external = _is_external_request()
+    tunnel = _is_tunnel_request()
 
-    if _is_tunnel_request() and not is_public_path:
-        # Allow mobile app API via Bearer token (config.json → mobileApi.token)
-        auth_header = request.headers.get('Authorization', '')
-        if auth_header.startswith('Bearer ') and request.path.startswith('/api/'):
-            try:
-                cfg = load_config()
-                expected = (cfg.get('mobileApi') or {}).get('token', '').strip()
-                token = auth_header[7:].strip()
-                if expected and token == expected and (cfg.get('mobileApi') or {}).get('allowTunnelApi'):
-                    return None
-            except Exception:
-                pass
-        return Response('Forbidden ', 403,
-                        {'Content-Type': 'text/plain; charset=utf-8'})
+    # Direct port-forward / public-IP access (:3001) — never expose Alexa paths or
+    # anonymous streams. Require admin Basic auth and/or mobileApi Bearer token.
+    if external and not tunnel:
+        if not _cfg_flag('mobileApi', 'allowExternalAccess'):
+            return _forbidden('External access disabled')
+        if any(request.path.startswith(p) for p in ('/alexa', '/music', '/oauth/')):
+            return _forbidden('Alexa endpoints use the Cloudflare tunnel only')
+        if _mobile_api_token_ok() or _basic_auth_ok():
+            return None
+        return _auth_required()
 
-    if is_public_path:
+    if tunnel and not is_alexa_tunnel_path:
+        if request.path.startswith('/api/') and _mobile_api_token_ok():
+            return None
+        return _forbidden()
+
+    if is_alexa_tunnel_path and (tunnel or not external):
         return None
+
+    if request.path.startswith('/api/') and _mobile_api_token_ok():
+        return None
+
     if get_pref('RequirePassword', '').lower() != 'true':
         return None
-    stored = get_pref('WebPassword', '').strip()
-    if not stored:
+    if not get_pref('WebPassword', '').strip():
         return None
-    auth = request.authorization
-    if not auth or auth.username != 'admin' or auth.password != stored:
-        return Response('Authentication required', 401,
-                        {'WWW-Authenticate': 'Basic realm="Bock Media"'})
-    return None
+    if _basic_auth_ok():
+        return None
+    return _auth_required()
 
 # ── Static files ─────────────────────────────────────────────────────────────
 
@@ -2933,14 +3015,19 @@ def local_ip():
 
 @app.route('/api/config', methods=['GET', 'POST'])
 def config_endpoint():
-    if request.method == 'GET':
-        return jsonify(load_config())
-    data = request.get_json() or {}
+    if request.method == 'POST':
+        if _mobile_api_only():
+            return jsonify({'error': 'forbidden'}), 403
+        data = request.get_json() or {}
+        cfg = load_config()
+        cfg.update(data)
+        with open(CONFIG_PATH, 'w') as f:
+            json.dump(cfg, f, indent=2)
+        return jsonify({'ok': True})
     cfg = load_config()
-    cfg.update(data)
-    with open(CONFIG_PATH, 'w') as f:
-        json.dump(cfg, f, indent=2)
-    return jsonify({'ok': True})
+    if _mobile_api_only():
+        return jsonify(_redact_config(cfg))
+    return jsonify(cfg)
 
 # ── Audio Streaming ───────────────────────────────────────────────────────────
 
