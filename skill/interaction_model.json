@@ -161,7 +161,9 @@
           "samples": [
             "start file token {FileToken}",
             "start token {FileToken}",
-            "play file token {FileToken}"
+            "play file token {FileToken}",
+            "start playlist token {FileToken}",
+            "mix playlist token {FileToken}"
           ]
         },
         {

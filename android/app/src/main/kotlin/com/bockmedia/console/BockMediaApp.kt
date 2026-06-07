@@ -37,9 +37,12 @@ class BockMediaApp(context: Context) {
         val user = preferences.adminUser.first()
         val pass = preferences.adminPass.first()
         val token = preferences.mobileToken.first()
+        val local = preferences.getLocalServerUrlSync()
+        val external = preferences.getExternalServerUrlSync()
         return ServerEndpointResolver.resolve(
             preferences = preferences,
-            authClient = buildHttpClient(user, pass, token),
+            localProbeClient = buildPlainHttpClient(),
+            externalProbeClient = buildHttpClient(user, pass, token, local, external),
             forceRefresh = forceRefresh,
         )
     }
@@ -49,6 +52,8 @@ class BockMediaApp(context: Context) {
         val user = preferences.adminUser.first()
         val pass = preferences.adminPass.first()
         val token = preferences.mobileToken.first()
+        val local = preferences.getLocalServerUrlSync()
+        val external = preferences.getExternalServerUrlSync()
         if (cachedApi != null && cachedBaseUrl == base &&
             cachedAdminUser == user && cachedAdminPass == pass && cachedMobileToken == token
         ) {
@@ -58,7 +63,7 @@ class BockMediaApp(context: Context) {
         cachedAdminUser = user
         cachedAdminPass = pass
         cachedMobileToken = token
-        val client = buildHttpClient(user, pass, token)
+        val client = buildHttpClient(user, pass, token, local, external)
         val contentType = "application/json".toMediaType()
         cachedApi = Retrofit.Builder()
             .baseUrl("$base/")
@@ -79,14 +84,37 @@ class BockMediaApp(context: Context) {
         val user = preferences.adminUser.first()
         val pass = preferences.adminPass.first()
         val token = preferences.mobileToken.first()
-        return buildHttpClient(user, pass, token)
+        val local = preferences.getLocalServerUrlSync()
+        val external = preferences.getExternalServerUrlSync()
+        return buildHttpClient(user, pass, token, local, external)
     }
 
-    private fun buildHttpClient(user: String?, pass: String?, token: String?): OkHttpClient {
+    private fun buildPlainHttpClient(): OkHttpClient {
         return OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
-            .addInterceptor(BockAuthInterceptor({ user }, { pass }, { token }))
+            .apply {
+                if (BuildConfig.DEBUG) {
+                    addInterceptor(HttpLoggingInterceptor().apply {
+                        level = HttpLoggingInterceptor.Level.BASIC
+                    })
+                }
+            }
+            .build()
+    }
+
+    private fun buildHttpClient(
+        user: String?,
+        pass: String?,
+        token: String?,
+        localUrl: String?,
+        externalUrl: String?,
+    ): OkHttpClient {
+        val localHosts = AppPreferences.localHosts(localUrl, externalUrl)
+        return OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .addInterceptor(BockAuthInterceptor({ localHosts }, { user }, { pass }, { token }))
             .apply {
                 if (BuildConfig.DEBUG) {
                     addInterceptor(HttpLoggingInterceptor().apply {

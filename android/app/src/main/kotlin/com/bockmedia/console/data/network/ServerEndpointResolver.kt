@@ -20,7 +20,8 @@ object ServerEndpointResolver {
 
     suspend fun resolve(
         preferences: AppPreferences,
-        authClient: OkHttpClient,
+        localProbeClient: OkHttpClient,
+        externalProbeClient: OkHttpClient,
         forceRefresh: Boolean = false,
     ): String = withContext(Dispatchers.IO) {
         if (!forceRefresh) {
@@ -33,14 +34,22 @@ object ServerEndpointResolver {
 
         val local = preferences.getLocalServerUrlSync()
         val external = preferences.getExternalServerUrlSync()
-        val probeClient = authClient.newBuilder()
+        val probeClient = localProbeClient.newBuilder()
             .connectTimeout(2, TimeUnit.SECONDS)
             .readTimeout(2, TimeUnit.SECONDS)
             .callTimeout(3, TimeUnit.SECONDS)
             .build()
+        val externalClient = externalProbeClient.newBuilder()
+            .connectTimeout(4, TimeUnit.SECONDS)
+            .readTimeout(4, TimeUnit.SECONDS)
+            .callTimeout(6, TimeUnit.SECONDS)
+            .build()
 
         if (!local.isNullOrBlank() && probe(probeClient, local)) {
             return@withContext cache(AppPreferences.normalizeUrl(local))
+        }
+        if (!external.isNullOrBlank() && probe(externalClient, external)) {
+            return@withContext cache(AppPreferences.normalizeUrl(external))
         }
         if (!external.isNullOrBlank()) {
             return@withContext cache(AppPreferences.normalizeUrl(external))

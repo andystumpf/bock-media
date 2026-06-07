@@ -141,5 +141,22 @@ class AppPreferences(private val context: Context) {
             }
             return "${normalizeUrl(base)}/artwork/$encoded"
         }
+
+        fun hostOf(raw: String?): String? {
+            if (raw.isNullOrBlank()) return null
+            return try {
+                java.net.URI(normalizeUrl(raw)).host?.lowercase()
+            } catch (_: Exception) {
+                null
+            }
+        }
+
+        fun localHosts(localUrl: String?, externalUrl: String?): Set<String> {
+            return buildSet {
+                hostOf(localUrl)?.let { add(it) }
+                add("localhost")
+                add("127.0.0.1")
+            }
+        }
     }
 }

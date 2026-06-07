@@ -149,9 +149,7 @@ def _host_ip():
     return (request.host or '').split(':')[0].strip().lower()
 
 def _is_lan_request():
-    """True when the browser/server URL is on the local network."""
-    if _is_private_ip(_client_ip()):
-        return True
+    """True when the request Host is a private/local address (e.g. 192.168.x)."""
     host = _host_ip()
     if host in ('localhost',):
         return True
@@ -1063,7 +1061,46 @@ def _play_file_token_from_query(query):
     return _consume_play_file_token(m.group(1)) if m else None
 
 
-def _build_play_text(kind, name, shuffle, artist=None, path=None):
+# UI playlist plays use a short token so Alexa hears an exact phrase instead of
+# garbling long playlist titles (which causes fuzzy-match failures / timeouts).
+_PLAYLIST_TOKENS = {}
+_PLAYLIST_TOKEN_LOCK = threading.Lock()
+_PLAYLIST_TOKEN_TTL = 180.0
+
+
+def _register_play_playlist_token(playlist_id, name, source):
+    token = uuid.uuid4().hex[:8]
+    now = time.time()
+    with _PLAYLIST_TOKEN_LOCK:
+        for k in [k for k, v in _PLAYLIST_TOKENS.items() if v['exp'] < now]:
+            del _PLAYLIST_TOKENS[k]
+        _PLAYLIST_TOKENS[token] = {
+            'id': str(playlist_id),
+            'name': name or '',
+            'source': (source or '').strip(),
+            'exp': now + _PLAYLIST_TOKEN_TTL,
+        }
+    return token
+
+
+def _consume_play_playlist_token(raw):
+    token = re.sub(r'[^a-f0-9]', '', (raw or '').lower())
+    if not token:
+        return None
+    with _PLAYLIST_TOKEN_LOCK:
+        entry = _PLAYLIST_TOKENS.get(token)
+        if not entry or entry['exp'] < time.time():
+            return None
+        return dict(entry)
+
+
+def _play_playlist_token_from_query(query):
+    q = (query or '').strip().lower()
+    m = re.search(r'(?:playlist\s+)?token\s+([a-f0-9]{6,12})\b', q)
+    return _consume_play_playlist_token(m.group(1)) if m else None
+
+
+def _build_play_text(kind, name, shuffle, artist=None, path=None, playlist_id=None, playlist_source=None):
     """Build a collision-safe utterance that routes to our custom skill.
 
     "play"/"shuffle" get grabbed by Amazon's music domain; "start"/"mix" route
@@ -1089,7 +1126,15 @@ def _build_play_text(kind, name, shuffle, artist=None, path=None):
         else:
             phrase = f"the song {name}"
     else:  # playlist
-        phrase = f"the {name} playlist"
+        pid = (playlist_id or '').strip()
+        src = (playlist_source or '').strip()
+        if pid:
+            if not src:
+                _, src = _msp_playlist_by_id(pid)
+            token = _register_play_playlist_token(pid, name, src)
+            phrase = f"playlist token {token}"
+        else:
+            phrase = f"the {name} playlist"
     return f"ask {alias} to {verb} {phrase}"
 
 
@@ -1317,10 +1362,16 @@ def play_on_device():
     if not device:
         return jsonify({'error': 'device required'}), 400
     if not name and pid and kind == 'playlist':
-        name, _ = _msp_playlist_by_id(pid)
+        name, playlist_source = _msp_playlist_by_id(pid)
+    else:
+        playlist_source = _msp_playlist_by_id(pid)[1] if pid and kind == 'playlist' else None
     if not name:
         return jsonify({'error': 'name or id required'}), 400
-    text = _build_play_text(kind, name, shuffle, artist=artist, path=fpath)
+    text = _build_play_text(
+        kind, name, shuffle, artist=artist, path=fpath,
+        playlist_id=pid if kind == 'playlist' else None,
+        playlist_source=playlist_source,
+    )
     try:
         targets = _expand_play_targets(device)
     except ValueError as e:
@@ -3477,7 +3528,18 @@ def _upcoming_tracks_for_token(token, limit=5):
 
 # ── M3U Parser ───────────────────────────────────────────────────────────────
 
+_M3U_PARSE_CACHE = {}
+_M3U_CACHE_MAX = 96
+
 def parse_m3u(filepath):
+    try:
+        mtime = os.path.getmtime(filepath)
+    except OSError:
+        return []
+    cache_key = (filepath, mtime)
+    cached = _M3U_PARSE_CACHE.get(cache_key)
+    if cached is not None:
+        return list(cached)
     tracks = []
     base_dir = os.path.dirname(filepath)
     try:
@@ -3491,6 +3553,9 @@ def parse_m3u(filepath):
                     tracks.append(path)
     except Exception as e:
         print(f'M3U parse error {filepath}: {e}')
+    if len(_M3U_PARSE_CACHE) >= _M3U_CACHE_MAX:
+        _M3U_PARSE_CACHE.clear()
+    _M3U_PARSE_CACHE[cache_key] = tracks
     return tracks
 
 # ── Playlist library (create / merge / sort / AI) ────────────────────────────
@@ -3875,6 +3940,13 @@ def playlist_detail(playlist_id):
 
 def _tracks_from_source(source):
     return parse_m3u(source) if source and os.path.isfile(source) else []
+
+
+def _tracks_for_playlist(playlist_id, source):
+    """Load playlist tracks using the enriched cache when an id is known."""
+    if playlist_id and source:
+        return _playlist_paths_cached(playlist_id, source)
+    return _tracks_from_source(source)
 
 
 @app.route('/api/playlists', methods=['POST'])
@@ -5771,7 +5843,7 @@ def alexa_skill():
             else:
                 name, source, pid = None, None, None
             if name and source and os.path.isfile(source):
-                tracks = parse_m3u(source)
+                tracks = _tracks_for_playlist(pid, source)
                 if tracks:
                     do_shuffle = get_pref('DefaultPlaylistShuffle', '').lower() == 'true'
                     return start_playing(tracks, shuffle=do_shuffle,
@@ -5797,6 +5869,16 @@ def alexa_skill():
             query = sv('PlaylistName')
             if not query:
                 return alexa_speak("Which playlist would you like to play?", end_session=False)
+            token_entry = _play_playlist_token_from_query(query)
+            if token_entry:
+                name = token_entry.get('name') or 'playlist'
+                pid = token_entry.get('id')
+                source = token_entry.get('source')
+                tracks = _tracks_for_playlist(pid, source)
+                if not tracks:
+                    return alexa_speak(f"The playlist {name} has no playable tracks.")
+                return start_playing(tracks, speech=f"Playing {name}.",
+                                    playlist=name, playlist_id=pid)
             token_entry = _play_file_token_from_query(query)
             if token_entry and os.path.isfile(token_entry['path']):
                 label = token_entry['title']
@@ -5820,7 +5902,7 @@ def alexa_skill():
                     tracks, label = recovered
                     return start_playing(tracks, speech=f"Playing {label}.", context=f'Song · {label}')
                 return alexa_speak(f"Sorry, I couldn't find a playlist called {query}.")
-            tracks = parse_m3u(source) if source and os.path.isfile(source) else []
+            tracks = _tracks_for_playlist(pid, source)
             if not tracks:
                 return alexa_speak(f"The playlist {name} has no playable tracks.")
             return start_playing(tracks, speech=f"Playing {name}.",
@@ -5831,6 +5913,16 @@ def alexa_skill():
             query = sv('PlaylistName')
             if not query:
                 return alexa_speak("Which playlist would you like to shuffle?", end_session=False)
+            token_entry = _play_playlist_token_from_query(query)
+            if token_entry:
+                name = token_entry.get('name') or 'playlist'
+                pid = token_entry.get('id')
+                source = token_entry.get('source')
+                tracks = _tracks_for_playlist(pid, source)
+                if not tracks:
+                    return alexa_speak(f"The playlist {name} has no playable tracks.")
+                return start_playing(tracks, shuffle=True, speech=f"Shuffling {name}.",
+                                    playlist=name, playlist_id=pid)
             entry = best_playlist_entry(query)
             name = entry[1] if entry else None
             source = entry[2] if entry else None
@@ -5838,7 +5930,7 @@ def alexa_skill():
             print(f'[ALEXA DEBUG] ShufflePlaylistIntent query={repr(query)} -> name={repr(name)} source={repr(source)}', flush=True)
             if not name:
                 return alexa_speak(f"Sorry, I couldn't find a playlist called {query}.")
-            tracks = parse_m3u(source) if source and os.path.isfile(source) else []
+            tracks = _tracks_for_playlist(pid, source)
             if not tracks:
                 return alexa_speak(f"The playlist {name} has no playable tracks.")
             return start_playing(tracks, shuffle=True, speech=f"Shuffling {name}.",
@@ -5942,6 +6034,16 @@ def alexa_skill():
         elif iname == 'PlayFileTokenIntent':
             token_raw = sv('FileToken')
             entry = _consume_play_file_token(token_raw)
+            if not entry:
+                pl_entry = _consume_play_playlist_token(token_raw)
+                if pl_entry:
+                    name = pl_entry.get('name') or 'playlist'
+                    pid = pl_entry.get('id')
+                    source = pl_entry.get('source')
+                    tracks = _tracks_for_playlist(pid, source)
+                    if tracks:
+                        return start_playing(tracks, speech=f"Playing {name}.",
+                                            playlist=name, playlist_id=pid)
             if not entry or not os.path.isfile(entry['path']):
                 return alexa_speak("Sorry, I couldn't find that track.")
             label = entry['title']

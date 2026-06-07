@@ -238,16 +238,20 @@ data class SmartPlaylist(
 data class ArtistsResponse(val items: List<ArtistItem> = emptyList(), val total: Int = 0)
 
 @Serializable
-data class ArtistItem(val name: String = "", val tracks: Int = 0, val albums: Int = 0)
+data class ArtistItem(
+    @SerialName("artist") val name: String = "",
+    @SerialName("track_count") val tracks: Int = 0,
+    @SerialName("album_count") val albums: Int = 0,
+)
 
 @Serializable
 data class AlbumsResponse(val items: List<AlbumItem> = emptyList(), val total: Int = 0)
 
 @Serializable
 data class AlbumItem(
-    val name: String = "",
+    @SerialName("album") val name: String = "",
     val artist: String? = null,
-    val tracks: Int = 0,
+    @SerialName("track_count") val tracks: Int = 0,
     val year: Int? = null,
 )
 

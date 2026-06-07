@@ -69,8 +69,8 @@ fun SetupScreen(onConnected: () -> Unit) {
             singleLine = true,
         )
         Spacer(Modifier.height(8.dp))
-        OutlinedTextField(adminUser, { adminUser = it }, label = { Text("Username") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-        OutlinedTextField(adminPass, { adminPass = it }, label = { Text("Password") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+        OutlinedTextField(adminUser, { adminUser = it }, label = { Text("Username (external only)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+        OutlinedTextField(adminPass, { adminPass = it }, label = { Text("Password (external only)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
         OutlinedTextField(mobileToken, { mobileToken = it }, label = { Text("Mobile API token") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
         Row(
             Modifier.fillMaxWidth().padding(top = 8.dp),
@@ -92,8 +92,8 @@ fun SetupScreen(onConnected: () -> Unit) {
                         error = "Invalid local URL"
                     external.isNotBlank() && !AppPreferences.isValidUrl(external) ->
                         error = "Invalid external URL"
-                    adminUser.isBlank() || adminPass.isBlank() ->
-                        error = "Enter username and password"
+                    external.isNotBlank() && (adminUser.isBlank() || adminPass.isBlank()) ->
+                        error = "Username and password required for external URL"
                     else -> scope.launch {
                         loading = true
                         error = null
@@ -128,8 +128,8 @@ fun SetupScreen(onConnected: () -> Unit) {
         }
         Spacer(Modifier.height(16.dp))
         Text(
-            "Tries local URL first (2s), then external.\n" +
-                "External URL needs password + mobile API token when away from home.",
+            "Tries local URL first (no password). Falls back to external when away.\n" +
+                "Password is only sent to the external URL.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
