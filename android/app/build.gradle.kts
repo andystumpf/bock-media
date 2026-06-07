@@ -29,11 +29,15 @@ android {
         val externalServerUrl = prop("bockmedia.externalServerUrl")
             .ifBlank { "http://142.56.8.193:3001" }
         val mobileApiToken = prop("bockmedia.mobileApiToken")
-            .ifBlank { "T2TmM-enxMn6gxJP9aI-Mc0mj-UGV4BX5o4C6NMWBwI" }
+            .ifBlank { "LXAddEVrzkaoWBgHXqHYEFr2e2UprVL0" }
+        val adminUser = prop("bockmedia.adminUser").ifBlank { "morejava" }
+        val adminPassword = prop("bockmedia.adminPassword").ifBlank { "TwWnvnNS7qKFJ1JagSk2" }
         buildConfigField("String", "DEFAULT_LOCAL_SERVER_URL", "\"$localServerUrl\"")
         buildConfigField("String", "DEFAULT_EXTERNAL_SERVER_URL", "\"$externalServerUrl\"")
         buildConfigField("String", "DEFAULT_SERVER_URL", "\"$localServerUrl\"")
         buildConfigField("String", "DEFAULT_MOBILE_API_TOKEN", "\"$mobileApiToken\"")
+        buildConfigField("String", "DEFAULT_ADMIN_USER", "\"$adminUser\"")
+        buildConfigField("String", "DEFAULT_ADMIN_PASSWORD", "\"$adminPassword\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

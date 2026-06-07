@@ -1,11 +1,147 @@
 // Bock Media frontend app
 
-const API = (path) => fetch(path).then(r => r.json()).catch(() => null);
-const POST = (path, body) => fetch(path, {
+const AUTH_STORAGE_KEY = 'bockmedia_auth';
+let _requirePassword = false;
+
+async function refreshAuthInfo() {
+  const info = await fetch('/api/auth/info').then(r => r.json()).catch(() => ({}));
+  _requirePassword = !!info.requirePassword;
+  return info;
+}
+
+function authRequired() {
+  return _requirePassword;
+}
+
+function getStoredAuth() {
+  try {
+    const raw = localStorage.getItem(AUTH_STORAGE_KEY) || sessionStorage.getItem(AUTH_STORAGE_KEY);
+    if (!raw) return null;
+    const a = JSON.parse(raw);
+    return (a && a.user && a.pass) ? a : null;
+  } catch { return null; }
+}
+
+function storeAuth(user, pass, remember) {
+  const payload = JSON.stringify({ user, pass });
+  sessionStorage.removeItem(AUTH_STORAGE_KEY);
+  localStorage.removeItem(AUTH_STORAGE_KEY);
+  if (remember) localStorage.setItem(AUTH_STORAGE_KEY, payload);
+  else sessionStorage.setItem(AUTH_STORAGE_KEY, payload);
+}
+
+function clearStoredAuth() {
+  localStorage.removeItem(AUTH_STORAGE_KEY);
+  sessionStorage.removeItem(AUTH_STORAGE_KEY);
+}
+
+function authHeaders() {
+  if (!authRequired()) return {};
+  const a = getStoredAuth();
+  if (!a) return {};
+  return { Authorization: 'Basic ' + btoa(unescape(encodeURIComponent(a.user + ':' + a.pass))) };
+}
+
+function authFetch(input, init = {}) {
+  const headers = { ...authHeaders(), ...(init.headers || {}) };
+  return fetch(input, { ...init, headers });
+}
+
+const API = (path) => authFetch(path).then(r => {
+  if (r.status === 401 && authRequired()) { showLoginModal(); return null; }
+  return r.json();
+}).catch(() => null);
+
+const POST = (path, body) => authFetch(path, {
   method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
+  headers: { 'Content-Type': 'application/json', ...authHeaders() },
   body: JSON.stringify(body),
-}).then(r => r.json()).catch(() => null);
+}).then(r => {
+  if (r.status === 401 && authRequired()) { showLoginModal(); return null; }
+  return r.json();
+}).catch(() => null);
+
+function showLoginModal() {
+  if (document.getElementById('login-overlay')) return;
+  const overlay = document.createElement('div');
+  overlay.id = 'login-overlay';
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal-box" style="max-width:380px">
+      <h3 style="margin-top:0"><i class="fa fa-lock"></i> Sign in</h3>
+      <p class="hint" style="margin:0 0 12px">Bock Media console login</p>
+      <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px">
+        <input type="text" id="login-user" class="settings-input" placeholder="Username" autocomplete="username">
+        <input type="password" id="login-pass" class="settings-input" placeholder="Password" autocomplete="current-password">
+        <label style="font-size:13px;display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" id="login-remember" checked> Remember me
+        </label>
+      </div>
+      <p id="login-error" class="hint" style="color:#c0392b;display:none;margin:8px 0 0"></p>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">
+        <button class="btn-sm btn-primary" id="login-submit"><i class="fa fa-right-to-bracket"></i> Sign in</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  fetch('/api/auth/info').then(r => r.json()).then(info => {
+    const u = document.getElementById('login-user');
+    if (u && info && info.username) u.value = info.username;
+  }).catch(() => {});
+  const saved = getStoredAuth();
+  if (saved) {
+    document.getElementById('login-user').value = saved.user;
+    document.getElementById('login-pass').value = saved.pass;
+  }
+  document.getElementById('login-submit').onclick = () => submitLogin();
+  document.getElementById('login-pass').onkeydown = (e) => { if (e.key === 'Enter') submitLogin(); };
+}
+
+async function submitLogin() {
+  const user = (document.getElementById('login-user') || {}).value || '';
+  const pass = (document.getElementById('login-pass') || {}).value || '';
+  const remember = !!(document.getElementById('login-remember') || {}).checked;
+  const errEl = document.getElementById('login-error');
+  if (!user || !pass) {
+    if (errEl) { errEl.textContent = 'Enter username and password'; errEl.style.display = ''; }
+    return;
+  }
+  storeAuth(user, pass, remember);
+  const r = await authFetch('/api/health');
+  if (r.ok) {
+    document.getElementById('login-overlay')?.remove();
+    const hash = window.location.hash.replace('#', '') || 'dashboard';
+    navigate(hash);
+    refreshCurrentTrack();
+    return;
+  }
+  clearStoredAuth();
+  if (errEl) { errEl.textContent = 'Invalid username or password'; errEl.style.display = ''; }
+}
+
+async function ensureAuth() {
+  await refreshAuthInfo();
+  document.getElementById('login-overlay')?.remove();
+  if (!authRequired()) return;
+  if (getStoredAuth()) {
+    const r = await authFetch('/api/health');
+    if (r.ok) return;
+    clearStoredAuth();
+  }
+  showLoginModal();
+  return new Promise((resolve) => {
+    const iv = setInterval(() => {
+      if (!authRequired() || (getStoredAuth() && !document.getElementById('login-overlay'))) {
+        clearInterval(iv);
+        resolve();
+      }
+    }, 200);
+  });
+}
+
+function signOut() {
+  clearStoredAuth();
+  if (authRequired()) showLoginModal();
+}
 
 // Format helpers
 function fmtNum(n) { return Number(n || 0).toLocaleString(); }
@@ -3180,15 +3316,32 @@ register('settings', async () => {
         </div>
 
         <div class="settings-section">
-          <h4>Admin Account Password</h4>
-          <p class="hint">Protects the web console with HTTP Basic Auth. Username is always <strong>admin</strong>. Does not affect Alexa streaming.</p>
-          ${toggle('s-pass', 'Require password for web console', requirePw, 'togglePasswordField(this.checked)')}
+          <h4>Admin Account</h4>
+          <p class="hint">Password is required only for external access (cellular / port-forward). The LAN address (e.g. 192.168.x.x) is open. Does not affect Alexa streaming.</p>
+          ${toggle('s-pass', 'Require password for external access', requirePw, 'togglePasswordField(this.checked)')}
           <div id="s-pass-fields" style="${requirePw ? '' : 'display:none'}; margin-top:10px">
             <div class="settings-row">
+              <label style="font-size:12px;color:#667;min-width:100px">Username</label>
+              <input type="text" id="s-web-username" class="settings-input" value="${escHtml(settings.webUsername || 'morejava')}" autocomplete="username">
+              <button class="btn-sm btn-primary" onclick="saveWebUsername()">Set</button>
+            </div>
+            <div class="settings-row" style="margin-top:8px">
               <label style="font-size:12px;color:#667;min-width:100px">New Password</label>
               <input type="password" id="s-web-password" class="settings-input" placeholder="Enter password" autocomplete="new-password">
               <button class="btn-sm btn-primary" onclick="savePassword()">Set</button>
             </div>
+            <div class="settings-row" style="margin-top:8px">
+              <button class="btn-sm btn-default" type="button" onclick="signOut()"><i class="fa fa-right-from-bracket"></i> Sign out</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <h4>Mobile API token</h4>
+          <p class="hint">Used by the Android app on cellular / port-forward. Stored in <code>config.json</code> → <code>mobileApi.token</code>.</p>
+          <div class="settings-row">
+            <input type="text" id="s-mobile-token" class="settings-input wide" value="${escHtml((cfg.mobileApi && cfg.mobileApi.token) || '')}" placeholder="Bearer token">
+            <button class="btn-sm btn-primary" onclick="saveMobileApiToken()">Save</button>
           </div>
         </div>
 
@@ -3295,10 +3448,34 @@ async function savePassword() {
   const r = await POST('/api/settings', { webPassword: pw, requirePassword: 'true' });
   if (r && r.ok) {
     document.getElementById('s-web-password').value = '';
+    const user = (document.getElementById('s-web-username') || {}).value || '';
+    const remember = !!localStorage.getItem(AUTH_STORAGE_KEY);
+    if (user) storeAuth(user, pw, remember);
     showToast('Password set');
   } else {
     showToast('Failed to set password', true);
   }
+}
+
+async function saveWebUsername() {
+  const user = ((document.getElementById('s-web-username') || {}).value || '').trim();
+  if (!user) { showToast('Enter a username', true); return; }
+  const r = await POST('/api/settings', { webUsername: user });
+  if (r && r.ok) {
+    const a = getStoredAuth();
+    if (a) storeAuth(user, a.pass, !!localStorage.getItem(AUTH_STORAGE_KEY));
+    showToast('Username saved');
+  } else {
+    showToast('Failed to save username', true);
+  }
+}
+
+async function saveMobileApiToken() {
+  const token = ((document.getElementById('s-mobile-token') || {}).value || '').trim();
+  if (!token) { showToast('Enter a token', true); return; }
+  const r = await POST('/api/config', { mobileApi: { token } });
+  if (r && r.ok) showToast('Mobile API token saved');
+  else showToast('Failed to save token', true);
 }
 
 async function savePublicUrl(url) {
@@ -4045,7 +4222,20 @@ function dismissBanner() {
 }
 
 // ── Init ─────────────────────────────────────────────────────────────────────
+function installAuthFetch() {
+  if (window._bockAuthFetchInstalled) return;
+  window._bockAuthFetchInstalled = true;
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = (input, init = {}) => {
+    const headers = { ...authHeaders(), ...(init.headers || {}) };
+    return nativeFetch(input, { ...init, headers });
+  };
+}
+
 async function init() {
+  await refreshAuthInfo();
+  installAuthFetch();
+  await ensureAuth();
   // Stop Now Playing poll when navigating away from it
   window.addEventListener('hashchange', () => {
     const hash = window.location.hash.replace('#', '');

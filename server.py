@@ -143,7 +143,19 @@ def _is_private_ip(ip):
 
 def _is_external_request():
     """True for direct internet hits (e.g. router port-forward to :3001), not LAN."""
-    return not _is_private_ip(_client_ip())
+    return not _is_lan_request()
+
+def _host_ip():
+    return (request.host or '').split(':')[0].strip().lower()
+
+def _is_lan_request():
+    """True when the browser/server URL is on the local network."""
+    if _is_private_ip(_client_ip()):
+        return True
+    host = _host_ip()
+    if host in ('localhost',):
+        return True
+    return _is_private_ip(host)
 
 def _cfg_flag(section, key, default=False):
     try:
@@ -156,12 +168,15 @@ def _cfg_flag(section, key, default=False):
     except Exception:
         return default
 
+def _web_username():
+    return (get_pref('WebUsername', '') or 'morejava').strip() or 'morejava'
+
 def _basic_auth_ok():
     stored = get_pref('WebPassword', '').strip()
     if not stored:
         return False
     auth = request.authorization
-    return bool(auth and auth.username == 'admin' and auth.password == stored)
+    return bool(auth and auth.username == _web_username() and auth.password == stored)
 
 def _mobile_api_bearer_value():
     auth_header = request.headers.get('Authorization', '')
@@ -198,6 +213,12 @@ def _redact_config(cfg):
         if key in redacted:
             redacted[key] = {'_redacted': True}
     return redacted
+
+def _api_auth_required():
+    """Credentials required for direct external hits (port-forward), not on LAN."""
+    if _is_tunnel_request() or _is_lan_request():
+        return False
+    return _cfg_flag('mobileApi', 'allowExternalAccess')
 
 def _auth_required():
     return Response('Authentication required', 401,
@@ -280,6 +301,9 @@ def _verify_alexa_signature(raw_body, body_json):
 
 @app.before_request
 def check_auth():
+    if request.path == '/api/auth/info':
+        return None
+
     if request.path.startswith('/stream/') or request.path.startswith('/artwork/'):
         ua = request.headers.get('User-Agent', '')
         rng = request.headers.get('Range', '')
@@ -311,13 +335,7 @@ def check_auth():
     if request.path.startswith('/api/') and _mobile_api_token_ok():
         return None
 
-    if get_pref('RequirePassword', '').lower() != 'true':
-        return None
-    if not get_pref('WebPassword', '').strip():
-        return None
-    if _basic_auth_ok():
-        return None
-    return _auth_required()
+    return None  # LAN open; external credentials enforced above
 
 # ── Static files ─────────────────────────────────────────────────────────────
 
@@ -1932,6 +1950,8 @@ SETTINGS_MAP = {
     'flacSupport':          'FlacSupport',
     'replayGain':           'ReplayGain',
     'requirePassword':      'RequirePassword',
+    'webUsername':          'WebUsername',
+    'webPassword':          'WebPassword',
     'autoImportPlaylists':  'AutoImportPlaylists',
     'suppressAutoScan':     'SuppressAutoScan',
     'sendAlbumArt':         'SendAlbumArt',
@@ -1940,8 +1960,15 @@ SETTINGS_MAP = {
     'scanIgnoreFiles':      'ScanIgnoreFiles',
     'bypassProxy':          'BypassProxy',
     'allowExternalAccess':  'AllowExternalAccess',
-    'webPassword':          'WebPassword',
 }
+
+@app.route('/api/auth/info')
+def auth_info():
+    """Public login hints (no password)."""
+    return jsonify({
+        'requirePassword': _api_auth_required(),
+        'username': _web_username(),
+    })
 
 @app.route('/api/settings', methods=['GET'])
 def settings_get():
@@ -3004,8 +3031,20 @@ def cfg_bool(key, default=False):
     return default
 
 
+_DEFAULT_ALEXA_PUBLIC_URL = 'https://alexa.morejava.bid'
+
 def get_public_url():
-    return load_config().get('publicUrl', '').rstrip('/')
+    raw = (load_config().get('publicUrl') or '').strip().rstrip('/')
+    if not raw:
+        return _DEFAULT_ALEXA_PUBLIC_URL
+    if raw.startswith('https://') or raw.startswith('http://'):
+        return raw
+    # Bare hostname (no scheme) — assume HTTPS tunnel.
+    if not re.match(r'^\d+\.\d+\.\d+\.\d+(:\d+)?$', raw):
+        return f'https://{raw}'
+    # Bare IP/port-forward is not a valid Alexa stream base (Echo needs HTTPS tunnel).
+    print(f'[WARN] publicUrl {raw!r} ignored for Alexa streams; using {_DEFAULT_ALEXA_PUBLIC_URL}', flush=True)
+    return _DEFAULT_ALEXA_PUBLIC_URL
 
 @app.route('/api/localip')
 def local_ip():
@@ -3025,6 +3064,15 @@ def config_endpoint():
             return jsonify({'error': 'forbidden'}), 403
         data = request.get_json() or {}
         cfg = load_config()
+        if isinstance(data.get('mobileApi'), dict):
+            cfg.setdefault('mobileApi', {}).update(data.pop('mobileApi'))
+        url = data.get('publicUrl')
+        if url is not None:
+            url = (url or '').strip().rstrip('/')
+            if url and not url.startswith('https://'):
+                return jsonify({'error': 'publicUrl must start with https:// (use your Cloudflare tunnel hostname, not a bare IP)'}), 400
+            if url and re.match(r'^https://\d+\.\d+\.\d+\.\d+', url):
+                return jsonify({'error': 'publicUrl must be a tunnel hostname (e.g. https://alexa.morejava.bid), not a raw IP'}), 400
         cfg.update(data)
         with open(CONFIG_PATH, 'w') as f:
             json.dump(cfg, f, indent=2)

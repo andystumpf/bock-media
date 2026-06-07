@@ -28,6 +28,14 @@ class MainActivity : ComponentActivity() {
                 val scope = rememberCoroutineScope()
 
                 LaunchedEffect(Unit) {
+                    app.preferences.clearCredentialsIfNotRemembered()
+                    if (app.preferences.isRememberMeSync()) {
+                        app.preferences.applyBuildDefaultsIfEmpty()
+                        if (app.hasServerUrl()) {
+                            runCatching { app.repository.testConnection() }
+                                .onSuccess { hasServer = true; return@LaunchedEffect }
+                        }
+                    }
                     hasServer = app.hasServerUrl()
                 }
 

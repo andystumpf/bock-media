@@ -12,6 +12,7 @@ import androidx.compose.ui.unit.dp
 import com.bockmedia.console.BockMediaApp
 import com.bockmedia.console.BuildConfig
 import com.bockmedia.console.data.local.AppPreferences
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import retrofit2.HttpException
 
@@ -22,18 +23,33 @@ fun SetupScreen(onConnected: () -> Unit) {
     val scope = rememberCoroutineScope()
     var localUrl by remember { mutableStateOf(BuildConfig.DEFAULT_LOCAL_SERVER_URL) }
     var externalUrl by remember { mutableStateOf(BuildConfig.DEFAULT_EXTERNAL_SERVER_URL) }
-    var adminUser by remember { mutableStateOf("admin") }
-    var adminPass by remember { mutableStateOf("") }
+    var adminUser by remember { mutableStateOf(BuildConfig.DEFAULT_ADMIN_USER) }
+    var adminPass by remember { mutableStateOf(BuildConfig.DEFAULT_ADMIN_PASSWORD) }
     var mobileToken by remember { mutableStateOf(BuildConfig.DEFAULT_MOBILE_API_TOKEN) }
+    var rememberMe by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        localUrl = app.preferences.getLocalServerUrlSync()
+            ?: BuildConfig.DEFAULT_LOCAL_SERVER_URL
+        externalUrl = app.preferences.getExternalServerUrlSync()
+            ?: BuildConfig.DEFAULT_EXTERNAL_SERVER_URL
+        adminUser = app.preferences.adminUser.first()
+            ?: BuildConfig.DEFAULT_ADMIN_USER
+        adminPass = app.preferences.adminPass.first()
+            ?: BuildConfig.DEFAULT_ADMIN_PASSWORD
+        mobileToken = app.preferences.mobileToken.first()
+            ?: BuildConfig.DEFAULT_MOBILE_API_TOKEN
+        rememberMe = app.preferences.isRememberMeSync()
+    }
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text("Bock Media", style = MaterialTheme.typography.headlineMedium)
-        Text("Connect to your server", style = MaterialTheme.typography.bodyMedium)
+        Text("Sign in to your server", style = MaterialTheme.typography.bodyMedium)
         Spacer(Modifier.height(24.dp))
         OutlinedTextField(
             localUrl,
@@ -53,9 +69,16 @@ fun SetupScreen(onConnected: () -> Unit) {
             singleLine = true,
         )
         Spacer(Modifier.height(8.dp))
-        OutlinedTextField(adminUser, { adminUser = it }, label = { Text("Admin user") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-        OutlinedTextField(adminPass, { adminPass = it }, label = { Text("Admin password") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+        OutlinedTextField(adminUser, { adminUser = it }, label = { Text("Username") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+        OutlinedTextField(adminPass, { adminPass = it }, label = { Text("Password") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
         OutlinedTextField(mobileToken, { mobileToken = it }, label = { Text("Mobile API token") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+        Row(
+            Modifier.fillMaxWidth().padding(top = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Checkbox(checked = rememberMe, onCheckedChange = { rememberMe = it })
+            Text("Remember me", style = MaterialTheme.typography.bodyMedium)
+        }
         error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 8.dp)) }
         Spacer(Modifier.height(16.dp))
         Button(
@@ -69,14 +92,17 @@ fun SetupScreen(onConnected: () -> Unit) {
                         error = "Invalid local URL"
                     external.isNotBlank() && !AppPreferences.isValidUrl(external) ->
                         error = "Invalid external URL"
+                    adminUser.isBlank() || adminPass.isBlank() ->
+                        error = "Enter username and password"
                     else -> scope.launch {
                         loading = true
                         error = null
+                        app.preferences.setRememberMe(rememberMe)
                         app.preferences.setServerUrls(
                             local = local.takeIf { it.isNotBlank() },
                             external = external.takeIf { it.isNotBlank() },
                         )
-                        app.preferences.setAdminCredentials(adminUser.takeIf { it.isNotBlank() }, adminPass.takeIf { it.isNotBlank() })
+                        app.preferences.setAdminCredentials(adminUser.trim(), adminPass)
                         app.preferences.setMobileToken(mobileToken.takeIf { it.isNotBlank() })
                         app.invalidateApi()
                         app.repository.testConnection()
@@ -84,7 +110,7 @@ fun SetupScreen(onConnected: () -> Unit) {
                             .onFailure { e ->
                                 error = when (e) {
                                     is HttpException -> when (e.code()) {
-                                        401 -> "Authentication failed — check password and mobile API token"
+                                        401 -> "Authentication failed — check username, password, and mobile API token"
                                         403 -> "External API blocked — set mobileApi.allowExternalAccess in config.json"
                                         else -> "HTTP ${e.code()}"
                                     }
@@ -98,12 +124,12 @@ fun SetupScreen(onConnected: () -> Unit) {
             enabled = !loading,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            if (loading) CircularProgressIndicator(Modifier.size(20.dp)) else Text("Connect")
+            if (loading) CircularProgressIndicator(Modifier.size(20.dp)) else Text("Sign in")
         }
         Spacer(Modifier.height(16.dp))
         Text(
             "Tries local URL first (2s), then external.\n" +
-                "External URL needs admin password + mobileApi token when away from home.",
+                "External URL needs password + mobile API token when away from home.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
@@ -20,6 +21,9 @@ class AppPreferences(private val context: Context) {
     private val keyAdminUser = stringPreferencesKey("admin_user")
     private val keyAdminPass = stringPreferencesKey("admin_pass")
     private val keyMobileToken = stringPreferencesKey("mobile_token")
+    private val keyRememberMe = booleanPreferencesKey("remember_me")
+
+    val rememberMe: Flow<Boolean> = context.dataStore.data.map { it[keyRememberMe] == true }
 
     val localServerUrl: Flow<String?> = context.dataStore.data.map { it[keyLocalUrl] }
     val externalServerUrl: Flow<String?> = context.dataStore.data.map { it[keyExternalUrl] }
@@ -65,6 +69,38 @@ class AppPreferences(private val context: Context) {
     suspend fun setMobileToken(token: String?) {
         context.dataStore.edit {
             if (token.isNullOrBlank()) it.remove(keyMobileToken) else it[keyMobileToken] = token
+        }
+    }
+
+    suspend fun isRememberMeSync(): Boolean = rememberMe.first()
+
+    suspend fun setRememberMe(remember: Boolean) {
+        context.dataStore.edit { prefs ->
+            if (remember) prefs[keyRememberMe] = true else prefs.remove(keyRememberMe)
+        }
+    }
+
+    suspend fun clearCredentialsIfNotRemembered() {
+        if (!isRememberMeSync()) {
+            setAdminCredentials(null, null)
+            setMobileToken(null)
+        }
+    }
+
+    suspend fun applyBuildDefaultsIfEmpty() {
+        if (hasAnyServerUrl()) return
+        setServerUrls(
+            local = com.bockmedia.console.BuildConfig.DEFAULT_LOCAL_SERVER_URL.takeIf { it.isNotBlank() },
+            external = com.bockmedia.console.BuildConfig.DEFAULT_EXTERNAL_SERVER_URL.takeIf { it.isNotBlank() },
+        )
+        if (adminUser.first().isNullOrBlank()) {
+            setAdminCredentials(
+                com.bockmedia.console.BuildConfig.DEFAULT_ADMIN_USER.takeIf { it.isNotBlank() },
+                com.bockmedia.console.BuildConfig.DEFAULT_ADMIN_PASSWORD.takeIf { it.isNotBlank() },
+            )
+        }
+        if (mobileToken.first().isNullOrBlank()) {
+            setMobileToken(com.bockmedia.console.BuildConfig.DEFAULT_MOBILE_API_TOKEN.takeIf { it.isNotBlank() })
         }
     }
 
