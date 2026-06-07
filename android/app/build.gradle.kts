@@ -13,24 +13,26 @@ android {
         applicationId = "com.bockmedia.console"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "2.0.0"
+        versionCode = 4
+        versionName = "2.0.1"
+        // Bock Media server endpoints (override via local.properties if needed)
         val localProps = rootProject.file("local.properties")
-        val serverUrl = if (localProps.exists()) {
+        fun prop(name: String) = if (localProps.exists()) {
             localProps.readLines()
-                .firstOrNull { it.startsWith("bockmedia.serverUrl=") }
+                .firstOrNull { it.startsWith("$name=") }
                 ?.substringAfter("=")
                 ?.trim()
                 ?: ""
         } else ""
-        val mobileApiToken = if (localProps.exists()) {
-            localProps.readLines()
-                .firstOrNull { it.startsWith("bockmedia.mobileApiToken=") }
-                ?.substringAfter("=")
-                ?.trim()
-                ?: ""
-        } else ""
-        buildConfigField("String", "DEFAULT_SERVER_URL", "\"$serverUrl\"")
+        val localServerUrl = prop("bockmedia.localServerUrl")
+            .ifBlank { "http://192.168.1.187:3001" }
+        val externalServerUrl = prop("bockmedia.externalServerUrl")
+            .ifBlank { "http://142.56.8.193:3001" }
+        val mobileApiToken = prop("bockmedia.mobileApiToken")
+            .ifBlank { "T2TmM-enxMn6gxJP9aI-Mc0mj-UGV4BX5o4C6NMWBwI" }
+        buildConfigField("String", "DEFAULT_LOCAL_SERVER_URL", "\"$localServerUrl\"")
+        buildConfigField("String", "DEFAULT_EXTERNAL_SERVER_URL", "\"$externalServerUrl\"")
+        buildConfigField("String", "DEFAULT_SERVER_URL", "\"$localServerUrl\"")
         buildConfigField("String", "DEFAULT_MOBILE_API_TOKEN", "\"$mobileApiToken\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

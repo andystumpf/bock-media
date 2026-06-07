@@ -14,27 +14,27 @@ Full **Jetpack Compose** client for the Bock Media Flask API — feature parity 
 2. Optional `android/local.properties`:
    ```
    sdk.dir=/path/to/Android/sdk
-   bockmedia.serverUrl=http://192.168.1.187:3001
+   bockmedia.localServerUrl=http://192.168.1.187:3001
+   bockmedia.externalServerUrl=http://142.56.8.193:3001
+   bockmedia.mobileApiToken=your-token
    ```
 3. Debug: `./gradlew assembleDebug`
 4. Release: see [keystore setup](#release) below
 
 ## First launch
 
-Enter your server URL (`http://192.168.x.x:3001` on LAN). Phone must reach the server (same Wi‑Fi or VPN).
+Enter **local** (LAN) and **external** (public IP) URLs. The app probes local first (~2s), then uses external when away from home.
 
-**Public URL (`https://alexa.morejava.bid`):** `/api/*` is blocked on the tunnel by default. Options:
+**External URL** (`http://YOUR_PUBLIC_IP:3001`) requires `config.json`:
 
-1. **VPN (recommended):** Tailscale/WireGuard → use LAN IP in app
-2. **Port forward (`http://YOUR_PUBLIC_IP:3001`):** Requires auth — set in `config.json`:
-   ```json
-   "mobileApi": {
-     "token": "your-long-random-token",
-     "allowExternalAccess": true
-   }
-   ```
-   Enter admin password + the same token in Setup. External access without token/password returns 401.
-3. **Cloudflare tunnel token:** `"allowTunnelApi": true` with the same token (tunnel only)
+```json
+"mobileApi": {
+  "token": "your-long-random-token",
+  "allowExternalAccess": true
+}
+```
+
+Enter admin password + the same token in Setup.
 
 ## Screens (web parity)
 

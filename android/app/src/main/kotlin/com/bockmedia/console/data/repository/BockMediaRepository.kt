@@ -12,6 +12,7 @@ class ApiException(val code: String, message: String) : Exception(message)
 
 class BockMediaRepository(
     private val apiProvider: suspend () -> BockMediaApi,
+    private val baseUrlProvider: suspend () -> String,
     private val preferences: AppPreferences,
 ) {
     private suspend fun api() = apiProvider()
@@ -57,7 +58,7 @@ class BockMediaRepository(
     suspend fun identifyStatus() = api().identifyStatus()
 
     suspend fun artworkUrl(filepath: String?): String? {
-        val base = preferences.getServerUrlSync() ?: return null
+        val base = runCatching { baseUrlProvider() }.getOrNull() ?: return null
         return AppPreferences.artworkUrl(base, filepath)
     }
 

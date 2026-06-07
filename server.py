@@ -163,14 +163,19 @@ def _basic_auth_ok():
     auth = request.authorization
     return bool(auth and auth.username == 'admin' and auth.password == stored)
 
-def _mobile_api_token_ok():
+def _mobile_api_bearer_value():
     auth_header = request.headers.get('Authorization', '')
-    if not auth_header.startswith('Bearer '):
+    if auth_header.startswith('Bearer '):
+        return auth_header[7:].strip()
+    return (request.headers.get('X-BockMedia-Token') or '').strip()
+
+def _mobile_api_token_ok():
+    token = _mobile_api_bearer_value()
+    if not token:
         return False
     try:
         ma = load_config().get('mobileApi') or {}
         expected = ma.get('token', '').strip()
-        token = auth_header[7:].strip()
         if not expected or token != expected:
             return False
         ext = _is_external_request() and not _is_tunnel_request()

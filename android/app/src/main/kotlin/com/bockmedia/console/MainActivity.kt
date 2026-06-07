@@ -5,6 +5,11 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.*
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import coil.Coil
+import coil.ImageLoader
 import com.bockmedia.console.ui.navigation.BockApp
 import com.bockmedia.console.ui.setup.SetupScreen
 import com.bockmedia.console.ui.theme.BockMediaTheme
@@ -26,6 +31,30 @@ class MainActivity : ComponentActivity() {
                     hasServer = app.hasServerUrl()
                 }
 
+                LaunchedEffect(hasServer) {
+                    if (hasServer == true) {
+                        runCatching {
+                            val client = app.buildAuthenticatedHttpClient()
+                            Coil.setImageLoader(
+                                ImageLoader.Builder(this@MainActivity)
+                                    .okHttpClient(client)
+                                    .build(),
+                            )
+                        }
+                    }
+                }
+
+                val lifecycleOwner = LocalLifecycleOwner.current
+                DisposableEffect(lifecycleOwner, app, hasServer) {
+                    val observer = LifecycleEventObserver { _, event ->
+                        if (event == Lifecycle.Event.ON_RESUME && hasServer == true) {
+                            app.invalidateApi()
+                        }
+                    }
+                    lifecycleOwner.lifecycle.addObserver(observer)
+                    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+                }
+
                 when (hasServer) {
                     null -> { /* loading */ }
                     false -> SetupScreen {
@@ -35,7 +64,7 @@ class MainActivity : ComponentActivity() {
                         repository = app.repository,
                         onChangeServer = {
                             scope.launch {
-                                app.preferences.setServerUrl("")
+                                app.preferences.clearServerUrls()
                                 app.invalidateApi()
                                 hasServer = false
                             }

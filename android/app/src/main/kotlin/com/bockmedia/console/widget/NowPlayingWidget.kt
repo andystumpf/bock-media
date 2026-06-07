@@ -41,7 +41,7 @@ object NowPlayingWidget {
     fun updateOne(context: Context, mgr: AppWidgetManager, widgetId: Int) {
         val views = RemoteViews(context.packageName, R.layout.widget_now_playing)
         val app = BockMediaApp.get(context)
-        val base = kotlinx.coroutines.runBlocking { app.preferences.getServerUrlSync() }
+        val base = BockMediaApp.activeBaseUrlBlocking(context)
 
         if (base.isNullOrBlank()) {
             bindEmpty(views, context, widgetId, context.getString(R.string.widget_setup_required))

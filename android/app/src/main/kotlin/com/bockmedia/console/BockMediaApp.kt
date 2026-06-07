@@ -3,9 +3,9 @@ package com.bockmedia.console
 import android.content.Context
 import com.bockmedia.console.data.api.BockMediaApi
 import com.bockmedia.console.data.api.bockJson
-import com.bockmedia.console.data.auth.AuthInterceptor
-import com.bockmedia.console.data.auth.MobileTokenInterceptor
+import com.bockmedia.console.data.auth.BockAuthInterceptor
 import com.bockmedia.console.data.local.AppPreferences
+import com.bockmedia.console.data.network.ServerEndpointResolver
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
 import kotlinx.coroutines.flow.first
@@ -26,12 +26,26 @@ class BockMediaApp(context: Context) {
     private var cachedMobileToken: String? = null
 
     val repository: BockMediaRepository by lazy {
-        BockMediaRepository(apiProvider = { api() }, preferences = preferences)
+        BockMediaRepository(
+            apiProvider = { api() },
+            baseUrlProvider = { resolveBaseUrl() },
+            preferences = preferences,
+        )
+    }
+
+    suspend fun resolveBaseUrl(forceRefresh: Boolean = false): String {
+        val user = preferences.adminUser.first()
+        val pass = preferences.adminPass.first()
+        val token = preferences.mobileToken.first()
+        return ServerEndpointResolver.resolve(
+            preferences = preferences,
+            authClient = buildHttpClient(user, pass, token),
+            forceRefresh = forceRefresh,
+        )
     }
 
     suspend fun api(): BockMediaApi {
-        val base = preferences.getServerUrlSync()
-            ?: throw IllegalStateException("Server URL not configured")
+        val base = resolveBaseUrl()
         val user = preferences.adminUser.first()
         val pass = preferences.adminPass.first()
         val token = preferences.mobileToken.first()
@@ -44,19 +58,7 @@ class BockMediaApp(context: Context) {
         cachedAdminUser = user
         cachedAdminPass = pass
         cachedMobileToken = token
-        val client = OkHttpClient.Builder()
-            .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
-            .addInterceptor(MobileTokenInterceptor { token })
-            .addInterceptor(AuthInterceptor({ user }, { pass }))
-            .apply {
-                if (BuildConfig.DEBUG) {
-                    addInterceptor(HttpLoggingInterceptor().apply {
-                        level = HttpLoggingInterceptor.Level.BASIC
-                    })
-                }
-            }
-            .build()
+        val client = buildHttpClient(user, pass, token)
         val contentType = "application/json".toMediaType()
         cachedApi = Retrofit.Builder()
             .baseUrl("$base/")
@@ -70,9 +72,32 @@ class BockMediaApp(context: Context) {
     fun invalidateApi() {
         cachedApi = null
         cachedBaseUrl = null
+        ServerEndpointResolver.invalidate()
     }
 
-    suspend fun hasServerUrl(): Boolean = !preferences.getServerUrlSync().isNullOrBlank()
+    suspend fun buildAuthenticatedHttpClient(): OkHttpClient {
+        val user = preferences.adminUser.first()
+        val pass = preferences.adminPass.first()
+        val token = preferences.mobileToken.first()
+        return buildHttpClient(user, pass, token)
+    }
+
+    private fun buildHttpClient(user: String?, pass: String?, token: String?): OkHttpClient {
+        return OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .addInterceptor(BockAuthInterceptor({ user }, { pass }, { token }))
+            .apply {
+                if (BuildConfig.DEBUG) {
+                    addInterceptor(HttpLoggingInterceptor().apply {
+                        level = HttpLoggingInterceptor.Level.BASIC
+                    })
+                }
+            }
+            .build()
+    }
+
+    suspend fun hasServerUrl(): Boolean = preferences.hasAnyServerUrl()
 
     companion object {
         @Volatile
@@ -87,6 +112,10 @@ class BockMediaApp(context: Context) {
         /** Blocking API access for widget/worker (background thread only). */
         fun apiBlocking(context: Context): BockMediaApi = runBlocking {
             get(context).api()
+        }
+
+        fun activeBaseUrlBlocking(context: Context): String? = runBlocking {
+            runCatching { get(context).resolveBaseUrl() }.getOrNull()
         }
     }
 }
