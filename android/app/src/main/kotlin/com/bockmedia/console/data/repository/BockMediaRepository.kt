@@ -66,6 +66,8 @@ class BockMediaRepository(
         kind: String,
         name: String? = null,
         id: String? = null,
+        path: String? = null,
+        artist: String? = null,
         shuffle: Boolean = false,
     ): PlayResponse {
         val body = buildJsonObject {
@@ -73,6 +75,8 @@ class BockMediaRepository(
             put("kind", kind)
             name?.let { put("name", it) }
             id?.let { put("id", it) }
+            path?.let { put("path", it) }
+            artist?.let { put("artist", it) }
             put("shuffle", shuffle)
         }
         return api().playOnDevice(body)
@@ -109,7 +113,7 @@ class BockMediaRepository(
     suspend fun addFavorite(path: String, track: String?, artist: String?, album: String?) {
         api().addFavorite(buildJsonObject {
             put("path", path)
-            track?.let { put("track", it) }
+            track?.let { put("title", it) }
             artist?.let { put("artist", it) }
             album?.let { put("album", it) }
         })

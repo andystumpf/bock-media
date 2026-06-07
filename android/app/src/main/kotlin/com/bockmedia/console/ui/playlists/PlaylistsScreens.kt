@@ -79,19 +79,22 @@ fun PlaylistsScreen(
     )
     if (showAi) AiPlaylistDialog(
         repository = repository,
-        onDismiss = { showAi = false; load() },
+        onDismiss = { showAi = false; scope.launch { load() } },
     )
 
     Column(Modifier.fillMaxSize()) {
-        Row(Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            SearchField(search, { search = it }, "Search playlists", modifier = Modifier.weight(1f))
-            IconButton(onClick = { showNew = true }) { Icon(Icons.Default.Add, "New") }
-            IconButton(onClick = { showSmart = true }) { Icon(Icons.Default.AutoAwesome, "Smart") }
-            IconButton(onClick = { showAi = true }) { Icon(Icons.Default.Psychology, "AI") }
-            IconButton(
-                onClick = { showMerge = true },
-                enabled = selectedMerge.size >= 2,
-            ) { Icon(Icons.Default.Merge, "Merge") }
+        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+            SearchField(search, { search = it }, "Search playlists")
+            Spacer(Modifier.height(8.dp))
+            SearchActionRow {
+                IconButton(onClick = { showNew = true }) { Icon(Icons.Default.Add, "New") }
+                IconButton(onClick = { showSmart = true }) { Icon(Icons.Default.AutoAwesome, "Smart") }
+                IconButton(onClick = { showAi = true }) { Icon(Icons.Default.Psychology, "AI") }
+                IconButton(
+                    onClick = { showMerge = true },
+                    enabled = selectedMerge.size >= 2,
+                ) { Icon(Icons.Default.Merge, "Merge") }
+            }
         }
         if (smart.isNotEmpty()) {
             Text("Smart playlists", modifier = Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.titleSmall)
@@ -169,7 +172,9 @@ fun PlaylistDetailScreen(
                 scope.launch { repository.deletePlaylist(playlistId); onBack() }
             }) { Icon(Icons.Default.Delete, null) }
         }
-        SearchField(filter, { filter = it }, "Filter tracks", modifier = Modifier.padding(horizontal = 16.dp))
+        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+            SearchField(filter, { filter = it }, "Filter tracks")
+        }
         if (loading) LoadingBox(Modifier.weight(1f)) else {
             LazyColumn(Modifier.weight(1f)) {
                 items(tracks) { t ->

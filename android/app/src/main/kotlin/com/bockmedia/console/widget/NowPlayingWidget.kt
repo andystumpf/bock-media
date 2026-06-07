@@ -50,7 +50,9 @@ object NowPlayingWidget {
         }
 
         val snap = runCatching {
-            BockMediaApp.apiBlocking(context).nowPlayingDevices()
+            kotlinx.coroutines.runBlocking {
+                BockMediaApp.apiBlocking(context).nowPlayingDevices()
+            }
         }.getOrNull()
 
         val item = snap?.items?.firstOrNull { !it.paused } ?: snap?.items?.firstOrNull()

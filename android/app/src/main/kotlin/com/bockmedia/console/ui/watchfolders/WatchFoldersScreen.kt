@@ -22,7 +22,6 @@ fun WatchFoldersScreen(repository: BockMediaRepository) {
     }
 
     Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Text("Watch Folders", style = MaterialTheme.typography.headlineSmall)
         if (loading) LoadingBox(Modifier.weight(1f)) else {
             LazyColumn {
                 items(items) { wf ->

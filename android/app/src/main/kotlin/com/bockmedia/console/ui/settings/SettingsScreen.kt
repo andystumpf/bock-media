@@ -65,7 +65,6 @@ fun SettingsScreen(
     }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
-        Text("Settings", style = MaterialTheme.typography.headlineSmall)
         message?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
         if (loading) LoadingBox() else {
             Card(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {

@@ -32,9 +32,9 @@ fun DevicesScreen(repository: BockMediaRepository) {
 
     suspend fun load() {
         runCatching {
-            devices = repository.devices().devices
+            devices = repository.devices()
             candidates = repository.mergeCandidates().candidates
-            groups = repository.deviceGroups().groups
+            groups = repository.deviceGroups().items
             runCatching { alexaDevices = repository.alexaRemoteDevices().devices }
             identify = repository.identifyStatus()
         }.onFailure { error = it.message }
@@ -77,7 +77,6 @@ fun DevicesScreen(repository: BockMediaRepository) {
         loading -> LoadingBox()
         error != null -> ErrorText(error!!) { scope.launch { load() } }
         else -> LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            item { Text("Alexa Devices", style = MaterialTheme.typography.headlineSmall) }
             if (candidates.isNotEmpty()) {
                 item { Text("Likely duplicates", style = MaterialTheme.typography.titleSmall) }
                 items(candidates) { c ->
@@ -104,7 +103,7 @@ fun DevicesScreen(repository: BockMediaRepository) {
             items(groups) { g ->
                 ListItem(
                     headlineContent = { Text(g.name) },
-                    supportingContent = { Text("${g.devices.size} speakers") },
+                    supportingContent = { Text("${g.members.size} speakers") },
                     trailingContent = {
                         Row {
                             TextButton(onClick = { editGroup = g }) { Text("Edit") }
@@ -151,7 +150,7 @@ private fun GroupEditorDialog(
     onSave: (String, List<String>) -> Unit,
 ) {
     var name by remember { mutableStateOf(group?.name ?: "") }
-    var selected by remember { mutableStateOf(group?.devices?.toSet() ?: emptySet()) }
+    var selected by remember { mutableStateOf(group?.members?.map { it.serial }?.toSet() ?: emptySet()) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (group == null) "New group" else "Edit group") },

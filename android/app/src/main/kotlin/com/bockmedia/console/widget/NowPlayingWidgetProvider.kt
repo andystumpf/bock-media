@@ -18,5 +18,7 @@ class NowPlayingWidgetProvider : AppWidgetProvider() {
     }
 
     override fun onEnabled(context: Context) = WidgetRefreshScheduler.schedule(context)
-    override fun onDisabled(context: Context) = WidgetRefreshScheduler.cancel(context)
+    override fun onDisabled(context: Context) {
+        WidgetRefreshScheduler.cancel(context)
+    }
 }

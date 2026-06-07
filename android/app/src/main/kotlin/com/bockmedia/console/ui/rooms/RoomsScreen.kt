@@ -72,7 +72,6 @@ fun RoomsScreen(repository: BockMediaRepository) {
         loading -> LoadingBox()
         error != null -> ErrorText(error!!) { scope.launch { load() } }
         else -> LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            item { Text("Rooms", style = MaterialTheme.typography.headlineSmall) }
             items(rooms) { room ->
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(12.dp)) {

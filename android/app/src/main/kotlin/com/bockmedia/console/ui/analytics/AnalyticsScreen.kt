@@ -34,7 +34,6 @@ fun AnalyticsScreen(repository: BockMediaRepository) {
     LaunchedEffect(Unit) { load() }
 
     Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Text("Analytics", style = MaterialTheme.typography.headlineSmall)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(from, { from = it }, label = { Text("From") }, modifier = Modifier.weight(1f))
             OutlinedTextField(to, { to = it }, label = { Text("To") }, modifier = Modifier.weight(1f))

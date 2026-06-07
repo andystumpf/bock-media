@@ -65,12 +65,12 @@ fun AutomationScreen(repository: BockMediaRepository) {
     }
 
     Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Text("Automation", style = MaterialTheme.typography.headlineSmall)
         if (!remoteOk) {
             Text("Configure Alexa remote in Settings first.", color = MaterialTheme.colorScheme.error)
         } else {
             OutlinedTextField(label, { label = it }, label = { Text("Label") }, modifier = Modifier.fillMaxWidth())
             SearchField(playlistSearch, { playlistSearch = it }, "Search playlist")
+            Spacer(Modifier.height(8.dp))
             playlistHits.take(5).forEach { (id, name) ->
                 TextButton(onClick = { playlistPick = id to name }) { Text(name) }
             }

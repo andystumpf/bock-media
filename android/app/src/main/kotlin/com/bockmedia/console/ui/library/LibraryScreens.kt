@@ -60,7 +60,6 @@ fun AlbumsScreen(
             remoteOk = remoteOk,
             onPlay = { onPlay(PlayTarget.Album(it.name)) },
             onOpen = { onOpenAlbum(it.name) },
-            showTitle = onBack == null,
         )
     }
 }
@@ -91,7 +90,6 @@ fun SongsScreen(
             remoteOk = remoteOk,
             onPlay = { it.path?.let { p -> onPlay(PlayTarget.Song(p, it.title ?: "")) } },
             onOpen = null,
-            showTitle = onBack == null,
         )
     }
 }
@@ -105,7 +103,6 @@ private fun <T> LibraryListScreen(
     remoteOk: Boolean,
     onPlay: (T) -> Unit,
     onOpen: ((T) -> Unit)?,
-    showTitle: Boolean = true,
 ) {
     var search by remember { mutableStateOf("") }
     var page by remember { mutableIntStateOf(1) }
@@ -125,8 +122,7 @@ private fun <T> LibraryListScreen(
         loading = false
     }
 
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
-        if (showTitle) Text(title, style = MaterialTheme.typography.headlineSmall)
+    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
         SearchField(search, { search = it; page = 1 }, "Search")
         Spacer(Modifier.height(8.dp))
         if (loading) LoadingBox(Modifier.weight(1f)) else {

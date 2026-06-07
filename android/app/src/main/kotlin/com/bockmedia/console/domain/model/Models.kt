@@ -23,6 +23,13 @@ fun computeNowPlayingProgress(timestamp: Double?, durationMs: Long, offsetMs: Lo
     return NowPlayingProgress(posMs.coerceAtMost(durationMs), durationMs)
 }
 
+fun formatPlaybackTime(seconds: Long): String {
+    val sec = seconds.coerceAtLeast(0)
+    val m = sec / 60
+    val s = sec % 60
+    return "$m:${s.toString().padStart(2, '0')}"
+}
+
 fun buildRoutinePhrase(playlist: String, shuffle: Boolean, alias: String = "bock media"): String {
     val verb = if (shuffle) "mix" else "start"
     return "Alexa, ask $alias to $verb the $playlist playlist"

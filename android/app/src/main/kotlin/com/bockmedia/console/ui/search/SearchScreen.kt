@@ -28,9 +28,7 @@ fun SearchScreen(repository: BockMediaRepository, remoteOk: Boolean, onPlay: (Pl
         runCatching { results = repository.search(query) }
     }
 
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Text("Search", style = MaterialTheme.typography.headlineSmall)
-        Spacer(Modifier.height(8.dp))
+    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
         SearchField(query, { query = it }, "Search library…")
         Spacer(Modifier.height(8.dp))
         LazyColumn {

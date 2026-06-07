@@ -20,7 +20,7 @@ fun SetupScreen(onConnected: () -> Unit) {
     var url by remember { mutableStateOf(BuildConfig.DEFAULT_SERVER_URL) }
     var adminUser by remember { mutableStateOf("admin") }
     var adminPass by remember { mutableStateOf("") }
-    var mobileToken by remember { mutableStateOf("") }
+    var mobileToken by remember { mutableStateOf(BuildConfig.DEFAULT_MOBILE_API_TOKEN) }
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(false) }
 

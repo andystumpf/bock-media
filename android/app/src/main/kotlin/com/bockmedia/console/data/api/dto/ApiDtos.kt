@@ -28,7 +28,15 @@ data class HealthResponse(
 )
 
 @Serializable
-data class RecentResponse(val items: List<RecentItem> = emptyList(), val total: Int = 0)
+data class RecentResponse(val items: List<RecentPlayRequestItem> = emptyList(), val total: Int = 0)
+
+@Serializable
+data class RecentPlayRequestItem(
+    val heard: String? = null,
+    val found: String? = null,
+    val success: Boolean = false,
+    val timestamp: String? = null,
+)
 
 @Serializable
 data class RecentItem(
@@ -111,7 +119,11 @@ data class NowPlayingDeviceItem(
 data class SleepInfo(val type: String? = null, val remainingMin: Int? = null, val remaining: Int? = null)
 
 @Serializable
-data class UpcomingTrack(val track: String? = null, val artist: String? = null)
+data class UpcomingTrack(
+    val title: String? = null,
+    val artist: String? = null,
+    val path: String? = null,
+)
 
 @Serializable
 data class StreamHistoryResponse(
@@ -125,8 +137,10 @@ data class StreamHistoryItem(
     val artist: String? = null,
     val album: String? = null,
     val device: String? = null,
+    val date: String? = null,
     val timestamp: String? = null,
     val playlist: String? = null,
+    val sourceLabel: String? = null,
 )
 
 @Serializable
@@ -184,7 +198,7 @@ data class PlaylistsResponse(
 data class PlaylistSummary(
     val id: String = "",
     val name: String = "",
-    val tracks: Int = 0,
+    @SerialName("trackCount") val tracks: Int = 0,
     val source: String? = null,
     val sourceName: String? = null,
 )
@@ -288,13 +302,19 @@ data class MergeCandidate(
 data class MergeCandidatesResponse(val candidates: List<MergeCandidate> = emptyList())
 
 @Serializable
-data class DeviceGroupsResponse(val groups: List<DeviceGroup> = emptyList())
+data class DeviceGroupsResponse(val items: List<DeviceGroup> = emptyList())
 
 @Serializable
 data class DeviceGroup(
     val id: String = "",
     val name: String = "",
-    val devices: List<String> = emptyList(),
+    val members: List<GroupMember> = emptyList(),
+)
+
+@Serializable
+data class GroupMember(
+    val serial: String = "",
+    val name: String? = null,
 )
 
 @Serializable
@@ -373,7 +393,13 @@ data class LocalIpResponse(val ip: String? = null)
 data class VolumeResponse(val volume: Int? = null)
 
 @Serializable
-data class PlayResponse(val device: String? = null, val text: String? = null, val ok: Boolean = false)
+data class PlayResponse(
+    val device: String? = null,
+    val text: String? = null,
+    val ok: Boolean = false,
+    val error: String? = null,
+    val code: String? = null,
+)
 
 @Serializable
 data class AiPlaylistResponse(

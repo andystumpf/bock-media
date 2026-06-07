@@ -14,6 +14,7 @@ import com.bockmedia.console.ui.components.ErrorText
 import com.bockmedia.console.ui.components.LoadingBox
 import com.bockmedia.console.ui.components.PlayButton
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @Composable
 fun DashboardScreen(
@@ -25,10 +26,11 @@ fun DashboardScreen(
     var error by remember { mutableStateOf<String?>(null) }
     var summary by remember { mutableStateOf<SummaryResponse?>(null) }
     var quick by remember { mutableStateOf<DashboardQuickResponse?>(null) }
-    var recent by remember { mutableStateOf<List<RecentItem>>(emptyList()) }
+    var recent by remember { mutableStateOf<List<RecentPlayRequestItem>>(emptyList()) }
     var health by remember { mutableStateOf<HealthResponse?>(null) }
     var plex by remember { mutableStateOf<PlexSyncStatusResponse?>(null) }
     var remote by remember { mutableStateOf<AlexaRemoteStatus?>(null) }
+    val scope = rememberCoroutineScope()
 
     suspend fun load() {
         loading = true
@@ -54,10 +56,9 @@ fun DashboardScreen(
 
     when {
         loading && summary == null -> LoadingBox()
-        error != null && summary == null -> ErrorText(error!!) { LaunchedEffect(Unit) { load() } }
+        error != null && summary == null -> ErrorText(error!!) { scope.launch { load() } }
         else -> LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             item {
-                Text("Dashboard", style = MaterialTheme.typography.headlineSmall)
                 summary?.let {
                     Text("Songs ${it.songs} · Artists ${it.artists} · Albums ${it.albums} · Playlists ${it.playlists}")
                 }
@@ -95,10 +96,25 @@ fun DashboardScreen(
                 )
             }
             item { Text("Recent play requests", style = MaterialTheme.typography.titleMedium) }
+            if (recent.isEmpty()) {
+                item {
+                    Text(
+                        "No recent play requests.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
             items(recent) { r ->
                 ListItem(
-                    headlineContent = { Text(r.track ?: "—") },
-                    supportingContent = { Text("${r.playlist ?: ""} · ${r.device ?: ""}") },
+                    headlineContent = {
+                        Text(
+                            r.heard ?: "—",
+                            color = if (r.success) MaterialTheme.colorScheme.onSurface
+                            else MaterialTheme.colorScheme.error,
+                        )
+                    },
+                    supportingContent = { Text(r.found ?: "") },
                 )
             }
         }

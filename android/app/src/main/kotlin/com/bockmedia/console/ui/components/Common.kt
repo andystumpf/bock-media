@@ -4,17 +4,21 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import com.bockmedia.console.domain.model.PlayTarget
-import androidx.compose.material3.Icon
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.bockmedia.console.data.api.dto.AlexaDevice
 import com.bockmedia.console.data.api.dto.DeviceGroup
 import com.bockmedia.console.data.repository.BockMediaRepository
 import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Search
 import kotlinx.coroutines.launch
 
 @Composable
@@ -35,14 +39,63 @@ fun ErrorText(message: String, onRetry: (() -> Unit)? = null) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SearchField(value: String, onValueChange: (String) -> Unit, placeholder: String, modifier: Modifier = Modifier) {
-    OutlinedTextField(
+fun SearchField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    modifier: Modifier = Modifier,
+) {
+    val shape = RoundedCornerShape(16.dp)
+    TextField(
         value = value,
         onValueChange = onValueChange,
         modifier = modifier.fillMaxWidth(),
-        placeholder = { Text(placeholder) },
+        placeholder = {
+            Text(
+                placeholder,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        },
+        leadingIcon = {
+            Icon(
+                Icons.Default.Search,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        },
+        trailingIcon = {
+            if (value.isNotEmpty()) {
+                IconButton(onClick = { onValueChange("") }) {
+                    Icon(Icons.Default.Clear, contentDescription = "Clear search")
+                }
+            }
+        },
         singleLine = true,
+        shape = shape,
+        colors = TextFieldDefaults.colors(
+            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+            focusedIndicatorColor = Color.Transparent,
+            unfocusedIndicatorColor = Color.Transparent,
+            disabledIndicatorColor = Color.Transparent,
+        ),
+    )
+}
+
+@Composable
+fun SearchActionRow(
+    modifier: Modifier = Modifier,
+    content: @Composable RowScope.() -> Unit,
+) {
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+        verticalAlignment = Alignment.CenterVertically,
+        content = content,
     )
 }
 
@@ -65,7 +118,8 @@ fun PaginationBar(page: Int, totalPages: Int, onPage: (Int) -> Unit) {
 fun DevicePickerSheet(
     repository: BockMediaRepository,
     onDismiss: () -> Unit,
-    onPlay: (device: String, shuffle: Boolean) -> Unit,
+    onPlay: suspend (device: String, shuffle: Boolean) -> Unit,
+    onPlayError: suspend (Throwable) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     var devices by remember { mutableStateOf<List<AlexaDevice>>(emptyList()) }
@@ -78,7 +132,7 @@ fun DevicePickerSheet(
         loading = true
         runCatching {
             devices = repository.alexaRemoteDevices().devices
-            groups = repository.deviceGroups().groups
+            groups = repository.deviceGroups().items
         }.onFailure { error = it.message }.also { loading = false }
     }
 
@@ -104,7 +158,9 @@ fun DevicePickerSheet(
                                         .fillMaxWidth()
                                         .clickable {
                                             scope.launch {
-                                                onPlay("group:${g.id}", shuffle)
+                                                runCatching {
+                                                    onPlay("group:${g.id}", shuffle)
+                                                }.onFailure { onPlayError(it) }
                                                 onDismiss()
                                             }
                                         },
@@ -121,9 +177,11 @@ fun DevicePickerSheet(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
-                                        val target = d.serial ?: d.name ?: return@clickable
+                                        val serial = d.serial ?: d.name ?: return@clickable
                                         scope.launch {
-                                            onPlay(target, shuffle)
+                                            runCatching {
+                                                onPlay(serial, shuffle)
+                                            }.onFailure { onPlayError(it) }
                                             onDismiss()
                                         }
                                     },
@@ -137,9 +195,7 @@ fun DevicePickerSheet(
 }
 
 private fun Modifier.clickableRow(onClick: () -> Unit): Modifier =
-    this.then(Modifier.padding(vertical = 2.dp)).let { m ->
-        androidx.compose.foundation.clickable(onClick = onClick).then(m)
-    }
+    padding(vertical = 2.dp).clickable(onClick = onClick)
 
 @Composable
 fun PlayButton(onClick: () -> Unit, enabled: Boolean = true) {

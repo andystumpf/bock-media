@@ -33,7 +33,6 @@ fun RoutinesScreen(repository: BockMediaRepository) {
     }
 
     Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Text("Routines", style = MaterialTheme.typography.headlineSmall)
         Text("Generate an Alexa Routine phrase to copy into the Alexa app.", style = MaterialTheme.typography.bodySmall)
         Spacer(Modifier.height(16.dp))
         var expanded by remember { mutableStateOf(false) }

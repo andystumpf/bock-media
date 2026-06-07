@@ -74,9 +74,6 @@ class BockMediaApp(context: Context) {
 
     suspend fun hasServerUrl(): Boolean = !preferences.getServerUrlSync().isNullOrBlank()
 
-    private suspend fun kotlinx.coroutines.flow.Flow<String?>.firstValue(): String? =
-        kotlinx.coroutines.flow.first()
-
     companion object {
         @Volatile
         private var instance: BockMediaApp? = null

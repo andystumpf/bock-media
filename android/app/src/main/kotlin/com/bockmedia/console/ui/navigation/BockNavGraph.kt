@@ -1,11 +1,15 @@
 package com.bockmedia.console.ui.navigation
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.Icon
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
@@ -66,24 +70,39 @@ fun BockApp(repository: BockMediaRepository, onChangeServer: () -> Unit, deepLin
 
     AlexaAuthMonitor(repository, snackbarHostState)
 
-    PlayTargetLauncher(repository, playTarget, remoteOk) { playTarget = null }
+    PlayTargetLauncher(repository, playTarget, remoteOk, snackbarHostState) { playTarget = null }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
-            ModalDrawerSheet {
-                Text("Bock Media", modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.titleLarge)
-                BockRoute.drawerRoutes.forEach { route ->
-                    NavigationDrawerItem(
-                        label = { Text(route.title) },
-                        icon = { Icon(route.icon, null) },
-                        selected = currentRoute(navController) == route.route,
-                        onClick = {
-                            navController.navigate(route.route) { launchSingleTop = true }
-                            scope.launch { drawerState.close() }
-                        },
-                        modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
+            ModalDrawerSheet(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .widthIn(max = 272.dp),
+            ) {
+                Column(Modifier.fillMaxSize()) {
+                    Text(
+                        "Bock Media",
+                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 6.dp),
+                        style = MaterialTheme.typography.titleMedium,
                     )
+                    HorizontalDivider(modifier = Modifier.padding(horizontal = 12.dp))
+                    LazyColumn(
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(top = 3.dp, bottom = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        items(BockRoute.drawerRoutes, key = { it.route }) { route ->
+                            CompactDrawerItem(
+                                route = route,
+                                selected = currentRoute(navController) == route.route,
+                                onClick = {
+                                    navController.navigate(route.route) { launchSingleTop = true }
+                                    scope.launch { drawerState.close() }
+                                },
+                            )
+                        }
+                    }
                 }
             }
         },
@@ -105,6 +124,7 @@ fun BockApp(repository: BockMediaRepository, onChangeServer: () -> Unit, deepLin
                 navController = navController,
                 repository = repository,
                 remoteOk = remoteOk,
+                snackbarHostState = snackbarHostState,
                 onPlay = { playTarget = it },
                 onChangeServer = onChangeServer,
                 modifier = Modifier.padding(padding),
@@ -118,6 +138,7 @@ private fun BockNavHost(
     navController: NavHostController,
     repository: BockMediaRepository,
     remoteOk: Boolean,
+    snackbarHostState: SnackbarHostState,
     onPlay: (PlayTarget) -> Unit,
     onChangeServer: () -> Unit,
     modifier: Modifier = Modifier,
@@ -126,7 +147,7 @@ private fun BockNavHost(
         composable(BockRoute.Dashboard.route) {
             DashboardScreen(repository, onPlay) { navController.navigate(BockRoute.Settings.route) }
         }
-        composable(BockRoute.NowPlaying.route) { NowPlayingScreen(repository) }
+        composable(BockRoute.NowPlaying.route) { NowPlayingScreen(repository, snackbarHostState) }
         composable(BockRoute.Rooms.route) { RoomsScreen(repository) }
         composable(BockRoute.Search.route) { SearchScreen(repository, remoteOk, onPlay) }
         composable(BockRoute.Playlists.route) {
@@ -188,6 +209,7 @@ private fun BockNavHost(
     }
 }
 
+@Composable
 private fun currentRoute(navController: NavHostController): String? {
     val entry = navController.currentBackStackEntryAsState().value ?: return null
     return entry.destination.route?.substringBefore("/")
@@ -195,3 +217,48 @@ private fun currentRoute(navController: NavHostController): String? {
 
 private fun titleForRoute(route: String?): String =
     BockRoute.drawerRoutes.find { it.route == route }?.title ?: "Bock Media"
+
+@Composable
+private fun CompactDrawerItem(
+    route: BockRoute,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val containerColor = if (selected) {
+        MaterialTheme.colorScheme.secondaryContainer
+    } else {
+        MaterialTheme.colorScheme.surface
+    }
+    val contentColor = if (selected) {
+        MaterialTheme.colorScheme.onSecondaryContainer
+    } else {
+        MaterialTheme.colorScheme.onSurface
+    }
+    Surface(
+        onClick = onClick,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp)
+            .height(40.dp),
+        shape = RoundedCornerShape(7.dp),
+        color = containerColor,
+        contentColor = contentColor,
+    ) {
+        Row(
+            Modifier.fillMaxSize().padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                route.icon,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+            )
+            Spacer(Modifier.width(12.dp))
+            Text(
+                route.title,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+            )
+        }
+    }
+}
