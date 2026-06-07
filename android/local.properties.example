@@ -1,0 +1,2 @@
+# Copy to local.properties (gitignored) to pre-fill the setup screen:
+# bockmedia.serverUrl=http://192.168.1.187:3001

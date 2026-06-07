@@ -1,0 +1,4 @@
+#!/bin/sh
+# Gradle wrapper script — open project in Android Studio once to download gradle-wrapper.jar,
+# or run: gradle wrapper --gradle-version 8.9
+exec java -jar "$(dirname "$0")/gradle/wrapper/gradle-wrapper.jar" "$@"

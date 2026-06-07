@@ -205,6 +205,17 @@ def check_auth():
     is_public_path = any(request.path.startswith(p) for p in _PUBLIC_PREFIXES)
 
     if _is_tunnel_request() and not is_public_path:
+        # Allow mobile app API via Bearer token (config.json → mobileApi.token)
+        auth_header = request.headers.get('Authorization', '')
+        if auth_header.startswith('Bearer ') and request.path.startswith('/api/'):
+            try:
+                cfg = load_config()
+                expected = (cfg.get('mobileApi') or {}).get('token', '').strip()
+                token = auth_header[7:].strip()
+                if expected and token == expected and (cfg.get('mobileApi') or {}).get('allowTunnelApi'):
+                    return None
+            except Exception:
+                pass
         return Response('Forbidden ', 403,
                         {'Content-Type': 'text/plain; charset=utf-8'})
 

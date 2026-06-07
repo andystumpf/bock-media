@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.BockMedia" parent="Theme.Material3.Light.NoActionBar">
+        <item name="colorPrimary">@color/bock_navy</item>
+        <item name="colorPrimaryDark">@color/bock_navy</item>
+        <item name="colorAccent">@color/bock_gold</item>
+        <item name="android:statusBarColor">@color/bock_navy</item>
+        <item name="android:navigationBarColor">@color/bock_navy</item>
+    </style>
+</resources>

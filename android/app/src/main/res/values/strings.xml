@@ -1,0 +1,32 @@
+<resources>
+    <string name="app_name">Bock Media</string>
+    <string name="setup_title">Connect to your server</string>
+    <string name="setup_subtitle">Enter the URL of your Bock Media console on your home network.</string>
+    <string name="server_url_hint">Server URL</string>
+    <string name="server_url_helper">Use your LAN IP and port 3001, or your public URL</string>
+    <string name="connect">Connect</string>
+    <string name="setup_examples">Examples:\n• http://192.168.1.187:3001\n• https://alexa.morejava.bid</string>
+    <string name="invalid_url">Enter a valid http or https URL</string>
+    <string name="refresh">Refresh</string>
+    <string name="change_server">Change server</string>
+    <string name="load_error">Could not load page</string>
+    <string name="offline">No network connection</string>
+    <string name="shortcut_now_playing">Now Playing</string>
+    <string name="shortcut_now_playing_long">Open Now Playing</string>
+    <string name="shortcut_playlists">Playlists</string>
+    <string name="shortcut_playlists_long">Browse Playlists</string>
+    <string name="shortcut_rooms">Rooms</string>
+    <string name="shortcut_rooms_long">Open Rooms</string>
+    <string name="shortcut_search">Search</string>
+    <string name="shortcut_search_long">Search library</string>
+    <string name="widget_name">Bock Media Now Playing</string>
+    <string name="widget_description">Current track and playback controls</string>
+    <string name="widget_art_desc">Album art</string>
+    <string name="widget_nothing_playing">Nothing playing</string>
+    <string name="widget_setup_required">Set server URL in app first</string>
+    <string name="widget_unknown_track">Unknown track</string>
+    <string name="widget_pause">Pause</string>
+    <string name="widget_next">Next track</string>
+    <string name="widget_open">Open app</string>
+    <string name="widget_control_failed">Control failed — check Alexa login on server</string>
+</resources>
