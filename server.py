@@ -1065,39 +1065,94 @@ def _play_file_token_from_query(query):
 # garbling long playlist titles (which causes fuzzy-match failures / timeouts).
 _PLAYLIST_TOKENS = {}
 _PLAYLIST_TOKEN_LOCK = threading.Lock()
-_PLAYLIST_TOKEN_TTL = 180.0
+_PLAYLIST_TOKEN_TTL = 600.0
+_PLAY_TOKENS_FILE = os.path.join(DATA_DIR, 'play_tokens.json')
 
 
-def _register_play_playlist_token(playlist_id, name, source):
-    token = uuid.uuid4().hex[:8]
+def _load_playlist_tokens():
+    global _PLAYLIST_TOKENS
+    try:
+        with open(_PLAY_TOKENS_FILE) as f:
+            data = json.load(f) or {}
+        now = time.time()
+        _PLAYLIST_TOKENS = {
+            k: v for k, v in (data.get('playlist') or {}).items()
+            if v.get('exp', 0) > now
+        }
+    except Exception:
+        _PLAYLIST_TOKENS = {}
+
+
+def _save_playlist_tokens():
+    try:
+        with open(_PLAY_TOKENS_FILE, 'w') as f:
+            json.dump({'playlist': _PLAYLIST_TOKENS}, f)
+    except Exception as ex:
+        print(f'[PLAY TOKEN] save failed: {ex}', flush=True)
+
+
+_load_playlist_tokens()
+
+
+def _new_playlist_token_id():
+    """Digit-only id — Alexa handles spaced digits better than hex."""
+    return str(random.randint(10_000_000, 99_999_999))
+
+
+def _register_play_playlist_token(playlist_id, name, source, shuffle=False):
+    token = _new_playlist_token_id()
     now = time.time()
     with _PLAYLIST_TOKEN_LOCK:
-        for k in [k for k, v in _PLAYLIST_TOKENS.items() if v['exp'] < now]:
+        for k in [k for k, v in _PLAYLIST_TOKENS.items() if v.get('exp', 0) < now]:
             del _PLAYLIST_TOKENS[k]
         _PLAYLIST_TOKENS[token] = {
             'id': str(playlist_id),
             'name': name or '',
             'source': (source or '').strip(),
+            'shuffle': bool(shuffle),
             'exp': now + _PLAYLIST_TOKEN_TTL,
         }
+        _save_playlist_tokens()
+    print(f'[PLAY TOKEN] registered {token} playlist={name!r} shuffle={shuffle}', flush=True)
     return token
 
 
+def _normalize_play_token(raw):
+    """Extract digit token from Alexa slot (handles 'token 12345678' or '12 34 56 78')."""
+    chunk = (raw or '').strip().lower()
+    if 'token' in chunk:
+        chunk = chunk.split('token', 1)[1]
+    digits = re.sub(r'[^0-9]', '', chunk)
+    return digits if len(digits) >= 6 else ''
+
+
 def _consume_play_playlist_token(raw):
-    token = re.sub(r'[^a-f0-9]', '', (raw or '').lower())
+    token = _normalize_play_token(raw)
     if not token:
         return None
     with _PLAYLIST_TOKEN_LOCK:
+        _load_playlist_tokens()
         entry = _PLAYLIST_TOKENS.get(token)
-        if not entry or entry['exp'] < time.time():
+        if not entry or entry.get('exp', 0) < time.time():
             return None
         return dict(entry)
 
 
 def _play_playlist_token_from_query(query):
-    q = (query or '').strip().lower()
-    m = re.search(r'(?:playlist\s+)?token\s+([a-f0-9]{6,12})\b', q)
-    return _consume_play_playlist_token(m.group(1)) if m else None
+    return _consume_play_playlist_token(query)
+
+
+def _start_playlist_token_entry(token_entry, shuffle=None):
+    name = token_entry.get('name') or 'playlist'
+    pid = token_entry.get('id')
+    source = token_entry.get('source')
+    do_shuffle = token_entry.get('shuffle', False) if shuffle is None else shuffle
+    tracks = _tracks_for_playlist(pid, source)
+    if not tracks:
+        return alexa_speak(f"The playlist {name} has no playable tracks.")
+    speech = f"Shuffling {name}." if do_shuffle else f"Playing {name}."
+    return start_playing(tracks, shuffle=do_shuffle, speech=speech,
+                        playlist=name, playlist_id=pid)
 
 
 def _build_play_text(kind, name, shuffle, artist=None, path=None, playlist_id=None, playlist_source=None):
@@ -1131,8 +1186,10 @@ def _build_play_text(kind, name, shuffle, artist=None, path=None, playlist_id=No
         if pid:
             if not src:
                 _, src = _msp_playlist_by_id(pid)
-            token = _register_play_playlist_token(pid, name, src)
-            phrase = f"playlist token {token}"
+            token = _register_play_playlist_token(pid, name, src, shuffle=shuffle)
+            # PlayFileTokenIntent sample "start token {FileToken}" — slot is digits only.
+            phrase = f"token {token}"
+            verb = 'start'
         else:
             phrase = f"the {name} playlist"
     return f"ask {alias} to {verb} {phrase}"
@@ -3337,6 +3394,15 @@ def serve_artwork(filepath):
     )
     if not any(abs_path.startswith(r) for r in allowed_roots):
         return 'Forbidden', 403
+    if not os.path.isfile(abs_path):
+        return 'Not found', 404
+    # Mobile app / UI pass the track path — resolve to sidecar/embedded/cache art.
+    if os.path.splitext(abs_path)[1].lower() not in _ART_MIME_BY_EXT:
+        resolved = find_artwork(abs_path)
+        if resolved and os.path.isfile(resolved):
+            abs_path = os.path.abspath(resolved)
+            if not any(abs_path.startswith(r) for r in allowed_roots):
+                return 'Forbidden', 403
     if not os.path.isfile(abs_path):
         return 'Not found', 404
     mime = _ART_MIME_BY_EXT.get(os.path.splitext(abs_path)[1].lower(), 'image/jpeg')
@@ -5871,14 +5937,7 @@ def alexa_skill():
                 return alexa_speak("Which playlist would you like to play?", end_session=False)
             token_entry = _play_playlist_token_from_query(query)
             if token_entry:
-                name = token_entry.get('name') or 'playlist'
-                pid = token_entry.get('id')
-                source = token_entry.get('source')
-                tracks = _tracks_for_playlist(pid, source)
-                if not tracks:
-                    return alexa_speak(f"The playlist {name} has no playable tracks.")
-                return start_playing(tracks, speech=f"Playing {name}.",
-                                    playlist=name, playlist_id=pid)
+                return _start_playlist_token_entry(token_entry)
             token_entry = _play_file_token_from_query(query)
             if token_entry and os.path.isfile(token_entry['path']):
                 label = token_entry['title']
@@ -5897,6 +5956,8 @@ def alexa_skill():
             pid = entry[0] if entry else None
             print(f'[ALEXA DEBUG] PlayPlaylistIntent query={repr(query)} -> name={repr(name)} source={repr(source)}', flush=True)
             if not name:
+                if 'token' in query.lower():
+                    return alexa_speak("Sorry, that play request expired. Please try again from the app.")
                 recovered = _try_play_misrouted_song(query)
                 if recovered:
                     tracks, label = recovered
@@ -5915,14 +5976,7 @@ def alexa_skill():
                 return alexa_speak("Which playlist would you like to shuffle?", end_session=False)
             token_entry = _play_playlist_token_from_query(query)
             if token_entry:
-                name = token_entry.get('name') or 'playlist'
-                pid = token_entry.get('id')
-                source = token_entry.get('source')
-                tracks = _tracks_for_playlist(pid, source)
-                if not tracks:
-                    return alexa_speak(f"The playlist {name} has no playable tracks.")
-                return start_playing(tracks, shuffle=True, speech=f"Shuffling {name}.",
-                                    playlist=name, playlist_id=pid)
+                return _start_playlist_token_entry(token_entry, shuffle=True)
             entry = best_playlist_entry(query)
             name = entry[1] if entry else None
             source = entry[2] if entry else None
@@ -5969,6 +6023,9 @@ def alexa_skill():
             query = sv('ArtistName')
             if not query:
                 return alexa_speak("Which artist would you like to shuffle?", end_session=False)
+            token_entry = _play_playlist_token_from_query(query)
+            if token_entry:
+                return _start_playlist_token_entry(token_entry)
             if 'playlist' in query.lower():
                 pl_q = re.sub(r'\s+playlist$', '', query, flags=re.IGNORECASE).strip()
                 pl_q = re.sub(r'^(?:shuffle\s+)?(?:play\s+)?(?:my\s+)?(?:the\s+)?playlist\s+', '', pl_q, flags=re.IGNORECASE).strip() or query
@@ -6037,13 +6094,7 @@ def alexa_skill():
             if not entry:
                 pl_entry = _consume_play_playlist_token(token_raw)
                 if pl_entry:
-                    name = pl_entry.get('name') or 'playlist'
-                    pid = pl_entry.get('id')
-                    source = pl_entry.get('source')
-                    tracks = _tracks_for_playlist(pid, source)
-                    if tracks:
-                        return start_playing(tracks, speech=f"Playing {name}.",
-                                            playlist=name, playlist_id=pid)
+                    return _start_playlist_token_entry(pl_entry)
             if not entry or not os.path.isfile(entry['path']):
                 return alexa_speak("Sorry, I couldn't find that track.")
             label = entry['title']

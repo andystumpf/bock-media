@@ -13,7 +13,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
+import coil.compose.SubcomposeAsyncImage
+import coil.compose.SubcomposeAsyncImageContent
 import com.bockmedia.console.data.api.dto.*
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.computeNowPlayingProgress
@@ -509,10 +510,31 @@ private fun NowPlayingDeviceCard(
             Row(verticalAlignment = Alignment.Top) {
                 var artUrl by remember(dev.filepath) { mutableStateOf<String?>(null) }
                 LaunchedEffect(dev.filepath) { artUrl = repository.artworkUrl(dev.filepath) }
-                AsyncImage(
+                SubcomposeAsyncImage(
                     model = artUrl,
-                    contentDescription = null,
+                    contentDescription = dev.album ?: "Album art",
                     modifier = Modifier.size(72.dp),
+                    loading = {
+                        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surfaceVariant) {
+                            Icon(
+                                Icons.Default.Album,
+                                null,
+                                Modifier.padding(16.dp).fillMaxSize(),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    },
+                    error = {
+                        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surfaceVariant) {
+                            Icon(
+                                Icons.Default.Album,
+                                null,
+                                Modifier.padding(16.dp).fillMaxSize(),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    },
+                    success = { SubcomposeAsyncImageContent() },
                 )
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
