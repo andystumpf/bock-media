@@ -58,7 +58,7 @@ fun AlbumsScreen(
             label = { it.name },
             sub = { "${it.artist ?: ""} · ${it.tracks} tracks" },
             remoteOk = remoteOk,
-            onPlay = { onPlay(PlayTarget.Album(it.name)) },
+            onPlay = { onPlay(PlayTarget.Album(it.name, it.artist)) },
             onOpen = { onOpenAlbum(it.name) },
         )
     }

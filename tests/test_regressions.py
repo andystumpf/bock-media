@@ -208,6 +208,12 @@ class TestCollisionSafePlayText:
         text = server._build_play_text('song', 'Dancing Queen', shuffle=False, artist='ABBA')
         assert 'ask bock media to start the song Dancing Queen by ABBA' in text
 
+    def test_album_uses_token_not_fuzzy_phrase(self, isolated_paths, monkeypatch):
+        monkeypatch.setattr(server, '_alexa_alias', lambda: 'bock media')
+        text = server._build_play_text('album', 'Rumours', shuffle=False, artist='Fleetwood Mac')
+        assert 'ask bock media to start token' in text
+        assert 'the album Rumours' not in text
+
 
 # ─────────────────────────── static cache busting ──────────────────────────────
 

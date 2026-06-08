@@ -63,7 +63,7 @@ fun SearchScreen(repository: BockMediaRepository, remoteOk: Boolean, onPlay: (Pl
                         headlineContent = { Text(hit.name ?: "") },
                         supportingContent = { Text(hit.artist ?: "") },
                         trailingContent = {
-                            if (remoteOk) PlayButton(onClick = { onPlay(PlayTarget.Album(hit.name ?: "")) })
+                            if (remoteOk) PlayButton(onClick = { onPlay(PlayTarget.Album(hit.name ?: "", hit.artist)) })
                         },
                     )
                 }

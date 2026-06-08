@@ -163,7 +163,9 @@
             "start token {FileToken}",
             "play file token {FileToken}",
             "start playlist token {FileToken}",
-            "mix playlist token {FileToken}"
+            "mix playlist token {FileToken}",
+            "start album token {FileToken}",
+            "mix album token {FileToken}"
           ]
         },
         {

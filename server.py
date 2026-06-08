@@ -1147,12 +1147,9 @@ def _start_playlist_token_entry(token_entry, shuffle=None):
     pid = token_entry.get('id')
     source = token_entry.get('source')
     do_shuffle = token_entry.get('shuffle', False) if shuffle is None else shuffle
-    tracks = _tracks_for_playlist(pid, source)
-    if not tracks:
-        return alexa_speak(f"The playlist {name} has no playable tracks.")
     speech = f"Shuffling {name}." if do_shuffle else f"Playing {name}."
-    return start_playing(tracks, shuffle=do_shuffle, speech=speech,
-                        playlist=name, playlist_id=pid)
+    return start_playing(None, shuffle=do_shuffle, speech=speech,
+                        playlist=name, playlist_id=pid, source=source)
 
 
 def _build_play_text(kind, name, shuffle, artist=None, path=None, playlist_id=None, playlist_source=None):
@@ -1445,6 +1442,12 @@ def play_on_device():
         playlist_id=pid if kind == 'playlist' and pid else None,
         context=ctx_label,
     )
+    if kind == 'playlist' and pid:
+        warm_src = playlist_source
+        if not warm_src:
+            _, warm_src = _msp_playlist_by_id(pid)
+        if warm_src:
+            _playlist_paths_cached(pid, warm_src)
     try:
         import alexa_remote
         results, errors = [], []
@@ -3431,6 +3434,28 @@ def normalize_track_queue(tracks):
     """Return tracks that can actually be streamed right now."""
     return [p for p in tracks if can_stream_track(p)]
 
+_FFMPEG_AVAILABLE = None
+
+def _ffmpeg_available():
+    global _FFMPEG_AVAILABLE
+    if _FFMPEG_AVAILABLE is None:
+        ffmpeg_bin = get_pref('FFmpegLocation', '').strip() or 'ffmpeg'
+        _FFMPEG_AVAILABLE = shutil.which(ffmpeg_bin) is not None
+    return _FFMPEG_AVAILABLE
+
+def normalize_track_queue_fast(tracks):
+    """Extension-only filter for Alexa hot path — avoids stat() on every path."""
+    flac_ok = get_pref('FlacSupport', '').lower() == 'true'
+    ffmpeg_ok = _ffmpeg_available() if flac_ok else False
+    out = []
+    for p in tracks:
+        ext = os.path.splitext(p)[1].lower()
+        if ext in NATIVE_EXTS:
+            out.append(p)
+        elif ext in TRANSCODE_EXTS and flac_ok and ffmpeg_ok:
+            out.append(p)
+    return out
+
 # ── Token encode/decode ───────────────────────────────────────────────────────
 
 QUEUES_PATH = os.path.join(HERE, 'queues.json')
@@ -3472,6 +3497,53 @@ def _store_queue(tracks, shuffle=False, loop=False, playlist=None, playlist_id=N
         queues[qid] = entry
         _save_queues(queues)
         return qid
+
+def _store_queue_lazy(playlist_id, source, shuffle=False, shuffle_seed=None, loop=False,
+                      playlist=None, context=None):
+    """Store a playlist reference instead of copying thousands of track paths."""
+    with _QUEUES_LOCK:
+        queues = _load_queues()
+        now = time.time()
+        queues = {k: v for k, v in queues.items() if now - v.get('ts', 0) < _QUEUE_TTL_SECONDS}
+        qid = _new_queue_id()
+        entry = {
+            'lazy': True,
+            'playlist_id': playlist_id,
+            'source': source,
+            'shuffle': bool(shuffle),
+            'loop': bool(loop),
+            'ts': now,
+        }
+        if shuffle_seed is not None:
+            entry['shuffle_seed'] = shuffle_seed
+        if playlist:
+            entry['playlist'] = playlist
+        if context:
+            entry['context'] = context
+        queues[qid] = entry
+        _save_queues(queues)
+        return qid
+
+_QUEUE_TRACK_LIMIT = 300
+
+def _resolve_queue_tracks(entry):
+    """Materialize track list for a queue entry (lazy playlist refs or inline tracks)."""
+    if not entry.get('lazy'):
+        return entry.get('tracks') or []
+    pid = entry.get('playlist_id')
+    source = entry.get('source')
+    if not pid or not source:
+        return []
+    paths = _playlist_paths_cached(pid, source)
+    queue = _filter_ignored_queue(normalize_track_queue_fast(paths))
+    if entry.get('shuffle') and queue:
+        seed = entry.get('shuffle_seed')
+        if seed is not None:
+            rng = random.Random(seed)
+            rng.shuffle(queue)
+        else:
+            random.shuffle(queue)
+    return queue[:_QUEUE_TRACK_LIMIT]
 
 def _update_queue_flags(qid, **kwargs):
     """Update loop/shuffle/tracks on an existing queue entry."""
@@ -3553,9 +3625,10 @@ def decode_token(token):
             entry = queues.get(qid)
             if not entry:
                 return {}
+            tracks = _resolve_queue_tracks(entry) if entry.get('lazy') else entry.get('tracks', [])
             return {
                 'qid': qid,
-                'tracks': entry.get('tracks', []),
+                'tracks': tracks,
                 'idx': int(idx),
                 'shuffle': entry.get('shuffle', False),
                 'loop': entry.get('loop', False),
@@ -3564,6 +3637,8 @@ def decode_token(token):
                 'context': entry.get('context'),
                 'stopAt': entry.get('stopAt'),
                 'stopAfterIdx': entry.get('stopAfterIdx'),
+                'lazy': entry.get('lazy', False),
+                'source': entry.get('source'),
             }
         padding = 4 - len(token) % 4
         return json.loads(base64.urlsafe_b64decode(token + '=' * padding))
@@ -3597,12 +3672,12 @@ def _upcoming_tracks_for_token(token, limit=5):
 _M3U_PARSE_CACHE = {}
 _M3U_CACHE_MAX = 96
 
-def parse_m3u(filepath):
+def parse_m3u(filepath, verify_exists=True):
     try:
         mtime = os.path.getmtime(filepath)
     except OSError:
         return []
-    cache_key = (filepath, mtime)
+    cache_key = (filepath, mtime, verify_exists)
     cached = _M3U_PARSE_CACHE.get(cache_key)
     if cached is not None:
         return list(cached)
@@ -3615,8 +3690,11 @@ def parse_m3u(filepath):
                 if not line or line.startswith('#'):
                     continue
                 path = line if os.path.isabs(line) else os.path.normpath(os.path.join(base_dir, line))
-                if os.path.isfile(path) and os.path.splitext(path)[1].lower() in SUPPORTED_EXTS:
-                    tracks.append(path)
+                if os.path.splitext(path)[1].lower() not in SUPPORTED_EXTS:
+                    continue
+                if verify_exists and not os.path.isfile(path):
+                    continue
+                tracks.append(path)
     except Exception as e:
         print(f'M3U parse error {filepath}: {e}')
     if len(_M3U_PARSE_CACHE) >= _M3U_CACHE_MAX:
@@ -4005,7 +4083,8 @@ def playlist_detail(playlist_id):
 
 
 def _tracks_from_source(source):
-    return parse_m3u(source) if source and os.path.isfile(source) else []
+    # Plex-exported .m3u paths are trusted; skip per-line stat() on network mounts.
+    return parse_m3u(source, verify_exists=False) if source and os.path.isfile(source) else []
 
 
 def _tracks_for_playlist(playlist_id, source):
@@ -5072,9 +5151,12 @@ def alexa_empty():
     return jsonify({'version': '1.0', 'response': {}})
 
 def _np_play_path(path, token, *, offset_ms=0, previous_token=None,
-                  play_behavior='REPLACE_ALL', speech=None):
+                  play_behavior='REPLACE_ALL', speech=None, fast_metadata=False):
     """AudioPlayer.Play with title/artist/artwork for Echo Show / Spot display."""
-    title, artist, album, artwork_url = track_metadata(path)
+    if fast_metadata:
+        title, artist, album, artwork_url = track_metadata_fast(path)
+    else:
+        title, artist, album, artwork_url = track_metadata(path)
     if artist and album:
         subtitle = f'{artist} · {album}'
     else:
@@ -5246,6 +5328,15 @@ def track_metadata(path):
     )
     return title, artist, album, artwork_url
 
+def track_metadata_fast(path):
+    """DB-only metadata for Alexa responses — no artwork lookup (iTunes can exceed 8s)."""
+    row = db_one('SELECT title, artist, album FROM songs_cache WHERE path = ?', [path]) or {}
+    fname = os.path.splitext(os.path.basename(path))[0]
+    title  = row.get('title', fname) or fname
+    artist = row.get('artist') or None
+    album  = row.get('album') or None
+    return title, artist, album, None
+
 def _filter_ignored_queue(queue):
     """Drop "never play again" tracks at queue-build time so they never start —
     but if the WHOLE queue is ignored (e.g. a one-song ignored selection), keep
@@ -5257,26 +5348,52 @@ def _filter_ignored_queue(queue):
     return filtered if filtered else queue
 
 def start_playing(tracks, shuffle=False, speech=None, loop=False,
-                  playlist=None, playlist_id=None, context=None):
-    queue = _filter_ignored_queue(normalize_track_queue(tracks))
-    if not queue:
-        return alexa_speak("Sorry, I couldn't find any tracks to play.")
-    if shuffle:
-        random.shuffle(queue)
-    first = queue[0]
-    token_data = {
-        'tracks': queue[:300], 'idx': 0, 'shuffle': shuffle, 'loop': loop,
-        'playlist': playlist, 'playlist_id': playlist_id, 'context': context,
-    }
-    token = encode_token(token_data)
-    title, artist, album, artwork_url = track_metadata(first)
+                  playlist=None, playlist_id=None, context=None, source=None):
+    t0 = time.time()
+    shuffle_seed = None
+    if playlist_id and not source:
+        _, source = _msp_playlist_by_id(playlist_id)
+    use_lazy = bool(playlist_id and source)
+    if use_lazy:
+        paths = _playlist_paths_cached(playlist_id, source)
+        queue = _filter_ignored_queue(normalize_track_queue_fast(paths))
+        if shuffle and queue:
+            shuffle_seed = random.randint(0, 2**31 - 1)
+            rng = random.Random(shuffle_seed)
+            rng.shuffle(queue)
+        elif shuffle:
+            random.shuffle(queue)
+        queue = queue[:_QUEUE_TRACK_LIMIT]
+        if not queue:
+            return alexa_speak("Sorry, I couldn't find any tracks to play.")
+        first = queue[0]
+        qid = _store_queue_lazy(
+            playlist_id, source, shuffle=shuffle, shuffle_seed=shuffle_seed,
+            loop=loop, playlist=playlist, context=context,
+        )
+        token = f"{qid}:0"
+    else:
+        queue = _filter_ignored_queue(normalize_track_queue(tracks or []))
+        if not queue:
+            return alexa_speak("Sorry, I couldn't find any tracks to play.")
+        if shuffle:
+            random.shuffle(queue)
+        first = queue[0]
+        token_data = {
+            'tracks': queue[:_QUEUE_TRACK_LIMIT], 'idx': 0, 'shuffle': shuffle, 'loop': loop,
+            'playlist': playlist, 'playlist_id': playlist_id, 'context': context,
+        }
+        token = encode_token(token_data)
+    title, artist, album, _ = track_metadata_fast(first)
     src = _np_source_fields(token)
-    # playing=False until Alexa confirms PlaybackStarted
     write_np_state({'track': None, 'artist': artist, 'album': album,
                     'filepath': first, 'token': token,
                     'playing': False, 'timestamp': time.time(),
                     **src})
-    return _np_play_path(first, token, speech=speech)
+    elapsed = time.time() - t0
+    print(f'[ALEXA TIMING] start_playing lazy={use_lazy} tracks={len(queue)} '
+          f'playlist={playlist!r} elapsed={elapsed:.2f}s', flush=True)
+    return _np_play_path(first, token, speech=speech, fast_metadata=True)
 
 # ── Music Skill (MSP) — scaffolding ───────────────────────────────────────────
 # Account linking + directive handler stubs for migrating to Alexa's Music Skill API.
@@ -5963,11 +6080,8 @@ def alexa_skill():
                     tracks, label = recovered
                     return start_playing(tracks, speech=f"Playing {label}.", context=f'Song · {label}')
                 return alexa_speak(f"Sorry, I couldn't find a playlist called {query}.")
-            tracks = _tracks_for_playlist(pid, source)
-            if not tracks:
-                return alexa_speak(f"The playlist {name} has no playable tracks.")
-            return start_playing(tracks, speech=f"Playing {name}.",
-                                playlist=name, playlist_id=pid)
+            return start_playing(None, speech=f"Playing {name}.",
+                                playlist=name, playlist_id=pid, source=source)
 
         # ── Shuffle playlist ───────────────────────────────────────────────
         elif iname == 'ShufflePlaylistIntent':
@@ -5984,11 +6098,8 @@ def alexa_skill():
             print(f'[ALEXA DEBUG] ShufflePlaylistIntent query={repr(query)} -> name={repr(name)} source={repr(source)}', flush=True)
             if not name:
                 return alexa_speak(f"Sorry, I couldn't find a playlist called {query}.")
-            tracks = _tracks_for_playlist(pid, source)
-            if not tracks:
-                return alexa_speak(f"The playlist {name} has no playable tracks.")
-            return start_playing(tracks, shuffle=True, speech=f"Shuffling {name}.",
-                                playlist=name, playlist_id=pid)
+            return start_playing(None, shuffle=True, speech=f"Shuffling {name}.",
+                                playlist=name, playlist_id=pid, source=source)
 
         # ── Play artist ────────────────────────────────────────────────────
         elif iname == 'PlayArtistIntent':

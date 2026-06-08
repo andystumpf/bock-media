@@ -21,7 +21,7 @@ suspend fun repositoryPlay(
         device, "artist", name = target.name, shuffle = shuffle,
     )
     is PlayTarget.Album -> repository.playOnDevice(
-        device, "album", name = target.name, shuffle = shuffle,
+        device, "album", name = target.name, artist = target.artist, shuffle = shuffle,
     )
     is PlayTarget.Song -> repository.playOnDevice(
         device, "song", name = target.title, path = target.path, shuffle = shuffle,

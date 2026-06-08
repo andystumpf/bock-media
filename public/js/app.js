@@ -2123,7 +2123,7 @@ function playArtistAt(i) {
 }
 function playAlbumAt(i) {
   const a = (window._albums || [])[i];
-  if (a) playOnDevice({ kind: 'album', name: a.album });
+  if (a) playOnDevice({ kind: 'album', name: a.album, artist: a.artist || '' });
 }
 function playSongAt(i) {
   const opts = songPlayOpts((window._songs || [])[i]);
@@ -2188,11 +2188,15 @@ register('albums', async (params) => {
 });
 
 async function loadAlbums() {
-  const [data, remote] = await Promise.all([
-    API(`/api/albums?page=${_alPage}&limit=50&search=${encodeURIComponent(_alSearch)}&artist=${encodeURIComponent(_alArtist)}`),
-    ensureAlexaRemoteStatus(),
-  ]);
-  const { items = [], total = 0 } = data || {};
+  const data = await API(`/api/albums?page=${_alPage}&limit=50&search=${encodeURIComponent(_alSearch)}&artist=${encodeURIComponent(_alArtist)}`);
+  if (!data) {
+    document.getElementById('page-title').textContent = 'Albums';
+    document.getElementById('main-content').innerHTML =
+      '<div class="empty-state"><i class="fa fa-compact-disc"></i><p>Could not load albums — the library query timed out. Try again.</p></div>';
+    return;
+  }
+  const remote = await ensureAlexaRemoteStatus().catch(() => ({}));
+  const { items = [], total = 0 } = data;
   window._albums = items;
   const canPlay = !!(remote && remote.configured);
 
@@ -3687,7 +3691,7 @@ async function libSearchRun(q) {
   const al = (data.albums || []).map((a) => {
     const href = `#songs/album/${encodeURIComponent(a.name)}`;
     const label = `${libSearchLink(href, a.name)}${a.artist ? ` <span class="text-muted">— ${escHtml(a.artist)}</span>` : ''}`;
-    return libSearchHit('<i class="fa fa-compact-disc"></i>', label, { kind: 'album', name: a.name }, '', canPlay);
+    return libSearchHit('<i class="fa fa-compact-disc"></i>', label, { kind: 'album', name: a.name, artist: a.artist || '' }, '', canPlay);
   }).join('');
   const sg = (data.songs || []).map((s) => {
     const label = `${escHtml(s.title)}${s.artist ? ` <span class="text-muted">— ${escHtml(s.artist)}</span>` : ''}`;

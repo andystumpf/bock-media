@@ -4,7 +4,7 @@ sealed class PlayTarget {
     abstract val label: String
     data class Playlist(val id: String, val name: String) : PlayTarget() { override val label = name }
     data class Artist(val name: String) : PlayTarget() { override val label = name }
-    data class Album(val name: String) : PlayTarget() { override val label = name }
+    data class Album(val name: String, val artist: String? = null) : PlayTarget() { override val label = name }
     data class Song(val path: String, val title: String) : PlayTarget() { override val label = title }
 }
 
