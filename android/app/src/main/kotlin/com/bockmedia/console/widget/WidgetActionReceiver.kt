@@ -4,9 +4,9 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.widget.Toast
-import com.bockmedia.console.BockMediaApp
+import android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+import com.bockmedia.console.MainActivity
 import com.bockmedia.console.R
-import kotlinx.coroutines.runBlocking
 
 class WidgetActionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -15,6 +15,19 @@ class WidgetActionReceiver : BroadcastReceiver() {
             NowPlayingWidget.ACTION_PAUSE -> control(context, intent, "pause")
             NowPlayingWidget.ACTION_PLAY -> control(context, intent, "play")
             NowPlayingWidget.ACTION_NEXT -> control(context, intent, "next")
+            NowPlayingWidget.ACTION_PREVIOUS -> control(context, intent, "previous")
+            NowPlayingWidget.ACTION_CYCLE_DEVICE -> {
+                val pending = goAsync()
+                Thread {
+                    NowPlayingController.cycleDevice(context.applicationContext)
+                    pending.finish()
+                }.start()
+            }
+            NowPlayingWidget.ACTION_OPEN -> {
+                context.startActivity(
+                    MainActivity.launchIntent(context, "#nowplaying").addFlags(FLAG_ACTIVITY_NEW_TASK),
+                )
+            }
         }
     }
 
@@ -23,13 +36,10 @@ class WidgetActionReceiver : BroadcastReceiver() {
         val deviceName = intent.getStringExtra(NowPlayingWidget.EXTRA_DEVICE_NAME) ?: return
         val pending = goAsync()
         Thread {
-            val ok = runCatching {
-                runBlocking {
-                    BockMediaApp.get(context).repository.deviceControl(deviceId, deviceName, null, action)
-                }
-            }.isSuccess
-            NowPlayingWidget.updateAll(context)
-            if (!ok) Toast.makeText(context, R.string.widget_control_failed, Toast.LENGTH_SHORT).show()
+            val ok = NowPlayingController.sendControl(context.applicationContext, deviceId, deviceName, action)
+            if (!ok) {
+                Toast.makeText(context, R.string.widget_control_failed, Toast.LENGTH_SHORT).show()
+            }
             pending.finish()
         }.start()
     }

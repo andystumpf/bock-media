@@ -4,117 +4,34 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@drawable/widget_background"
-    android:gravity="center_vertical"
-    android:orientation="horizontal"
-    android:padding="12dp">
+    android:orientation="vertical"
+    android:padding="8dp">
 
-    <ImageView
-        android:id="@+id/widget_art"
-        android:layout_width="56dp"
-        android:layout_height="56dp"
-        android:contentDescription="@string/widget_art_desc"
-        android:scaleType="centerCrop"
-        android:src="@mipmap/ic_launcher" />
-
-    <LinearLayout
-        android:layout_width="0dp"
+    <TextView
+        android:id="@+id/widget_header"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginStart="12dp"
+        android:paddingBottom="4dp"
+        android:text="@string/widget_name"
+        android:textColor="#E99D1A"
+        android:textSize="12sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/widget_empty"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:padding="12dp"
+        android:text="@string/widget_nothing_playing"
+        android:textColor="#B8C4DC"
+        android:textSize="13sp"
+        android:visibility="gone" />
+
+    <ListView
+        android:id="@+id/widget_list"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
         android:layout_weight="1"
-        android:orientation="vertical">
-
-        <TextView
-            android:id="@+id/widget_track"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:ellipsize="marquee"
-            android:marqueeRepeatLimit="marquee_forever"
-            android:singleLine="true"
-            android:textColor="@android:color/white"
-            android:textSize="14sp"
-            android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/widget_subtitle"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:ellipsize="end"
-            android:maxLines="1"
-            android:textColor="#B8C4DC"
-            android:textSize="12sp" />
-
-        <TextView
-            android:id="@+id/widget_source"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:ellipsize="end"
-            android:maxLines="1"
-            android:textColor="#E99D1A"
-            android:textSize="11sp"
-            android:visibility="gone" />
-
-        <ProgressBar
-            android:id="@+id/widget_progress"
-            style="?android:attr/progressBarStyleHorizontal"
-            android:layout_width="match_parent"
-            android:layout_height="4dp"
-            android:layout_marginTop="6dp"
-            android:max="1000"
-            android:progress="0"
-            android:progressDrawable="@drawable/widget_progress" />
-    </LinearLayout>
-
-    <LinearLayout
-        android:id="@+id/widget_controls"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="8dp"
-        android:gravity="center"
-        android:orientation="vertical"
-        android:visibility="gone">
-
-        <ImageButton
-            android:id="@+id/widget_btn_refresh"
-            android:layout_width="36dp"
-            android:layout_height="36dp"
-            android:background="?android:attr/selectableItemBackgroundBorderless"
-            android:contentDescription="@string/refresh"
-            android:padding="6dp"
-            android:scaleType="centerInside"
-            android:src="@android:drawable/ic_menu_rotate"
-            android:tint="@android:color/white" />
-
-        <ImageButton
-            android:id="@+id/widget_btn_pause"
-            android:layout_width="36dp"
-            android:layout_height="36dp"
-            android:background="?android:attr/selectableItemBackgroundBorderless"
-            android:contentDescription="@string/widget_pause"
-            android:padding="6dp"
-            android:scaleType="centerInside"
-            android:src="@android:drawable/ic_media_pause"
-            android:tint="@android:color/white" />
-
-        <ImageButton
-            android:id="@+id/widget_btn_next"
-            android:layout_width="36dp"
-            android:layout_height="36dp"
-            android:background="?android:attr/selectableItemBackgroundBorderless"
-            android:contentDescription="@string/widget_next"
-            android:padding="6dp"
-            android:scaleType="centerInside"
-            android:src="@android:drawable/ic_media_next"
-            android:tint="@android:color/white" />
-
-        <ImageButton
-            android:id="@+id/widget_btn_open"
-            android:layout_width="36dp"
-            android:layout_height="36dp"
-            android:background="?android:attr/selectableItemBackgroundBorderless"
-            android:contentDescription="@string/widget_open"
-            android:padding="6dp"
-            android:scaleType="centerInside"
-            android:src="@android:drawable/ic_menu_view"
-            android:tint="#E99D1A" />
-    </LinearLayout>
+        android:divider="#33FFFFFF"
+        android:dividerHeight="1dp" />
 </LinearLayout>

@@ -156,10 +156,11 @@ fun NowPlayingScreen(
     suspend fun loadAll() {
         loading = true
         error = null
-        runCatching {
-            refreshLive()
-            loadHistory()
-        }.onFailure { error = it.message }
+        var liveError: String? = null
+        var historyError: String? = null
+        runCatching { refreshLive() }.onFailure { liveError = it.message }
+        runCatching { loadHistory() }.onFailure { historyError = it.message }
+        error = liveError ?: historyError
         loading = false
     }
 
@@ -180,7 +181,11 @@ fun NowPlayingScreen(
     }
 
     LaunchedEffect(Unit) { loadAll() }
-    LaunchedEffect(histPage) { runCatching { loadHistory() } }
+    LaunchedEffect(histPage) {
+        runCatching { loadHistory() }.onFailure {
+            if (error == null) error = it.message
+        }
+    }
     LaunchedEffect(Unit) {
         while (true) {
             delay(5_000)
@@ -442,7 +447,11 @@ fun NowPlayingScreen(
                 if (history.isEmpty()) {
                     item {
                         Text(
-                            "No streaming history found.",
+                            if (histTotal > 0) {
+                                "Could not load streaming history."
+                            } else {
+                                "No streaming history found."
+                            },
                             modifier = Modifier.padding(horizontal = 16.dp),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )

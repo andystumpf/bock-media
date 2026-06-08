@@ -1,19 +1,28 @@
 package com.bockmedia.console
 
+import android.Manifest
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.*
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import coil.Coil
 import coil.ImageLoader
+import com.bockmedia.console.media.NowPlayingNotificationManager
 import com.bockmedia.console.ui.navigation.BockApp
 import com.bockmedia.console.ui.setup.SetupScreen
 import com.bockmedia.console.ui.theme.BockMediaTheme
+import androidx.lifecycle.lifecycleScope
+import com.bockmedia.console.widget.NowPlayingWidget
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
 
@@ -26,8 +35,12 @@ class MainActivity : ComponentActivity() {
                 val app = remember { BockMediaApp.get(this) }
                 var hasServer by remember { mutableStateOf<Boolean?>(null) }
                 val scope = rememberCoroutineScope()
+                val notificationPermission = rememberLauncherForActivityResult(
+                    ActivityResultContracts.RequestPermission(),
+                ) { }
 
                 LaunchedEffect(Unit) {
+                    NowPlayingNotificationManager.ensureChannel(this@MainActivity)
                     app.preferences.clearCredentialsIfNotRemembered()
                     if (app.preferences.isRememberMeSync()) {
                         app.preferences.applyBuildDefaultsIfEmpty()
@@ -41,6 +54,9 @@ class MainActivity : ComponentActivity() {
 
                 LaunchedEffect(hasServer) {
                     if (hasServer == true) {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        }
                         runCatching {
                             val client = app.buildAuthenticatedHttpClient()
                             Coil.setImageLoader(
@@ -57,6 +73,11 @@ class MainActivity : ComponentActivity() {
                     val observer = LifecycleEventObserver { _, event ->
                         if (event == Lifecycle.Event.ON_RESUME && hasServer == true) {
                             app.invalidateApi()
+                            lifecycleOwner.lifecycleScope.launch {
+                                withContext(Dispatchers.IO) {
+                                    NowPlayingWidget.refreshSession(applicationContext)
+                                }
+                            }
                         }
                     }
                     lifecycleOwner.lifecycle.addObserver(observer)

@@ -815,6 +815,52 @@ def alexa_remote_devices():
         status = 400 if code in ('not_configured', 'not_authenticated') else 500
         return jsonify({'error': code, 'code': code}), status
 
+def _optimistic_np_skip(device_id, delta):
+    """Advance Now Playing metadata immediately after remote skip (before Alexa event)."""
+    st = read_np_state_for_device(device_id)
+    if not st:
+        return
+    token = st.get('token') or ''
+    if ':' not in token:
+        return
+    data = decode_token(token)
+    tracks = data.get('tracks') or []
+    if not tracks:
+        return
+    try:
+        idx = int(data.get('idx', 0))
+    except (TypeError, ValueError):
+        idx = 0
+    if delta > 0:
+        new_idx = idx + 1
+        if new_idx >= len(tracks):
+            if data.get('loop'):
+                new_idx = 0
+            else:
+                return
+    else:
+        new_idx = max(idx - 1, 0)
+    if new_idx == idx:
+        return
+    path = tracks[new_idx]
+    title, artist, album, _ = track_metadata_fast(path)
+    new_token = encode_token({**data, 'idx': new_idx})
+    src = _np_source_fields(new_token, device_id)
+    write_np_state_for_device(device_id, {
+        **st,
+        'track': title,
+        'artist': artist,
+        'album': album,
+        'filepath': path,
+        'token': new_token,
+        'playing': True,
+        'paused': False,
+        'timestamp': time.time(),
+        'duration_ms': _duration_ms_for_path(path),
+        'offset_ms': 0,
+        **src,
+    })
+
 @app.route('/api/alexa_remote/control', methods=['POST'])
 def alexa_remote_control():
     """Pause/play/skip/shuffle on a specific Echo (unofficial Alexa API)."""
@@ -844,6 +890,10 @@ def alexa_remote_control():
             elif action == 'stop':
                 # Device goes home — drop it from Now Playing entirely.
                 write_np_state_for_device(device_id, None)
+            elif action == 'next':
+                _optimistic_np_skip(device_id, 1)
+            elif action == 'previous':
+                _optimistic_np_skip(device_id, -1)
         return jsonify({'ok': True, **result})
     except ImportError:
         return jsonify({'error': 'alexapy not installed', 'code': 'not_installed'}), 503

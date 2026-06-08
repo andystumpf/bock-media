@@ -8,8 +8,10 @@ object WidgetRefreshScheduler {
     private const val WORK_NAME = "bockmedia_widget_refresh"
 
     fun schedule(context: Context) {
+        val playing = NowPlayingSessionStore.snapshot?.items?.any { !it.paused } == true
+        val delaySec = if (playing) 5L else 30L
         val req = OneTimeWorkRequestBuilder<WidgetRefreshWorker>()
-            .setInitialDelay(30, TimeUnit.SECONDS)
+            .setInitialDelay(delaySec, TimeUnit.SECONDS)
             .build()
         WorkManager.getInstance(context).enqueueUniqueWork(WORK_NAME, ExistingWorkPolicy.REPLACE, req)
     }

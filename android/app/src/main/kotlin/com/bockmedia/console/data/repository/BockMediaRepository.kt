@@ -83,14 +83,14 @@ class BockMediaRepository(
         return api().playOnDevice(body)
     }
 
-    suspend fun deviceControl(deviceId: String, deviceName: String, serial: String?, action: String) {
+    suspend fun deviceControl(deviceId: String, deviceName: String, serial: String?, action: String): PlayResponse {
         val body = buildJsonObject {
             put("deviceId", deviceId)
             put("device", deviceName)
             serial?.let { put("serial", it) }
             put("action", action)
         }
-        api().alexaRemoteControl(body)
+        return api().alexaRemoteControl(body)
     }
 
     suspend fun setVolume(serial: String, deviceName: String, volume: Int) {

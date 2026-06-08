@@ -29,4 +29,14 @@
     <string name="widget_next">Next track</string>
     <string name="widget_open">Open app</string>
     <string name="widget_control_failed">Control failed — check Alexa login on server</string>
+    <string name="widget_paused">Paused</string>
+    <string name="widget_playing_count">Now Playing · %1$d speakers</string>
+    <string name="notification_channel_name">Now Playing</string>
+    <string name="notification_channel_desc">Playback controls for your Alexa devices</string>
+    <string name="notification_previous">Previous</string>
+    <string name="notification_next">Next</string>
+    <string name="notification_play">Play</string>
+    <string name="notification_pause">Pause</string>
+    <string name="notification_next_device">Next device</string>
+    <string name="notification_more_devices">+%1$d more</string>
 </resources>
