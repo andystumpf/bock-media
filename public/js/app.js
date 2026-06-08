@@ -146,6 +146,24 @@ function signOut() {
 // Format helpers
 function fmtNum(n) { return Number(n || 0).toLocaleString(); }
 
+function artworkUrl(filepath) {
+  if (!filepath) return null;
+  const rel = String(filepath).replace(/^\/+/, '');
+  const encoded = rel.split('/').map(seg => encodeURIComponent(seg)).join('/');
+  return `/artwork/${encoded}`;
+}
+
+function npArtworkHtml(filepath) {
+  const url = artworkUrl(filepath);
+  if (!url) {
+    return '<div class="np-artwork np-artwork-fallback" aria-hidden="true"><i class="fa fa-compact-disc"></i></div>';
+  }
+  return `<div class="np-artwork" aria-hidden="true">
+    <img src="${escHtml(url)}" alt="" loading="lazy" class="np-artwork-img"
+      onerror="this.closest('.np-artwork').classList.add('np-artwork-fallback');this.remove();">
+  </div>`;
+}
+
 function time24ToParts(time24) {
   const parts = (time24 || '08:00').split(':');
   const h24 = parseInt(parts[0], 10) || 0;
@@ -924,7 +942,7 @@ function buildDeviceRow(d, controlsAvailable = false) {
   return `
     <div class="np-device-row${d.paused ? ' np-device-paused' : ''}">
       <div class="np-device-main">
-        <div class="np-device-icon"><i class="fa fa-music"></i></div>
+        ${npArtworkHtml(d.filepath)}
         <div class="np-device-meta">
           <div class="np-track">${escHtml(d.track || '—')} ${pausedBadge} ${sleepBadge}</div>
           ${d.artist ? `<div class="np-artist">${escHtml(d.artist)}</div>` : ''}
@@ -1178,13 +1196,19 @@ function groupNowPlaying(list) {
 
 function buildGroupRow(g, controlsAvailable) {
   const sub = g.members.map(d => buildDeviceRow(d, controlsAvailable)).join('');
+  const groupArt = g.members[0] ? npArtworkHtml(g.members[0].filepath) : '';
   return `
     <div class="np-group">
       <div class="np-group-header">
-        <i class="fa fa-layer-group"></i>
-        <span class="np-group-name">${escHtml(g.name)}</span>
-        <span class="np-group-count">${g.members.length} speakers</span>
-        <span class="np-group-track">${escHtml(g.track || '—')}${g.artist ? ' — ' + escHtml(g.artist) : ''}${g.members[0] && (g.members[0].sourceLabel || g.members[0].playlist) ? ' · <i class="fa fa-list"></i> ' + escHtml(g.members[0].sourceLabel || g.members[0].playlist) : ''}</span>
+        ${groupArt}
+        <div class="np-group-header-text">
+          <div class="np-group-header-top">
+            <i class="fa fa-layer-group"></i>
+            <span class="np-group-name">${escHtml(g.name)}</span>
+            <span class="np-group-count">${g.members.length} speakers</span>
+          </div>
+          <span class="np-group-track">${escHtml(g.track || '—')}${g.artist ? ' — ' + escHtml(g.artist) : ''}${g.members[0] && (g.members[0].sourceLabel || g.members[0].playlist) ? ' · <i class="fa fa-list"></i> ' + escHtml(g.members[0].sourceLabel || g.members[0].playlist) : ''}</span>
+        </div>
       </div>
       <div class="np-group-members">${sub}</div>
     </div>`;

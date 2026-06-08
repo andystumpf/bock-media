@@ -1106,6 +1106,7 @@ def _register_play_playlist_token(playlist_id, name, source, shuffle=False):
         for k in [k for k, v in _PLAYLIST_TOKENS.items() if v.get('exp', 0) < now]:
             del _PLAYLIST_TOKENS[k]
         _PLAYLIST_TOKENS[token] = {
+            'kind': 'playlist',
             'id': str(playlist_id),
             'name': name or '',
             'source': (source or '').strip(),
@@ -1114,6 +1115,25 @@ def _register_play_playlist_token(playlist_id, name, source, shuffle=False):
         }
         _save_playlist_tokens()
     print(f'[PLAY TOKEN] registered {token} playlist={name!r} shuffle={shuffle}', flush=True)
+    return token
+
+
+def _register_play_album_token(album, artist=None, shuffle=False):
+    """Short-lived token so UI album plays avoid fuzzy NLU on album titles."""
+    token = _new_playlist_token_id()
+    now = time.time()
+    with _PLAYLIST_TOKEN_LOCK:
+        for k in [k for k, v in _PLAYLIST_TOKENS.items() if v.get('exp', 0) < now]:
+            del _PLAYLIST_TOKENS[k]
+        _PLAYLIST_TOKENS[token] = {
+            'kind': 'album',
+            'album': album or '',
+            'artist': (artist or '').strip(),
+            'shuffle': bool(shuffle),
+            'exp': now + _PLAYLIST_TOKEN_TTL,
+        }
+        _save_playlist_tokens()
+    print(f'[PLAY TOKEN] registered {token} album={album!r} artist={artist!r} shuffle={shuffle}', flush=True)
     return token
 
 
@@ -1152,6 +1172,36 @@ def _start_playlist_token_entry(token_entry, shuffle=None):
                         playlist=name, playlist_id=pid, source=source)
 
 
+def _album_tracks_for_play(album, artist=None, shuffle=False, limit=50):
+    order = 'ORDER BY RANDOM()' if shuffle else 'ORDER BY CAST(track_number AS INTEGER), title'
+    if artist:
+        rows = db_query(
+            f"SELECT path FROM songs_cache WHERE album = ? AND artist = ? AND path IS NOT NULL "
+            f"AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac') {order} LIMIT ?",
+            [album, artist, limit],
+        )
+    else:
+        rows = db_query(
+            f"SELECT path FROM songs_cache WHERE album = ? AND path IS NOT NULL "
+            f"AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac') {order} LIMIT ?",
+            [album, limit],
+        )
+    return [r['path'] for r in rows]
+
+
+def _start_album_token_entry(token_entry, shuffle=None):
+    album = token_entry.get('album') or 'album'
+    artist = (token_entry.get('artist') or '').strip() or None
+    do_shuffle = token_entry.get('shuffle', False) if shuffle is None else shuffle
+    tracks = _album_tracks_for_play(album, artist=artist, shuffle=do_shuffle)
+    if not tracks:
+        return alexa_speak(f"I found {album} but no playable files.")
+    speech = (f"Shuffling the album {album}." if do_shuffle
+              else f"Playing the album {album}.")
+    return start_playing(tracks, shuffle=do_shuffle, speech=speech,
+                        context=f'Album · {album}')
+
+
 def _build_play_text(kind, name, shuffle, artist=None, path=None, playlist_id=None, playlist_source=None):
     """Build a collision-safe utterance that routes to our custom skill.
 
@@ -1165,7 +1215,9 @@ def _build_play_text(kind, name, shuffle, artist=None, path=None, playlist_id=No
     if kind == 'artist':
         phrase = f"music by {name}"
     elif kind == 'album':
-        phrase = f"the album {name}"
+        token = _register_play_album_token(name, artist=artist, shuffle=shuffle)
+        phrase = f"token {token}"
+        verb = 'start'
     elif kind == 'song':
         verb = 'start'
         artist = (artist or '').strip()
@@ -6205,6 +6257,8 @@ def alexa_skill():
             if not entry:
                 pl_entry = _consume_play_playlist_token(token_raw)
                 if pl_entry:
+                    if pl_entry.get('kind') == 'album':
+                        return _start_album_token_entry(pl_entry)
                     return _start_playlist_token_entry(pl_entry)
             if not entry or not os.path.isfile(entry['path']):
                 return alexa_speak("Sorry, I couldn't find that track.")
