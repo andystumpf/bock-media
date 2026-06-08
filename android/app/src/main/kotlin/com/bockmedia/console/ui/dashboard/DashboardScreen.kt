@@ -1,7 +1,7 @@
 package com.bockmedia.console.ui.dashboard
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
+import com.bockmedia.console.ui.components.BockLazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -57,7 +57,7 @@ fun DashboardScreen(
     when {
         loading && summary == null -> LoadingBox()
         error != null && summary == null -> ErrorText(error!!) { scope.launch { load() } }
-        else -> LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        else -> BockLazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             item {
                 summary?.let {
                     Text("Songs ${it.songs} · Artists ${it.artists} · Albums ${it.albums} · Playlists ${it.playlists}")

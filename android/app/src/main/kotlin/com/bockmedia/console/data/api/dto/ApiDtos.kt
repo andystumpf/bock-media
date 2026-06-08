@@ -274,12 +274,15 @@ data class WatchFoldersResponse(val items: List<WatchFolder> = emptyList())
 
 @Serializable
 data class WatchFolder(
+    val guid: String? = null,
     val path: String? = null,
     val label: String? = null,
     val status: String? = null,
-    val songs: Int = 0,
+    val count: Int = 0,
+    @SerialName("identifiedFiles") val identifiedFiles: Int = 0,
+    val errors: Int = 0,
     val playlists: Int = 0,
-    val error: String? = null,
+    val type: String? = null,
 )
 
 @Serializable
@@ -352,6 +355,7 @@ data class AutomationItem(
     val playlistId: String? = null,
     val playlistName: String? = null,
     val device: String? = null,
+    val deviceName: String? = null,
     val time: String? = null,
     val volume: Int? = null,
     val shuffle: Boolean = false,

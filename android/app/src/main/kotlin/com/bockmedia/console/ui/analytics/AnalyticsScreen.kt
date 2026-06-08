@@ -1,7 +1,7 @@
 package com.bockmedia.console.ui.analytics
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
+import com.bockmedia.console.ui.components.BockLazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -10,6 +10,7 @@ import androidx.compose.ui.unit.dp
 import com.bockmedia.console.data.api.dto.AnalyticsResponse
 import com.bockmedia.console.data.api.dto.CountRow
 import com.bockmedia.console.data.repository.BockMediaRepository
+import com.bockmedia.console.ui.components.BockTextField
 import com.bockmedia.console.ui.components.LoadingBox
 import kotlinx.coroutines.launch
 
@@ -35,12 +36,12 @@ fun AnalyticsScreen(repository: BockMediaRepository) {
 
     Column(Modifier.fillMaxSize().padding(16.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(from, { from = it }, label = { Text("From") }, modifier = Modifier.weight(1f))
-            OutlinedTextField(to, { to = it }, label = { Text("To") }, modifier = Modifier.weight(1f))
+            BockTextField(from, { from = it }, "From", modifier = Modifier.weight(1f))
+            BockTextField(to, { to = it }, "To", modifier = Modifier.weight(1f))
             Button(onClick = { scope.launch { load() } }) { Text("Apply") }
         }
         if (loading) LoadingBox(Modifier.weight(1f)) else {
-            LazyColumn(Modifier.weight(1f)) {
+            BockLazyColumn(Modifier.weight(1f)) {
                 data?.let { a ->
                     item { StatsSection("Top artists", a.topArtists) }
                     item { StatsSection("Top albums", a.topAlbums) }

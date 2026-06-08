@@ -1,7 +1,7 @@
 package com.bockmedia.console.ui.rooms
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
+import com.bockmedia.console.ui.components.BockLazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -71,7 +71,7 @@ fun RoomsScreen(repository: BockMediaRepository) {
     when {
         loading -> LoadingBox()
         error != null -> ErrorText(error!!) { scope.launch { load() } }
-        else -> LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        else -> BockLazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(rooms) { room ->
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(12.dp)) {

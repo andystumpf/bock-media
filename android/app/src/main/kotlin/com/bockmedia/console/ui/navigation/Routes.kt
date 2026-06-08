@@ -35,7 +35,7 @@ sealed class BockRoute(val route: String, val title: String, val icon: ImageVect
 
     companion object {
         val drawerRoutes = listOf(
-            Dashboard, NowPlaying, Rooms,
+            NowPlaying, Dashboard, Rooms,
             Search, Playlists, Albums, Artists, Songs,
             WatchFolders, Devices, Automation, Routines, Analytics, Settings,
         )

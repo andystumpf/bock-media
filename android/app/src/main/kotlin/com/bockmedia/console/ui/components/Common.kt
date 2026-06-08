@@ -1,7 +1,6 @@
 package com.bockmedia.console.ui.components
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import com.bockmedia.console.domain.model.PlayTarget
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -14,6 +13,9 @@ import androidx.compose.ui.unit.dp
 import com.bockmedia.console.data.api.dto.AlexaDevice
 import com.bockmedia.console.data.api.dto.DeviceGroup
 import com.bockmedia.console.data.repository.BockMediaRepository
+import com.bockmedia.console.ui.util.formatTime12
+import com.bockmedia.console.ui.util.formatTime24
+import com.bockmedia.console.ui.util.parseTime24
 import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
@@ -41,13 +43,27 @@ fun ErrorText(message: String, onRetry: (() -> Unit)? = null) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SearchField(
+fun bockTextFieldColors() = TextFieldDefaults.colors(
+    focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+    disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+    focusedIndicatorColor = Color.Transparent,
+    unfocusedIndicatorColor = Color.Transparent,
+    disabledIndicatorColor = Color.Transparent,
+)
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun BockTextField(
     value: String,
     onValueChange: (String) -> Unit,
     placeholder: String,
     modifier: Modifier = Modifier,
+    readOnly: Boolean = false,
+    singleLine: Boolean = true,
+    leadingIcon: @Composable (() -> Unit)? = null,
+    trailingIcon: @Composable (() -> Unit)? = null,
 ) {
-    val shape = RoundedCornerShape(16.dp)
     TextField(
         value = value,
         onValueChange = onValueChange,
@@ -59,6 +75,28 @@ fun SearchField(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         },
+        leadingIcon = leadingIcon,
+        trailingIcon = trailingIcon,
+        readOnly = readOnly,
+        singleLine = singleLine,
+        shape = RoundedCornerShape(16.dp),
+        colors = bockTextFieldColors(),
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SearchField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    modifier: Modifier = Modifier,
+) {
+    BockTextField(
+        value = value,
+        onValueChange = onValueChange,
+        placeholder = placeholder,
+        modifier = modifier,
         leadingIcon = {
             Icon(
                 Icons.Default.Search,
@@ -73,17 +111,100 @@ fun SearchField(
                 }
             }
         },
-        singleLine = true,
-        shape = shape,
-        colors = TextFieldDefaults.colors(
-            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
-            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
-            focusedIndicatorColor = Color.Transparent,
-            unfocusedIndicatorColor = Color.Transparent,
-            disabledIndicatorColor = Color.Transparent,
-        ),
     )
+}
+
+data class DeviceOption(val value: String, val label: String)
+
+fun buildDeviceOptions(groups: List<DeviceGroup>, devices: List<AlexaDevice>): List<DeviceOption> {
+    val out = mutableListOf<DeviceOption>()
+    groups.forEach { g ->
+        out += DeviceOption("group:${g.id}", "${g.name} (${g.members?.size ?: 0})")
+    }
+    devices.forEach { d ->
+        val serial = d.serial ?: return@forEach
+        val name = d.name ?: serial
+        val label = if (d.online) name else "$name (offline)"
+        out += DeviceOption(serial, label)
+    }
+    return out
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun DeviceSelectField(
+    options: List<DeviceOption>,
+    selectedValue: String,
+    onSelect: (DeviceOption) -> Unit,
+    placeholder: String = "Select device…",
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val selectedLabel = options.find { it.value == selectedValue }?.label ?: ""
+    ExposedDropdownMenuBox(expanded, { expanded = !expanded }, modifier = modifier) {
+        BockTextField(
+            selectedLabel,
+            {},
+            placeholder,
+            readOnly = true,
+            modifier = Modifier.menuAnchor(),
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
+        )
+        ExposedDropdownMenu(expanded, { expanded = false }) {
+            if (options.isEmpty()) {
+                DropdownMenuItem(
+                    text = { Text("No devices found") },
+                    onClick = {},
+                    enabled = false,
+                )
+            } else {
+                options.forEach { opt ->
+                    DropdownMenuItem(
+                        text = { Text(opt.label) },
+                        onClick = {
+                            onSelect(opt)
+                            expanded = false
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun BockTimeField(
+    time24: String,
+    onTimeChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var showPicker by remember { mutableStateOf(false) }
+    val (hour, minute) = parseTime24(time24)
+    val display = formatTime12(time24)
+    Box(modifier = modifier.clickable { showPicker = true }) {
+        BockTextField(display, {}, "Time", readOnly = true)
+    }
+    if (showPicker) {
+        val state = rememberTimePickerState(
+            initialHour = hour,
+            initialMinute = minute,
+            is24Hour = false,
+        )
+        AlertDialog(
+            onDismissRequest = { showPicker = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    onTimeChange(formatTime24(state.hour, state.minute))
+                    showPicker = false
+                }) { Text("OK") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPicker = false }) { Text("Cancel") }
+            },
+            text = { TimePicker(state = state) },
+        )
+    }
 }
 
 @Composable
@@ -148,7 +269,7 @@ fun DevicePickerSheet(
                 loading -> CircularProgressIndicator()
                 error != null -> ErrorText(error!!)
                 else -> {
-                    LazyColumn(Modifier.heightIn(max = 400.dp)) {
+                    BockLazyColumn(Modifier.heightIn(max = 400.dp)) {
                         if (groups.isNotEmpty()) {
                             item { Text("Groups", style = MaterialTheme.typography.labelLarge) }
                             items(groups) { g ->

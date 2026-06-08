@@ -1,7 +1,7 @@
 package com.bockmedia.console.ui.search
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
+import com.bockmedia.console.ui.components.BockLazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -31,7 +31,7 @@ fun SearchScreen(repository: BockMediaRepository, remoteOk: Boolean, onPlay: (Pl
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
         SearchField(query, { query = it }, "Search library…")
         Spacer(Modifier.height(8.dp))
-        LazyColumn {
+        BockLazyColumn {
             results?.playlists?.let { list ->
                 item { Text("Playlists", style = MaterialTheme.typography.titleSmall) }
                 items(list) { hit ->

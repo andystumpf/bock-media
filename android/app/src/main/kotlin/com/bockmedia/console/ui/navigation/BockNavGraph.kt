@@ -1,7 +1,7 @@
 package com.bockmedia.console.ui.navigation
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
+import com.bockmedia.console.ui.components.BockLazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -87,7 +87,7 @@ fun BockApp(repository: BockMediaRepository, onChangeServer: () -> Unit, deepLin
                         style = MaterialTheme.typography.titleMedium,
                     )
                     HorizontalDivider(modifier = Modifier.padding(horizontal = 12.dp))
-                    LazyColumn(
+                    BockLazyColumn(
                         modifier = Modifier.weight(1f),
                         contentPadding = PaddingValues(top = 3.dp, bottom = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(2.dp),
@@ -143,7 +143,7 @@ private fun BockNavHost(
     onChangeServer: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    NavHost(navController, startDestination = BockRoute.Dashboard.route, modifier = modifier) {
+    NavHost(navController, startDestination = BockRoute.NowPlaying.route, modifier = modifier) {
         composable(BockRoute.Dashboard.route) {
             DashboardScreen(repository, onPlay) { navController.navigate(BockRoute.Settings.route) }
         }

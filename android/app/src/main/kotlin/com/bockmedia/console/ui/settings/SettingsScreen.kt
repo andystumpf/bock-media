@@ -3,14 +3,14 @@ package com.bockmedia.console.ui.settings
 import android.net.Uri
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import com.bockmedia.console.ui.components.bockVerticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.bockmedia.console.data.repository.BockMediaRepository
+import com.bockmedia.console.ui.components.BockTextField
 import com.bockmedia.console.ui.components.LoadingBox
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -64,7 +64,7 @@ fun SettingsScreen(
         }
     }
 
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+    Column(Modifier.fillMaxSize().bockVerticalScroll().padding(16.dp)) {
         message?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
         if (loading) LoadingBox() else {
             Card(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
@@ -85,8 +85,8 @@ fun SettingsScreen(
                     }
                 }
             }
-            OutlinedTextField(defaultPlaylist, { defaultPlaylist = it }, label = { Text("Default playlist") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(publicUrl, { publicUrl = it }, label = { Text("Public URL") }, modifier = Modifier.fillMaxWidth())
+            BockTextField(defaultPlaylist, { defaultPlaylist = it }, "Default playlist")
+            BockTextField(publicUrl, { publicUrl = it }, "Public URL")
             Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                 Checkbox(launchPrompt, { launchPrompt = it })
                 Text("Launch playlist prompt")

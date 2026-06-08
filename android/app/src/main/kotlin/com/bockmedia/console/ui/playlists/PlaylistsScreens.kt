@@ -1,7 +1,7 @@
 package com.bockmedia.console.ui.playlists
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
+import com.bockmedia.console.ui.components.BockLazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -110,7 +110,7 @@ fun PlaylistsScreen(
                 )
             }
         }
-        LazyColumn(Modifier.weight(1f)) {
+        BockLazyColumn(Modifier.weight(1f)) {
             items(paged, key = { it.id }) { pl ->
                 ListItem(
                     headlineContent = { Text(pl.name) },
@@ -176,7 +176,7 @@ fun PlaylistDetailScreen(
             SearchField(filter, { filter = it }, "Filter tracks")
         }
         if (loading) LoadingBox(Modifier.weight(1f)) else {
-            LazyColumn(Modifier.weight(1f)) {
+            BockLazyColumn(Modifier.weight(1f)) {
                 items(tracks) { t ->
                     ListItem(
                         headlineContent = { Text(t.title ?: "—") },

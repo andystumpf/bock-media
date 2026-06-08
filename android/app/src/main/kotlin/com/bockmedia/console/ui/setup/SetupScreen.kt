@@ -2,6 +2,7 @@ package com.bockmedia.console.ui.setup
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import com.bockmedia.console.ui.components.bockVerticalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -45,7 +46,7 @@ fun SetupScreen(onConnected: () -> Unit) {
     }
 
     Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
+        Modifier.fillMaxSize().bockVerticalScroll().padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text("Bock Media", style = MaterialTheme.typography.headlineMedium)

@@ -2,7 +2,7 @@ package com.bockmedia.console.ui.library
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
+import com.bockmedia.console.ui.components.BockLazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -126,7 +126,7 @@ private fun <T> LibraryListScreen(
         SearchField(search, { search = it; page = 1 }, "Search")
         Spacer(Modifier.height(8.dp))
         if (loading) LoadingBox(Modifier.weight(1f)) else {
-            LazyColumn(Modifier.weight(1f)) {
+            BockLazyColumn(Modifier.weight(1f)) {
                 items(items) { item ->
                     ListItem(
                         headlineContent = { Text(label(item)) },

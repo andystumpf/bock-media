@@ -2,7 +2,7 @@ package com.bockmedia.console.ui.nowplaying
 
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
+import com.bockmedia.console.ui.components.BockLazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
@@ -297,7 +297,7 @@ fun NowPlayingScreen(
         error != null && items.isEmpty() && history.isEmpty() -> ErrorText(error!!) { scope.launch { loadAll() } }
         else -> {
             val entries = groupNowPlaying(items, deviceGroups, alexaDevices)
-            LazyColumn(
+            BockLazyColumn(
                 Modifier.fillMaxSize().padding(horizontal = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 contentPadding = PaddingValues(bottom = 16.dp),

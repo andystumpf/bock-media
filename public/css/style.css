@@ -1,5 +1,6 @@
 /* Reset & base */
 * { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
 body { font-family: 'Segoe UI', Arial, sans-serif; background: #f4f6f9; color: #333; }
 a { text-decoration: none; color: inherit; }
 
@@ -68,7 +69,7 @@ a { text-decoration: none; color: inherit; }
 #sidebar-wrapper.collapsed .sidebar-brand .brand-logo { max-height: 40px; padding: 2px; }
 
 /* Sidebar nav */
-ul.sidebar-nav { list-style: none; flex: 1; overflow-y: auto; overflow-x: hidden; padding: 8px 0; }
+ul.sidebar-nav { list-style: none; flex: 1; overflow-y: auto; overflow-x: hidden; padding: 8px 0; -webkit-overflow-scrolling: touch; scroll-behavior: smooth; }
 ul.sidebar-nav::-webkit-scrollbar { width: 4px; }
 ul.sidebar-nav::-webkit-scrollbar-thumb { background: #4a5e8a; border-radius: 2px; }
 
@@ -196,7 +197,7 @@ ul.sidebar-nav li a .nav-label { overflow: hidden; }
 }
 .card-header h3 { font-size: 14px; font-weight: 600; color: #30426a; display: flex; align-items: center; gap: 8px; }
 .card-header h3 i { color: #e99d1a; }
-.card-body { padding: 16px 20px; }
+.card-body { padding: 16px 20px; -webkit-overflow-scrolling: touch; }
 
 /* Stat cards */
 .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 20px; }
@@ -1115,6 +1116,18 @@ ul.sidebar-nav li a .nav-label { overflow: hidden; }
   margin-bottom: 4px;
 }
 .auto-field .settings-input { width: 100%; }
+.auto-time-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.auto-time-row .settings-input {
+  width: auto;
+  min-width: 72px;
+  flex: 0 0 auto;
+}
+.auto-time-row #auto-time-min { min-width: 64px; }
+.auto-time-sep { font-weight: 600; color: #667; }
 .auto-pl-wrap { position: relative; }
 .auto-pl-results {
   position: absolute;
@@ -1126,6 +1139,8 @@ ul.sidebar-nav li a .nav-label { overflow: hidden; }
   border-radius: 0 0 6px 6px;
   max-height: 220px;
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
   box-shadow: 0 4px 12px rgba(0,0,0,0.08);
 }
 .auto-pl-results:empty { display: none; }

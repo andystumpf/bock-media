@@ -145,6 +145,57 @@ function signOut() {
 
 // Format helpers
 function fmtNum(n) { return Number(n || 0).toLocaleString(); }
+
+function time24ToParts(time24) {
+  const parts = (time24 || '08:00').split(':');
+  const h24 = parseInt(parts[0], 10) || 0;
+  const minute = parseInt(parts[1], 10) || 0;
+  const ampm = h24 >= 12 ? 'PM' : 'AM';
+  let hour = h24 % 12;
+  if (hour === 0) hour = 12;
+  return { hour, minute, ampm };
+}
+
+function partsToTime24(hour12, minute, ampm) {
+  let h = parseInt(hour12, 10) || 12;
+  const m = parseInt(minute, 10) || 0;
+  if (ampm === 'AM') {
+    if (h === 12) h = 0;
+  } else if (h !== 12) {
+    h += 12;
+  }
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+function formatTime12(time24) {
+  const { hour, minute, ampm } = time24ToParts(time24);
+  return `${hour}:${String(minute).padStart(2, '0')} ${ampm}`;
+}
+
+function autoTimeSelectHtml(time24) {
+  const { hour, minute, ampm } = time24ToParts(time24);
+  const hours = Array.from({ length: 12 }, (_, i) => i + 1).map(h =>
+    `<option value="${h}" ${h === hour ? 'selected' : ''}>${h}</option>`).join('');
+  const mins = Array.from({ length: 60 }, (_, i) => i).map(m =>
+    `<option value="${m}" ${m === minute ? 'selected' : ''}>${String(m).padStart(2, '0')}</option>`).join('');
+  return `
+    <div class="auto-time-row">
+      <select id="auto-time-hour" class="settings-input">${hours}</select>
+      <span class="auto-time-sep">:</span>
+      <select id="auto-time-min" class="settings-input">${mins}</select>
+      <select id="auto-time-ampm" class="settings-input">
+        <option value="AM" ${ampm === 'AM' ? 'selected' : ''}>AM</option>
+        <option value="PM" ${ampm === 'PM' ? 'selected' : ''}>PM</option>
+      </select>
+    </div>`;
+}
+
+function autoCollectTime24() {
+  const hour = (document.getElementById('auto-time-hour') || {}).value;
+  const minute = (document.getElementById('auto-time-min') || {}).value;
+  const ampm = (document.getElementById('auto-time-ampm') || {}).value;
+  return partsToTime24(hour, minute, ampm);
+}
 function fmtDuration(secs) {
   if (!secs) return '—';
   const m = Math.floor(secs / 60), s = secs % 60;
@@ -2954,7 +3005,7 @@ function renderAutomation(remote) {
           </div>
           <div class="auto-field">
             <label>Time</label>
-            <input type="time" id="auto-time" class="settings-input" value="${escHtml(editing ? (editing.time || '08:00') : '08:00')}">
+            ${autoTimeSelectHtml(editing ? (editing.time || '08:00') : '08:00')}
           </div>
           <div class="auto-field" style="grid-column:1/-1">
             <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
@@ -3013,7 +3064,7 @@ function renderAutomation(remote) {
         <strong>${escHtml(a.name)}</strong>
         <div class="auto-list-meta">${escHtml(a.playlistName)} · ${escHtml(a.deviceName || a.device)}</div>
       </td>
-      <td>${escHtml(a.time)}</td>
+      <td>${escHtml(formatTime12(a.time))}</td>
       <td>${escHtml(autoDaysLabel(a.days))}${a.shuffle ? ' · shuffle' : ''}${a.volume != null ? ` · vol ${a.volume}` : ''}</td>
       <td>${lastRun}</td>
       <td>${status}</td>
@@ -3156,7 +3207,7 @@ async function saveAutomation() {
     playlistName: playlistName.trim(),
     device,
     deviceName: (deviceName || '').replace(/ \(offline\)$/, ''),
-    time: (document.getElementById('auto-time') || {}).value || '',
+    time: autoCollectTime24(),
     days: autoCollectDays(),
     shuffle: !!(document.getElementById('auto-shuffle') || {}).checked,
     enabled: !!(document.getElementById('auto-enabled') || {}).checked,
