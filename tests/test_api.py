@@ -59,6 +59,13 @@ class TestBrowse:
         assert len(data['items']) <= 5
 
     def test_playlist_cover_fast(self, client, monkeypatch):
+        import xml.etree.ElementTree as ET
+
+        monkeypatch.setattr(
+            server,
+            '_load_playlists_tree',
+            lambda: ET.ElementTree(ET.Element('playlists')),
+        )
         monkeypatch.setattr(
             server,
             '_find_playlist_key',
@@ -284,9 +291,9 @@ class TestNewFeatures:
 
         def recording_db_query(sql, params=()):
             calls.append((sql, params))
-            if 'DISTINCT album' in sql:
-                return [{'album': 'Mamma Mia', 'artist': 'ABBA'}]
-            if 'DISTINCT artist' in sql:
+            if 'GROUP BY album, artist' in sql:
+                return [{'album': 'Mamma Mia', 'artist': 'ABBA', 'art_path': '/c.mp3'}]
+            if 'GROUP BY artist' in sql:
                 return []
             if 'FROM songs_cache' in sql:
                 return [
@@ -306,7 +313,7 @@ class TestNewFeatures:
         assert data['albums'][0]['name'] == 'Mamma Mia'
         assert [s['title'] for s in data['songs']] == ['Mamma Mia']
 
-        song_queries = [c for c in calls if 'FROM songs_cache' in c[0] and 'DISTINCT' not in c[0]]
+        song_queries = [c for c in calls if 'LOWER(title) LIKE' in c[0]]
         assert len(song_queries) == 1
         sql, params = song_queries[0]
         assert 'LOWER(album) LIKE' not in sql

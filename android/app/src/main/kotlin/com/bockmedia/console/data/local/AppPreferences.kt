@@ -140,7 +140,7 @@ class AppPreferences(private val context: Context) {
         fun isValidUrl(raw: String): Boolean {
             if (raw.isBlank()) return false
             return try {
-                val uri = android.net.Uri.parse(normalizeUrl(raw))
+                val uri = java.net.URI(normalizeUrl(raw))
                 !uri.host.isNullOrBlank()
             } catch (_: Exception) {
                 false
