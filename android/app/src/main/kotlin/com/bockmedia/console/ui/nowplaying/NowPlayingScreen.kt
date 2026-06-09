@@ -1,16 +1,26 @@
 package com.bockmedia.console.ui.nowplaying
 
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.pager.VerticalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import com.bockmedia.console.ui.components.BockLazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.SubcomposeAsyncImage
@@ -24,65 +34,9 @@ import com.bockmedia.console.ui.components.BockPullRefresh
 import com.bockmedia.console.ui.components.ErrorText
 import com.bockmedia.console.ui.components.LoadingBox
 import com.bockmedia.console.ui.components.PaginationBar
-import com.bockmedia.console.ui.nowplaying.canControlDevice
-import com.bockmedia.console.ui.nowplaying.resolveSerial
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import retrofit2.HttpException
-
-private sealed class NpDisplayEntry {
-    data class Single(val item: NowPlayingDeviceItem) : NpDisplayEntry()
-    data class Group(
-        val name: String,
-        val track: String,
-        val artist: String?,
-        val source: String?,
-        val members: List<NowPlayingDeviceItem>,
-    ) : NpDisplayEntry()
-}
-
-private fun groupNameFor(device: NowPlayingDeviceItem, groups: List<DeviceGroup>, alexaDevices: List<AlexaDevice>): String {
-    val serial = resolveSerial(device, alexaDevices) ?: return ""
-    return groups.firstOrNull { g -> g.members.any { it.serial == serial } }?.name ?: ""
-}
-
-private fun groupNowPlaying(
-    items: List<NowPlayingDeviceItem>,
-    groups: List<DeviceGroup>,
-    alexaDevices: List<AlexaDevice>,
-): List<NpDisplayEntry> {
-    val out = mutableListOf<NpDisplayEntry>()
-    val byKey = linkedMapOf<String, NpDisplayEntry.Group>()
-    for (d in items) {
-        val gname = groupNameFor(d, groups, alexaDevices)
-        val track = d.track?.trim().orEmpty()
-        val key = if (gname.isNotEmpty() && track.isNotEmpty()) "$gname\u0000$track" else ""
-        if (key.isEmpty()) {
-            out.add(NpDisplayEntry.Single(d))
-            continue
-        }
-        val existing = byKey[key]
-        if (existing != null) {
-            byKey[key] = existing.copy(members = existing.members + d)
-        } else {
-            val entry = NpDisplayEntry.Group(
-                name = gname,
-                track = track,
-                artist = d.artist,
-                source = d.sourceLabel ?: d.playlist,
-                members = listOf(d),
-            )
-            byKey[key] = entry
-            out.add(entry)
-        }
-    }
-    return out.map { e ->
-        when (e) {
-            is NpDisplayEntry.Single -> e
-            is NpDisplayEntry.Group -> if (e.members.size < 2) NpDisplayEntry.Single(e.members.first()) else e
-        }
-    }
-}
 
 private fun controlErrorMessage(e: Throwable): String {
     if (e is HttpException) {
@@ -92,7 +46,10 @@ private fun controlErrorMessage(e: Throwable): String {
     return e.message?.takeIf { it.isNotBlank() } ?: "Control failed"
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+private fun sortedDevices(items: List<NowPlayingDeviceItem>): List<NowPlayingDeviceItem> =
+    items.sortedWith(compareBy({ it.paused }, { it.deviceName ?: it.deviceId }))
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun NowPlayingScreen(
     repository: BockMediaRepository,
@@ -102,7 +59,6 @@ fun NowPlayingScreen(
     var items by remember { mutableStateOf<List<NowPlayingDeviceItem>>(emptyList()) }
     var history by remember { mutableStateOf<List<StreamHistoryItem>>(emptyList()) }
     var alexaDevices by remember { mutableStateOf<List<AlexaDevice>>(emptyList()) }
-    var deviceGroups by remember { mutableStateOf<List<DeviceGroup>>(emptyList()) }
     var controlsAvailable by remember { mutableStateOf(false) }
     var remoteOk by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(true) }
@@ -124,7 +80,6 @@ fun NowPlayingScreen(
         remoteOk = alexaControlsAvailable(repository.alexaRemoteStatus())
         if (controlsAvailable && remoteOk && alexaDevices.isEmpty()) {
             runCatching { alexaDevices = repository.alexaRemoteDevices().devices }
-            runCatching { deviceGroups = repository.deviceGroups().items }
         }
         for (dev in np.items) {
             if (!canControlDevice(dev, alexaDevices, controlsAvailable, remoteOk)) continue
@@ -302,185 +257,203 @@ fun NowPlayingScreen(
         loading && items.isEmpty() && history.isEmpty() -> LoadingBox()
         error != null && items.isEmpty() && history.isEmpty() -> ErrorText(error!!) { scope.launch { loadAll() } }
         else -> {
-            val entries = groupNowPlaying(items, deviceGroups, alexaDevices)
-            val heroId = items.firstOrNull { !it.paused }?.deviceId ?: items.firstOrNull()?.deviceId
+            val devices = remember(items) { sortedDevices(items) }
+            val playerHeight = LocalConfiguration.current.screenHeightDp.dp * 0.78f
+            val pagerState = rememberPagerState(pageCount = { devices.size.coerceAtLeast(1) })
+            val deviceIds = remember(devices) { devices.map { it.deviceId } }
+
+            LaunchedEffect(deviceIds) {
+                if (devices.isNotEmpty() && pagerState.currentPage >= devices.size) {
+                    pagerState.scrollToPage((devices.size - 1).coerceAtLeast(0))
+                }
+            }
+
             BockPullRefresh(
                 isRefreshing = refreshing,
                 onRefresh = { scope.launch { pullRefresh() } },
                 modifier = Modifier.fillMaxSize(),
             ) {
-            BockLazyColumn(
-                Modifier.fillMaxSize().padding(horizontal = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                contentPadding = PaddingValues(bottom = 16.dp),
-            ) {
-                if (items.isEmpty()) {
-                    item {
-                        Card(Modifier.fillMaxWidth()) {
-                            Column(Modifier.padding(16.dp)) {
-                                Text("Nothing is currently playing", style = MaterialTheme.typography.titleMedium)
-                                Text(
-                                    "Ask Alexa to play a playlist, artist, or album",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
+                BockLazyColumn(
+                    Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = PaddingValues(bottom = 16.dp),
+                ) {
+                    if (devices.isEmpty()) {
+                        item {
+                            SpotifyEmptyState(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = playerHeight),
+                            )
                         }
-                    }
-                } else {
-                    item {
-                        Text(
-                            "${items.size} active ${if (items.size == 1) "device" else "devices"}",
-                            style = MaterialTheme.typography.labelLarge,
-                            modifier = Modifier.padding(horizontal = 8.dp),
-                        )
-                    }
-                    items(entries, key = {
-                        when (it) {
-                            is NpDisplayEntry.Single -> it.item.deviceId
-                            is NpDisplayEntry.Group -> "group:${it.name}:${it.track}"
-                        }
-                    }) { entry ->
-                        when (entry) {
-                            is NpDisplayEntry.Group -> {
-                                Card(Modifier.fillMaxWidth()) {
-                                    Column(Modifier.padding(12.dp)) {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Icon(Icons.Default.Layers, null, tint = MaterialTheme.colorScheme.primary)
-                                            Spacer(Modifier.width(8.dp))
-                                            Text(entry.name, style = MaterialTheme.typography.titleSmall)
-                                            Spacer(Modifier.width(8.dp))
-                                            Text("${entry.members.size} speakers", style = MaterialTheme.typography.labelSmall)
-                                        }
-                                        Text(
-                                            "${entry.track}${entry.artist?.let { " — $it" } ?: ""}",
-                                            style = MaterialTheme.typography.bodyMedium,
-                                        )
-                                        entry.source?.let {
-                                            Text(it, style = MaterialTheme.typography.labelSmall)
-                                        }
-                                        Spacer(Modifier.height(8.dp))
-                                        entry.members.forEach { member ->
-                                            NowPlayingDeviceCard(
-                                                dev = member,
-                                                alexaDevices = alexaDevices,
-                                                controlsAvailable = controlsAvailable,
-                                                remoteOk = remoteOk,
-                                                tick = tick,
-                                                repository = repository,
-                                                volumes = volumes,
-                                                shuffleOn = shuffleOn,
-                                                volumeTimers = volumeTimers,
-                                                scope = scope,
-                                                snackbarHostState = snackbarHostState,
-                                                onControl = { d, action -> scope.launch { runControl(d, action) } },
-                                                onSleep = { sleepDevice = it },
-                                                onIgnore = { ignoreDevice = it },
-                                                onFavorite = { d ->
-                                                    scope.launch {
-                                                        d.filepath?.let { path ->
-                                                            runCatching {
-                                                                repository.addFavorite(path, d.track, d.artist, d.album)
-                                                                snackbarHostState.showSnackbar("Starred \"${d.track ?: "track"}\"")
-                                                            }.onFailure {
-                                                                snackbarHostState.showSnackbar("Failed to star track")
-                                                            }
-                                                        }
+                    } else {
+                        item(key = "player") {
+                            Column(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .height(playerHeight),
+                            ) {
+                                VerticalPager(
+                                    state = pagerState,
+                                    modifier = Modifier.weight(1f),
+                                ) { page ->
+                                    SpotifyNowPlayingPage(
+                                        dev = devices[page],
+                                        alexaDevices = alexaDevices,
+                                        controlsAvailable = controlsAvailable,
+                                        remoteOk = remoteOk,
+                                        tick = tick,
+                                        repository = repository,
+                                        volumes = volumes,
+                                        shuffleOn = shuffleOn,
+                                        volumeTimers = volumeTimers,
+                                        scope = scope,
+                                        snackbarHostState = snackbarHostState,
+                                        onControl = { d, action -> scope.launch { runControl(d, action) } },
+                                        onSleep = { sleepDevice = it },
+                                        onIgnore = { ignoreDevice = it },
+                                        onFavorite = { d ->
+                                            scope.launch {
+                                                d.filepath?.let { path ->
+                                                    runCatching {
+                                                        repository.addFavorite(path, d.track, d.artist, d.album)
+                                                        snackbarHostState.showSnackbar("Starred \"${d.track ?: "track"}\"")
+                                                    }.onFailure {
+                                                        snackbarHostState.showSnackbar("Failed to star track")
                                                     }
-                                                },
-                                                modifier = Modifier.padding(top = 8.dp),
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                            is NpDisplayEntry.Single -> {
-                                NowPlayingDeviceCard(
-                                    dev = entry.item,
-                                    hero = entry.item.deviceId == heroId && items.size == 1,
-                                    alexaDevices = alexaDevices,
-                                    controlsAvailable = controlsAvailable,
-                                    remoteOk = remoteOk,
-                                    tick = tick,
-                                    repository = repository,
-                                    volumes = volumes,
-                                    shuffleOn = shuffleOn,
-                                    volumeTimers = volumeTimers,
-                                    scope = scope,
-                                    snackbarHostState = snackbarHostState,
-                                    onControl = { d, action -> scope.launch { runControl(d, action) } },
-                                    onSleep = { sleepDevice = it },
-                                    onIgnore = { ignoreDevice = it },
-                                    onFavorite = { d ->
-                                        scope.launch {
-                                            d.filepath?.let { path ->
-                                                runCatching {
-                                                    repository.addFavorite(path, d.track, d.artist, d.album)
-                                                    snackbarHostState.showSnackbar("Starred \"${d.track ?: "track"}\"")
-                                                }.onFailure {
-                                                    snackbarHostState.showSnackbar("Failed to star track")
                                                 }
                                             }
-                                        }
-                                    },
-                                )
+                                        },
+                                    )
+                                }
+                                if (devices.size > 1) {
+                                    SpotifyDevicePagerHint(
+                                        currentPage = pagerState.currentPage,
+                                        totalPages = devices.size,
+                                        deviceName = devices.getOrNull(pagerState.currentPage)?.deviceName,
+                                    )
+                                }
                             }
                         }
                     }
-                }
 
-                item {
-                    Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text("Streaming history ($histTotal)", style = MaterialTheme.typography.titleMedium)
-                    }
-                }
-                if (history.isEmpty()) {
                     item {
                         Text(
-                            if (histTotal > 0) {
-                                "Could not load streaming history."
-                            } else {
-                                "No streaming history found."
-                            },
-                            modifier = Modifier.padding(horizontal = 16.dp),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            "Streaming history ($histTotal)",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                         )
                     }
-                }
-                items(history) { h ->
-                    ListItem(
-                        headlineContent = {
-                            Text(h.track ?: "—", maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        },
-                        supportingContent = {
+                    if (history.isEmpty()) {
+                        item {
                             Text(
-                                listOfNotNull(
-                                    h.artist?.takeIf { it.isNotBlank() },
-                                    h.sourceLabel ?: h.playlist?.takeIf { it.isNotBlank() },
-                                    h.device?.takeIf { it.isNotBlank() },
-                                    h.date ?: h.timestamp,
-                                ).joinToString(" · "),
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
+                                if (histTotal > 0) {
+                                    "Could not load streaming history."
+                                } else {
+                                    "No streaming history found."
+                                },
+                                modifier = Modifier.padding(horizontal = 16.dp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                        },
-                    )
+                        }
+                    }
+                    items(history) { h ->
+                        ListItem(
+                            headlineContent = {
+                                Text(h.track ?: "—", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            },
+                            supportingContent = {
+                                Text(
+                                    listOfNotNull(
+                                        h.artist?.takeIf { it.isNotBlank() },
+                                        h.sourceLabel ?: h.playlist?.takeIf { it.isNotBlank() },
+                                        h.device?.takeIf { it.isNotBlank() },
+                                        h.date ?: h.timestamp,
+                                    ).joinToString(" · "),
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            },
+                        )
+                    }
+                    item {
+                        PaginationBar(histPage, ((histTotal + 24) / 25).coerceAtLeast(1)) { histPage = it }
+                    }
                 }
-                item {
-                    PaginationBar(histPage, ((histTotal + 24) / 25).coerceAtLeast(1)) { histPage = it }
-                }
-            }
             }
         }
     }
 }
 
 @Composable
-private fun NowPlayingDeviceCard(
+private fun SpotifyEmptyState(modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier.padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Icon(
+            Icons.Default.MusicNote,
+            contentDescription = null,
+            modifier = Modifier.size(72.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(16.dp))
+        Text("Nothing is currently playing", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "Ask Alexa to play a playlist, artist, or album",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
+@Composable
+private fun SpotifyDevicePagerHint(
+    currentPage: Int,
+    totalPages: Int,
+    deviceName: String?,
+) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            repeat(totalPages) { index ->
+                Box(
+                    Modifier
+                        .size(if (index == currentPage) 8.dp else 6.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (index == currentPage) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
+                            },
+                        ),
+                )
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            buildString {
+                deviceName?.let { append(it).append(" · ") }
+                append("${currentPage + 1} of $totalPages")
+                append(" · swipe up/down")
+            },
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun SpotifyNowPlayingPage(
     dev: NowPlayingDeviceItem,
     alexaDevices: List<AlexaDevice>,
     controlsAvailable: Boolean,
@@ -496,199 +469,354 @@ private fun NowPlayingDeviceCard(
     onSleep: (NowPlayingDeviceItem) -> Unit,
     onIgnore: (NowPlayingDeviceItem) -> Unit,
     onFavorite: (NowPlayingDeviceItem) -> Unit,
-    modifier: Modifier = Modifier,
-    hero: Boolean = false,
 ) {
     @Suppress("UNUSED_VARIABLE") val _t = tick
     val prog = computeNowPlayingProgress(dev.timestamp, dev.duration_ms, dev.offset_ms, dev.paused)
     val canControl = canControlDevice(dev, alexaDevices, controlsAvailable, remoteOk)
     val elapsedSec = prog.elapsedMs / 1000
     val durationSec = prog.durationMs / 1000
-    val timeLabel = if (durationSec > 0) {
-        "${formatPlaybackTime(elapsedSec)} / ${formatPlaybackTime(durationSec)}"
-    } else {
-        formatPlaybackTime(elapsedSec)
-    }
-    val artSize = if (hero) 220.dp else 72.dp
-    val titleStyle = if (hero) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.titleSmall
+    var showMoreMenu by remember { mutableStateOf(false) }
 
-    Card(modifier.fillMaxWidth()) {
-        Column(Modifier.padding(if (hero) 16.dp else 12.dp)) {
-            if (hero) {
-                dev.deviceName?.let {
-                    AssistChip(onClick = {}, label = { Text(it) }, enabled = false)
-                }
-                Spacer(Modifier.height(8.dp))
-            }
-            Row(verticalAlignment = if (hero) Alignment.Top else Alignment.Top) {
-                var artUrl by remember(dev.filepath) { mutableStateOf<String?>(null) }
-                LaunchedEffect(dev.filepath) { artUrl = repository.artworkUrl(dev.filepath) }
-                SubcomposeAsyncImage(
-                    model = artUrl,
-                    contentDescription = dev.album ?: "Album art",
-                    modifier = Modifier.size(artSize),
-                    loading = {
-                        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surfaceVariant) {
-                            Icon(
-                                Icons.Default.Album,
-                                null,
-                                Modifier.padding(16.dp).fillMaxSize(),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    },
-                    error = {
-                        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surfaceVariant) {
-                            Icon(
-                                Icons.Default.Album,
-                                null,
-                                Modifier.padding(16.dp).fillMaxSize(),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    },
-                    success = { SubcomposeAsyncImageContent() },
+    Column(
+        Modifier
+            .fillMaxSize()
+            .padding(horizontal = 20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        dev.deviceName?.let { name ->
+            AssistChip(
+                onClick = {},
+                label = { Text(name) },
+                enabled = false,
+                leadingIcon = { Icon(Icons.Default.Speaker, null, Modifier.size(16.dp)) },
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
+
+        BoxWithConstraints(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .padding(vertical = 12.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            val artSize = minOf(maxWidth, maxHeight)
+            var artUrl by remember(dev.filepath) { mutableStateOf<String?>(null) }
+            LaunchedEffect(dev.filepath) { artUrl = repository.artworkUrl(dev.filepath) }
+            SubcomposeAsyncImage(
+                model = artUrl,
+                contentDescription = dev.album ?: "Album art",
+                modifier = Modifier
+                    .size(artSize)
+                    .clip(RoundedCornerShape(8.dp)),
+                contentScale = ContentScale.Crop,
+                loading = {
+                    SpotifyArtPlaceholder(Modifier.size(artSize))
+                },
+                error = {
+                    SpotifyArtPlaceholder(Modifier.size(artSize))
+                },
+                success = { SubcomposeAsyncImageContent() },
+            )
+        }
+
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    dev.track ?: "—",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                 )
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            dev.track ?: "—",
-                            style = titleStyle,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f, fill = false),
-                        )
-                        if (dev.paused) {
-                            Spacer(Modifier.width(6.dp))
-                            AssistChip(onClick = {}, label = { Text("Paused") }, enabled = false)
-                        }
-                        dev.sleep?.let { sleep ->
-                            Spacer(Modifier.width(6.dp))
-                            val sleepLabel = when (sleep.type) {
-                                "time" -> "${sleep.remainingMin ?: "?"}m"
-                                else -> "${sleep.remaining ?: "?"} left"
-                            }
-                            AssistChip(
-                                onClick = { onSleep(dev) },
-                                label = { Text(sleepLabel) },
-                                leadingIcon = { Icon(Icons.Default.Bedtime, null, Modifier.size(16.dp)) },
-                            )
-                        }
-                    }
-                    dev.artist?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
-                    dev.album?.let {
-                        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    (dev.sourceLabel ?: dev.playlist)?.let {
-                        Text("♪ $it", style = MaterialTheme.typography.labelMedium)
-                    }
+                dev.artist?.let {
                     Text(
-                        "Device: ${dev.deviceName ?: dev.deviceId.takeLast(8)} · $timeLabel",
-                        style = MaterialTheme.typography.labelSmall,
+                        it,
+                        style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
-            }
-
-            if (prog.durationMs > 0) {
-                LinearProgressIndicator(
-                    progress = { prog.fraction },
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                )
-            }
-
-            if (dev.upcoming.isNotEmpty()) {
-                Spacer(Modifier.height(8.dp))
-                Text("Up next", style = MaterialTheme.typography.labelLarge)
-                dev.upcoming.forEachIndexed { i, track ->
+                (dev.sourceLabel ?: dev.playlist)?.let {
                     Text(
-                        "${i + 2}. ${track.title ?: "—"}${track.artist?.let { " — $it" } ?: ""}",
-                        style = MaterialTheme.typography.bodySmall,
+                        it,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
-
-            if (canControl) {
-                Spacer(Modifier.height(8.dp))
-                Row(
-                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(2.dp),
-                ) {
-                    IconButton(onClick = { onControl(dev, "previous") }) {
-                        Icon(Icons.Default.SkipPrevious, "Previous")
-                    }
-                    IconButton(onClick = { onControl(dev, "play") }) {
-                        Icon(Icons.Default.PlayArrow, "Play")
-                    }
-                    IconButton(onClick = { onControl(dev, "pause") }) {
-                        Icon(Icons.Default.Pause, "Pause")
-                    }
-                    IconButton(onClick = { onControl(dev, "next") }) {
-                        Icon(Icons.Default.SkipNext, "Next")
-                    }
-                    val shuffled = shuffleOn[dev.deviceId] == true
-                    IconButton(onClick = {
-                        val on = !shuffled
-                        shuffleOn[dev.deviceId] = on
-                        onControl(dev, if (on) "shuffle_on" else "shuffle_off")
-                    }) {
-                        Icon(
-                            Icons.Default.Shuffle,
-                            "Shuffle",
-                            tint = if (shuffled) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onSurface,
-                        )
-                    }
-                    IconButton(onClick = { onSleep(dev) }) {
-                        Icon(Icons.Default.Bedtime, "Sleep timer")
-                    }
-                    if (dev.filepath != null) {
-                        IconButton(onClick = { onFavorite(dev) }) {
-                            Icon(Icons.Default.Star, "Favorite")
-                        }
-                        IconButton(onClick = { onIgnore(dev) }) {
-                            Icon(Icons.Default.Block, "Never again")
-                        }
-                    }
-                    IconButton(onClick = { onControl(dev, "stop") }) {
-                        Icon(Icons.Default.Stop, "Stop")
-                    }
-                }
-
-                val serial = resolveSerial(dev, alexaDevices)
-                if (serial != null) {
-                    val vol = volumes[dev.deviceId]
-                    Row(
-                        Modifier.fillMaxWidth().padding(top = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(Icons.Default.VolumeDown, null, Modifier.size(20.dp))
-                        Slider(
-                            value = (vol ?: 50).toFloat(),
-                            onValueChange = { v ->
-                                val intVol = v.toInt().coerceIn(0, 100)
-                                volumes[dev.deviceId] = intVol
-                                volumeTimers[dev.deviceId]?.cancel()
-                                volumeTimers[dev.deviceId] = scope.launch {
-                                    delay(350)
-                                    runCatching {
-                                        repository.setVolume(serial, dev.deviceName ?: "", intVol)
-                                    }.onFailure {
-                                        snackbarHostState.showSnackbar("Volume failed")
-                                    }
-                                }
-                            },
-                            valueRange = 0f..100f,
-                            modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
-                        )
-                        Text(if (vol == null) "—" else vol.toString(), style = MaterialTheme.typography.labelSmall)
-                        Icon(Icons.Default.VolumeUp, null, Modifier.size(20.dp))
-                    }
+            if (dev.filepath != null) {
+                IconButton(onClick = { onFavorite(dev) }) {
+                    Icon(Icons.Default.FavoriteBorder, contentDescription = "Favorite")
                 }
             }
         }
+
+        if (dev.paused || dev.sleep != null) {
+            Row(
+                Modifier.padding(top = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (dev.paused) {
+                    AssistChip(onClick = {}, label = { Text("Paused") }, enabled = false)
+                }
+                dev.sleep?.let { sleep ->
+                    val sleepLabel = when (sleep.type) {
+                        "time" -> "Sleep ${sleep.remainingMin ?: "?"}m"
+                        else -> "${sleep.remaining ?: "?"} songs left"
+                    }
+                    AssistChip(
+                        onClick = { onSleep(dev) },
+                        label = { Text(sleepLabel) },
+                        leadingIcon = { Icon(Icons.Default.Bedtime, null, Modifier.size(16.dp)) },
+                    )
+                }
+            }
+        }
+
+        SpotifyProgressBar(
+            fraction = prog.fraction,
+            elapsedSec = elapsedSec,
+            durationSec = durationSec,
+            modifier = Modifier.padding(top = 12.dp),
+        )
+
+        if (canControl) {
+            SpotifyTransportControls(
+                dev = dev,
+                shuffleOn = shuffleOn,
+                onControl = onControl,
+                onSleep = onSleep,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+
+            val serial = resolveSerial(dev, alexaDevices)
+            if (serial != null) {
+                SpotifyVolumeRow(
+                    dev = dev,
+                    serial = serial,
+                    volume = volumes[dev.deviceId],
+                    repository = repository,
+                    volumes = volumes,
+                    volumeTimers = volumeTimers,
+                    scope = scope,
+                    snackbarHostState = snackbarHostState,
+                    modifier = Modifier.padding(top = 8.dp, bottom = 4.dp),
+                )
+            }
+
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
+                IconButton(onClick = { showMoreMenu = true }) {
+                    Icon(Icons.Default.MoreHoriz, contentDescription = "More")
+                }
+                DropdownMenu(expanded = showMoreMenu, onDismissRequest = { showMoreMenu = false }) {
+                    if (dev.filepath != null) {
+                        DropdownMenuItem(
+                            text = { Text("Never play again") },
+                            onClick = {
+                                showMoreMenu = false
+                                onIgnore(dev)
+                            },
+                            leadingIcon = { Icon(Icons.Default.Block, null) },
+                        )
+                    }
+                    DropdownMenuItem(
+                        text = { Text("Stop playback") },
+                        onClick = {
+                            showMoreMenu = false
+                            onControl(dev, "stop")
+                        },
+                        leadingIcon = { Icon(Icons.Default.Stop, null) },
+                    )
+                }
+            }
+        }
+
+        if (dev.upcoming.isNotEmpty()) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp, bottom = 8.dp),
+            ) {
+                Text("Up next", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+                dev.upcoming.take(3).forEachIndexed { i, track ->
+                    Text(
+                        "${i + 2}. ${track.title ?: "—"}${track.artist?.let { " — $it" } ?: ""}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SpotifyArtPlaceholder(modifier: Modifier = Modifier) {
+    Surface(modifier, color = MaterialTheme.colorScheme.surfaceVariant) {
+        Icon(
+            Icons.Default.Album,
+            contentDescription = null,
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(48.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun SpotifyProgressBar(
+    fraction: Float,
+    elapsedSec: Long,
+    durationSec: Long,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier.fillMaxWidth()) {
+        Slider(
+            value = fraction.coerceIn(0f, 1f),
+            onValueChange = {},
+            enabled = false,
+            modifier = Modifier.fillMaxWidth(),
+            colors = SliderDefaults.colors(
+                disabledThumbColor = Color.White,
+                disabledActiveTrackColor = Color.White,
+                disabledInactiveTrackColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f),
+            ),
+        )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(
+                formatPlaybackTime(elapsedSec),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (durationSec > 0) {
+                Text(
+                    formatPlaybackTime(durationSec),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SpotifyTransportControls(
+    dev: NowPlayingDeviceItem,
+    shuffleOn: MutableMap<String, Boolean>,
+    onControl: (NowPlayingDeviceItem, String) -> Unit,
+    onSleep: (NowPlayingDeviceItem) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val shuffled = shuffleOn[dev.deviceId] == true
+    Row(
+        modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconButton(
+            onClick = {
+                val on = !shuffled
+                shuffleOn[dev.deviceId] = on
+                onControl(dev, if (on) "shuffle_on" else "shuffle_off")
+            },
+            modifier = Modifier.size(48.dp),
+        ) {
+            Icon(
+                Icons.Default.Shuffle,
+                contentDescription = "Shuffle",
+                tint = if (shuffled) MaterialTheme.colorScheme.primary else Color.White,
+            )
+        }
+        IconButton(
+            onClick = { onControl(dev, "previous") },
+            modifier = Modifier.size(48.dp),
+        ) {
+            Icon(Icons.Default.SkipPrevious, contentDescription = "Previous", tint = Color.White, modifier = Modifier.size(36.dp))
+        }
+        Surface(
+            onClick = { onControl(dev, if (dev.paused) "play" else "pause") },
+            modifier = Modifier.size(72.dp),
+            shape = CircleShape,
+            color = Color.White,
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    if (dev.paused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                    contentDescription = if (dev.paused) "Play" else "Pause",
+                    tint = Color.Black,
+                    modifier = Modifier.size(40.dp),
+                )
+            }
+        }
+        IconButton(
+            onClick = { onControl(dev, "next") },
+            modifier = Modifier.size(48.dp),
+        ) {
+            Icon(Icons.Default.SkipNext, contentDescription = "Next", tint = Color.White, modifier = Modifier.size(36.dp))
+        }
+        IconButton(
+            onClick = { onSleep(dev) },
+            modifier = Modifier.size(48.dp),
+        ) {
+            Icon(
+                Icons.Default.Bedtime,
+                contentDescription = "Sleep timer",
+                tint = if (dev.sleep != null) MaterialTheme.colorScheme.primary else Color.White,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SpotifyVolumeRow(
+    dev: NowPlayingDeviceItem,
+    serial: String,
+    volume: Int?,
+    repository: BockMediaRepository,
+    volumes: MutableMap<String, Int?>,
+    volumeTimers: MutableMap<String, kotlinx.coroutines.Job?>,
+    scope: kotlinx.coroutines.CoroutineScope,
+    snackbarHostState: SnackbarHostState,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Default.VolumeDown, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Slider(
+            value = (volume ?: 50).toFloat(),
+            onValueChange = { v ->
+                val intVol = v.toInt().coerceIn(0, 100)
+                volumes[dev.deviceId] = intVol
+                volumeTimers[dev.deviceId]?.cancel()
+                volumeTimers[dev.deviceId] = scope.launch {
+                    delay(350)
+                    runCatching {
+                        repository.setVolume(serial, dev.deviceName ?: "", intVol)
+                    }.onFailure {
+                        snackbarHostState.showSnackbar("Volume failed")
+                    }
+                }
+            },
+            valueRange = 0f..100f,
+            modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+            colors = SliderDefaults.colors(
+                thumbColor = Color.White,
+                activeTrackColor = Color.White,
+                inactiveTrackColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f),
+            ),
+        )
+        Icon(Icons.Default.VolumeUp, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
