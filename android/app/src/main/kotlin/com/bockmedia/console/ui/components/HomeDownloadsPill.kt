@@ -1,6 +1,7 @@
 package com.bockmedia.console.ui.components
 
 import androidx.compose.foundation.layout.*
+import com.bockmedia.console.ui.theme.BockGreen
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -19,7 +20,6 @@ import com.bockmedia.console.local.OfflineCollectionStatus
 import com.bockmedia.console.local.OfflineDownloadManager
 
 private val PillShape = RoundedCornerShape(50)
-private val SpotifyGreen = Color(0xFF1DB954)
 private val SpotifySheetBg = Color(0xFF282828)
 
 @Composable
@@ -52,17 +52,17 @@ fun HomeDownloadsPillRow(
     Surface(
         onClick = { showSheet = true },
         shape = PillShape,
-        color = SpotifyGreen.copy(alpha = 0.18f),
+        color = BockGreen.copy(alpha = 0.18f),
         modifier = modifier,
     ) {
         Column(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Icon(Icons.Default.Download, contentDescription = null, tint = SpotifyGreen, modifier = Modifier.size(16.dp))
+                Icon(Icons.Default.Download, contentDescription = null, tint = BockGreen, modifier = Modifier.size(16.dp))
                 Text(
                     pillLabel,
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.SemiBold,
-                    color = SpotifyGreen,
+                    color = BockGreen,
                 )
             }
             if (downloading.isNotEmpty()) {
@@ -72,8 +72,8 @@ fun HomeDownloadsPillRow(
                     modifier = Modifier
                         .width(96.dp)
                         .height(3.dp),
-                    color = SpotifyGreen,
-                    trackColor = SpotifyGreen.copy(alpha = 0.25f),
+                    color = BockGreen,
+                    trackColor = BockGreen.copy(alpha = 0.25f),
                 )
             }
         }
@@ -157,7 +157,7 @@ private fun DownloadProgressRow(status: OfflineCollectionStatus) {
                     Text(
                         "${(status.progress * 100).toInt()}%",
                         style = MaterialTheme.typography.labelMedium,
-                        color = SpotifyGreen,
+                        color = BockGreen,
                     )
                 }
                 DownloadState.Failed -> {
@@ -176,7 +176,7 @@ private fun DownloadProgressRow(status: OfflineCollectionStatus) {
                 LinearProgressIndicator(
                     progress = { status.progress.coerceIn(0f, 1f) },
                     modifier = Modifier.fillMaxWidth().height(4.dp),
-                    color = SpotifyGreen,
+                    color = BockGreen,
                     trackColor = Color.White.copy(alpha = 0.15f),
                 )
             }

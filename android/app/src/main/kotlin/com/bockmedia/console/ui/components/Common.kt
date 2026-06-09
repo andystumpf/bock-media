@@ -23,6 +23,7 @@ import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.ui.util.formatTime12
 import com.bockmedia.console.ui.util.formatTime24
 import com.bockmedia.console.ui.util.parseTime24
+import com.bockmedia.console.ui.theme.BockGreen
 import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
@@ -32,6 +33,8 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.runtime.collectAsState
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.PushPin
+import com.bockmedia.console.domain.model.PlaybackFocus
+import com.bockmedia.console.local.LastDeviceStore
 import com.bockmedia.console.local.PinnedDevicesStore
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.material.icons.filled.Speaker
@@ -39,10 +42,19 @@ import androidx.compose.material.icons.filled.SpeakerGroup
 import androidx.compose.material.icons.filled.Shuffle
 import kotlinx.coroutines.launch
 
-private val SpotifyGreen = Color(0xFF1DB954)
 private val SpotifySheetBg = Color(0xFF282828)
 private val SpotifyRowSelected = Color(0xFF3E3E3E)
 private val SpotifyMuted = Color(0xFFB3B3B3)
+
+@Composable
+fun TabScreenHeader(title: String, modifier: Modifier = Modifier) {
+    Text(
+        title,
+        style = MaterialTheme.typography.headlineSmall,
+        fontWeight = FontWeight.Bold,
+        modifier = modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 4.dp),
+    )
+}
 
 @Composable
 fun LoadingBox(modifier: Modifier = Modifier) {
@@ -303,9 +315,20 @@ fun DevicePickerSheet(
             val devices = repository.alexaRemoteDevices().devices
             val groups = repository.deviceGroups().items
             deviceOptions = buildDeviceOptions(groups, devices)
-            deviceValue = deviceOptions.firstOrNull { !it.label.contains("offline", true) }?.value
-                ?: deviceOptions.firstOrNull()?.value.orEmpty()
         }.onFailure { error = it.message }.also { loading = false }
+    }
+
+    LaunchedEffect(deviceOptions, pinned) {
+        if (deviceOptions.isEmpty()) return@LaunchedEffect
+        val online = { v: String ->
+            deviceOptions.any { it.value == v && !it.label.contains("offline", true) }
+        }
+        val lastUsed = runCatching { LastDeviceStore(context).lastDeviceSync() }.getOrNull()
+        deviceValue = PlaybackFocus.pendingDeviceValue?.takeIf { online(it) }
+            ?: pinned.firstOrNull { online(it) }
+            ?: lastUsed?.takeIf { online(it) }
+            ?: deviceOptions.firstOrNull { !it.label.contains("offline", true) }?.value
+            ?: deviceOptions.firstOrNull()?.value.orEmpty()
     }
 
     val orderedOptions = remember(deviceOptions, pinned) {
@@ -368,7 +391,7 @@ fun DevicePickerSheet(
                             .height(160.dp),
                         contentAlignment = Alignment.Center,
                     ) {
-                        CircularProgressIndicator(color = SpotifyGreen)
+                        CircularProgressIndicator(color = BockGreen)
                     }
                 }
                 error != null -> ErrorText(error!!)
@@ -383,7 +406,7 @@ fun DevicePickerSheet(
                             Modifier.padding(horizontal = 14.dp, vertical = 14.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Icon(Icons.Default.PhoneAndroid, null, tint = SpotifyGreen, modifier = Modifier.size(24.dp))
+                            Icon(Icons.Default.PhoneAndroid, null, tint = BockGreen, modifier = Modifier.size(24.dp))
                             Spacer(Modifier.width(14.dp))
                             Text("This phone", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = Color.White)
                         }
@@ -432,7 +455,7 @@ fun DevicePickerSheet(
                                         Icon(
                                             Icons.Default.Check,
                                             contentDescription = "Selected",
-                                            tint = SpotifyGreen,
+                                            tint = BockGreen,
                                             modifier = Modifier.size(22.dp),
                                         )
                                     }
@@ -442,7 +465,7 @@ fun DevicePickerSheet(
                                         Icon(
                                             Icons.Default.PushPin,
                                             contentDescription = "Pin speaker",
-                                            tint = if (opt.value in pinned) SpotifyGreen else SpotifyMuted,
+                                            tint = if (opt.value in pinned) BockGreen else SpotifyMuted,
                                             modifier = Modifier.size(18.dp),
                                         )
                                     }
@@ -467,7 +490,7 @@ fun DevicePickerSheet(
                             Icon(
                                 Icons.Default.Shuffle,
                                 contentDescription = null,
-                                tint = if (shuffle) SpotifyGreen else Color.White,
+                                tint = if (shuffle) BockGreen else Color.White,
                                 modifier = Modifier.size(22.dp),
                             )
                             Spacer(Modifier.width(12.dp))
@@ -483,7 +506,7 @@ fun DevicePickerSheet(
                                 enabled = remoteOk,
                                 colors = SwitchDefaults.colors(
                                     checkedThumbColor = Color.White,
-                                    checkedTrackColor = SpotifyGreen,
+                                    checkedTrackColor = BockGreen,
                                     uncheckedThumbColor = Color.White,
                                     uncheckedTrackColor = Color.White.copy(alpha = 0.25f),
                                 ),
@@ -512,9 +535,9 @@ fun DevicePickerSheet(
                             .height(52.dp),
                         shape = CircleShape,
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = SpotifyGreen,
+                            containerColor = BockGreen,
                             contentColor = Color.Black,
-                            disabledContainerColor = SpotifyGreen.copy(alpha = 0.35f),
+                            disabledContainerColor = BockGreen.copy(alpha = 0.35f),
                             disabledContentColor = Color.Black.copy(alpha = 0.45f),
                         ),
                     ) {

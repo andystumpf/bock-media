@@ -1,7 +1,9 @@
 package com.bockmedia.console.ui.search
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -111,6 +113,7 @@ fun SearchBrowseAllSection(
     repository: BockMediaRepository,
     onNewReleasesClick: () -> Unit,
     onGenreClick: (GenreItem) -> Unit,
+    onGenreLongClick: (GenreItem) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val tiles = genres
@@ -136,6 +139,7 @@ fun SearchBrowseAllSection(
                     genre = tiles.first(),
                     repository = repository,
                     onClick = onGenreClick,
+                    onLongClick = onGenreLongClick,
                     modifier = Modifier.weight(1f),
                 )
             } else {
@@ -149,6 +153,7 @@ fun SearchBrowseAllSection(
                         genre = genre,
                         repository = repository,
                         onClick = onGenreClick,
+                        onLongClick = onGenreLongClick,
                         modifier = Modifier.weight(1f),
                     )
                 }
@@ -189,11 +194,13 @@ private fun SearchNewReleasesTile(
     )
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun SearchGenreTile(
     genre: GenreItem,
     repository: BockMediaRepository,
     onClick: (GenreItem) -> Unit,
+    onLongClick: (GenreItem) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val artUrl = rememberArtworkUrl(
@@ -201,13 +208,43 @@ private fun SearchGenreTile(
         title = genre.name,
         artPath = genre.artPath,
     )
-    SearchBrowseTile(
-        title = genre.name,
-        artUrl = artUrl,
-        fallbackTitle = genre.name,
-        onClick = { onClick(genre) },
-        modifier = modifier,
-    )
+    Box(
+        modifier
+            .fillMaxWidth()
+            .height(96.dp)
+            .clip(TileShape)
+            .combinedClickable(
+                onClick = { onClick(genre) },
+                onLongClick = { onLongClick(genre) },
+            ),
+    ) {
+        BockArtwork(
+            model = artUrl,
+            title = genre.name,
+            modifier = Modifier.fillMaxSize(),
+            shape = TileShape,
+            fallbackFontSize = 22.sp,
+        )
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        listOf(Color.Transparent, Color.Black.copy(alpha = 0.65f)),
+                    ),
+                ),
+        )
+        Text(
+            genre.name,
+            color = Color.White,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(10.dp),
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
 }
 
 @Composable

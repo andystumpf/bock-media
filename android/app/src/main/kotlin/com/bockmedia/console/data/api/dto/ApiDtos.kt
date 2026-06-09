@@ -418,7 +418,12 @@ data class CountRow(val label: String? = null, val name: String? = null, val cou
 data class IgnoredResponse(val items: List<IgnoredTrack> = emptyList())
 
 @Serializable
-data class IgnoredTrack(val path: String = "", val track: String? = null, val artist: String? = null)
+data class IgnoredTrack(
+    val path: String = "",
+    @SerialName("title") val track: String? = null,
+    val artist: String? = null,
+    val album: String? = null,
+)
 
 @Serializable
 data class SettingsResponse(val settings: JsonObject? = null)

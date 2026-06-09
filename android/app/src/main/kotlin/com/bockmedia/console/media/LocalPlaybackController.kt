@@ -124,6 +124,12 @@ object LocalPlaybackController {
         _state.value = LocalPlaybackState()
     }
 
+    suspend fun seekToQueueIndex(context: Context, index: Int) {
+        val current = _state.value
+        if (index !in current.tracks.indices) return
+        playTracks(context, current.tracks, startIndex = index, shuffle = current.shuffle)
+    }
+
     /** Blocking hook for service binder callbacks. */
     fun onServiceState(
         index: Int,

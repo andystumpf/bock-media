@@ -39,6 +39,7 @@ import com.bockmedia.console.ui.nowplaying.resolveSerial
 import com.bockmedia.console.ui.playlists.PlaylistDetailScreen
 import com.bockmedia.console.ui.playlists.PlaylistsScreen
 import com.bockmedia.console.ui.rooms.RoomsScreen
+import com.bockmedia.console.ui.search.GenreDetailScreen
 import com.bockmedia.console.ui.search.SearchScreen
 import com.bockmedia.console.ui.settings.SettingsScreen
 import java.net.URLDecoder
@@ -225,10 +226,17 @@ private fun BockNavHost(
                 onOpenArtist = { name -> navController.navigate("songs/artist/${android.net.Uri.encode(name)}") },
                 onOpenAlbum = { name -> navController.navigate("songs/album/${android.net.Uri.encode(name)}") },
                 onOpenFavorites = { navController.navigate(BockRoute.Favorites.route) },
+                onOpenPlaylists = { navController.navigate(BockRoute.Playlists.route) },
             )
         }
         composable(BockRoute.Favorites.route) {
-            FavoritesScreen(repository, remoteOk, onPlay, onPlay)
+            FavoritesScreen(
+                repository = repository,
+                remoteOk = remoteOk,
+                onPlay = onPlay,
+                onBrowseSearch = { navController.navigate(BockRoute.Search.route) },
+                onOpenLibrary = { navController.navigate(BockRoute.Library.route) },
+            )
         }
         composable(BockRoute.Downloads.route) {
             DownloadsScreen(
@@ -250,6 +258,22 @@ private fun BockNavHost(
                 onPlay,
                 onOpenArtist = { navController.navigate(albumsArtistRoute(it)) },
                 onOpenAlbum = { album, _ -> navController.navigate(songsAlbumRoute(album)) },
+                onOpenGenre = { name -> navController.navigate(genreRoute(name)) },
+                snackbarHostState = snackbarHostState,
+            )
+        }
+        composable(
+            ROUTE_GENRE,
+            arguments = listOf(navArgument("name") { type = NavType.StringType }),
+        ) { entry ->
+            val genreName = URLDecoder.decode(entry.arguments?.getString("name") ?: "", "UTF-8")
+            GenreDetailScreen(
+                genreName = genreName,
+                repository = repository,
+                remoteOk = remoteOk,
+                onPlay = onPlay,
+                onOpenArtist = { navController.navigate(albumsArtistRoute(it)) },
+                onOpenAlbum = { album, artist -> navController.navigate(songsAlbumRoute(album)) },
             )
         }
         composable(BockRoute.Automations.route) { AutomationScreen(repository) }
@@ -325,6 +349,7 @@ private fun BockNavHost(
                 onOpenPlaylist = { id ->
                     navController.navigate(playlistDetailRoute(id))
                 },
+                onOpenPlaylists = { navController.navigate(BockRoute.Playlists.route) },
             )
         }
     }

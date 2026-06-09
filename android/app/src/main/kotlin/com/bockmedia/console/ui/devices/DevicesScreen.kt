@@ -1,6 +1,7 @@
 package com.bockmedia.console.ui.devices
 
 import androidx.compose.foundation.background
+import com.bockmedia.console.ui.theme.BockGreen
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -28,7 +29,6 @@ import com.bockmedia.console.ui.theme.HomePillInactive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private val SpotifyGreen = Color(0xFF1DB954)
 private val CardBg = Color(0xFF282828)
 private val PillShape = RoundedCornerShape(50)
 private val CardShape = RoundedCornerShape(12.dp)
@@ -306,7 +306,7 @@ private fun DuplicateCard(
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextButton(onClick = onMerge) {
-                    Text("Merge", color = SpotifyGreen)
+                    Text("Merge", color = BockGreen)
                 }
                 TextButton(onClick = onDismiss) {
                     Text("Not duplicate", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -391,18 +391,18 @@ private fun SpeakerRow(
             Text(
                 if (device.online) "Online" else "Offline",
                 style = MaterialTheme.typography.bodySmall,
-                color = if (device.online) SpotifyGreen else MaterialTheme.colorScheme.onSurfaceVariant,
+                color = if (device.online) BockGreen else MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         Box(
             Modifier
                 .size(8.dp)
                 .clip(CircleShape)
-                .background(if (device.online) SpotifyGreen else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)),
+                .background(if (device.online) BockGreen else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)),
         )
         Spacer(Modifier.width(8.dp))
         IconButton(onClick = onTest, enabled = device.online) {
-            Icon(Icons.Default.VolumeUp, contentDescription = "Test speaker", tint = SpotifyGreen)
+            Icon(Icons.Default.VolumeUp, contentDescription = "Test speaker", tint = BockGreen)
         }
     }
 }
@@ -493,7 +493,7 @@ private fun GroupEditorSheet(
                 onClick = { onSave(name, selected.toList()) },
                 enabled = name.isNotBlank(),
                 modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = SpotifyGreen, contentColor = Color.Black),
+                colors = ButtonDefaults.buttonColors(containerColor = BockGreen, contentColor = Color.Black),
             ) {
                 Text("Save", fontWeight = FontWeight.Bold)
             }
@@ -530,7 +530,7 @@ private fun DeviceRenameSheet(
                 onClick = { onSave(name) },
                 enabled = name.isNotBlank(),
                 modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = SpotifyGreen, contentColor = Color.Black),
+                colors = ButtonDefaults.buttonColors(containerColor = BockGreen, contentColor = Color.Black),
             ) {
                 Text("Save", fontWeight = FontWeight.Bold)
             }

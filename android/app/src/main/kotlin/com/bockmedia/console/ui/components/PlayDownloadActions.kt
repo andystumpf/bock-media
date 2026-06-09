@@ -1,6 +1,7 @@
 package com.bockmedia.console.ui.components
 
 import androidx.compose.foundation.layout.Row
+import com.bockmedia.console.ui.theme.BockGreen
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material3.Icon
@@ -13,7 +14,6 @@ import androidx.compose.ui.platform.LocalContext
 import com.bockmedia.console.domain.model.PlayTarget
 import com.bockmedia.console.local.OfflineDownloadManager
 
-private val SpotifyGreen = Color(0xFF1DB954)
 
 @Composable
 fun PlayDownloadActions(
@@ -29,7 +29,7 @@ fun PlayDownloadActions(
         leading?.invoke()
         if (showDownload) {
             IconButton(onClick = { OfflineDownloadManager.download(context, playTarget) }) {
-                Icon(Icons.Default.Download, contentDescription = "Download", tint = SpotifyGreen)
+                Icon(Icons.Default.Download, contentDescription = "Download", tint = BockGreen)
             }
         }
         if (remoteOk) PlayButton(onClick = onPlay)

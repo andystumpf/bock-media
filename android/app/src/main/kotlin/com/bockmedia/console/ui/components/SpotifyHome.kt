@@ -12,6 +12,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -35,7 +36,6 @@ import com.bockmedia.console.local.downloadId
 import com.bockmedia.console.ui.theme.*
 
 private val PillShape = RoundedCornerShape(50)
-private val SpotifyGreen = Color(0xFF1DB954)
 private val SpotifySheetBg = Color(0xFF282828)
 
 @Composable
@@ -178,11 +178,13 @@ fun SpotifyHomeSection(
                         GenreMixTile(
                             card, repository, onPlay,
                             onLongPress = { actionCard = card },
+                            onDownload = { onDownload(card) },
                             artLoadKey, downloaded, downloading, downloadProgress,
                         )
                     else -> PlaylistArtTile(
                         card, repository, onPlay,
                         onLongPress = { actionCard = card },
+                        onDownload = { onDownload(card) },
                         artLoadKey, downloaded, downloading, downloadProgress,
                     )
                 }
@@ -221,7 +223,7 @@ private fun HomeCardActionSheet(
             Spacer(Modifier.height(8.dp))
             Surface(onClick = onPlay, shape = RoundedCornerShape(12.dp), color = Color.White.copy(alpha = 0.08f), modifier = Modifier.fillMaxWidth()) {
                 Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.PlayArrow, null, tint = SpotifyGreen)
+                    Icon(Icons.Default.PlayArrow, null, tint = BockGreen)
                     Spacer(Modifier.width(12.dp))
                     Text("Play", color = Color.White, style = MaterialTheme.typography.bodyLarge)
                 }
@@ -232,7 +234,7 @@ private fun HomeCardActionSheet(
                         Icon(
                             if (downloadState == DownloadState.Complete) Icons.Default.DownloadDone else Icons.Default.Download,
                             null,
-                            tint = SpotifyGreen,
+                            tint = BockGreen,
                         )
                         Spacer(Modifier.width(12.dp))
                         Text(
@@ -275,6 +277,7 @@ private fun PlaylistArtTile(
     repository: BockMediaRepository,
     onPlay: (HomeCard) -> Unit,
     onLongPress: () -> Unit,
+    onDownload: () -> Unit,
     artLoadKey: Any,
     downloaded: Boolean,
     downloading: Boolean,
@@ -303,12 +306,27 @@ private fun PlaylistArtTile(
                 Icon(
                     Icons.Default.DownloadDone,
                     contentDescription = "Downloaded",
-                    tint = SpotifyGreen,
+                    tint = BockGreen,
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(6.dp)
                         .size(18.dp),
                 )
+            }
+            if (!downloading) {
+                IconButton(
+                    onClick = onDownload,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .size(32.dp),
+                ) {
+                    Icon(
+                        if (downloaded) Icons.Default.DownloadDone else Icons.Default.Download,
+                        contentDescription = "Download",
+                        tint = BockGreen,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
             }
         }
         Spacer(Modifier.height(4.dp))
@@ -339,6 +357,7 @@ private fun GenreMixTile(
     repository: BockMediaRepository,
     onPlay: (HomeCard) -> Unit,
     onLongPress: () -> Unit,
+    onDownload: () -> Unit,
     artLoadKey: Any,
     downloaded: Boolean,
     downloading: Boolean,
@@ -379,12 +398,27 @@ private fun GenreMixTile(
             Icon(
                 Icons.Default.DownloadDone,
                 contentDescription = "Downloaded",
-                tint = SpotifyGreen,
+                tint = BockGreen,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(8.dp)
                     .size(20.dp),
             )
+        }
+        if (!downloading) {
+            IconButton(
+                onClick = onDownload,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .size(36.dp),
+            ) {
+                Icon(
+                    if (downloaded) Icons.Default.DownloadDone else Icons.Default.Download,
+                    contentDescription = "Download",
+                    tint = BockGreen,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
         }
         Column(
             Modifier
@@ -421,7 +455,7 @@ private fun DownloadProgressOverlay(progress: Float, modifier: Modifier = Modifi
             CircularProgressIndicator(
                 progress = { progress.coerceIn(0f, 1f) },
                 modifier = Modifier.size(36.dp),
-                color = SpotifyGreen,
+                color = BockGreen,
                 trackColor = Color.White.copy(alpha = 0.25f),
                 strokeWidth = 3.dp,
             )
@@ -439,7 +473,7 @@ private fun DownloadProgressOverlay(progress: Float, modifier: Modifier = Modifi
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .height(4.dp),
-            color = SpotifyGreen,
+            color = BockGreen,
             trackColor = Color.Transparent,
         )
     }

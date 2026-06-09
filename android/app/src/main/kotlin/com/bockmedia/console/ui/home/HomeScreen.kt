@@ -101,7 +101,7 @@ fun HomeScreen(
                     item {
                         Text(
                             when (filter) {
-                                HomeFilter.Offline -> "Nothing downloaded yet — long-press Home tiles to save music offline."
+                                HomeFilter.Offline -> "Nothing downloaded yet — tap download on Home tiles or long-press for more."
                                 else -> "Nothing here yet — play some music and your mixes will appear."
                             },
                             modifier = Modifier.padding(16.dp),

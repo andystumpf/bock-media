@@ -374,3 +374,23 @@ class TestLibrarySearchSongMatch:
                               data=json.dumps({'by': 'title', 'order': 'asc'}),
                               content_type='application/json')
         assert sort_rv.status_code == 200
+
+    def test_create_smart_playlist_android_rules_body(self, client, isolated_paths, tmp_path, monkeypatch):
+        import server
+        smart_path = tmp_path / 'smart_playlists.json'
+        smart_path.write_text('[]', encoding='utf-8')
+        monkeypatch.setattr(server, 'SMART_PLAYLISTS_PATH', str(smart_path))
+        monkeypatch.setattr(server, '_refresh_smart_playlist', lambda item: (item, {'ok': True}))
+        body = {
+            'name': 'Evening Jazz',
+            'rules': [
+                {'type': 'genre', 'value': 'jazz'},
+                {'type': 'limit', 'value': 40},
+            ],
+            'refresh': True,
+        }
+        rv = client.post('/api/smart_playlists', data=json.dumps(body), content_type='application/json')
+        assert rv.status_code == 201
+        data = rv.get_json()
+        assert data['name'] == 'Evening Jazz'
+        assert len(data.get('rules', [])) == 2

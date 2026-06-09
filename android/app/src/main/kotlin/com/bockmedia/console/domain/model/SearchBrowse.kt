@@ -1,5 +1,6 @@
 package com.bockmedia.console.domain.model
 
+import com.bockmedia.console.data.api.dto.DashboardQuickResponse
 import com.bockmedia.console.data.api.dto.GenreItem
 import com.bockmedia.console.data.api.dto.AlbumItem
 import com.bockmedia.console.data.api.dto.SearchHit
@@ -41,6 +42,7 @@ object SearchBrowseLoader {
         val smartDef = async { runCatching { repository.smartPlaylists() }.getOrNull() }
         val genresDef = async { runCatching { repository.genres(limit = 16) }.getOrNull() }
         val newReleasesDef = async { runCatching { repository.recentAlbums(limit = 12) }.getOrNull() }
+        val dashboardDef = async { runCatching { repository.dashboardQuick() }.getOrNull() }
 
         val history = historyDef.await()?.items.orEmpty()
         val analytics = analyticsDef.await()
@@ -48,6 +50,7 @@ object SearchBrowseLoader {
         val smartPlaylists = smartDef.await()?.items.orEmpty()
         val genres = genresDef.await()?.items.orEmpty()
         val newReleases = newReleasesDef.await()?.items.orEmpty()
+        val dashboard = dashboardDef.await()
 
         val playlistByName = allPlaylists.associateBy { it.name.lowercase() }
         val playlistById = allPlaylists.associateBy { it.id }
@@ -156,7 +159,8 @@ object SearchBrowseLoader {
             playlistCard(pl, claimArt(artByPlaylist[name.lowercase()]), "Played recently")
         }.take(4)
 
-        val pickedForYou = (genreMixes + recentAlbumCards + discoverCards + recentPlaylistCards)
+        val dashboardCards = dashboardRecentCards(dashboard, playlistByName, artByPlaylist, ::claimArt)
+        val pickedForYou = (dashboardCards + genreMixes + recentAlbumCards + discoverCards + recentPlaylistCards)
             .distinctBy { it.id }
             .take(12)
 
@@ -267,3 +271,35 @@ object SearchBrowseLoader {
         }
     }
 }
+
+private fun dashboardRecentCards(
+    dashboard: DashboardQuickResponse?,
+    playlistByName: Map<String, com.bockmedia.console.data.api.dto.PlaylistSummary>,
+    artByPlaylist: Map<String, String>,
+    claimArt: (String?) -> String?,
+): List<HomeCard> = dashboard?.recent.orEmpty().mapNotNull { item ->
+    val playlistName = item.playlist?.trim()?.takeIf { it.isNotBlank() }
+    if (playlistName != null) {
+        val pl = playlistByName[playlistName.lowercase()] ?: return@mapNotNull null
+        return@mapNotNull HomeCard(
+            id = "dash-pl-${pl.id}",
+            title = pl.name,
+            subtitle = "Recently played",
+            artPath = claimArt(artByPlaylist[playlistName.lowercase()] ?: item.path),
+            playlistId = pl.id,
+            playTarget = PlayTarget.Playlist(pl.id, pl.name),
+            kind = HomeSectionKind.Discover,
+        )
+    }
+    val path = item.path?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+    val title = item.track?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+    HomeCard(
+        id = "dash-${path.hashCode()}",
+        title = title,
+        subtitle = item.artist ?: "Recently played",
+        artPath = claimArt(path),
+        playTarget = PlayTarget.Song(path, title),
+        kind = HomeSectionKind.Discover,
+    )
+}
+

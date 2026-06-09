@@ -1,6 +1,7 @@
 package com.bockmedia.console.ui.recent
 
 import androidx.compose.foundation.layout.*
+import com.bockmedia.console.ui.theme.BockGreen
 import com.bockmedia.console.ui.components.*
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
@@ -47,7 +48,7 @@ fun RecentRequestsScreen(repository: BockMediaRepository) {
                         trailingContent = {
                             Text(
                                 if (row.success) "OK" else "Miss",
-                                color = if (row.success) Color(0xFF1DB954) else MaterialTheme.colorScheme.error,
+                                color = if (row.success) BockGreen else MaterialTheme.colorScheme.error,
                             )
                         },
                     )

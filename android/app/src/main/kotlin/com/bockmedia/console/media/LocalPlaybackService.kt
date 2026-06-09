@@ -8,7 +8,9 @@ import android.content.Intent
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.graphics.BitmapFactory
 import androidx.core.app.NotificationCompat
+import androidx.media.app.NotificationCompat.MediaStyle
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -129,6 +131,7 @@ class LocalPlaybackService : MediaSessionService() {
 
             override fun onPlaybackStateChanged(playbackState: Int) {
                 syncState(exo)
+                startForeground(NOTIFICATION_ID, buildNotification())
                 if (playbackState == Player.STATE_ENDED) {
                     stopProgressUpdates()
                     stopForeground(STOP_FOREGROUND_REMOVE)
@@ -162,15 +165,71 @@ class LocalPlaybackService : MediaSessionService() {
         val idx = player?.currentMediaItemIndex ?: 0
         val title = titles.getOrNull(idx) ?: "Bock Media"
         val artist = artists.getOrNull(idx) ?: ""
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        val exo = player
+        val isPlaying = exo?.isPlaying == true
+        val buffering = exo?.playbackState == Player.STATE_BUFFERING
+        val duration = exo?.duration ?: 0L
+        val position = exo?.currentPosition?.coerceAtLeast(0) ?: 0L
+        val hasDuration = duration > 0 && duration != C.TIME_UNSET
+
+        val prev = actionPendingIntent(ACTION_PREVIOUS, 1)
+        val toggle = actionPendingIntent(
+            if (isPlaying) ACTION_TOGGLE else ACTION_TOGGLE,
+            2,
+        )
+        val next = actionPendingIntent(ACTION_NEXT, 3)
+
+        val localTrack = LocalPlaybackController.state.value.tracks.getOrNull(idx)
+        val artBitmap = localTrack?.localFile?.let { file ->
+            PlaybackArtwork.embeddedArtUri(this, file)?.removePrefix("file://")?.let { path ->
+                runCatching { BitmapFactory.decodeFile(path) }.getOrNull()
+            }
+        }
+
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_media_play)
             .setContentTitle(title)
             .setContentText(artist)
             .setContentIntent(open)
-            .setOngoing(true)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setPriority(NotificationCompat.PRIORITY_LOW)
-            .build()
+            .setOnlyAlertOnce(true)
+            .setOngoing(isPlaying || buffering)
+            .addAction(android.R.drawable.ic_media_previous, "Previous", prev)
+            .addAction(
+                if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
+                if (isPlaying) "Pause" else "Play",
+                toggle,
+            )
+            .addAction(android.R.drawable.ic_media_next, "Next", next)
+
+        artBitmap?.let { builder.setLargeIcon(it) }
+
+        if (buffering) {
+            builder.setProgress(0, 0, true)
+        } else if (hasDuration) {
+            builder.setProgress(duration.toInt(), position.toInt(), false)
+        }
+
+        mediaSession?.let { session ->
+            builder.setStyle(
+                MediaStyle()
+                    .setMediaSession(session.sessionCompatToken)
+                    .setShowActionsInCompactView(0, 1, 2),
+            )
+        }
+
+        return builder.build()
+    }
+
+    private fun actionPendingIntent(action: String, requestCode: Int): PendingIntent {
+        val intent = Intent(this, LocalPlaybackService::class.java).apply { this.action = action }
+        return PendingIntent.getService(
+            this,
+            requestCode,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
     }
 
     private fun ensureChannel() {

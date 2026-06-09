@@ -1,6 +1,7 @@
 package com.bockmedia.console.ui.downloads
 
 import androidx.compose.foundation.background
+import com.bockmedia.console.ui.theme.BockGreen
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -34,7 +35,6 @@ import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.ui.components.BockLazyColumn
 import kotlinx.coroutines.launch
 
-private val SpotifyGreen = Color(0xFF1DB954)
 private val SpotifySheetBg = Color(0xFF121212)
 
 @Composable
@@ -120,6 +120,10 @@ fun DownloadsManagementSection(
                     else -> OfflineDownloadManager.resync(context, status.manifest.toPlayTarget())
                 }
             },
+            onCancel = {
+                OfflineDownloadManager.cancelCollection(status.manifest.id)
+                detailStatus = null
+            },
             onOpenPlaylist = status.manifest.sourcePlaylistId?.let { id ->
                 { detailStatus = null; onOpenPlaylist(id) }
             },
@@ -183,6 +187,7 @@ internal fun DownloadDetailScreen(
     onPlay: (startIndex: Int) -> Unit,
     onDelete: () -> Unit,
     onDownload: () -> Unit,
+    onCancel: () -> Unit = {},
     onOpenPlaylist: (() -> Unit)?,
 ) {
     val manifest = status.manifest
@@ -227,6 +232,7 @@ internal fun DownloadDetailScreen(
                 status = status,
                 onPlay = { onPlay(0) },
                 onDownload = onDownload,
+                onCancel = onCancel,
             )
         },
     ) { padding ->
@@ -271,7 +277,7 @@ internal fun DownloadDetailScreen(
                             LinearProgressIndicator(
                                 progress = { status.progress },
                                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                                color = SpotifyGreen,
+                                color = BockGreen,
                             )
                         }
                         DownloadState.Failed -> {
@@ -350,6 +356,7 @@ private fun DownloadDetailBottomBar(
     status: OfflineCollectionStatus,
     onPlay: () -> Unit,
     onDownload: () -> Unit,
+    onCancel: () -> Unit = {},
 ) {
     Surface(
         color = SpotifySheetBg,
@@ -367,7 +374,7 @@ private fun DownloadDetailBottomBar(
                     Surface(
                         onClick = onPlay,
                         shape = RoundedCornerShape(12.dp),
-                        color = SpotifyGreen,
+                        color = BockGreen,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Row(
@@ -391,7 +398,7 @@ private fun DownloadDetailBottomBar(
                             horizontalArrangement = Arrangement.Center,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Icon(Icons.Default.DownloadDone, null, tint = SpotifyGreen)
+                            Icon(Icons.Default.DownloadDone, null, tint = BockGreen)
                             Spacer(Modifier.width(8.dp))
                             Text("Sync new tracks", color = Color.White, fontWeight = FontWeight.Medium)
                         }
@@ -401,7 +408,7 @@ private fun DownloadDetailBottomBar(
                     Surface(
                         onClick = onDownload,
                         shape = RoundedCornerShape(12.dp),
-                        color = SpotifyGreen,
+                        color = BockGreen,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Row(
@@ -419,19 +426,33 @@ private fun DownloadDetailBottomBar(
                     LinearProgressIndicator(
                         progress = { status.progress },
                         modifier = Modifier.fillMaxWidth(),
-                        color = SpotifyGreen,
+                        color = BockGreen,
                     )
                     Text(
                         "Downloading… ${(status.progress * 100).toInt()}%",
                         color = Color.White.copy(alpha = 0.75f),
                         style = MaterialTheme.typography.bodySmall,
                     )
+                    Surface(
+                        onClick = onCancel,
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color.White.copy(alpha = 0.1f),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            "Cancel download",
+                            color = MaterialTheme.colorScheme.error,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        )
+                    }
                 }
                 DownloadState.Idle -> {
                     Surface(
                         onClick = onDownload,
                         shape = RoundedCornerShape(12.dp),
-                        color = SpotifyGreen,
+                        color = BockGreen,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Row(
@@ -536,7 +557,7 @@ internal fun DownloadListRow(
                         LinearProgressIndicator(
                             progress = { status.progress },
                             modifier = Modifier.fillMaxWidth(),
-                            color = SpotifyGreen,
+                            color = BockGreen,
                         )
                     }
                     DownloadState.Complete -> {

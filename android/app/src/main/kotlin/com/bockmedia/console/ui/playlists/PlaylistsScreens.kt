@@ -1,6 +1,7 @@
 package com.bockmedia.console.ui.playlists
 
 import androidx.compose.foundation.background
+import com.bockmedia.console.ui.theme.BockGreen
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.items
@@ -35,7 +36,6 @@ import com.bockmedia.console.ui.components.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private val SpotifyGreen = Color(0xFF1DB954)
 private val SpotifyMuted = Color(0xFFB3B3B3)
 
 @Composable
@@ -53,6 +53,7 @@ fun PlaylistsScreen(
     var mergeMode by remember { mutableStateOf(false) }
     var showNew by remember { mutableStateOf(false) }
     var showSmart by remember { mutableStateOf(false) }
+    var editSmart by remember { mutableStateOf<SmartPlaylist?>(null) }
     var showMerge by remember { mutableStateOf(false) }
     var showAi by remember { mutableStateOf(false) }
     var page by remember { mutableIntStateOf(1) }
@@ -83,10 +84,23 @@ fun PlaylistsScreen(
     )
     if (showSmart) SmartPlaylistDialog(
         onDismiss = { showSmart = false },
-        onCreate = { name, genre, artist, max ->
+        onCreate = { name, genre, artist, max, _ ->
             scope.launch { repository.createSmartPlaylist(name, genre, artist, max); load(); showSmart = false }
         },
     )
+    editSmart?.let { sp ->
+        SmartPlaylistDialog(
+            initial = sp,
+            onDismiss = { editSmart = null },
+            onCreate = { name, genre, artist, max, enabled ->
+                scope.launch {
+                    repository.updateSmartPlaylist(sp.id, name, genre, artist, max, enabled)
+                    load()
+                    editSmart = null
+                }
+            },
+        )
+    }
     if (showMerge) MergeDialog(
         onDismiss = { showMerge = false },
         onMerge = { name ->
@@ -126,7 +140,7 @@ fun PlaylistsScreen(
                     Icon(
                         Icons.Default.Merge,
                         "Merge",
-                        tint = if (mergeMode) SpotifyGreen else LocalContentColor.current,
+                        tint = if (mergeMode) BockGreen else LocalContentColor.current,
                     )
                 }
             }
@@ -152,6 +166,7 @@ fun PlaylistsScreen(
                     headlineContent = { Text(sp.name) },
                     trailingContent = {
                         Row {
+                            TextButton(onClick = { editSmart = sp }) { Text("Edit") }
                             TextButton(onClick = { scope.launch { repository.refreshSmartPlaylist(sp.id); load() } }) {
                                 Text("Refresh")
                             }
@@ -470,7 +485,7 @@ private fun SpotifyPlaylistHeader(
             FilledIconButton(
                 onClick = onPlay,
                 modifier = Modifier.size(56.dp),
-                colors = IconButtonDefaults.filledIconButtonColors(containerColor = SpotifyGreen),
+                colors = IconButtonDefaults.filledIconButtonColors(containerColor = BockGreen),
                 shape = CircleShape,
             ) {
                 Icon(
@@ -491,7 +506,7 @@ private fun SpotifyPlaylistHeader(
                     contentDescription = if (downloaded) "Sync offline" else "Download for offline",
                     tint = when {
                         downloading -> MaterialTheme.colorScheme.onSurfaceVariant
-                        downloaded || downloadFailed -> SpotifyGreen
+                        downloaded || downloadFailed -> BockGreen
                         else -> MaterialTheme.colorScheme.onSurface
                     },
                 )
@@ -525,12 +540,12 @@ private fun SpotifyPlaylistHeader(
                     LinearProgressIndicator(
                         progress = { downloadProgress.coerceIn(0f, 1f) },
                         modifier = Modifier.weight(1f).height(4.dp),
-                        color = SpotifyGreen,
+                        color = BockGreen,
                     )
                     Text(
                         "${(downloadProgress * 100).toInt()}%",
                         style = MaterialTheme.typography.labelSmall,
-                        color = SpotifyGreen,
+                        color = BockGreen,
                         fontWeight = FontWeight.SemiBold,
                     )
                 }
@@ -552,7 +567,7 @@ private fun SpotifyPlaylistHeader(
                 Text(
                     "Available offline · tap download to sync new tracks",
                     style = MaterialTheme.typography.labelSmall,
-                    color = SpotifyGreen,
+                    color = BockGreen,
                 )
             }
             else -> {
@@ -660,26 +675,37 @@ private fun NewPlaylistDialog(onDismiss: () -> Unit, onCreate: (String) -> Unit)
 }
 
 @Composable
-private fun SmartPlaylistDialog(onDismiss: () -> Unit, onCreate: (String, String?, String?, Int) -> Unit) {
-    var name by remember { mutableStateOf("") }
-    var genre by remember { mutableStateOf("") }
-    var artist by remember { mutableStateOf("") }
-    var max by remember { mutableStateOf("50") }
+private fun SmartPlaylistDialog(
+    onDismiss: () -> Unit,
+    onCreate: (String, String?, String?, Int, Boolean) -> Unit,
+    initial: SmartPlaylist? = null,
+) {
+    var name by remember(initial) { mutableStateOf(initial?.name ?: "") }
+    var genre by remember(initial) { mutableStateOf("") }
+    var artist by remember(initial) { mutableStateOf("") }
+    var max by remember(initial) { mutableStateOf("50") }
+    var enabled by remember(initial) { mutableStateOf(initial?.enabled ?: true) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Smart playlist") },
+        title = { Text(if (initial == null) "Smart playlist" else "Edit smart playlist") },
         text = {
             Column {
                 OutlinedTextField(name, { name = it }, label = { Text("Name") })
                 OutlinedTextField(genre, { genre = it }, label = { Text("Genre") })
                 OutlinedTextField(artist, { artist = it }, label = { Text("Artist") })
                 OutlinedTextField(max, { max = it }, label = { Text("Max tracks") })
+                if (initial != null) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(enabled, { enabled = it })
+                        Text("Enabled")
+                    }
+                }
             }
         },
         confirmButton = {
             TextButton(onClick = {
-                onCreate(name, genre.ifBlank { null }, artist.ifBlank { null }, max.toIntOrNull() ?: 50)
-            }) { Text("Create") }
+                onCreate(name, genre.ifBlank { null }, artist.ifBlank { null }, max.toIntOrNull() ?: 50, enabled)
+            }) { Text(if (initial == null) "Create" else "Save") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )

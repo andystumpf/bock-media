@@ -1,6 +1,7 @@
 package com.bockmedia.console.ui.library
 
 import androidx.compose.foundation.horizontalScroll
+import com.bockmedia.console.ui.theme.BockGreen
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -35,7 +36,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private val PillShape = RoundedCornerShape(50)
-private val SpotifyGreen = Color(0xFF1DB954)
 
 @Composable
 fun LibraryScreen(
@@ -46,6 +46,7 @@ fun LibraryScreen(
     onOpenArtist: (String) -> Unit,
     onOpenAlbum: (String) -> Unit,
     onOpenFavorites: () -> Unit,
+    onOpenPlaylists: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -99,6 +100,14 @@ fun LibraryScreen(
                 onSelect = { filter = it },
                 modifier = Modifier.padding(top = 8.dp, bottom = 4.dp),
             )
+            if (filter == LibraryFilter.All || filter == LibraryFilter.Playlists) {
+                TextButton(
+                    onClick = onOpenPlaylists,
+                    modifier = Modifier.padding(horizontal = 12.dp),
+                ) {
+                    Text("Manage playlists")
+                }
+            }
             when {
                 loading && items.isEmpty() -> LoadingBox(Modifier.weight(1f))
                 sorted.isEmpty() -> Box(
@@ -108,7 +117,7 @@ fun LibraryScreen(
                     Text(
                         when {
                             filter == LibraryFilter.Downloaded && search.isBlank() ->
-                                "Nothing downloaded yet — long-press Home tiles to save music offline."
+                                "Nothing downloaded yet — tap download on Home tiles or long-press for more."
                             search.isNotBlank() ->
                                 "No results for \"$search\"."
                             else ->
@@ -174,7 +183,7 @@ private fun LibraryHeader(
             modifier = Modifier.weight(1f),
         )
         IconButton(onClick = onOpenFavorites) {
-            Icon(Icons.Default.Star, contentDescription = "Favorites", tint = SpotifyGreen)
+            Icon(Icons.Default.Star, contentDescription = "Favorites", tint = BockGreen)
         }
         var sortMenu by remember { mutableStateOf(false) }
         TextButton(onClick = { sortMenu = true }) {

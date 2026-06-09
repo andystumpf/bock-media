@@ -17,6 +17,8 @@ import com.bockmedia.console.data.api.dto.SearchHit
 import com.bockmedia.console.data.api.dto.SearchResponse
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.*
+import androidx.compose.material.icons.filled.PlaylistAdd
+import com.bockmedia.console.local.OfflineDownloadManager
 import com.bockmedia.console.local.SearchHistoryStore
 import com.bockmedia.console.ui.components.*
 import kotlinx.coroutines.delay
@@ -32,6 +34,8 @@ fun SearchScreen(
     onPlay: (PlayTarget) -> Unit,
     onOpenArtist: (String) -> Unit,
     onOpenAlbum: (String, String?) -> Unit,
+    onOpenGenre: (String) -> Unit = {},
+    snackbarHostState: SnackbarHostState? = null,
 ) {
     val context = LocalContext.current
     val historyStore = remember { SearchHistoryStore(context) }
@@ -87,6 +91,7 @@ fun SearchScreen(
     val showRecents = !showResults && !showSuggestions && searchFocused
 
     Column(Modifier.fillMaxSize().padding(top = 8.dp)) {
+        TabScreenHeader("Search")
         SearchField(
             query,
             { query = it },
@@ -106,6 +111,7 @@ fun SearchScreen(
                 onPlay = onPlay,
                 onOpenArtist = onOpenArtist,
                 onOpenAlbum = onOpenAlbum,
+                snackbarHostState = snackbarHostState,
                 onFavoriteToggle = { path, hit, starred ->
                     scope.launch {
                         if (starred) repository.removeFavorite(path)
@@ -159,7 +165,8 @@ fun SearchScreen(
                         genres = browseFeed?.genres.orEmpty(),
                         repository = repository,
                         onNewReleasesClick = { browseView = SearchView.NewReleases },
-                        onGenreClick = { genre ->
+                        onGenreClick = { genre -> onOpenGenre(genre.name) },
+                        onGenreLongClick = { genre ->
                             scope.launch {
                                 val seedArtist = runCatching {
                                     repository.songs(page = 1, search = genre.name, limit = 8)
@@ -192,8 +199,25 @@ private fun SearchResultsList(
     onPlay: (PlayTarget) -> Unit,
     onOpenArtist: (String) -> Unit,
     onOpenAlbum: (String, String?) -> Unit,
+    snackbarHostState: SnackbarHostState? = null,
     onFavoriteToggle: (String, SearchHit, Boolean) -> Unit,
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var addToPlaylist by remember { mutableStateOf<Pair<String, String>?>(null) }
+
+    addToPlaylist?.let { (path, title) ->
+        AddToPlaylistSheet(
+            repository = repository,
+            trackPath = path,
+            trackTitle = title,
+            onDismiss = { addToPlaylist = null },
+            onAdded = { msg ->
+                scope.launch { snackbarHostState?.showSnackbar(msg) }
+            },
+        )
+    }
+
     BockLazyColumn {
         results.playlists.takeIf { it.isNotEmpty() }?.let { list ->
             item { SearchSectionHeader("Playlists") }
@@ -253,19 +277,35 @@ private fun SearchResultsList(
                 val path = hit.path.orEmpty()
                 val starred = path in favoritePaths
                 val target = PlayTarget.Song(path, hit.title ?: "")
+                val canPlay = remoteOk || OfflineDownloadManager.isDownloaded(target)
                 SearchHitRow(
                     repository = repository,
                     kind = SearchSuggestionKind.Song,
                     hit = hit,
                     title = hit.title ?: hit.name ?: "",
                     subtitle = hit.artist,
-                    onClick = { onPlay(target) },
+                    onClick = {
+                        if (remoteOk) onPlay(target)
+                        else scope.launch {
+                            val err = PhonePlayback.playLocally(context, target)
+                            err?.let { snackbarHostState?.showSnackbar(it) }
+                        }
+                    },
                     trailing = {
                         PlayDownloadActions(
                             playTarget = target,
-                            remoteOk = remoteOk,
-                            onPlay = { onPlay(target) },
+                            remoteOk = canPlay,
+                            onPlay = {
+                                if (remoteOk) onPlay(target)
+                                else scope.launch {
+                                    val err = PhonePlayback.playLocally(context, target)
+                                    err?.let { snackbarHostState?.showSnackbar(it) }
+                                }
+                            },
                             leading = {
+                                IconButton(onClick = { addToPlaylist = path to (hit.title ?: hit.name ?: "Track") }) {
+                                    Icon(Icons.Default.PlaylistAdd, contentDescription = "Add to playlist")
+                                }
                                 IconButton(onClick = { onFavoriteToggle(path, hit, starred) }) {
                                     Icon(
                                         if (starred) Icons.Default.Star else Icons.Default.StarBorder,

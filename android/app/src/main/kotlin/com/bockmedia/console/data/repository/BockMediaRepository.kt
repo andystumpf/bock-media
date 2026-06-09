@@ -10,10 +10,14 @@ import com.bockmedia.console.domain.model.filterSearchSongHits
 import com.bockmedia.console.media.PlaybackArtwork
 import android.content.Context
 import java.io.File
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
+import okhttp3.ResponseBody
 import java.util.concurrent.ConcurrentHashMap
 
 class ApiException(val code: String, message: String) : Exception(message)
@@ -393,13 +397,74 @@ class BockMediaRepository(
         })
 
     suspend fun createSmartPlaylist(name: String, genre: String?, artist: String?, maxTracks: Int) {
+        val rules = buildJsonArray {
+            genre?.takeIf { it.isNotBlank() }?.let {
+                add(buildJsonObject { put("type", "genre"); put("value", it) })
+            }
+            artist?.takeIf { it.isNotBlank() }?.let {
+                add(buildJsonObject { put("type", "artist"); put("value", it) })
+            }
+            add(buildJsonObject { put("type", "limit"); put("value", maxTracks) })
+        }
         api().createSmartPlaylist(buildJsonObject {
             put("name", name)
-            genre?.let { put("genre", it) }
-            artist?.let { put("artist", it) }
-            put("maxTracks", maxTracks)
+            put("rules", rules)
+            put("refresh", true)
         })
     }
+
+    suspend fun updateSmartPlaylist(
+        id: String,
+        name: String,
+        genre: String?,
+        artist: String?,
+        maxTracks: Int,
+        enabled: Boolean,
+    ) {
+        val rules = buildJsonArray {
+            genre?.takeIf { it.isNotBlank() }?.let {
+                add(buildJsonObject { put("type", "genre"); put("value", it) })
+            }
+            artist?.takeIf { it.isNotBlank() }?.let {
+                add(buildJsonObject { put("type", "artist"); put("value", it) })
+            }
+            add(buildJsonObject { put("type", "limit"); put("value", maxTracks) })
+        }
+        api().updateSmartPlaylist(id, buildJsonObject {
+            put("name", name)
+            put("rules", rules)
+            put("enabled", enabled)
+            put("refresh", true)
+        })
+    }
+
+    suspend fun addPlaylistTrack(playlistId: String, path: String) {
+        val tracks = mutableListOf<String>()
+        var page = 1
+        while (true) {
+            val detail = playlistDetail(playlistId, page = page, limit = 500)
+            tracks.addAll(detail.tracks.mapNotNull { it.path })
+            if (detail.tracks.size < 500 || tracks.size >= detail.total) break
+            page++
+        }
+        if (path in tracks) return
+        tracks.add(path)
+        api().updatePlaylist(playlistId, buildJsonObject {
+            putJsonArray("tracks") { tracks.forEach { add(JsonPrimitive(it)) } }
+        })
+    }
+
+    suspend fun exportAnalyticsCsv(from: String?, to: String?, cacheDir: java.io.File): File {
+        val body = api().analyticsExport(from, to)
+        val file = java.io.File(cacheDir, "bock_media_streams.csv")
+        body.byteStream().use { input ->
+            file.outputStream().use { output -> input.copyTo(output) }
+        }
+        return file
+    }
+
+    suspend fun loadSettingsJson(): JsonObject = api().settings()
+    suspend fun loadConfigJson(): JsonObject = api().config()
 
     suspend fun refreshSmartPlaylist(id: String) = api().refreshSmartPlaylist(id)
     suspend fun deleteSmartPlaylist(id: String) = api().deleteSmartPlaylist(id)

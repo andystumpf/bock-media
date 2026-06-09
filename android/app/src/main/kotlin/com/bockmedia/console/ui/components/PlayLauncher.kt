@@ -8,6 +8,7 @@ import com.bockmedia.console.data.api.dto.PlayResponse
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.PlayTarget
 import com.bockmedia.console.domain.model.PlaybackFocus
+import com.bockmedia.console.local.LastDeviceStore
 import com.bockmedia.console.media.LocalPlaybackController
 import kotlinx.coroutines.launch
 import retrofit2.HttpException
@@ -78,6 +79,7 @@ fun PlayTargetLauncher(
                 if (response.ok) {
                     val label = response.device ?: deviceLabel
                     PlaybackFocus.notePlayStarted(device, label)
+                    scope.launch { LastDeviceStore(context).setLastDevice(device) }
                     onPlayStarted(device, label)
                     snackbarHostState.showSnackbar(
                         "Playing \"${target.label}\" on $label",

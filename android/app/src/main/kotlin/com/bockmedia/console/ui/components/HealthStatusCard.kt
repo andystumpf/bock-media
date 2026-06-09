@@ -1,6 +1,7 @@
 package com.bockmedia.console.ui.components
 
 import android.net.Uri
+import com.bockmedia.console.ui.theme.BockGreen
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
@@ -22,7 +23,6 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 
-private val OkGreen = Color(0xFF1DB954)
 private val WarnAmber = Color(0xFFE8A838)
 private val ErrRed = Color(0xFFE74C3C)
 
@@ -192,7 +192,7 @@ private fun AlexaRemoteSection(
     HorizontalDivider(Modifier.padding(vertical = 4.dp))
     Text("Alexa remote", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
     when {
-        remote.authenticated == true -> Text("Connected — Play on device and volume controls available", color = OkGreen)
+        remote.authenticated == true -> Text("Connected — Play on device and volume controls available", color = BockGreen)
         remote.configured != true -> Text("Not configured on server", color = MaterialTheme.colorScheme.onSurfaceVariant)
         else -> {
             val status = remote.loginStatus ?: "needs login"
@@ -213,7 +213,7 @@ private fun AlexaRemoteSection(
 @Composable
 private fun HealthChip(label: String, ok: Boolean?, detail: String) {
     val (color, value) = when (ok) {
-        true -> OkGreen to "OK"
+        true -> BockGreen to "OK"
         false -> ErrRed to "Down"
         null -> MaterialTheme.colorScheme.onSurfaceVariant to "Unknown"
     }

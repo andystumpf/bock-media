@@ -1,7 +1,9 @@
 package com.bockmedia.console.domain.model
 
 import android.content.Context
+import com.bockmedia.console.data.api.dto.DashboardQuickResponse
 import com.bockmedia.console.data.api.dto.PlaylistSummary
+import com.bockmedia.console.data.api.dto.RecentItem
 import com.bockmedia.console.data.api.dto.StreamHistoryItem
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.local.OfflineDownloadManager
@@ -67,12 +69,14 @@ object HomeFeedLoader {
         val playlistsDef = async { runCatching { repository.playlists(limit = PLAYLIST_LIMIT) }.getOrNull() }
         val smartDef = async { runCatching { repository.smartPlaylists() }.getOrNull() }
         val favoritesDef = async { runCatching { repository.favorites() }.getOrNull().orEmpty() }
+        val dashboardDef = async { runCatching { repository.dashboardQuick() }.getOrNull() }
 
         val history = historyDef.await()?.items.orEmpty()
         val analytics = analyticsDef.await()
         val allPlaylists = playlistsDef.await()?.items.orEmpty()
         val smartPlaylists = smartDef.await()?.items.orEmpty()
-        val favorites = favoritesDef.await()
+        val dashboard = dashboardDef.await()
+        val favorites = dashboard?.favorites?.takeIf { it.isNotEmpty() } ?: favoritesDef.await()
 
         val playlistByName = allPlaylists.associateBy { it.name.lowercase() }
         val playlistById = allPlaylists.associateBy { it.id }
@@ -143,7 +147,8 @@ object HomeFeedLoader {
             .take(6)
             .map { playlistCard(it, kind = HomeSectionKind.JumpBackIn, subtitle = "Recently added") }
 
-        val jumpBackIn = (recentlyPlayedPlaylists + recentAlbums + recentlyAdded)
+        val jumpBackIn = (dashboardJumpCards(dashboard, playlistByName, artByPlaylist) +
+            recentlyPlayedPlaylists + recentAlbums + recentlyAdded)
             .distinctBy { it.id }
             .take(16)
 
@@ -440,6 +445,47 @@ object HomeFeedLoader {
             }.getOrDefault(0L)
         }
     }
+}
+
+private fun dashboardJumpCards(
+    dashboard: DashboardQuickResponse?,
+    playlistByName: Map<String, PlaylistSummary>,
+    artByPlaylist: Map<String, String>,
+): List<HomeCard> {
+    return dashboard?.recent.orEmpty().mapNotNull { item ->
+        cardFromRecentItem(item, playlistByName, artByPlaylist)
+    }
+}
+
+private fun cardFromRecentItem(
+    item: RecentItem,
+    playlistByName: Map<String, PlaylistSummary>,
+    artByPlaylist: Map<String, String>,
+): HomeCard? {
+    val path = item.path?.takeIf { it.isNotBlank() }
+    val playlistName = item.playlist?.trim()?.takeIf { it.isNotBlank() }
+    if (playlistName != null) {
+        val pl = playlistByName[playlistName.lowercase()] ?: return null
+        return HomeCard(
+            id = "dash-pl-${pl.id}",
+            title = pl.name,
+            subtitle = "Recently played",
+            artPath = artByPlaylist[playlistName.lowercase()] ?: path,
+            playlistId = pl.id,
+            playTarget = PlayTarget.Playlist(pl.id, pl.name),
+            kind = HomeSectionKind.JumpBackIn,
+        )
+    }
+    if (path == null) return null
+    val title = item.track?.takeIf { it.isNotBlank() } ?: return null
+    return HomeCard(
+        id = "dash-${path.hashCode()}",
+        title = title,
+        subtitle = item.artist ?: "Recently played",
+        artPath = path,
+        playTarget = PlayTarget.Song(path, title),
+        kind = HomeSectionKind.JumpBackIn,
+    )
 }
 
 fun HomeFilter.matches(kind: HomeSectionKind): Boolean = when (this) {

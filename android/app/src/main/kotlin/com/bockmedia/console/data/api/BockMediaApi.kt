@@ -2,6 +2,7 @@ package com.bockmedia.console.data.api
 
 import com.bockmedia.console.data.api.dto.*
 import kotlinx.serialization.json.JsonObject
+import okhttp3.ResponseBody
 import retrofit2.http.*
 
 interface BockMediaApi {
@@ -199,6 +200,13 @@ interface BockMediaApi {
         @Query("to") to: String? = null,
     ): AnalyticsResponse
 
+    @GET("api/analytics/export")
+    @Streaming
+    suspend fun analyticsExport(
+        @Query("from") from: String? = null,
+        @Query("to") to: String? = null,
+    ): ResponseBody
+
     @GET("api/ignored")
     suspend fun ignored(): IgnoredResponse
 
@@ -218,13 +226,13 @@ interface BockMediaApi {
     suspend fun removeFavorite(@Body body: JsonObject): OkResponse
 
     @GET("api/settings")
-    suspend fun settings(): SettingsResponse
+    suspend fun settings(): JsonObject
 
     @POST("api/settings")
     suspend fun saveSettings(@Body body: JsonObject): OkResponse
 
     @GET("api/config")
-    suspend fun config(): ConfigResponse
+    suspend fun config(): JsonObject
 
     @POST("api/config")
     suspend fun saveConfig(@Body body: JsonObject): OkResponse

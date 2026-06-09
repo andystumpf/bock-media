@@ -1,6 +1,7 @@
 package com.bockmedia.console.ui.rooms
 
 import androidx.compose.foundation.background
+import com.bockmedia.console.ui.theme.BockGreen
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -27,7 +28,6 @@ import com.bockmedia.console.ui.theme.HomePillInactive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private val SpotifyGreen = Color(0xFF1DB954)
 private val CardBg = Color(0xFF282828)
 private val PillShape = RoundedCornerShape(50)
 
@@ -205,7 +205,7 @@ private fun RoomRow(
                         .offset(x = 2.dp, y = 2.dp)
                         .size(10.dp)
                         .clip(CircleShape)
-                        .background(if (playing) SpotifyGreen else Color(0xFFE8A838)),
+                        .background(if (playing) BockGreen else Color(0xFFE8A838)),
                 )
             }
         }

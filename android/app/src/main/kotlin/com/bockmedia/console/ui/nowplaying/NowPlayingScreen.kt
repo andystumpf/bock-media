@@ -1,6 +1,7 @@
 package com.bockmedia.console.ui.nowplaying
 
 import android.os.Build
+import com.bockmedia.console.ui.theme.BockGreen
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -760,6 +761,21 @@ private fun SpotifyNowPlayingPage(
             UpNextSheet(
                 tracks = displayDev.upcoming,
                 repository = repository,
+                isLocalPlayback = isLocal,
+                onPlayAtIndex = { upNextIndex ->
+                    scope.launch {
+                        LocalPlaybackController.seekToQueueIndex(
+                            context,
+                            liveLocal.index + 1 + upNextIndex,
+                        )
+                    }
+                    showUpNext = false
+                },
+                onAlexaUnsupported = {
+                    scope.launch {
+                        snackbarHostState.showSnackbar("Skip from Up Next not supported on Alexa yet")
+                    }
+                },
                 onDismiss = { showUpNext = false },
             )
         }
@@ -847,7 +863,6 @@ private fun SpotifyPlayerTopBar(
     }
 }
 
-private val SpotifyGreen = Color(0xFF1DB954)
 
 @Composable
 private fun SpotifyTrackInfoRow(
@@ -893,7 +908,7 @@ private fun SpotifyTrackInfoRow(
                 Icon(
                     if (isLiked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
                     contentDescription = if (isLiked) "Remove from Liked" else "Add to Liked",
-                    tint = if (isLiked) SpotifyGreen else Color.White,
+                    tint = if (isLiked) BockGreen else Color.White,
                 )
             }
         }

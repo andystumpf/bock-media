@@ -7,6 +7,7 @@ import com.bockmedia.console.domain.model.PlayTarget
 import com.bockmedia.console.media.LocalPlaybackQueueResolver
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -15,12 +16,16 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import okhttp3.Request
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 
 object OfflineDownloadManager {
     private const val MAX_TRACKS = 150
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mutex = Mutex()
+    private val activeJobs = ConcurrentHashMap<String, Job>()
+    private val cancelFlags = ConcurrentHashMap<String, AtomicBoolean>()
     private val _statuses = MutableStateFlow<Map<String, OfflineCollectionStatus>>(emptyMap())
     val statuses: StateFlow<Map<String, OfflineCollectionStatus>> = _statuses.asStateFlow()
 
@@ -50,7 +55,8 @@ object OfflineDownloadManager {
         val appContext = context.applicationContext
         val id = target.downloadId()
         if (_statuses.value[id]?.state == DownloadState.Downloading) return
-        scope.launch {
+        cancelFlags[id] = AtomicBoolean(false)
+        activeJobs[id] = scope.launch {
             val blocked = OfflineDownloadNetwork.blockedReason(appContext)
             if (blocked != null) {
                 val existing = OfflineDownloadStore(appContext).readManifest(id)
@@ -68,7 +74,28 @@ object OfflineDownloadManager {
             mutex.withLock {
                 downloadOrSyncLocked(appContext, target, resyncOnly = false)
             }
+        }.also { job ->
+            job.invokeOnCompletion { activeJobs.remove(id) }
         }
+    }
+
+    fun cancelCollection(id: String) {
+        cancelFlags.computeIfAbsent(id) { AtomicBoolean(false) }.set(true)
+        activeJobs[id]?.cancel()
+        val existing = _statuses.value[id]
+        if (existing?.state == DownloadState.Downloading) {
+            updateStatus(
+                id,
+                OfflineCollectionStatus(
+                    existing.manifest,
+                    DownloadState.Failed,
+                    existing.progress,
+                    "Cancelled",
+                ),
+            )
+        }
+        cancelFlags.remove(id)
+        activeJobs.remove(id)
     }
 
     fun resync(context: Context, target: PlayTarget) {
@@ -166,6 +193,7 @@ object OfflineDownloadManager {
             val workingManifest = manifestFor(id, title, kind, sourcePlaylistId, mergedTracks)
 
             mergedTracks.forEach { entry ->
+                if (cancelFlags[id]?.get() == true) error("Cancelled")
                 val dest = store.trackFile(id, entry.fileName)
                 if (dest.exists() && dest.length() > 0) {
                     tracksOnDisk.add(entry)

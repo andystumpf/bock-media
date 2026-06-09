@@ -64,19 +64,20 @@ class OfflineDownloadForegroundService : Service() {
                 } else {
                     "Downloading ${active.size} collections"
                 }
-                startForeground(NOTIFICATION_ID, buildNotification(title, aggregate))
+                val cancelId = active.singleOrNull()?.manifest?.id
+                startForeground(NOTIFICATION_ID, buildNotification(title, aggregate, cancelId))
             }
         }
     }
 
-    private fun buildNotification(title: String, progress: Float): Notification {
+    private fun buildNotification(title: String, progress: Float, cancelId: String? = null): Notification {
         val open = PendingIntent.getActivity(
             this,
             0,
             MainActivity.launchIntent(this, "downloads"),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_menu_save)
             .setContentTitle(title)
             .setContentText("${(progress * 100).toInt()}% complete")
@@ -84,7 +85,20 @@ class OfflineDownloadForegroundService : Service() {
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setContentIntent(open)
-            .build()
+        cancelId?.let { id ->
+            val cancelIntent = Intent(this, OfflineDownloadActionReceiver::class.java).apply {
+                action = OfflineDownloadActionReceiver.ACTION_CANCEL
+                putExtra(OfflineDownloadActionReceiver.EXTRA_COLLECTION_ID, id)
+            }
+            val cancelPi = PendingIntent.getBroadcast(
+                this,
+                id.hashCode(),
+                cancelIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            builder.addAction(android.R.drawable.ic_menu_close_clear_cancel, "Cancel", cancelPi)
+        }
+        return builder.build()
     }
 
     private fun ensureChannel() {
