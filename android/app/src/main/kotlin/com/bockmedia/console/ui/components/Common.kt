@@ -182,8 +182,19 @@ fun BockTimeField(
     var showPicker by remember { mutableStateOf(false) }
     val (hour, minute) = parseTime24(time24)
     val display = formatTime12(time24)
-    Box(modifier = modifier.clickable { showPicker = true }) {
-        BockTextField(display, {}, "Time", readOnly = true)
+
+    Box(modifier = modifier) {
+        BockTextField(
+            value = display,
+            onValueChange = {},
+            placeholder = "Time",
+            readOnly = true,
+        )
+        Box(
+            Modifier
+                .matchParentSize()
+                .clickable { showPicker = true },
+        )
     }
     if (showPicker) {
         val state = rememberTimePickerState(

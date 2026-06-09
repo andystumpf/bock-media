@@ -22,8 +22,9 @@ fun resolveScreenHeader(route: String?): ScreenHeader {
         }
         else -> {
             val top = route.substringBefore("/")
-            val title = BockRoute.drawerRoutes.find { it.route == top }?.title ?: "Bock Media"
-            ScreenHeader(title, showBack = false)
+            val title = BockRoute.allRoutes.find { it.route == top }?.title ?: "Bock Media"
+            val showBack = top !in BockRoute.bottomNavRoutes.map { it.route }
+            ScreenHeader(title, showBack = showBack)
         }
     }
 }
