@@ -39,6 +39,8 @@ sealed class BockRoute(val route: String, val title: String, val icon: ImageVect
             Search, Playlists, Albums, Artists, Songs,
             WatchFolders, Devices, Automation, Routines, Analytics, Settings,
         )
+
+        val bottomNavRoutes = listOf(NowPlaying, Rooms, Search, Playlists)
     }
 }
 

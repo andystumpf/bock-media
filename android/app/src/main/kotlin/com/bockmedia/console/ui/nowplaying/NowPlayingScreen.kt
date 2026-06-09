@@ -20,9 +20,12 @@ import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.computeNowPlayingProgress
 import com.bockmedia.console.domain.model.formatPlaybackTime
 import com.bockmedia.console.ui.alexaControlsAvailable
+import com.bockmedia.console.ui.components.BockPullRefresh
 import com.bockmedia.console.ui.components.ErrorText
 import com.bockmedia.console.ui.components.LoadingBox
 import com.bockmedia.console.ui.components.PaginationBar
+import com.bockmedia.console.ui.nowplaying.canControlDevice
+import com.bockmedia.console.ui.nowplaying.resolveSerial
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import retrofit2.HttpException
@@ -36,23 +39,6 @@ private sealed class NpDisplayEntry {
         val source: String?,
         val members: List<NowPlayingDeviceItem>,
     ) : NpDisplayEntry()
-}
-
-private fun resolveSerial(device: NowPlayingDeviceItem, alexaDevices: List<AlexaDevice>): String? {
-    val name = device.deviceName?.lowercase() ?: return null
-    return alexaDevices.firstOrNull { (it.name ?: "").lowercase() == name }?.serial
-}
-
-private fun canControlDevice(
-    device: NowPlayingDeviceItem,
-    alexaDevices: List<AlexaDevice>,
-    controlsAvailable: Boolean,
-    remoteOk: Boolean,
-): Boolean {
-    if (!controlsAvailable || !remoteOk) return false
-    if (device.deviceId.startsWith("msp-")) return false
-    if (device.deviceName.isNullOrBlank()) return false
-    return resolveSerial(device, alexaDevices) != null
 }
 
 private fun groupNameFor(device: NowPlayingDeviceItem, groups: List<DeviceGroup>, alexaDevices: List<AlexaDevice>): String {
@@ -126,6 +112,7 @@ fun NowPlayingScreen(
     var tick by remember { mutableIntStateOf(0) }
     var sleepDevice by remember { mutableStateOf<NowPlayingDeviceItem?>(null) }
     var ignoreDevice by remember { mutableStateOf<NowPlayingDeviceItem?>(null) }
+    var refreshing by remember { mutableStateOf(false) }
     val volumes = remember { mutableStateMapOf<String, Int?>() }
     val shuffleOn = remember { mutableStateMapOf<String, Boolean>() }
     val volumeTimers = remember { mutableStateMapOf<String, kotlinx.coroutines.Job?>() }
@@ -162,6 +149,14 @@ fun NowPlayingScreen(
         runCatching { loadHistory() }.onFailure { historyError = it.message }
         error = liveError ?: historyError
         loading = false
+        refreshing = false
+    }
+
+    suspend fun pullRefresh() {
+        refreshing = true
+        refreshLive()
+        loadHistory()
+        refreshing = false
     }
 
     suspend fun runControl(dev: NowPlayingDeviceItem, action: String) {
@@ -302,25 +297,17 @@ fun NowPlayingScreen(
         error != null && items.isEmpty() && history.isEmpty() -> ErrorText(error!!) { scope.launch { loadAll() } }
         else -> {
             val entries = groupNowPlaying(items, deviceGroups, alexaDevices)
+            val heroId = items.firstOrNull { !it.paused }?.deviceId ?: items.firstOrNull()?.deviceId
+            BockPullRefresh(
+                isRefreshing = refreshing,
+                onRefresh = { scope.launch { pullRefresh() } },
+                modifier = Modifier.fillMaxSize(),
+            ) {
             BockLazyColumn(
                 Modifier.fillMaxSize().padding(horizontal = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 contentPadding = PaddingValues(bottom = 16.dp),
             ) {
-                item {
-                    Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
-                        horizontalArrangement = Arrangement.End,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        TextButton(onClick = { scope.launch { loadAll() } }) {
-                            Icon(Icons.Default.Refresh, null, Modifier.size(18.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("Refresh")
-                        }
-                    }
-                }
-
                 if (items.isEmpty()) {
                     item {
                         Card(Modifier.fillMaxWidth()) {
@@ -404,6 +391,7 @@ fun NowPlayingScreen(
                             is NpDisplayEntry.Single -> {
                                 NowPlayingDeviceCard(
                                     dev = entry.item,
+                                    hero = entry.item.deviceId == heroId && items.size == 1,
                                     alexaDevices = alexaDevices,
                                     controlsAvailable = controlsAvailable,
                                     remoteOk = remoteOk,
@@ -480,6 +468,7 @@ fun NowPlayingScreen(
                     PaginationBar(histPage, ((histTotal + 24) / 25).coerceAtLeast(1)) { histPage = it }
                 }
             }
+            }
         }
     }
 }
@@ -502,6 +491,7 @@ private fun NowPlayingDeviceCard(
     onIgnore: (NowPlayingDeviceItem) -> Unit,
     onFavorite: (NowPlayingDeviceItem) -> Unit,
     modifier: Modifier = Modifier,
+    hero: Boolean = false,
 ) {
     @Suppress("UNUSED_VARIABLE") val _t = tick
     val prog = computeNowPlayingProgress(dev.timestamp, dev.duration_ms, dev.offset_ms, dev.paused)
@@ -513,16 +503,24 @@ private fun NowPlayingDeviceCard(
     } else {
         formatPlaybackTime(elapsedSec)
     }
+    val artSize = if (hero) 220.dp else 72.dp
+    val titleStyle = if (hero) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.titleSmall
 
     Card(modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp)) {
-            Row(verticalAlignment = Alignment.Top) {
+        Column(Modifier.padding(if (hero) 16.dp else 12.dp)) {
+            if (hero) {
+                dev.deviceName?.let {
+                    AssistChip(onClick = {}, label = { Text(it) }, enabled = false)
+                }
+                Spacer(Modifier.height(8.dp))
+            }
+            Row(verticalAlignment = if (hero) Alignment.Top else Alignment.Top) {
                 var artUrl by remember(dev.filepath) { mutableStateOf<String?>(null) }
                 LaunchedEffect(dev.filepath) { artUrl = repository.artworkUrl(dev.filepath) }
                 SubcomposeAsyncImage(
                     model = artUrl,
                     contentDescription = dev.album ?: "Album art",
-                    modifier = Modifier.size(72.dp),
+                    modifier = Modifier.size(artSize),
                     loading = {
                         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surfaceVariant) {
                             Icon(
@@ -550,7 +548,7 @@ private fun NowPlayingDeviceCard(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             dev.track ?: "—",
-                            style = MaterialTheme.typography.titleSmall,
+                            style = titleStyle,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f, fill = false),

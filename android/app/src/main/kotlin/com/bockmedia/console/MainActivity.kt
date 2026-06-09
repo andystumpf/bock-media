@@ -17,6 +17,7 @@ import coil.ImageLoader
 import com.bockmedia.console.media.NowPlayingNotificationManager
 import com.bockmedia.console.ui.navigation.BockApp
 import com.bockmedia.console.ui.setup.SetupScreen
+import com.bockmedia.console.ui.components.SplashScreen
 import com.bockmedia.console.ui.theme.BockMediaTheme
 import androidx.lifecycle.lifecycleScope
 import com.bockmedia.console.widget.NowPlayingWidget
@@ -85,7 +86,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 when (hasServer) {
-                    null -> { /* loading */ }
+                    null -> SplashScreen()
                     false -> SetupScreen {
                         hasServer = true
                     }

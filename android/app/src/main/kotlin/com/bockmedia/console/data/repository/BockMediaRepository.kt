@@ -32,8 +32,14 @@ class BockMediaRepository(
     suspend fun playlists(search: String = "", page: Int = 1, limit: Int = 500) =
         api().playlists(page = page, limit = limit, search = search)
 
-    suspend fun playlistDetail(id: String, page: Int = 1, q: String? = null, sortBy: String? = null, order: String? = null) =
-        api().playlistDetail(id, page = page, q = q, sortBy = sortBy, order = order)
+    suspend fun playlistDetail(
+        id: String,
+        page: Int = 1,
+        limit: Int = 50,
+        q: String? = null,
+        sortBy: String? = null,
+        order: String? = null,
+    ) = api().playlistDetail(id, page = page, limit = limit, q = q, sortBy = sortBy, order = order)
 
     suspend fun smartPlaylists() = api().smartPlaylists()
     suspend fun artists(page: Int, search: String) = api().artists(page = page, search = search)
@@ -192,7 +198,10 @@ class BockMediaRepository(
 
     suspend fun dismissMergeCandidate(id: String) = api().dismissMergeCandidate(id)
     suspend fun identifyDevices() = api().identifyDevices()
-    suspend fun testDevice(serial: String) = api().testDevice(buildJsonObject { put("serial", serial) })
+    suspend fun testDevice(serial: String, name: String? = null) = api().testDevice(buildJsonObject {
+        put("serial", serial)
+        name?.let { put("name", it) }
+    })
 
     suspend fun createDeviceGroup(name: String, devices: List<String>) {
         api().createDeviceGroup(buildJsonObject {

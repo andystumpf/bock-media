@@ -5,8 +5,8 @@ import com.bockmedia.console.ui.components.BockLazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material3.Icon
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -19,12 +19,14 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.bockmedia.console.data.api.dto.NowPlayingDeviceItem
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.PlayTarget
 import com.bockmedia.console.ui.AlexaAuthMonitor
 import com.bockmedia.console.ui.alexaControlsAvailable
 import com.bockmedia.console.ui.analytics.AnalyticsScreen
 import com.bockmedia.console.ui.automation.AutomationScreen
+import com.bockmedia.console.ui.components.MiniNowPlayingBar
 import com.bockmedia.console.ui.components.PlayTargetLauncher
 import com.bockmedia.console.ui.dashboard.DashboardScreen
 import com.bockmedia.console.ui.devices.DevicesScreen
@@ -32,6 +34,7 @@ import com.bockmedia.console.ui.library.AlbumsScreen
 import com.bockmedia.console.ui.library.ArtistsScreen
 import com.bockmedia.console.ui.library.SongsScreen
 import com.bockmedia.console.ui.nowplaying.NowPlayingScreen
+import com.bockmedia.console.ui.nowplaying.resolveSerial
 import com.bockmedia.console.ui.playlists.PlaylistDetailScreen
 import com.bockmedia.console.ui.playlists.PlaylistsScreen
 import com.bockmedia.console.ui.rooms.RoomsScreen
@@ -51,6 +54,14 @@ fun BockApp(repository: BockMediaRepository, onChangeServer: () -> Unit, deepLin
     val snackbarHostState = remember { SnackbarHostState() }
     var playTarget by remember { mutableStateOf<PlayTarget?>(null) }
     var remoteOk by remember { mutableStateOf(false) }
+    var alexaDevices by remember { mutableStateOf(emptyList<com.bockmedia.console.data.api.dto.AlexaDevice>()) }
+    var controlsAvailable by remember { mutableStateOf(false) }
+
+    val navBackStackEntry by navController.currentBackStackEntryAsState()
+    val fullRoute = navBackStackEntry?.destination?.route
+    val header = resolveScreenHeader(fullRoute)
+    val showBottomNav = isBottomNavRoute(fullRoute)
+    val showMiniBar = showBottomNav && fullRoute != BockRoute.NowPlaying.route
 
     LaunchedEffect(repository) {
         runCatching {
@@ -71,6 +82,13 @@ fun BockApp(repository: BockMediaRepository, onChangeServer: () -> Unit, deepLin
     AlexaAuthMonitor(repository, snackbarHostState)
 
     PlayTargetLauncher(repository, playTarget, remoteOk, snackbarHostState) { playTarget = null }
+
+    suspend fun runMiniControl(dev: NowPlayingDeviceItem, action: String) {
+        val serial = resolveSerial(dev, alexaDevices) ?: return
+        runCatching {
+            repository.deviceControl(dev.deviceId, dev.deviceName ?: "", serial, action)
+        }
+    }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -95,9 +113,13 @@ fun BockApp(repository: BockMediaRepository, onChangeServer: () -> Unit, deepLin
                         items(BockRoute.drawerRoutes, key = { it.route }) { route ->
                             CompactDrawerItem(
                                 route = route,
-                                selected = currentRoute(navController) == route.route,
+                                selected = fullRoute?.substringBefore("/") == route.route,
                                 onClick = {
-                                    navController.navigate(route.route) { launchSingleTop = true }
+                                    navController.navigate(route.route) {
+                                        launchSingleTop = true
+                                        popUpTo(BockRoute.NowPlaying.route) { saveState = true }
+                                        restoreState = true
+                                    }
                                     scope.launch { drawerState.close() }
                                 },
                             )
@@ -111,13 +133,61 @@ fun BockApp(repository: BockMediaRepository, onChangeServer: () -> Unit, deepLin
             snackbarHost = { SnackbarHost(snackbarHostState) },
             topBar = {
                 TopAppBar(
-                    title = { Text(titleForRoute(currentRoute(navController))) },
+                    title = { Text(header.title) },
                     navigationIcon = {
-                        IconButton(onClick = { scope.launch { drawerState.open() } }) {
-                            Icon(Icons.Default.Menu, "Menu")
+                        if (header.showBack) {
+                            IconButton(onClick = { navController.popBackStack() }) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+                            }
+                        } else {
+                            IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                                Icon(Icons.Default.Menu, "Menu")
+                            }
                         }
                     },
                 )
+            },
+            bottomBar = {
+                Column {
+                    if (showMiniBar) {
+                        MiniNowPlayingBar(
+                            repository = repository,
+                            remoteOk = remoteOk,
+                            onOpenNowPlaying = {
+                                navController.navigate(BockRoute.NowPlaying.route) {
+                                    launchSingleTop = true
+                                    popUpTo(BockRoute.NowPlaying.route) { saveState = true }
+                                    restoreState = true
+                                }
+                            },
+                            onControl = { dev, action ->
+                                if (alexaDevices.isEmpty()) {
+                                    runCatching { alexaDevices = repository.alexaRemoteDevices().devices }
+                                }
+                                runMiniControl(dev, action)
+                            },
+                        )
+                    }
+                    if (showBottomNav) {
+                        NavigationBar {
+                            BockRoute.bottomNavRoutes.forEach { route ->
+                                val selected = fullRoute?.substringBefore("/") == route.route
+                                NavigationBarItem(
+                                    selected = selected,
+                                    onClick = {
+                                        navController.navigate(route.route) {
+                                            launchSingleTop = true
+                                            popUpTo(BockRoute.NowPlaying.route) { saveState = true }
+                                            restoreState = true
+                                        }
+                                    },
+                                    icon = { Icon(route.icon, route.title) },
+                                    label = { Text(route.title) },
+                                )
+                            }
+                        }
+                    }
+                }
             },
         ) { padding ->
             BockNavHost(
@@ -208,15 +278,6 @@ private fun BockNavHost(
         composable(BockRoute.Settings.route) { SettingsScreen(repository, onChangeServer) }
     }
 }
-
-@Composable
-private fun currentRoute(navController: NavHostController): String? {
-    val entry = navController.currentBackStackEntryAsState().value ?: return null
-    return entry.destination.route?.substringBefore("/")
-}
-
-private fun titleForRoute(route: String?): String =
-    BockRoute.drawerRoutes.find { it.route == route }?.title ?: "Bock Media"
 
 @Composable
 private fun CompactDrawerItem(

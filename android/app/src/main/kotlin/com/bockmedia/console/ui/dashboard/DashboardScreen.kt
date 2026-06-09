@@ -10,6 +10,7 @@ import androidx.compose.ui.unit.dp
 import com.bockmedia.console.data.api.dto.*
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.PlayTarget
+import com.bockmedia.console.ui.components.BockPullRefresh
 import com.bockmedia.console.ui.components.ErrorText
 import com.bockmedia.console.ui.components.LoadingBox
 import com.bockmedia.console.ui.components.PlayButton
@@ -31,9 +32,10 @@ fun DashboardScreen(
     var plex by remember { mutableStateOf<PlexSyncStatusResponse?>(null) }
     var remote by remember { mutableStateOf<AlexaRemoteStatus?>(null) }
     val scope = rememberCoroutineScope()
+    var refreshing by remember { mutableStateOf(false) }
 
     suspend fun load() {
-        loading = true
+        loading = summary == null
         error = null
         runCatching {
             summary = repository.summary()
@@ -44,6 +46,7 @@ fun DashboardScreen(
             remote = repository.alexaRemoteStatus()
         }.onFailure { error = it.message }
         loading = false
+        refreshing = false
     }
 
     LaunchedEffect(Unit) { load() }
@@ -57,7 +60,12 @@ fun DashboardScreen(
     when {
         loading && summary == null -> LoadingBox()
         error != null && summary == null -> ErrorText(error!!) { scope.launch { load() } }
-        else -> BockLazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        else -> BockPullRefresh(
+            isRefreshing = refreshing,
+            onRefresh = { refreshing = true; scope.launch { load() } },
+            modifier = Modifier.fillMaxSize(),
+        ) {
+        BockLazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             item {
                 summary?.let {
                     Text("Songs ${it.songs} · Artists ${it.artists} · Albums ${it.albums} · Playlists ${it.playlists}")
@@ -117,6 +125,7 @@ fun DashboardScreen(
                     supportingContent = { Text(r.found ?: "") },
                 )
             }
+        }
         }
     }
 }

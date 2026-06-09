@@ -1,5 +1,6 @@
 package com.bockmedia.console.ui.theme
 
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
@@ -22,10 +23,25 @@ private val LightColors = lightColorScheme(
     onSurface = Color(0xFF1A2332),
 )
 
+private val DarkColors = darkColorScheme(
+    primary = Color(0xFF8FA4D6),
+    onPrimary = Color(0xFF0E1524),
+    secondary = BockGold,
+    onSecondary = Color(0xFF1A1200),
+    background = Color(0xFF0F1419),
+    surface = Color(0xFF1A2332),
+    onBackground = Color(0xFFE8ECF4),
+    onSurface = Color(0xFFE8ECF4),
+    surfaceVariant = Color(0xFF243044),
+)
+
 @Composable
-fun BockMediaTheme(content: @Composable () -> Unit) {
+fun BockMediaTheme(
+    darkTheme: Boolean = isSystemInDarkTheme(),
+    content: @Composable () -> Unit,
+) {
     MaterialTheme(
-        colorScheme = LightColors,
+        colorScheme = if (darkTheme) DarkColors else LightColors,
         content = content,
     )
 }
