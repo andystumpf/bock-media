@@ -211,8 +211,51 @@ class TestCollisionSafePlayText:
     def test_album_uses_token_not_fuzzy_phrase(self, isolated_paths, monkeypatch):
         monkeypatch.setattr(server, '_alexa_alias', lambda: 'bock media')
         text = server._build_play_text('album', 'Rumours', shuffle=False, artist='Fleetwood Mac')
-        assert 'ask bock media to start token' in text
+        assert 'ask bock media to start album token' in text
         assert 'the album Rumours' not in text
+
+    def test_playlist_with_id_uses_playlist_token(self, isolated_paths, monkeypatch):
+        monkeypatch.setattr(server, '_alexa_alias', lambda: 'bock media')
+        monkeypatch.setattr(server, '_msp_playlist_by_id', lambda pid: ('Mamma Mia', '/x/mamma.m3u'))
+        text = server._build_play_text(
+            'playlist', 'Mamma Mia', shuffle=False,
+            playlist_id='PL123', playlist_source='/x/mamma.m3u',
+        )
+        assert 'ask bock media to start playlist token' in text
+        assert 'the Mamma Mia playlist' not in text
+
+
+class TestPlaylistAlbumCollision:
+    """Titles like 'Mamma Mia' can exist as both a playlist and an album."""
+
+    def test_play_album_intent_prefers_album_over_playlist(self, post_alexa, isolated_paths, monkeypatch, sample_track):
+        entry = ('PL-MAMMA', 'Mamma Mia', '/tmp/mamma.m3u')
+        monkeypatch.setattr(server, 'best_playlist_entry', lambda q: entry if q.strip().lower() == 'mamma mia' else None)
+        monkeypatch.setattr(server, '_score_playlist', lambda q, n: 1.0 if q.strip().lower() == n.strip().lower() else 0.0)
+        monkeypatch.setattr(server.os.path, 'isfile', lambda p: True)
+        monkeypatch.setattr(server, 'fuzzy_find_album', lambda q: 'Mamma Mia!' if q.strip().lower() == 'mamma mia' else None)
+        monkeypatch.setattr(
+            server,
+            '_album_tracks_for_play',
+            lambda album, artist=None, shuffle=False, limit=50: [sample_track['path']],
+        )
+        resp = post_alexa('IntentRequest', 'PlayAlbumIntent', slots={'AlbumName': 'Mamma Mia'})
+        from tests.test_alexa import _audio_play, _speech
+        assert _audio_play(resp), resp
+        assert 'album' in _speech(resp).lower()
+
+    def test_play_album_token_uses_exact_album_and_artist(self, post_alexa, isolated_paths, monkeypatch, sample_track):
+        token = server._register_play_album_token('Mamma Mia!', artist='Benny Andersson', shuffle=False)
+        paths = []
+        monkeypatch.setattr(
+            server,
+            '_album_tracks_for_play',
+            lambda album, artist=None, shuffle=False, limit=50: paths.append((album, artist)) or [sample_track['path']],
+        )
+        resp = post_alexa('IntentRequest', 'PlayFileTokenIntent', slots={'FileToken': f'album token {token}'})
+        from tests.test_alexa import _audio_play
+        assert _audio_play(resp), resp
+        assert paths == [('Mamma Mia!', 'Benny Andersson')]
 
 
 # ─────────────────────────── static cache busting ──────────────────────────────

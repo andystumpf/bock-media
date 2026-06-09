@@ -765,6 +765,27 @@ def dashboard_quick():
 
 # ── Library search ─────────────────────────────────────────────────────────────
 
+def _library_search_song_match(q, title, album):
+    """True when a track belongs in unified search Songs, not album tracklist noise."""
+    ql = (q or '').lower().strip()
+    if len(ql) < 2:
+        return False
+    tl = (title or '').lower().strip()
+    al = (album or '').lower().strip()
+    if ql not in tl:
+        return False
+    for sep in (' - from ', ' – from '):
+        if sep in tl:
+            primary, suffix = tl.split(sep, 1)
+            if ql in al and ql not in primary and ql in suffix:
+                return False
+    if ' - ' in tl and ql in al:
+        primary, suffix = tl.split(' - ', 1)
+        if ql not in primary and ql in suffix:
+            return False
+    return True
+
+
 @app.route('/api/search')
 def library_search():
     q = (request.args.get('q') or '').strip()
@@ -772,20 +793,26 @@ def library_search():
     if len(q) < 2:
         return jsonify({'query': q, 'playlists': [], 'artists': [], 'albums': [], 'songs': []})
     like = f'%{q.lower()}%'
-    songs = db_query(
+    raw_songs = db_query(
         'SELECT title, artist, album, path FROM songs_cache '
-        'WHERE (LOWER(title) LIKE ? OR LOWER(artist) LIKE ? OR LOWER(album) LIKE ?) '
+        'WHERE LOWER(title) LIKE ? '
         'AND path IS NOT NULL LIMIT ?',
-        [like, like, like, limit],
+        [like, limit * 8],
     ) or []
+    songs = [
+        r for r in raw_songs
+        if _library_search_song_match(q, r.get('title'), r.get('album'))
+    ][:limit]
     artists = db_query(
-        'SELECT DISTINCT artist FROM songs_cache WHERE LOWER(artist) LIKE ? '
-        'AND artist IS NOT NULL AND artist != "" LIMIT ?',
+        'SELECT artist, MIN(path) as art_path FROM songs_cache WHERE LOWER(artist) LIKE ? '
+        'AND artist IS NOT NULL AND artist != "" AND path IS NOT NULL AND path != "" '
+        'GROUP BY artist LIMIT ?',
         [like, limit],
     ) or []
     albums = db_query(
-        'SELECT DISTINCT album, artist FROM songs_cache WHERE LOWER(album) LIKE ? '
-        'AND album IS NOT NULL AND album != "" LIMIT ?',
+        'SELECT album, artist, MIN(path) as art_path FROM songs_cache WHERE LOWER(album) LIKE ? '
+        'AND album IS NOT NULL AND album != "" AND path IS NOT NULL AND path != "" '
+        'GROUP BY album, artist LIMIT ?',
         [like, limit],
     ) or []
     playlists = []
@@ -798,8 +825,8 @@ def library_search():
     return jsonify({
         'query': q,
         'playlists': playlists[:limit],
-        'artists': [{'name': r['artist']} for r in artists],
-        'albums': [{'name': r['album'], 'artist': r.get('artist')} for r in albums],
+        'artists': [{'name': r['artist'], 'path': r.get('art_path')} for r in artists],
+        'albums': [{'name': r['album'], 'artist': r.get('artist'), 'path': r.get('art_path')} for r in albums],
         'songs': [{'title': r['title'], 'artist': r['artist'], 'album': r['album'], 'path': r['path']} for r in songs],
     })
 
@@ -1224,18 +1251,17 @@ def _start_playlist_token_entry(token_entry, shuffle=None):
 
 def _album_tracks_for_play(album, artist=None, shuffle=False, limit=50):
     order = 'ORDER BY RANDOM()' if shuffle else 'ORDER BY CAST(track_number AS INTEGER), title'
+    ext = "AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac')"
+    base = f"SELECT path FROM songs_cache WHERE album = ? AND path IS NOT NULL {ext}"
+    artist = (artist or '').strip() or None
     if artist:
         rows = db_query(
-            f"SELECT path FROM songs_cache WHERE album = ? AND artist = ? AND path IS NOT NULL "
-            f"AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac') {order} LIMIT ?",
-            [album, artist, limit],
+            f"{base} AND (artist = ? OR album_artist = ?) {order} LIMIT ?",
+            [album, artist, artist, limit],
         )
-    else:
-        rows = db_query(
-            f"SELECT path FROM songs_cache WHERE album = ? AND path IS NOT NULL "
-            f"AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac') {order} LIMIT ?",
-            [album, limit],
-        )
+        if rows:
+            return [r['path'] for r in rows]
+    rows = db_query(f"{base} {order} LIMIT ?", [album, limit])
     return [r['path'] for r in rows]
 
 
@@ -1252,6 +1278,31 @@ def _start_album_token_entry(token_entry, shuffle=None):
                         context=f'Album · {album}')
 
 
+def _try_ui_token_play(query, shuffle=None):
+    """Resolve a UI-registered play token before fuzzy album/artist matching."""
+    token_entry = _play_playlist_token_from_query(query)
+    if not token_entry:
+        return None
+    if token_entry.get('kind') == 'album':
+        return _start_album_token_entry(token_entry, shuffle=shuffle)
+    return _start_playlist_token_entry(token_entry, shuffle=shuffle)
+
+
+def _play_named_playlist_if_strong_match(query, shuffle=False):
+    """Prefer a playlist when NLU misroutes a playlist title into album/artist intents."""
+    entry = best_playlist_entry(query)
+    if not entry:
+        return None
+    pid, name, source = entry
+    if _score_playlist(query, name) < 0.90:
+        return None
+    if not source or not os.path.isfile(source):
+        return None
+    speech = f"Shuffling {name}." if shuffle else f"Playing {name}."
+    return start_playing(None, shuffle=shuffle, speech=speech,
+                         playlist=name, playlist_id=pid, source=source)
+
+
 def _build_play_text(kind, name, shuffle, artist=None, path=None, playlist_id=None, playlist_source=None):
     """Build a collision-safe utterance that routes to our custom skill.
 
@@ -1266,8 +1317,7 @@ def _build_play_text(kind, name, shuffle, artist=None, path=None, playlist_id=No
         phrase = f"music by {name}"
     elif kind == 'album':
         token = _register_play_album_token(name, artist=artist, shuffle=shuffle)
-        phrase = f"token {token}"
-        verb = 'start'
+        phrase = f"album token {token}"
     elif kind == 'song':
         verb = 'start'
         artist = (artist or '').strip()
@@ -1286,9 +1336,9 @@ def _build_play_text(kind, name, shuffle, artist=None, path=None, playlist_id=No
             if not src:
                 _, src = _msp_playlist_by_id(pid)
             token = _register_play_playlist_token(pid, name, src, shuffle=shuffle)
-            # PlayFileTokenIntent sample "start token {FileToken}" — slot is digits only.
-            phrase = f"token {token}"
-            verb = 'start'
+            # Explicit "playlist token" routes to PlayFileTokenIntent and avoids
+            # album/artist intents grabbing bare titles like "Mamma Mia".
+            phrase = f"playlist token {token}"
         else:
             phrase = f"the {name} playlist"
     return f"ask {alias} to {verb} {phrase}"
@@ -2088,6 +2138,7 @@ def albums():
     limit = int(request.args.get('limit', 50))
     search = request.args.get('search', '')
     artist = request.args.get('artist', '')
+    sort = (request.args.get('sort') or 'name').strip().lower()
     offset = (page - 1) * limit
 
     conditions = ['album IS NOT NULL', 'album != ""']
@@ -2100,10 +2151,15 @@ def albums():
         params += [artist, artist]
 
     where = ' AND '.join(conditions)
+    order = 'year DESC, album' if sort == 'year' else 'album'
 
     rows = db_query(
-        f'SELECT album, COALESCE(NULLIF(album_artist,""), artist) as artist, COUNT(*) as track_count '
-        f'FROM songs_cache WHERE {where} GROUP BY album, artist ORDER BY album LIMIT ? OFFSET ?',
+        f'SELECT album, COALESCE(NULLIF(album_artist,""), artist) as artist, '
+        f'COUNT(*) as track_count, '
+        f'MAX(CAST(NULLIF(year, "") AS INTEGER)) as year, '
+        f'MIN(CASE WHEN path IS NOT NULL AND path != "" THEN path END) as art_path '
+        f'FROM songs_cache WHERE {where} '
+        f'GROUP BY album, artist ORDER BY {order} LIMIT ? OFFSET ?',
         params + [limit, offset]
     )
     total_row = db_one(
@@ -2111,6 +2167,32 @@ def albums():
         params
     )
     return jsonify({'items': rows, 'total': total_row.get('total', 0)})
+
+
+@app.route('/api/genres')
+def genres_list():
+    limit = min(max(int(request.args.get('limit', 20) or 20), 1), 50)
+    rows = db_query(
+        'SELECT genre, COUNT(*) as track_count FROM songs_cache '
+        'WHERE genre IS NOT NULL AND genre != "" '
+        'GROUP BY genre ORDER BY track_count DESC LIMIT ?',
+        [limit],
+    ) or []
+    items = []
+    for row in rows:
+        genre = row.get('genre') or ''
+        if not genre:
+            continue
+        art_row = db_one(
+            'SELECT path FROM songs_cache WHERE genre = ? AND path IS NOT NULL AND path != "" LIMIT 1',
+            [genre],
+        )
+        items.append({
+            'name': genre,
+            'track_count': row.get('track_count') or 0,
+            'art_path': art_row.get('path') if art_row else None,
+        })
+    return jsonify({'items': items, 'total': len(items)})
 
 # ── API: Songs ───────────────────────────────────────────────────────────────
 
@@ -4125,6 +4207,45 @@ def _sort_paths_by_field(paths, field, order):
     return [t['path'] for t in tracks]
 
 
+def _m3u_first_paths(source, limit=12):
+    """First N media paths from a playlist file — avoids parsing/sorting huge lists."""
+    if not source or not os.path.isfile(source):
+        return []
+    out = []
+    try:
+        with open(source, encoding='utf-8', errors='replace') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                out.append(line)
+                if len(out) >= limit:
+                    break
+    except OSError:
+        pass
+    return out
+
+
+@app.route('/api/playlists/<playlist_id>/cover')
+def playlist_cover(playlist_id):
+    """Fast cover art path for a playlist — reads only the first few .m3u entries."""
+    key, _entry = _find_playlist_key(_load_playlists_tree().getroot(), playlist_id)
+    if key is None:
+        return jsonify({'error': 'not_found'}), 404
+    meta = _playlist_meta_from_key(key)
+    source = meta.get('source') or ''
+    paths = _m3u_first_paths(source, limit=12)
+    art_path = None
+    if paths:
+        rows = db_query(
+            f'SELECT path FROM songs_cache WHERE path IN ({",".join("?" * len(paths))}) '
+            f'AND path IS NOT NULL AND path != "" LIMIT 1',
+            paths,
+        ) or []
+        art_path = (rows[0].get('path') if rows else None) or paths[0]
+    return jsonify({'playlistId': playlist_id, 'path': art_path})
+
+
 @app.route('/api/playlists/<playlist_id>')
 def playlist_detail(playlist_id):
     page = max(1, int(request.args.get('page', 1)))
@@ -4622,18 +4743,24 @@ def fuzzy_find_artist(query):
     return matches[0] if matches else None
 
 def fuzzy_find_album(query):
-    q = query.lower()
+    q = (query or '').strip()
+    if not q:
+        return None
+    ql = q.lower()
     rows = db_query(
-        "SELECT DISTINCT album FROM songs_cache WHERE LOWER(album) LIKE ? AND album IS NOT NULL LIMIT 5",
-        [f'%{q}%']
-    )
-    if rows:
-        return rows[0]['album']
-    sample = db_query(
         "SELECT DISTINCT album FROM songs_cache WHERE album IS NOT NULL AND album != '' LIMIT 10000"
     )
-    names = [r['album'] for r in sample]
-    matches = difflib.get_close_matches(query, names, n=1, cutoff=0.5)
+    names = [r['album'] for r in rows if r.get('album')]
+    if not names:
+        return None
+    for name in names:
+        if name.lower() == ql:
+            return name
+    contains = [n for n in names if ql in n.lower()]
+    if contains:
+        contains.sort(key=lambda n: (len(n), n.lower()))
+        return contains[0]
+    matches = difflib.get_close_matches(q, names, n=1, cutoff=0.5)
     return matches[0] if matches else None
 
 def _resolve_song_tracks(title, artist=None):
@@ -6208,6 +6335,9 @@ def alexa_skill():
             query = sv('ArtistName')
             if not query:
                 return alexa_speak("Which artist would you like to play?", end_session=False)
+            token_resp = _try_ui_token_play(query)
+            if token_resp:
+                return token_resp
             if 'playlist' in query.lower():
                 pl_q = re.sub(r'\s+playlist$', '', query, flags=re.IGNORECASE).strip()
                 pl_q = re.sub(r'^(?:play\s+)?(?:my\s+)?(?:the\s+)?playlist\s+', '', pl_q, flags=re.IGNORECASE).strip() or query
@@ -6267,38 +6397,54 @@ def alexa_skill():
             query = sv('AlbumName')
             if not query:
                 return alexa_speak("Which album would you like to play?", end_session=False)
+            token_resp = _try_ui_token_play(query)
+            if token_resp:
+                return token_resp
+            if 'playlist' in query.lower():
+                pl_q = re.sub(r'\s+playlist$', '', query, flags=re.IGNORECASE).strip()
+                pl_q = re.sub(
+                    r'^(?:play\s+)?(?:my\s+)?(?:the\s+)?playlist\s+',
+                    '', pl_q, flags=re.IGNORECASE,
+                ).strip() or query
+                entry = best_playlist_entry(pl_q)
+                if entry and entry[2] and os.path.isfile(entry[2]):
+                    tracks = parse_m3u(entry[2])
+                    if tracks:
+                        return start_playing(tracks, speech=f"Playing {entry[1]}.",
+                                            playlist=entry[1], playlist_id=entry[0])
             album = fuzzy_find_album(query)
+            if album:
+                tracks = _album_tracks_for_play(album, shuffle=False)
+                if tracks:
+                    return start_playing(tracks, speech=f"Playing the album {album}.",
+                                        context=f'Album · {album}')
+            playlist_resp = _play_named_playlist_if_strong_match(query, shuffle=False)
+            if playlist_resp:
+                return playlist_resp
             if not album:
                 return alexa_speak(f"Sorry, I couldn't find the album {query}.")
-            rows = db_query(
-                "SELECT path FROM songs_cache WHERE album = ? AND path IS NOT NULL "
-                "AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac') ORDER BY CAST(track_number AS INTEGER), title LIMIT 50",
-                [album]
-            )
-            tracks = [r['path'] for r in rows]
-            if not tracks:
-                return alexa_speak(f"I found {album} but no playable files.")
-            return start_playing(tracks, speech=f"Playing the album {album}.",
-                                context=f'Album · {album}')
+            return alexa_speak(f"I found {album} but no playable files.")
 
         # ── Shuffle album ──────────────────────────────────────────────────
         elif iname == 'ShuffleAlbumIntent':
             query = sv('AlbumName')
             if not query:
                 return alexa_speak("Which album would you like to shuffle?", end_session=False)
+            token_resp = _try_ui_token_play(query, shuffle=True)
+            if token_resp:
+                return token_resp
             album = fuzzy_find_album(query)
+            if album:
+                tracks = _album_tracks_for_play(album, shuffle=True)
+                if tracks:
+                    return start_playing(tracks, shuffle=True, speech=f"Shuffling the album {album}.",
+                                        context=f'Album · {album}')
+            playlist_resp = _play_named_playlist_if_strong_match(query, shuffle=True)
+            if playlist_resp:
+                return playlist_resp
             if not album:
                 return alexa_speak(f"Sorry, I couldn't find the album {query}.")
-            rows = db_query(
-                "SELECT path FROM songs_cache WHERE album = ? AND path IS NOT NULL "
-                "AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac') ORDER BY RANDOM() LIMIT 50",
-                [album]
-            )
-            tracks = [r['path'] for r in rows]
-            if not tracks:
-                return alexa_speak(f"I found {album} but no playable files.")
-            return start_playing(tracks, shuffle=True, speech=f"Shuffling the album {album}.",
-                                context=f'Album · {album}')
+            return alexa_speak(f"I found {album} but no playable files.")
 
         # ── Play file by UI token (exact path, no fuzzy match) ─────────────
         elif iname == 'PlayFileTokenIntent':

@@ -1,8 +1,12 @@
 package com.bockmedia.console.domain.model
 
+import android.content.Context
 import com.bockmedia.console.data.api.dto.PlaylistSummary
 import com.bockmedia.console.data.api.dto.StreamHistoryItem
 import com.bockmedia.console.data.repository.BockMediaRepository
+import com.bockmedia.console.local.OfflineDownloadManager
+import com.bockmedia.console.local.OfflineDownloadStore
+import com.bockmedia.console.local.toPlayTarget
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withTimeoutOrNull
@@ -13,15 +17,18 @@ enum class HomeFilter(val label: String) {
     Mixes("Mixes"),
     Radio("Radio"),
     Discover("Discover"),
+    Offline("Offline"),
 }
 
 enum class HomeSectionKind {
     JumpBackIn,
+    Favorites,
     TopMixes,
     DailyMixes,
     RecentPlaylists,
     Radio,
     Discover,
+    Offline,
 }
 
 data class HomeCard(
@@ -59,11 +66,13 @@ object HomeFeedLoader {
         }
         val playlistsDef = async { runCatching { repository.playlists(limit = PLAYLIST_LIMIT) }.getOrNull() }
         val smartDef = async { runCatching { repository.smartPlaylists() }.getOrNull() }
+        val favoritesDef = async { runCatching { repository.favorites() }.getOrNull().orEmpty() }
 
         val history = historyDef.await()?.items.orEmpty()
         val analytics = analyticsDef.await()
         val allPlaylists = playlistsDef.await()?.items.orEmpty()
         val smartPlaylists = smartDef.await()?.items.orEmpty()
+        val favorites = favoritesDef.await()
 
         val playlistByName = allPlaylists.associateBy { it.name.lowercase() }
         val playlistById = allPlaylists.associateBy { it.id }
@@ -137,6 +146,17 @@ object HomeFeedLoader {
         val jumpBackIn = (recentlyPlayedPlaylists + recentAlbums + recentlyAdded)
             .distinctBy { it.id }
             .take(16)
+
+        val favoriteCards = favorites.take(12).map { fav ->
+            HomeCard(
+                id = "fav-${fav.path.hashCode()}",
+                title = fav.track ?: "Favorite",
+                subtitle = fav.artist ?: "Liked song",
+                artPath = fav.path,
+                playTarget = PlayTarget.Song(fav.path, fav.track ?: "Favorite"),
+                kind = HomeSectionKind.Favorites,
+            )
+        }
 
         val topGenres = analytics?.topGenres.orEmpty().take(6)
         val topArtists = analytics?.topArtists.orEmpty()
@@ -274,6 +294,7 @@ object HomeFeedLoader {
 
         val sections = listOfNotNull(
             section("jump-back-in", "Jump back in", HomeSectionKind.JumpBackIn, jumpBackIn),
+            section("favorites", "Your favorites", HomeSectionKind.Favorites, favoriteCards),
             section("top-mixes", "Your top mixes", HomeSectionKind.TopMixes, genreMixes),
             section("daily-mixes", "Daily mixes", HomeSectionKind.DailyMixes, dailyMixes),
             section("recent-playlists", "Recent playlists", HomeSectionKind.RecentPlaylists, recentPlaylists),
@@ -423,8 +444,30 @@ object HomeFeedLoader {
 
 fun HomeFilter.matches(kind: HomeSectionKind): Boolean = when (this) {
     HomeFilter.All -> true
-    HomeFilter.Playlists -> kind == HomeSectionKind.JumpBackIn || kind == HomeSectionKind.RecentPlaylists
+    HomeFilter.Offline -> false
+    HomeFilter.Playlists -> kind == HomeSectionKind.JumpBackIn || kind == HomeSectionKind.RecentPlaylists || kind == HomeSectionKind.Favorites
     HomeFilter.Mixes -> kind == HomeSectionKind.TopMixes || kind == HomeSectionKind.DailyMixes
     HomeFilter.Radio -> kind == HomeSectionKind.Radio
     HomeFilter.Discover -> kind == HomeSectionKind.Discover
+}
+
+fun buildOfflineHomeSection(context: Context): HomeSection? {
+    OfflineDownloadManager.refresh(context)
+    val store = OfflineDownloadStore(context)
+    val cards = store.listManifests()
+        .filter { manifest -> store.isCollectionComplete(manifest) }
+        .sortedByDescending { it.lastSyncedAtMs.takeIf { ms -> ms > 0 } ?: it.downloadedAtMs }
+        .map { manifest ->
+            HomeCard(
+                id = "offline-${manifest.id}",
+                title = manifest.title,
+                subtitle = "${manifest.tracks.size} tracks · Available offline",
+                artPath = manifest.coverArtPath,
+                playlistId = manifest.sourcePlaylistId ?: manifest.legacyPlaylistId,
+                playTarget = manifest.toPlayTarget(),
+                kind = HomeSectionKind.Offline,
+            )
+        }
+    if (cards.isEmpty()) return null
+    return HomeSection("offline-library", "Your downloads", HomeSectionKind.Offline, cards)
 }

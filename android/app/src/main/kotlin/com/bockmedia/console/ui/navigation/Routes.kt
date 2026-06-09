@@ -4,16 +4,19 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.Analytics
-import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Speaker
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.ui.graphics.vector.ImageVector
 
 sealed class BockRoute(val route: String, val title: String, val icon: ImageVector) {
@@ -26,7 +29,10 @@ sealed class BockRoute(val route: String, val title: String, val icon: ImageVect
     data object Albums : BockRoute("albums", "Albums", Icons.Default.Album)
     data object Artists : BockRoute("artists", "Artists", Icons.Default.Mic)
     data object Songs : BockRoute("songs", "Songs", Icons.Default.MusicNote)
-    data object WatchFolders : BockRoute("watchfolders", "Watch Folders", Icons.Default.Folder)
+    data object Favorites : BockRoute("favorites", "Favorites", Icons.Default.Star)
+    data object Downloads : BockRoute("downloads", "Downloads", Icons.Default.Download)
+    data object Routines : BockRoute("routines", "Routines", Icons.Default.Bolt)
+    data object RecentRequests : BockRoute("recent", "Voice log", Icons.Default.RecordVoiceOver)
     data object Rooms : BockRoute("rooms", "Rooms", Icons.Default.Home)
     data object Devices : BockRoute("devices", "Alexa Devices", Icons.Default.Speaker)
     data object Analytics : BockRoute("analytics", "Analytics", Icons.Default.Analytics)
@@ -38,12 +44,12 @@ sealed class BockRoute(val route: String, val title: String, val icon: ImageVect
         }
 
         val accountMenuRoutes: List<BockRoute> by lazy {
-            listOf(Settings, WatchFolders, Rooms, Devices, Analytics)
+            listOf(Settings, Downloads, Routines, RecentRequests, Rooms, Devices, Analytics)
         }
 
         val allRoutes: List<BockRoute> by lazy {
             bottomNavRoutes + accountMenuRoutes + listOf(
-                NowPlaying, Playlists, Artists, Albums, Songs,
+                NowPlaying, Playlists, Artists, Albums, Songs, Favorites, Downloads,
             )
         }
     }

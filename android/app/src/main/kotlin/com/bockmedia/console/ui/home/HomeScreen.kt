@@ -6,12 +6,15 @@ import androidx.compose.material3.Text
 import com.bockmedia.console.ui.components.BockLazyColumn
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.bockmedia.console.data.repository.BockMediaRepository
+import com.bockmedia.console.local.OfflineDownloadManager
 import com.bockmedia.console.domain.model.HomeFeedCache
 import com.bockmedia.console.domain.model.HomeFeedLoader
 import com.bockmedia.console.domain.model.HomeFilter
 import com.bockmedia.console.domain.model.PlayTarget
+import com.bockmedia.console.domain.model.buildOfflineHomeSection
 import com.bockmedia.console.domain.model.matches
 import com.bockmedia.console.ui.components.*
 import kotlinx.coroutines.launch
@@ -22,13 +25,20 @@ fun HomeScreen(
     remoteOk: Boolean,
     onPlay: (PlayTarget) -> Unit,
     onAccountNavigate: (String) -> Unit,
+    onOpenDownloads: () -> Unit = {},
 ) {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var feed by remember { mutableStateOf<com.bockmedia.console.domain.model.HomeFeed?>(null) }
     var loading by remember { mutableStateOf(true) }
     var refreshing by remember { mutableStateOf(false) }
     var filter by remember { mutableStateOf(HomeFilter.All) }
     var error by remember { mutableStateOf<String?>(null) }
+    var offlineSection by remember { mutableStateOf<com.bockmedia.console.domain.model.HomeSection?>(null) }
+
+    suspend fun loadOffline() {
+        offlineSection = buildOfflineHomeSection(context)
+    }
 
     suspend fun load() {
         if (feed == null) loading = true
@@ -43,18 +53,27 @@ fun HomeScreen(
     }
 
     LaunchedEffect(Unit) {
+        OfflineDownloadManager.refresh(context)
         HomeFeedCache.getIfFresh()?.let { cached ->
             feed = cached
             loading = false
         }
         load()
+        loadOffline()
     }
 
-    val sections = feed?.sections.orEmpty().filter { filter.matches(it.kind) }
+    LaunchedEffect(filter) {
+        if (filter == HomeFilter.Offline) loadOffline()
+    }
+
+    val sections = when (filter) {
+        HomeFilter.Offline -> listOfNotNull(offlineSection)
+        else -> feed?.sections.orEmpty().filter { filter.matches(it.kind) }
+    }
 
     BockPullRefresh(
         isRefreshing = refreshing,
-        onRefresh = { refreshing = true; scope.launch { load() } },
+        onRefresh = { refreshing = true; scope.launch { load(); loadOffline() } },
         modifier = Modifier.fillMaxSize(),
     ) {
         when {
@@ -66,6 +85,7 @@ fun HomeScreen(
                         selected = filter,
                         onSelect = { filter = it },
                         onAccountNavigate = onAccountNavigate,
+                        onOpenDownloads = onOpenDownloads,
                     )
                 }
                 if (!remoteOk) {
@@ -80,7 +100,10 @@ fun HomeScreen(
                 if (sections.isEmpty()) {
                     item {
                         Text(
-                            "Nothing here yet — play some music and your mixes will appear.",
+                            when (filter) {
+                                HomeFilter.Offline -> "Nothing downloaded yet — long-press Home tiles to save music offline."
+                                else -> "Nothing here yet — play some music and your mixes will appear."
+                            },
                             modifier = Modifier.padding(16.dp),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -91,6 +114,9 @@ fun HomeScreen(
                             section = sections[index],
                             repository = repository,
                             onPlay = { card -> onPlay(card.playTarget) },
+                            onDownload = { card ->
+                                OfflineDownloadManager.download(context, card.playTarget)
+                            },
                             compactTop = index == 0,
                             artLoadKey = filter,
                         )

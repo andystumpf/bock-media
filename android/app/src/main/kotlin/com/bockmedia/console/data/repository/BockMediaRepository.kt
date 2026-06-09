@@ -4,6 +4,12 @@ import com.bockmedia.console.data.api.BockMediaApi
 import com.bockmedia.console.data.api.dto.*
 import com.bockmedia.console.data.local.AppPreferences
 import com.bockmedia.console.domain.model.PlayTarget
+import com.bockmedia.console.domain.model.SearchSuggestion
+import com.bockmedia.console.domain.model.SearchSuggestionKind
+import com.bockmedia.console.domain.model.filterSearchSongHits
+import com.bockmedia.console.media.PlaybackArtwork
+import android.content.Context
+import java.io.File
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -21,18 +27,20 @@ class BockMediaRepository(
 
     private val playlistTrackPathsCache = ConcurrentHashMap<String, List<String>>()
     private val artistCoverPathsCache = ConcurrentHashMap<String, List<String>>()
+    private val albumCoverPathCache = ConcurrentHashMap<String, String>()
+    @Volatile private var cachedBaseUrl: String? = null
 
-    /** Picks a distinct track from the playlist based on variantKey (usually card id). */
+    private suspend fun baseUrl(): String =
+        cachedBaseUrl ?: baseUrlProvider().also { cachedBaseUrl = it }
+
+    /** Fast cover lookup — reads only the first tracks from the playlist file on the server. */
     suspend fun playlistCoverPath(playlistId: String, variantKey: String = playlistId): String? {
-        val paths = playlistTrackPathsCache.getOrPut(playlistId) {
-            runCatching {
-                playlistDetail(playlistId, limit = 24).tracks
-                    .mapNotNull { it.path?.takeIf { path -> path.isNotBlank() } }
-                    .distinct()
-            }.getOrDefault(emptyList())
-        }
-        if (paths.isEmpty()) return null
-        return paths[kotlin.math.abs(variantKey.hashCode()) % paths.size]
+        playlistTrackPathsCache[playlistId]?.firstOrNull()?.let { return it }
+        val path = runCatching {
+            api().playlistCover(playlistId).path?.takeIf { it.isNotBlank() }
+        }.getOrNull() ?: return null
+        playlistTrackPathsCache[playlistId] = listOf(path)
+        return path
     }
 
     suspend fun artworkUrlForPlaylist(playlistId: String, variantKey: String = playlistId): String? =
@@ -50,6 +58,41 @@ class BockMediaRepository(
         }
         if (paths.isEmpty()) return null
         return paths[kotlin.math.abs(pick) % paths.size]
+    }
+
+    suspend fun resolveArtistArtUrl(artistName: String): String? =
+        artistCoverPathAt(artistName)?.let { artworkUrl(it) }
+
+    suspend fun resolveAlbumArtUrl(albumName: String, artist: String? = null): String? =
+        albumCoverPath(albumName, artist)?.let { artworkUrl(it) }
+
+    private suspend fun albumCoverPath(albumName: String, artist: String? = null): String? {
+        val key = "${albumName.trim().lowercase()}|${artist?.trim()?.lowercase().orEmpty()}"
+        if (key == "|") return null
+        albumCoverPathCache[key]?.let { return it }
+        val path = runCatching {
+            songs(page = 1, search = albumName, artist = artist, album = albumName, limit = 1)
+                .items.firstOrNull()?.path?.takeIf { it.isNotBlank() }
+        }.getOrNull() ?: return null
+        albumCoverPathCache[key] = path
+        return path
+    }
+
+    suspend fun cacheArtPath(albumName: String, artist: String?, path: String?) {
+        if (path.isNullOrBlank()) return
+        val key = "${albumName.trim().lowercase()}|${artist?.trim()?.lowercase().orEmpty()}"
+        if (key != "|") albumCoverPathCache[key] = path
+    }
+
+    suspend fun cacheArtistArtPath(artistName: String, path: String?) {
+        if (path.isNullOrBlank()) return
+        val key = artistName.trim().lowercase()
+        if (key.isEmpty()) return
+        artistCoverPathsCache.compute(key) { _, existing ->
+            val list = existing?.toMutableList() ?: mutableListOf()
+            if (path !in list) list.add(0, path)
+            list
+        }
     }
 
     suspend fun resolveHomeCardArtUrl(
@@ -79,9 +122,34 @@ class BockMediaRepository(
         }
     }
 
+    suspend fun resolveOfflineManifestArtUrl(manifest: com.bockmedia.console.local.OfflineCollectionManifest): String? {
+        manifest.coverArtPath?.let { return artworkUrl(it) }
+        val paths = manifest.tracks.map { it.path }.filter { it.isNotBlank() }.distinct()
+        if (paths.isNotEmpty()) {
+            val pick = kotlin.math.abs(manifest.id.hashCode()) % paths.size
+            return artworkUrl(paths[pick])
+        }
+        manifest.sourcePlaylistId?.let { return artworkUrlForPlaylist(it, manifest.id) }
+        manifest.legacyPlaylistId?.let { return artworkUrlForPlaylist(it, manifest.id) }
+        return when (manifest.kind) {
+            "artist" -> artistCoverPathAt(manifest.title, manifest.id.hashCode())?.let { artworkUrl(it) }
+            "album" -> {
+                val artist = manifest.tracks.firstOrNull()?.artist
+                runCatching {
+                    songs(page = 1, search = manifest.title, artist = artist, album = manifest.title)
+                        .items.mapNotNull { it.path?.takeIf { path -> path.isNotBlank() } }
+                        .firstOrNull()
+                }.getOrNull()?.let { artworkUrl(it) }
+            }
+            else -> null
+        }
+    }
+
     fun clearCaches() {
+        cachedBaseUrl = null
         playlistTrackPathsCache.clear()
         artistCoverPathsCache.clear()
+        albumCoverPathCache.clear()
     }
 
     suspend fun testConnection(): Result<HealthResponse> = runCatching { api().health() }
@@ -95,9 +163,32 @@ class BockMediaRepository(
     suspend fun nowPlayingDevices() = api().nowPlayingDevices()
     suspend fun streamHistory(page: Int, limit: Int) = api().streamHistory(page, limit)
     suspend fun rooms() = api().rooms()
-    suspend fun search(q: String) = api().search(q)
+    suspend fun search(q: String, limit: Int = 30): SearchResponse {
+        val response = api().search(q, limit = limit)
+        val filtered = response.copy(songs = filterSearchSongHits(q, response.songs))
+        filtered.artists.forEach { hit ->
+            val name = hit.name ?: return@forEach
+            hit.path?.let { cacheArtistArtPath(name, it) }
+        }
+        filtered.albums.forEach { hit ->
+            val name = hit.name ?: hit.album ?: return@forEach
+            hit.path?.let { cacheArtPath(name, hit.artist, it) }
+        }
+        return filtered
+    }
     suspend fun playlists(search: String = "", page: Int = 1, limit: Int = 500) =
         api().playlists(page = page, limit = limit, search = search)
+
+    suspend fun resolvePlaylistId(name: String): String? {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return null
+        return runCatching {
+            playlists(search = trimmed, limit = 50).items
+                .firstOrNull { it.name.equals(trimmed, ignoreCase = true) }
+                ?.id
+                ?.takeIf { it.isNotBlank() }
+        }.getOrNull()
+    }
 
     suspend fun playlistDetail(
         id: String,
@@ -109,12 +200,53 @@ class BockMediaRepository(
     ) = api().playlistDetail(id, page = page, limit = limit, q = q, sortBy = sortBy, order = order)
 
     suspend fun smartPlaylists() = api().smartPlaylists()
-    suspend fun artists(page: Int, search: String) = api().artists(page = page, search = search)
-    suspend fun albums(page: Int, search: String, artist: String? = null) =
-        api().albums(page = page, search = search, artist = artist)
+    suspend fun artists(page: Int, search: String, limit: Int = 50) =
+        api().artists(page = page, search = search, limit = limit)
+    suspend fun albums(page: Int, search: String, artist: String? = null, limit: Int = 50, sort: String? = null) =
+        api().albums(page = page, search = search, artist = artist, limit = limit, sort = sort)
 
-    suspend fun songs(page: Int, search: String, artist: String? = null, album: String? = null) =
-        api().songs(page = page, search = search, artist = artist, album = album)
+    suspend fun recentAlbums(limit: Int = 12) = albums(page = 1, search = "", limit = limit, sort = "year")
+
+    suspend fun genres(limit: Int = 20) = api().genres(limit = limit)
+
+    suspend fun resolveSearchHitArtUrl(
+        kind: SearchSuggestionKind,
+        hit: SearchHit,
+        variantKey: String,
+    ): String? {
+        hit.path?.let { return artworkUrl(it) }
+        return when (kind) {
+            SearchSuggestionKind.Playlist -> hit.id?.let { artworkUrlForPlaylist(it, variantKey) }
+            SearchSuggestionKind.Artist -> hit.name?.let { resolveArtistArtUrl(it) }
+            SearchSuggestionKind.Album -> resolveAlbumArtUrl(hit.name ?: hit.album.orEmpty(), hit.artist)
+            SearchSuggestionKind.Song -> null
+        }
+    }
+
+    suspend fun resolveSuggestionArtUrl(suggestion: SearchSuggestion): String? {
+        suggestion.path?.let { return artworkUrl(it) }
+        return when (suggestion.kind) {
+            SearchSuggestionKind.Playlist -> suggestion.id?.let { artworkUrlForPlaylist(it, suggestion.title) }
+            SearchSuggestionKind.Artist -> resolveArtistArtUrl(suggestion.title)
+            SearchSuggestionKind.Album -> resolveAlbumArtUrl(suggestion.title, suggestion.artist)
+            SearchSuggestionKind.Song -> null
+        }
+    }
+
+    suspend fun resolveGenreArtUrl(genre: com.bockmedia.console.data.api.dto.GenreItem): String? {
+        genre.artPath?.let { return artworkUrl(it) }
+        return runCatching {
+            songs(page = 1, search = genre.name, limit = 1).items.firstOrNull()?.path
+        }.getOrNull()?.let { artworkUrl(it) }
+    }
+
+    suspend fun resolveAlbumItemArtUrl(album: com.bockmedia.console.data.api.dto.AlbumItem): String? {
+        album.artPath?.let { return artworkUrl(it) }
+        return resolveAlbumArtUrl(album.name, album.artist)
+    }
+
+    suspend fun songs(page: Int, search: String, artist: String? = null, album: String? = null, limit: Int = 100) =
+        api().songs(page = page, search = search, artist = artist, album = album, limit = limit)
 
     suspend fun watchFolders() = api().watchFolders()
     suspend fun devices() = api().devices()
@@ -131,8 +263,19 @@ class BockMediaRepository(
     suspend fun identifyStatus() = api().identifyStatus()
 
     suspend fun artworkUrl(filepath: String?): String? {
-        val base = runCatching { baseUrlProvider() }.getOrNull() ?: return null
+        if (filepath.isNullOrBlank()) return null
+        val base = runCatching { baseUrl() }.getOrNull() ?: return null
         return AppPreferences.artworkUrl(base, filepath)
+    }
+
+    suspend fun resolvePlaybackArtUrl(
+        context: Context,
+        libraryPath: String?,
+        localFile: File? = null,
+    ): String? {
+        libraryPath?.let { artworkUrl(it) }?.let { return it }
+        localFile?.let { PlaybackArtwork.embeddedArtUri(context.applicationContext, it) }?.let { return it }
+        return null
     }
 
     suspend fun playOnDevice(
@@ -195,6 +338,13 @@ class BockMediaRepository(
 
     suspend fun removeFavorite(path: String) {
         api().removeFavorite(buildJsonObject { put("path", path) })
+    }
+
+    suspend fun favorites(): List<FavoriteItem> = api().favorites().items
+
+    suspend fun streamUrl(filepath: String?): String? {
+        val base = runCatching { baseUrlProvider() }.getOrNull() ?: return null
+        return AppPreferences.streamUrl(base, filepath)
     }
 
     suspend fun addIgnored(path: String) {
@@ -294,6 +444,16 @@ class BockMediaRepository(
     suspend fun saveSettings(body: JsonObject) = api().saveSettings(body)
     suspend fun saveConfig(body: JsonObject) = api().saveConfig(body)
     suspend fun clearCache() = api().clearCache()
+
+    suspend fun connectionSummary(): String = runCatching {
+        val active = baseUrl()
+        val local = preferences.getLocalServerUrlSync()?.let { AppPreferences.normalizeUrl(it) }
+        when {
+            local != null && active.startsWith(local) -> "LAN · $local"
+            else -> "External · $active"
+        }
+    }.getOrDefault("Unknown")
+
     suspend fun alexaLoginStart() = api().alexaLoginStart()
     suspend fun alexaLoginStop() = api().alexaLoginStop()
     suspend fun alexaLoginState() = api().alexaLoginState()
