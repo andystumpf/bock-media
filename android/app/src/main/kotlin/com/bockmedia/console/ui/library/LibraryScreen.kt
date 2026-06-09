@@ -4,6 +4,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MusicNote
@@ -25,6 +26,7 @@ fun LibraryScreen(
     onOpenArtists: () -> Unit,
     onOpenAlbums: () -> Unit,
     onOpenSongs: () -> Unit,
+    onOpenPlaylists: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     var summary by remember { mutableStateOf<SummaryResponse?>(null) }
@@ -68,6 +70,12 @@ fun LibraryScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            LibraryEntry(
+                icon = { Icon(Icons.AutoMirrored.Filled.List, null) },
+                title = "Playlists",
+                subtitle = summary?.let { "${it.playlists} playlists" } ?: "All playlists",
+                onClick = onOpenPlaylists,
+            )
             LibraryEntry(
                 icon = { Icon(Icons.Default.Mic, null) },
                 title = "Artists",

@@ -2,10 +2,25 @@ package com.bockmedia.console.domain.model
 
 sealed class PlayTarget {
     abstract val label: String
+    open val shuffleDefault: Boolean get() = false
+
     data class Playlist(val id: String, val name: String) : PlayTarget() { override val label = name }
     data class Artist(val name: String) : PlayTarget() { override val label = name }
     data class Album(val name: String, val artist: String? = null) : PlayTarget() { override val label = name }
     data class Song(val path: String, val title: String) : PlayTarget() { override val label = title }
+
+    enum class RadioSeedKind { Artist, Song, Genre }
+
+    /** Infinite-style radio: shuffle from a single artist, song, or genre seed. */
+    data class Radio(
+        val displayTitle: String,
+        val seedKind: RadioSeedKind,
+        val name: String,
+        val path: String? = null,
+    ) : PlayTarget() {
+        override val label: String = displayTitle
+        override val shuffleDefault: Boolean = true
+    }
 }
 
 data class NowPlayingProgress(

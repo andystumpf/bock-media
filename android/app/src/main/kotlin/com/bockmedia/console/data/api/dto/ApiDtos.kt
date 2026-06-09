@@ -141,6 +141,7 @@ data class StreamHistoryItem(
     val timestamp: String? = null,
     val playlist: String? = null,
     val sourceLabel: String? = null,
+    val filepath: String? = null,
 )
 
 @Serializable
@@ -201,6 +202,8 @@ data class PlaylistSummary(
     @SerialName("trackCount") val tracks: Int = 0,
     val source: String? = null,
     val sourceName: String? = null,
+    val createDate: String? = null,
+    val lastUsed: String? = null,
 )
 
 @Serializable

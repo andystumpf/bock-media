@@ -3,10 +3,12 @@ package com.bockmedia.console.data.repository
 import com.bockmedia.console.data.api.BockMediaApi
 import com.bockmedia.console.data.api.dto.*
 import com.bockmedia.console.data.local.AppPreferences
+import com.bockmedia.console.domain.model.PlayTarget
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
+import java.util.concurrent.ConcurrentHashMap
 
 class ApiException(val code: String, message: String) : Exception(message)
 
@@ -16,6 +18,71 @@ class BockMediaRepository(
     private val preferences: AppPreferences,
 ) {
     private suspend fun api() = apiProvider()
+
+    private val playlistTrackPathsCache = ConcurrentHashMap<String, List<String>>()
+    private val artistCoverPathsCache = ConcurrentHashMap<String, List<String>>()
+
+    /** Picks a distinct track from the playlist based on variantKey (usually card id). */
+    suspend fun playlistCoverPath(playlistId: String, variantKey: String = playlistId): String? {
+        val paths = playlistTrackPathsCache.getOrPut(playlistId) {
+            runCatching {
+                playlistDetail(playlistId, limit = 24).tracks
+                    .mapNotNull { it.path?.takeIf { path -> path.isNotBlank() } }
+                    .distinct()
+            }.getOrDefault(emptyList())
+        }
+        if (paths.isEmpty()) return null
+        return paths[kotlin.math.abs(variantKey.hashCode()) % paths.size]
+    }
+
+    suspend fun artworkUrlForPlaylist(playlistId: String, variantKey: String = playlistId): String? =
+        playlistCoverPath(playlistId, variantKey)?.let { artworkUrl(it) }
+
+    suspend fun artistCoverPathAt(artistName: String, pick: Int = 0): String? {
+        val key = artistName.trim().lowercase()
+        if (key.isEmpty()) return null
+        val paths = artistCoverPathsCache.getOrPut(key) {
+            runCatching {
+                songs(page = 1, search = artistName, artist = artistName)
+                    .items.mapNotNull { it.path?.takeIf { path -> path.isNotBlank() } }
+                    .distinct()
+            }.getOrDefault(emptyList())
+        }
+        if (paths.isEmpty()) return null
+        return paths[kotlin.math.abs(pick) % paths.size]
+    }
+
+    suspend fun resolveHomeCardArtUrl(
+        cardId: String,
+        artPath: String?,
+        playlistId: String?,
+        playTarget: PlayTarget,
+    ): String? {
+        artPath?.let { return artworkUrl(it) }
+        val pick = kotlin.math.abs(cardId.hashCode())
+        playlistId?.let { return artworkUrlForPlaylist(it, cardId) }
+        return when (playTarget) {
+            is PlayTarget.Album -> {
+                runCatching {
+                    val paths = songs(page = 1, search = playTarget.name, artist = playTarget.artist, album = playTarget.name)
+                        .items.mapNotNull { it.path?.takeIf { path -> path.isNotBlank() } }
+                        .distinct()
+                    paths.getOrNull(pick % paths.size.coerceAtLeast(1))
+                }.getOrNull()?.let { artworkUrl(it) }
+            }
+            is PlayTarget.Artist -> artistCoverPathAt(playTarget.name, pick)?.let { artworkUrl(it) }
+            is PlayTarget.Radio -> {
+                playTarget.path?.let { return artworkUrl(it) }
+                artistCoverPathAt(playTarget.name, pick)?.let { artworkUrl(it) }
+            }
+            else -> null
+        }
+    }
+
+    fun clearCaches() {
+        playlistTrackPathsCache.clear()
+        artistCoverPathsCache.clear()
+    }
 
     suspend fun testConnection(): Result<HealthResponse> = runCatching { api().health() }
 

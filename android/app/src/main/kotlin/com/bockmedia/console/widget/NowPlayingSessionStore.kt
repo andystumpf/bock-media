@@ -1,6 +1,7 @@
 package com.bockmedia.console.widget
 
 import com.bockmedia.console.data.api.dto.NowPlayingDeviceItem
+import com.bockmedia.console.domain.model.PlaybackFocus
 
 object NowPlayingSessionStore {
     data class Snapshot(
@@ -24,10 +25,11 @@ object NowPlayingSessionStore {
     fun focusedItem(): NowPlayingDeviceItem? {
         val snap = snapshot ?: return null
         if (snap.items.isEmpty()) return null
-        focusedDeviceId?.let { id ->
-            snap.items.find { it.deviceId == id }?.let { return it }
-        }
-        return snap.items.firstOrNull { !it.paused } ?: snap.items.firstOrNull()
+        focusedDeviceId = PlaybackFocus.focusedDeviceId ?: focusedDeviceId
+        return PlaybackFocus.resolveFocusedItem(snap.items)
+            ?: focusedDeviceId?.let { id -> snap.items.find { it.deviceId == id } }
+            ?: snap.items.firstOrNull { !it.paused }
+            ?: snap.items.firstOrNull()
     }
 
     fun cycleFocus(forward: Boolean = true) {

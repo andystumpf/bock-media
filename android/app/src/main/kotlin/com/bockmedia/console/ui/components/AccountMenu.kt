@@ -21,8 +21,9 @@ fun AccountMenuButton(onNavigate: (String) -> Unit) {
     IconButton(onClick = { open = true }) {
         Surface(
             shape = CircleShape,
-            color = MaterialTheme.colorScheme.secondaryContainer,
-            modifier = Modifier.size(36.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.92f),
+            tonalElevation = 2.dp,
+            modifier = Modifier.size(40.dp),
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Icon(
