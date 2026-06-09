@@ -154,9 +154,15 @@ fun NowPlayingScreen(
 
     suspend fun pullRefresh() {
         refreshing = true
-        refreshLive()
-        loadHistory()
-        refreshing = false
+        try {
+            var liveError: String? = null
+            var historyError: String? = null
+            runCatching { refreshLive() }.onFailure { liveError = it.message }
+            runCatching { loadHistory() }.onFailure { historyError = it.message }
+            error = liveError ?: historyError
+        } finally {
+            refreshing = false
+        }
     }
 
     suspend fun runControl(dev: NowPlayingDeviceItem, action: String) {
