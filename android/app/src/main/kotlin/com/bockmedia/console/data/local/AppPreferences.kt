@@ -22,8 +22,10 @@ class AppPreferences(private val context: Context) {
     private val keyAdminPass = stringPreferencesKey("admin_pass")
     private val keyMobileToken = stringPreferencesKey("mobile_token")
     private val keyRememberMe = booleanPreferencesKey("remember_me")
+    private val keyDownloadWifiOnly = booleanPreferencesKey("download_wifi_only")
 
     val rememberMe: Flow<Boolean> = context.dataStore.data.map { it[keyRememberMe] == true }
+    val downloadWifiOnly: Flow<Boolean> = context.dataStore.data.map { it[keyDownloadWifiOnly] == true }
 
     val localServerUrl: Flow<String?> = context.dataStore.data.map { it[keyLocalUrl] }
     val externalServerUrl: Flow<String?> = context.dataStore.data.map { it[keyExternalUrl] }
@@ -74,6 +76,14 @@ class AppPreferences(private val context: Context) {
 
     suspend fun isRememberMeSync(): Boolean = rememberMe.first()
 
+    suspend fun isDownloadWifiOnlySync(): Boolean = downloadWifiOnly.first()
+
+    suspend fun setDownloadWifiOnly(wifiOnly: Boolean) {
+        context.dataStore.edit { prefs ->
+            if (wifiOnly) prefs[keyDownloadWifiOnly] = true else prefs.remove(keyDownloadWifiOnly)
+        }
+    }
+
     suspend fun setRememberMe(remember: Boolean) {
         context.dataStore.edit { prefs ->
             if (remember) prefs[keyRememberMe] = true else prefs.remove(keyRememberMe)
@@ -87,12 +97,16 @@ class AppPreferences(private val context: Context) {
         }
     }
 
-    suspend fun applyBuildDefaultsIfEmpty() {
-        if (hasAnyServerUrl()) return
+    /** Always use build-time LAN / external URLs — not user-editable. */
+    suspend fun applyBuildServerUrls() {
         setServerUrls(
             local = com.bockmedia.console.BuildConfig.DEFAULT_LOCAL_SERVER_URL.takeIf { it.isNotBlank() },
             external = com.bockmedia.console.BuildConfig.DEFAULT_EXTERNAL_SERVER_URL.takeIf { it.isNotBlank() },
         )
+    }
+
+    suspend fun applyBuildDefaultsIfEmpty() {
+        applyBuildServerUrls()
         if (adminUser.first().isNullOrBlank()) {
             setAdminCredentials(
                 com.bockmedia.console.BuildConfig.DEFAULT_ADMIN_USER.takeIf { it.isNotBlank() },
@@ -126,20 +140,28 @@ class AppPreferences(private val context: Context) {
         fun isValidUrl(raw: String): Boolean {
             if (raw.isBlank()) return false
             return try {
-                val uri = android.net.Uri.parse(normalizeUrl(raw))
+                val uri = java.net.URI(normalizeUrl(raw))
                 !uri.host.isNullOrBlank()
             } catch (_: Exception) {
                 false
             }
         }
 
-        fun artworkUrl(base: String, filepath: String?): String? {
-            if (filepath.isNullOrBlank()) return null
+        fun encodeMediaPath(filepath: String): String {
             val rel = filepath.trimStart('/')
-            val encoded = rel.split('/').joinToString("/") { segment ->
+            return rel.split('/').joinToString("/") { segment ->
                 java.net.URLEncoder.encode(segment, "UTF-8").replace("+", "%20")
             }
-            return "${normalizeUrl(base)}/artwork/$encoded"
+        }
+
+        fun artworkUrl(base: String, filepath: String?): String? {
+            if (filepath.isNullOrBlank()) return null
+            return "${normalizeUrl(base)}/artwork/${encodeMediaPath(filepath)}"
+        }
+
+        fun streamUrl(base: String, filepath: String?): String? {
+            if (filepath.isNullOrBlank()) return null
+            return "${normalizeUrl(base)}/stream/${encodeMediaPath(filepath)}"
         }
 
         fun hostOf(raw: String?): String? {

@@ -53,6 +53,9 @@ interface BockMediaApi {
         @Query("order") order: String? = null,
     ): PlaylistsResponse
 
+    @GET("api/playlists/{id}/cover")
+    suspend fun playlistCover(@Path("id") id: String): PlaylistCoverResponse
+
     @GET("api/playlists/{id}")
     suspend fun playlistDetail(
         @Path("id") id: String,
@@ -118,7 +121,11 @@ interface BockMediaApi {
         @Query("limit") limit: Int = 50,
         @Query("search") search: String = "",
         @Query("artist") artist: String? = null,
+        @Query("sort") sort: String? = null,
     ): AlbumsResponse
+
+    @GET("api/genres")
+    suspend fun genres(@Query("limit") limit: Int = 20): GenresResponse
 
     @GET("api/songs")
     suspend fun songs(
@@ -202,7 +209,7 @@ interface BockMediaApi {
     suspend fun removeIgnored(@Body body: JsonObject): OkResponse
 
     @GET("api/favorites")
-    suspend fun favorites(): JsonObject
+    suspend fun favorites(): FavoritesResponse
 
     @POST("api/favorites")
     suspend fun addFavorite(@Body body: JsonObject): OkResponse

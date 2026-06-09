@@ -14,7 +14,11 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import coil.Coil
 import coil.ImageLoader
+import coil.disk.DiskCache
+import coil.memory.MemoryCache
 import com.bockmedia.console.media.NowPlayingNotificationManager
+import com.bockmedia.console.local.OfflineNetworkMonitor
+import com.bockmedia.console.local.OfflineDownloadManager
 import com.bockmedia.console.ui.navigation.BockApp
 import com.bockmedia.console.ui.setup.SetupScreen
 import com.bockmedia.console.ui.components.SplashScreen
@@ -35,26 +39,26 @@ class MainActivity : ComponentActivity() {
             BockMediaTheme {
                 val app = remember { BockMediaApp.get(this) }
                 var hasServer by remember { mutableStateOf<Boolean?>(null) }
-                val scope = rememberCoroutineScope()
                 val notificationPermission = rememberLauncherForActivityResult(
                     ActivityResultContracts.RequestPermission(),
                 ) { }
 
                 LaunchedEffect(Unit) {
                     NowPlayingNotificationManager.ensureChannel(this@MainActivity)
+                    app.preferences.applyBuildServerUrls()
                     app.preferences.clearCredentialsIfNotRemembered()
                     if (app.preferences.isRememberMeSync()) {
                         app.preferences.applyBuildDefaultsIfEmpty()
-                        if (app.hasServerUrl()) {
-                            runCatching { app.repository.testConnection() }
-                                .onSuccess { hasServer = true; return@LaunchedEffect }
-                        }
+                        runCatching { app.repository.testConnection() }
+                            .onSuccess { hasServer = true; return@LaunchedEffect }
                     }
-                    hasServer = app.hasServerUrl()
+                    hasServer = false
                 }
 
                 LaunchedEffect(hasServer) {
                     if (hasServer == true) {
+                        OfflineNetworkMonitor.start(this@MainActivity)
+                        OfflineDownloadManager.refresh(this@MainActivity)
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
                         }
@@ -63,6 +67,18 @@ class MainActivity : ComponentActivity() {
                             Coil.setImageLoader(
                                 ImageLoader.Builder(this@MainActivity)
                                     .okHttpClient(client)
+                                    .memoryCache {
+                                        MemoryCache.Builder(this@MainActivity)
+                                            .maxSizePercent(0.25)
+                                            .build()
+                                    }
+                                    .diskCache {
+                                        DiskCache.Builder()
+                                            .directory(cacheDir.resolve("image_cache"))
+                                            .maxSizePercent(0.05)
+                                            .build()
+                                    }
+                                    .crossfade(true)
                                     .build(),
                             )
                         }
@@ -92,13 +108,6 @@ class MainActivity : ComponentActivity() {
                     }
                     true -> BockApp(
                         repository = app.repository,
-                        onChangeServer = {
-                            scope.launch {
-                                app.preferences.clearServerUrls()
-                                app.invalidateApi()
-                                hasServer = false
-                            }
-                        },
                         deepLinkRoute = deepRoute,
                     )
                 }

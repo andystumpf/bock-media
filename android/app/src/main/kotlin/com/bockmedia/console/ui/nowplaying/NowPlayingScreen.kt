@@ -3,6 +3,7 @@ package com.bockmedia.console.ui.nowplaying
 import android.os.Build
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.VerticalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -23,10 +24,12 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil.compose.SubcomposeAsyncImage
 import coil.compose.SubcomposeAsyncImageContent
 import com.bockmedia.console.data.api.dto.*
@@ -34,10 +37,16 @@ import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.PlaybackFocus
 import com.bockmedia.console.domain.model.computeNowPlayingProgress
 import com.bockmedia.console.domain.model.formatPlaybackTime
+import com.bockmedia.console.media.LocalPlaybackController
+import com.bockmedia.console.media.isLocalPhoneDevice
+import com.bockmedia.console.media.toNowPlayingDevice
 import com.bockmedia.console.ui.alexaControlsAvailable
+import com.bockmedia.console.ui.components.BockPullRefresh
+import com.bockmedia.console.ui.components.BockArtwork
 import com.bockmedia.console.ui.components.ErrorText
 import com.bockmedia.console.ui.components.LoadingBox
 import com.bockmedia.console.ui.components.PaginationBar
+import com.bockmedia.console.ui.components.UpNextSheet
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import retrofit2.HttpException
@@ -73,13 +82,16 @@ fun NowPlayingScreen(
     onBack: () -> Unit,
     playbackFocusGeneration: Int = 0,
 ) {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val localState by LocalPlaybackController.state.collectAsState()
     var items by remember { mutableStateOf<List<NowPlayingDeviceItem>>(emptyList()) }
     var history by remember { mutableStateOf<List<StreamHistoryItem>>(emptyList()) }
     var alexaDevices by remember { mutableStateOf<List<AlexaDevice>>(emptyList()) }
     var controlsAvailable by remember { mutableStateOf(false) }
     var remoteOk by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(true) }
+    var refreshing by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var histPage by remember { mutableIntStateOf(1) }
     var histTotal by remember { mutableIntStateOf(0) }
@@ -87,6 +99,7 @@ fun NowPlayingScreen(
     var sleepDevice by remember { mutableStateOf<NowPlayingDeviceItem?>(null) }
     var ignoreDevice by remember { mutableStateOf<NowPlayingDeviceItem?>(null) }
     var showHistory by remember { mutableStateOf(false) }
+    var favoritePaths by remember { mutableStateOf<Set<String>>(emptySet()) }
     val volumes = remember { mutableStateMapOf<String, Int?>() }
     val shuffleOn = remember { mutableStateMapOf<String, Boolean>() }
     val volumeTimers = remember { mutableStateMapOf<String, kotlinx.coroutines.Job?>() }
@@ -121,11 +134,34 @@ fun NowPlayingScreen(
         var historyError: String? = null
         runCatching { refreshLive() }.onFailure { liveError = it.message }
         runCatching { loadHistory() }.onFailure { historyError = it.message }
+        runCatching { favoritePaths = repository.favorites().map { it.path }.toSet() }
         error = liveError ?: historyError
         loading = false
     }
 
+    suspend fun pullRefresh() {
+        refreshing = true
+        try {
+            var liveError: String? = null
+            var historyError: String? = null
+            runCatching { refreshLive() }.onFailure { liveError = it.message }
+            runCatching { loadHistory() }.onFailure { historyError = it.message }
+            error = liveError ?: historyError
+        } finally {
+            refreshing = false
+        }
+    }
+
     suspend fun runControl(dev: NowPlayingDeviceItem, action: String) {
+        if (isLocalPhoneDevice(dev.deviceId)) {
+            when (action) {
+                "play", "pause" -> LocalPlaybackController.togglePlayPause(context)
+                "next" -> LocalPlaybackController.skip(context, forward = true)
+                "previous" -> LocalPlaybackController.skip(context, forward = false)
+                "stop" -> LocalPlaybackController.stop(context)
+            }
+            return
+        }
         val serial = resolveSerial(dev, alexaDevices)
         if (serial == null) {
             snackbarHostState.showSnackbar(
@@ -274,11 +310,14 @@ fun NowPlayingScreen(
     }
 
     when {
-        loading && items.isEmpty() && history.isEmpty() -> LoadingBox()
-        error != null && items.isEmpty() && history.isEmpty() -> ErrorText(error!!) { scope.launch { loadAll() } }
+        loading && items.isEmpty() && history.isEmpty() && !localState.active -> LoadingBox()
+        error != null && items.isEmpty() && history.isEmpty() && !localState.active -> ErrorText(error!!) { scope.launch { loadAll() } }
         else -> {
-            val devices = remember(items, alexaDevices, playbackFocusGeneration) {
-                orderDevicesForDisplay(items, alexaDevices)
+            val devices = remember(items, alexaDevices, playbackFocusGeneration, localState) {
+                val remote = orderDevicesForDisplay(items, alexaDevices)
+                localState.toNowPlayingDevice()?.let { local ->
+                    listOf(local) + remote.filter { !isLocalPhoneDevice(it.deviceId) }
+                } ?: remote
             }
             val pagerState = rememberPagerState(
                 initialPage = PlaybackFocus.focusedIndex(devices).coerceIn(0, (devices.size - 1).coerceAtLeast(0)),
@@ -302,12 +341,18 @@ fun NowPlayingScreen(
                     .fillMaxSize()
                     .background(Color.Black),
             ) {
+                BockPullRefresh(
+                    isRefreshing = refreshing,
+                    onRefresh = { scope.launch { pullRefresh() } },
+                    modifier = Modifier.fillMaxSize(),
+                ) {
                 if (devices.isEmpty()) {
                     SpotifyEmptyState(
                         onBack = onBack,
                         modifier = Modifier.fillMaxSize(),
                     )
                 } else {
+                    val pagerDotsVisible = devices.size > 1
                     VerticalPager(
                         state = pagerState,
                         modifier = Modifier.fillMaxSize(),
@@ -325,19 +370,30 @@ fun NowPlayingScreen(
                             volumeTimers = volumeTimers,
                             scope = scope,
                             snackbarHostState = snackbarHostState,
+                            pagerDotsVisible = pagerDotsVisible,
                             onBack = onBack,
                             onHistory = { showHistory = true },
                             onControl = { d, action -> scope.launch { runControl(d, action) } },
                             onSleep = { sleepDevice = it },
                             onIgnore = { ignoreDevice = it },
+                            favoritePaths = favoritePaths,
                             onFavorite = { d ->
                                 scope.launch {
                                     d.filepath?.let { path ->
+                                        val liked = path in favoritePaths
                                         runCatching {
-                                            repository.addFavorite(path, d.track, d.artist, d.album)
-                                            snackbarHostState.showSnackbar("Starred \"${d.track ?: "track"}\"")
+                                            if (liked) {
+                                                repository.removeFavorite(path)
+                                                snackbarHostState.showSnackbar("Removed from Liked")
+                                            } else {
+                                                repository.addFavorite(path, d.track, d.artist, d.album)
+                                                snackbarHostState.showSnackbar("Added to Liked")
+                                            }
+                                            favoritePaths = repository.favorites().map { it.path }.toSet()
                                         }.onFailure {
-                                            snackbarHostState.showSnackbar("Failed to star track")
+                                            snackbarHostState.showSnackbar(
+                                                if (liked) "Failed to remove from Liked" else "Failed to add to Liked",
+                                            )
                                         }
                                     }
                                 }
@@ -345,17 +401,17 @@ fun NowPlayingScreen(
                         )
                     }
 
-                    if (devices.size > 1) {
+                    if (pagerDotsVisible) {
                         SpotifyDevicePagerHint(
                             currentPage = pagerState.currentPage,
                             totalPages = devices.size,
-                            deviceName = devices.getOrNull(pagerState.currentPage)?.deviceName,
                             modifier = Modifier
                                 .align(Alignment.BottomCenter)
                                 .navigationBarsPadding()
-                                .padding(bottom = 8.dp),
+                                .padding(bottom = 12.dp),
                         )
                     }
+                }
                 }
             }
         }
@@ -480,36 +536,24 @@ private fun SpotifyEmptyState(
 private fun SpotifyDevicePagerHint(
     currentPage: Int,
     totalPages: Int,
-    deviceName: String?,
     modifier: Modifier = Modifier,
 ) {
-    Column(
-        modifier,
-        horizontalAlignment = Alignment.CenterHorizontally,
+    Row(
+        modifier.background(Color.Transparent),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            repeat(totalPages) { index ->
-                Box(
-                    Modifier
-                        .size(if (index == currentPage) 8.dp else 6.dp)
-                        .clip(CircleShape)
-                        .background(
-                            if (index == currentPage) Color.White
-                            else Color.White.copy(alpha = 0.35f),
-                        ),
-                )
-            }
+        repeat(totalPages) { index ->
+            Box(
+                Modifier
+                    .size(if (index == currentPage) 8.dp else 6.dp)
+                    .clip(CircleShape)
+                    .background(
+                        if (index == currentPage) Color.White
+                        else Color.White.copy(alpha = 0.35f),
+                    ),
+            )
         }
-        Spacer(Modifier.height(6.dp))
-        Text(
-            buildString {
-                deviceName?.let { append(it).append(" · ") }
-                append("${currentPage + 1} of $totalPages")
-                append(" · swipe up/down")
-            },
-            style = MaterialTheme.typography.labelSmall,
-            color = Color.White.copy(alpha = 0.55f),
-        )
     }
 }
 
@@ -526,27 +570,46 @@ private fun SpotifyNowPlayingPage(
     volumeTimers: MutableMap<String, kotlinx.coroutines.Job?>,
     scope: kotlinx.coroutines.CoroutineScope,
     snackbarHostState: SnackbarHostState,
+    pagerDotsVisible: Boolean = false,
     onBack: () -> Unit,
     onHistory: () -> Unit,
     onControl: (NowPlayingDeviceItem, String) -> Unit,
     onSleep: (NowPlayingDeviceItem) -> Unit,
     onIgnore: (NowPlayingDeviceItem) -> Unit,
+    favoritePaths: Set<String>,
     onFavorite: (NowPlayingDeviceItem) -> Unit,
 ) {
     @Suppress("UNUSED_VARIABLE") val _t = tick
-    val prog = computeNowPlayingProgress(dev.timestamp, dev.duration_ms, dev.offset_ms, dev.paused)
-    val canControl = canControlDevice(dev, alexaDevices, controlsAvailable, remoteOk)
+    val isLocal = isLocalPhoneDevice(dev.deviceId)
+    val liveLocal by LocalPlaybackController.state.collectAsState()
+    val prog = if (isLocal) {
+        val durationMs = liveLocal.durationMs.coerceAtLeast(0)
+        val positionMs = liveLocal.positionMs.coerceAtLeast(0)
+        com.bockmedia.console.domain.model.NowPlayingProgress(
+            if (durationMs > 0) positionMs.coerceAtMost(durationMs) else positionMs,
+            durationMs,
+        )
+    } else {
+        computeNowPlayingProgress(dev.timestamp, dev.duration_ms, dev.offset_ms, dev.paused)
+    }
+    val displayDev = if (isLocal) liveLocal.toNowPlayingDevice() ?: dev else dev
+    val canControl = canControlDevice(displayDev, alexaDevices, controlsAvailable, remoteOk)
     val elapsedSec = prog.elapsedMs / 1000
     val durationSec = prog.durationMs / 1000
     var showMoreMenu by remember { mutableStateOf(false) }
-    var artUrl by remember(dev.filepath) { mutableStateOf<String?>(null) }
-    LaunchedEffect(dev.filepath) { artUrl = repository.artworkUrl(dev.filepath) }
+    var showUpNext by remember { mutableStateOf(false) }
+    var artUrl by remember(displayDev.filepath) { mutableStateOf<String?>(null) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val localArtFile = if (isLocal) liveLocal.current?.localFile else null
+    LaunchedEffect(displayDev.filepath, localArtFile) {
+        artUrl = repository.resolvePlaybackArtUrl(context, displayDev.filepath, localArtFile)
+    }
 
     val config = LocalConfiguration.current
     val compact = config.screenHeightDp < 640
     val artCorner = if (compact) 6.dp else 8.dp
 
-    Box(Modifier.fillMaxSize()) {
+    Box(Modifier.fillMaxSize().background(Color.Black)) {
         ArtBackdrop(artUrl = artUrl)
 
         Column(
@@ -556,8 +619,9 @@ private fun SpotifyNowPlayingPage(
                 .navigationBarsPadding(),
         ) {
             SpotifyPlayerTopBar(
-                deviceName = dev.deviceName,
-                paused = dev.paused,
+                deviceName = displayDev.deviceName,
+                paused = displayDev.paused,
+                isLocal = isLocal,
                 onBack = onBack,
                 onHistory = onHistory,
                 onMore = { showMoreMenu = true },
@@ -575,24 +639,24 @@ private fun SpotifyNowPlayingPage(
                 )
                 val artSize = maxArt.coerceAtLeast(180.dp)
 
-                SubcomposeAsyncImage(
+                BockArtwork(
                     model = artUrl,
-                    contentDescription = dev.album ?: "Album art",
+                    title = displayDev.track ?: "Now playing",
                     modifier = Modifier
                         .size(artSize)
                         .align(Alignment.TopCenter)
-                        .padding(top = if (compact) 4.dp else 12.dp)
-                        .clip(RoundedCornerShape(artCorner)),
-                    contentScale = ContentScale.Crop,
-                    loading = { SpotifyArtPlaceholder(Modifier.fillMaxSize()) },
-                    error = { SpotifyArtPlaceholder(Modifier.fillMaxSize()) },
-                    success = { SubcomposeAsyncImageContent() },
+                        .padding(top = if (compact) 4.dp else 12.dp),
+                    shape = RoundedCornerShape(artCorner),
+                    fallbackFontSize = 48.sp,
                 )
 
                 Column(
                     Modifier
                         .align(Alignment.BottomCenter)
                         .fillMaxWidth()
+                        .then(
+                            if (pagerDotsVisible) Modifier.padding(bottom = 28.dp) else Modifier,
+                        )
                         .background(
                             Brush.verticalGradient(
                                 colorStops = arrayOf(
@@ -606,15 +670,17 @@ private fun SpotifyNowPlayingPage(
                         .padding(top = 48.dp),
                 ) {
                     SpotifyTrackInfoRow(
-                        dev = dev,
+                        dev = displayDev,
+                        isLiked = displayDev.filepath?.let { it in favoritePaths } == true,
                         onFavorite = onFavorite,
                         modifier = Modifier.padding(horizontal = 24.dp),
                     )
 
-                    if (dev.paused || dev.sleep != null) {
+                    if (displayDev.sleep != null || (displayDev.paused && !isLocal)) {
                         SpotifyStatusChips(
-                            dev = dev,
+                            dev = displayDev,
                             onSleep = onSleep,
+                            showPausedBadge = !isLocal,
                             modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp),
                         )
                     }
@@ -628,17 +694,18 @@ private fun SpotifyNowPlayingPage(
 
                     if (canControl) {
                         SpotifyTransportControls(
-                            dev = dev,
+                            dev = displayDev,
                             shuffleOn = shuffleOn,
                             onControl = onControl,
                             onSleep = onSleep,
+                            showSleepAndShuffle = !isLocal,
                             modifier = Modifier.padding(top = 4.dp),
                         )
 
-                        val serial = resolveSerial(dev, alexaDevices)
+                        val serial = if (isLocal) null else resolveSerial(displayDev, alexaDevices)
                         if (serial != null) {
                             SpotifyVolumeRow(
-                                dev = dev,
+                                dev = displayDev,
                                 serial = serial,
                                 volume = volumes[dev.deviceId],
                                 repository = repository,
@@ -651,10 +718,13 @@ private fun SpotifyNowPlayingPage(
                         }
                     }
 
-                    if (dev.upcoming.isNotEmpty()) {
+                    if (displayDev.upcoming.isNotEmpty()) {
                         SpotifyUpNext(
-                            tracks = dev.upcoming,
-                            modifier = Modifier.padding(horizontal = 24.dp).padding(bottom = 12.dp),
+                            tracks = displayDev.upcoming,
+                            modifier = Modifier
+                                .padding(horizontal = 24.dp)
+                                .padding(bottom = 12.dp)
+                                .clickable { showUpNext = true },
                         )
                     } else {
                         Spacer(Modifier.height(if (canControl) 4.dp else 16.dp))
@@ -684,6 +754,13 @@ private fun SpotifyNowPlayingPage(
                     onControl(dev, "stop")
                 },
                 leadingIcon = { Icon(Icons.Default.Stop, null) },
+            )
+        }
+        if (showUpNext) {
+            UpNextSheet(
+                tracks = displayDev.upcoming,
+                repository = repository,
+                onDismiss = { showUpNext = false },
             )
         }
     }
@@ -724,6 +801,7 @@ private fun ArtBackdrop(artUrl: String?) {
 private fun SpotifyPlayerTopBar(
     deviceName: String?,
     paused: Boolean,
+    isLocal: Boolean = false,
     onBack: () -> Unit,
     onHistory: () -> Unit,
     onMore: () -> Unit,
@@ -755,7 +833,7 @@ private fun SpotifyPlayerTopBar(
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                if (paused) "Paused" else "Playing on Alexa",
+                if (paused) "Paused" else if (isLocal) "Playing on this phone" else "Playing on Alexa",
                 style = MaterialTheme.typography.labelSmall,
                 color = Color.White.copy(alpha = 0.65f),
             )
@@ -769,9 +847,12 @@ private fun SpotifyPlayerTopBar(
     }
 }
 
+private val SpotifyGreen = Color(0xFF1DB954)
+
 @Composable
 private fun SpotifyTrackInfoRow(
     dev: NowPlayingDeviceItem,
+    isLiked: Boolean,
     onFavorite: (NowPlayingDeviceItem) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -809,7 +890,11 @@ private fun SpotifyTrackInfoRow(
         }
         if (dev.filepath != null) {
             IconButton(onClick = { onFavorite(dev) }) {
-                Icon(Icons.Default.FavoriteBorder, contentDescription = "Favorite", tint = Color.White)
+                Icon(
+                    if (isLiked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                    contentDescription = if (isLiked) "Remove from Liked" else "Add to Liked",
+                    tint = if (isLiked) SpotifyGreen else Color.White,
+                )
             }
         }
     }
@@ -819,10 +904,11 @@ private fun SpotifyTrackInfoRow(
 private fun SpotifyStatusChips(
     dev: NowPlayingDeviceItem,
     onSleep: (NowPlayingDeviceItem) -> Unit,
+    showPausedBadge: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     Row(modifier, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (dev.paused) {
+        if (dev.paused && showPausedBadge) {
             AssistChip(
                 onClick = {},
                 label = { Text("Paused") },
@@ -876,21 +962,6 @@ private fun SpotifyUpNext(
 }
 
 @Composable
-private fun SpotifyArtPlaceholder(modifier: Modifier = Modifier) {
-    Box(
-        modifier.background(Color.White.copy(alpha = 0.08f)),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(
-            Icons.Default.Album,
-            contentDescription = null,
-            modifier = Modifier.size(72.dp),
-            tint = Color.White.copy(alpha = 0.35f),
-        )
-    }
-}
-
-@Composable
 private fun SpotifyProgressBar(
     fraction: Float,
     elapsedSec: Long,
@@ -932,6 +1003,7 @@ private fun SpotifyTransportControls(
     shuffleOn: MutableMap<String, Boolean>,
     onControl: (NowPlayingDeviceItem, String) -> Unit,
     onSleep: (NowPlayingDeviceItem) -> Unit,
+    showSleepAndShuffle: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     val shuffled = shuffleOn[dev.deviceId] == true
@@ -942,19 +1014,23 @@ private fun SpotifyTransportControls(
         horizontalArrangement = Arrangement.SpaceEvenly,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        IconButton(
-            onClick = {
-                val on = !shuffled
-                shuffleOn[dev.deviceId] = on
-                onControl(dev, if (on) "shuffle_on" else "shuffle_off")
-            },
-            modifier = Modifier.size(48.dp),
-        ) {
-            Icon(
-                Icons.Default.Shuffle,
-                contentDescription = "Shuffle",
-                tint = if (shuffled) MaterialTheme.colorScheme.secondary else Color.White.copy(alpha = 0.85f),
-            )
+        if (showSleepAndShuffle) {
+            IconButton(
+                onClick = {
+                    val on = !shuffled
+                    shuffleOn[dev.deviceId] = on
+                    onControl(dev, if (on) "shuffle_on" else "shuffle_off")
+                },
+                modifier = Modifier.size(48.dp),
+            ) {
+                Icon(
+                    Icons.Default.Shuffle,
+                    contentDescription = "Shuffle",
+                    tint = if (shuffled) MaterialTheme.colorScheme.secondary else Color.White.copy(alpha = 0.85f),
+                )
+            }
+        } else {
+            Spacer(Modifier.size(48.dp))
         }
         IconButton(
             onClick = { onControl(dev, "previous") },
@@ -994,15 +1070,19 @@ private fun SpotifyTransportControls(
                 modifier = Modifier.size(38.dp),
             )
         }
-        IconButton(
-            onClick = { onSleep(dev) },
-            modifier = Modifier.size(48.dp),
-        ) {
-            Icon(
-                Icons.Default.Bedtime,
-                contentDescription = "Sleep timer",
-                tint = if (dev.sleep != null) MaterialTheme.colorScheme.secondary else Color.White.copy(alpha = 0.85f),
-            )
+        if (showSleepAndShuffle) {
+            IconButton(
+                onClick = { onSleep(dev) },
+                modifier = Modifier.size(48.dp),
+            ) {
+                Icon(
+                    Icons.Default.Bedtime,
+                    contentDescription = "Sleep timer",
+                    tint = if (dev.sleep != null) MaterialTheme.colorScheme.secondary else Color.White.copy(alpha = 0.85f),
+                )
+            }
+        } else {
+            Spacer(Modifier.size(48.dp))
         }
     }
 }

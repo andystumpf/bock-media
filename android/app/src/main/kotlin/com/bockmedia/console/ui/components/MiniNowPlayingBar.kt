@@ -14,6 +14,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
@@ -21,6 +22,8 @@ import com.bockmedia.console.data.api.dto.AlexaDevice
 import com.bockmedia.console.data.api.dto.NowPlayingDeviceItem
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.PlaybackFocus
+import com.bockmedia.console.media.LocalPlaybackController
+import com.bockmedia.console.media.toNowPlayingDevice
 import com.bockmedia.console.ui.nowplaying.canControlDevice
 import com.bockmedia.console.ui.theme.MiniBarBottom
 import com.bockmedia.console.ui.theme.MiniBarTop
@@ -35,13 +38,17 @@ fun MiniNowPlayingBar(
     onOpenNowPlaying: () -> Unit,
     onControl: suspend (NowPlayingDeviceItem, String) -> Unit,
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val localState by LocalPlaybackController.state.collectAsState()
     var item by remember { mutableStateOf<NowPlayingDeviceItem?>(null) }
     var controlsAvailable by remember { mutableStateOf(false) }
     var alexaDevices by remember { mutableStateOf<List<AlexaDevice>>(emptyList()) }
     var artUrl by remember { mutableStateOf<String?>(null) }
-    val scope = rememberCoroutineScope()
 
-    suspend fun refresh() {
+    val localItem = remember(localState) { localState.toNowPlayingDevice() }
+
+    suspend fun refreshRemote() {
         runCatching {
             val np = repository.nowPlayingDevices()
             controlsAvailable = np.controlsAvailable
@@ -54,29 +61,30 @@ fun MiniNowPlayingBar(
     }
 
     LaunchedEffect(Unit) {
-        refresh()
+        refreshRemote()
         while (true) {
             delay(5_000)
-            refresh()
+            refreshRemote()
         }
     }
     LaunchedEffect(playbackFocusGeneration) {
-        if (playbackFocusGeneration > 0) refresh()
+        if (playbackFocusGeneration > 0) refreshRemote()
     }
 
-    val dev = item ?: return
-    LaunchedEffect(dev.filepath) { artUrl = repository.artworkUrl(dev.filepath) }
+    val dev = localItem ?: item ?: return
+    val localArtFile = localState.current?.localFile
+    LaunchedEffect(dev.filepath, localArtFile) {
+        artUrl = repository.resolvePlaybackArtUrl(context, dev.filepath, localArtFile)
+    }
 
-    val canControl = canControlDevice(dev, alexaDevices, controlsAvailable, remoteOk)
-    val barGradient = Brush.verticalGradient(
-        colors = listOf(MiniBarTop, MiniBarBottom),
-    )
+    val canControl = if (localItem != null) {
+        true
+    } else {
+        canControlDevice(dev, alexaDevices, controlsAvailable, remoteOk)
+    }
+    val barGradient = Brush.verticalGradient(colors = listOf(MiniBarTop, MiniBarBottom))
 
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(barGradient),
-    ) {
+    Box(Modifier.fillMaxWidth().background(barGradient)) {
         Row(
             Modifier
                 .fillMaxWidth()
@@ -87,9 +95,7 @@ fun MiniNowPlayingBar(
             AsyncImage(
                 model = artUrl,
                 contentDescription = null,
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(RoundedCornerShape(6.dp)),
+                modifier = Modifier.size(40.dp).clip(RoundedCornerShape(6.dp)),
             )
             Spacer(Modifier.width(8.dp))
             Column(Modifier.weight(1f)) {
@@ -111,8 +117,12 @@ fun MiniNowPlayingBar(
                 IconButton(
                     onClick = {
                         scope.launch {
-                            onControl(dev, if (dev.paused) "play" else "pause")
-                            refresh()
+                            if (localItem != null) {
+                                LocalPlaybackController.togglePlayPause(context)
+                            } else {
+                                onControl(dev, if (dev.paused) "play" else "pause")
+                                refreshRemote()
+                            }
                         }
                     },
                     modifier = Modifier.size(40.dp),
@@ -126,8 +136,12 @@ fun MiniNowPlayingBar(
                 IconButton(
                     onClick = {
                         scope.launch {
-                            onControl(dev, "next")
-                            refresh()
+                            if (localItem != null) {
+                                LocalPlaybackController.skip(context, forward = true)
+                            } else {
+                                onControl(dev, "next")
+                                refreshRemote()
+                            }
                         }
                     },
                     modifier = Modifier.size(40.dp),

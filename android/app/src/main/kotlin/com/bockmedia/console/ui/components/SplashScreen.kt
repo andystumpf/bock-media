@@ -1,31 +1,23 @@
 package com.bockmedia.console.ui.components
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
-import com.bockmedia.console.ui.theme.BockGold
+import com.bockmedia.console.R
 
 @Composable
 fun SplashScreen(message: String = "Connecting…") {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(
-                Icons.Default.MusicNote,
-                contentDescription = null,
-                modifier = Modifier.size(56.dp),
-                tint = BockGold,
-            )
-            Spacer(Modifier.height(16.dp))
-            Text(
-                "Bock Media",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.SemiBold,
+            Image(
+                painter = painterResource(R.mipmap.ic_launcher),
+                contentDescription = "Bock Media",
+                modifier = Modifier.size(96.dp),
             )
             Spacer(Modifier.height(24.dp))
             CircularProgressIndicator(strokeWidth = 2.dp)

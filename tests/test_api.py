@@ -47,6 +47,40 @@ class TestBrowse:
         data = client.get('/api/albums?page=1&limit=3').get_json()
         assert 'items' in data and 'total' in data
 
+    def test_albums_sort_year(self, client):
+        data = client.get('/api/albums?page=1&limit=3&sort=year').get_json()
+        assert 'items' in data
+        if data['items']:
+            assert 'year' in data['items'][0]
+
+    def test_genres_list(self, client):
+        data = client.get('/api/genres?limit=5').get_json()
+        assert 'items' in data and 'total' in data
+        assert len(data['items']) <= 5
+
+    def test_playlist_cover_fast(self, client, monkeypatch):
+        import xml.etree.ElementTree as ET
+
+        monkeypatch.setattr(
+            server,
+            '_load_playlists_tree',
+            lambda: ET.ElementTree(ET.Element('playlists')),
+        )
+        monkeypatch.setattr(
+            server,
+            '_find_playlist_key',
+            lambda root, pid: ('key1', None) if pid == 'pl-1' else (None, None),
+        )
+        monkeypatch.setattr(server, '_playlist_meta_from_key', lambda key: {'source': '/fake/list.m3u'})
+        monkeypatch.setattr(server, '_m3u_first_paths', lambda source, limit=12: ['/music/a.mp3', '/music/b.mp3'])
+        monkeypatch.setattr(
+            server,
+            'db_query',
+            lambda sql, params=(): [{'path': '/music/a.mp3'}],
+        )
+        data = client.get('/api/playlists/pl-1/cover').get_json()
+        assert data.get('path') == '/music/a.mp3'
+
     def test_songs_paginated(self, client):
         data = client.get('/api/songs?page=1&limit=3').get_json()
         assert 'items' in data and 'total' in data
@@ -250,6 +284,51 @@ class TestNewFeatures:
     def test_search_returns_shape(self, client):
         data = client.get('/api/search?q=test&limit=5').get_json()
         assert 'playlists' in data and 'songs' in data
+
+    def test_search_songs_match_title_not_album(self, client, monkeypatch):
+        """Album name matches belong in albums section, not as every track in songs."""
+        calls = []
+
+        def recording_db_query(sql, params=()):
+            calls.append((sql, params))
+            if 'GROUP BY album, artist' in sql:
+                return [{'album': 'Mamma Mia', 'artist': 'ABBA', 'art_path': '/c.mp3'}]
+            if 'GROUP BY artist' in sql:
+                return []
+            if 'FROM songs_cache' in sql:
+                return [
+                    {'title': 'Waterloo', 'artist': 'ABBA', 'album': 'Mamma Mia!', 'path': '/a.mp3'},
+                    {'title': 'Waterloo - From Mamma Mia! Here We Go Again', 'artist': 'ABBA',
+                     'album': 'Mamma Mia!', 'path': '/b.mp3'},
+                    {'title': 'Mamma Mia', 'artist': 'ABBA', 'album': '[2001] ABBA', 'path': '/c.mp3'},
+                    {'title': 'Dancing Queen', 'artist': 'ABBA', 'album': 'Mamma Mia! Mania', 'path': '/d.mp3'},
+                ]
+            return []
+
+        monkeypatch.setattr(server, 'db_query', recording_db_query)
+        monkeypatch.setattr(server, '_load_playlist_entries', lambda: [])
+
+        data = client.get('/api/search?q=mamma&limit=30').get_json()
+        assert len(data['albums']) == 1
+        assert data['albums'][0]['name'] == 'Mamma Mia'
+        assert [s['title'] for s in data['songs']] == ['Mamma Mia']
+
+        song_queries = [c for c in calls if 'LOWER(title) LIKE' in c[0]]
+        assert len(song_queries) == 1
+        sql, params = song_queries[0]
+        assert 'LOWER(album) LIKE' not in sql
+        assert 'LOWER(artist) LIKE' not in sql
+        assert params[0] == '%mamma%'
+
+
+class TestLibrarySearchSongMatch:
+    def test_excludes_album_only_and_soundtrack_suffix(self):
+        m = server._library_search_song_match
+        assert not m('mamma', 'Waterloo', 'Mamma Mia!')
+        assert not m('mamma', 'Dancing Queen', 'Mamma Mia! Mania')
+        assert not m('mamma', 'Waterloo - From Mamma Mia! Here We Go Again', 'Mamma Mia!')
+        assert m('mamma', 'Mamma Mia', '[2001] ABBA')
+        assert m('mamma', 'Mamma Mia - Radio Version', '[2010] Hits')
 
     def test_plex_sync_status(self, client):
         data = client.get('/api/plex_sync/status').get_json()

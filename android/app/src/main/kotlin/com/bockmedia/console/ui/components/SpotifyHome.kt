@@ -1,13 +1,17 @@
 package com.bockmedia.console.ui.components
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Album
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.DownloadDone
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -19,22 +23,27 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil.compose.SubcomposeAsyncImage
-import coil.compose.SubcomposeAsyncImageContent
+import androidx.compose.ui.unit.sp
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.HomeCard
 import com.bockmedia.console.domain.model.HomeFilter
 import com.bockmedia.console.domain.model.HomeSection
 import com.bockmedia.console.domain.model.HomeSectionKind
+import com.bockmedia.console.local.DownloadState
+import com.bockmedia.console.local.OfflineDownloadManager
+import com.bockmedia.console.local.downloadId
 import com.bockmedia.console.ui.theme.*
 
 private val PillShape = RoundedCornerShape(50)
+private val SpotifyGreen = Color(0xFF1DB954)
+private val SpotifySheetBg = Color(0xFF282828)
 
 @Composable
 fun HomeHeader(
     selected: HomeFilter,
     onSelect: (HomeFilter) -> Unit,
     onAccountNavigate: (String) -> Unit,
+    onOpenDownloads: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val gradient = Brush.verticalGradient(
@@ -65,6 +74,7 @@ fun HomeHeader(
             HomePillFilters(
                 selected = selected,
                 onSelect = onSelect,
+                onOpenDownloads = onOpenDownloads,
             )
         }
     }
@@ -74,18 +84,28 @@ fun HomeHeader(
 fun HomePillFilters(
     selected: HomeFilter,
     onSelect: (HomeFilter) -> Unit,
+    onOpenDownloads: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val inactive = HomePillInactive
     val active = HomePillActive
     val inactiveText = MaterialTheme.colorScheme.onSurface
     val activeText = Color(0xFF0F1419)
+    val downloadStatuses by OfflineDownloadManager.statuses.collectAsState()
+    val showDownloadsPill = downloadStatuses.values.any {
+        it.state == DownloadState.Downloading || it.state == DownloadState.Failed
+    }
 
     LazyRow(
         modifier = modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         contentPadding = PaddingValues(horizontal = 16.dp),
     ) {
+        if (showDownloadsPill) {
+            item(key = "downloads-pill") {
+                HomeDownloadsPillRow(onOpenDownloads = onOpenDownloads)
+            }
+        }
         items(HomeFilter.entries.toList()) { filter ->
             val isActive = filter == selected
             Surface(
@@ -112,10 +132,30 @@ fun SpotifyHomeSection(
     section: HomeSection,
     repository: BockMediaRepository,
     onPlay: (HomeCard) -> Unit,
+    onDownload: (HomeCard) -> Unit,
     modifier: Modifier = Modifier,
     compactTop: Boolean = false,
     artLoadKey: Any = Unit,
 ) {
+    var actionCard by remember { mutableStateOf<HomeCard?>(null) }
+    val statuses by OfflineDownloadManager.statuses.collectAsState()
+
+    actionCard?.let { card ->
+        HomeCardActionSheet(
+            card = card,
+            downloadState = statuses[card.playTarget.downloadId()]?.state,
+            onDismiss = { actionCard = null },
+            onPlay = {
+                actionCard = null
+                onPlay(card)
+            },
+            onDownload = {
+                actionCard = null
+                onDownload(card)
+            },
+        )
+    }
+
     Column(modifier = modifier.padding(top = if (compactTop) 6.dp else 12.dp)) {
         Text(
             section.title,
@@ -129,11 +169,81 @@ fun SpotifyHomeSection(
             contentPadding = PaddingValues(horizontal = 16.dp),
         ) {
             items(section.cards, key = { "${artLoadKey}-${it.id}" }) { card ->
+                val downloadStatus = statuses[card.playTarget.downloadId()]
+                val downloaded = downloadStatus?.state == DownloadState.Complete
+                val downloading = downloadStatus?.state == DownloadState.Downloading
+                val downloadProgress = downloadStatus?.progress ?: 0f
                 when (section.kind) {
                     HomeSectionKind.TopMixes, HomeSectionKind.DailyMixes ->
-                        GenreMixTile(card, repository, onPlay, artLoadKey)
-                    else -> PlaylistArtTile(card, repository, onPlay, artLoadKey)
+                        GenreMixTile(
+                            card, repository, onPlay,
+                            onLongPress = { actionCard = card },
+                            artLoadKey, downloaded, downloading, downloadProgress,
+                        )
+                    else -> PlaylistArtTile(
+                        card, repository, onPlay,
+                        onLongPress = { actionCard = card },
+                        artLoadKey, downloaded, downloading, downloadProgress,
+                    )
                 }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun HomeCardActionSheet(
+    card: HomeCard,
+    downloadState: DownloadState?,
+    onDismiss: () -> Unit,
+    onPlay: () -> Unit,
+    onDownload: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = SpotifySheetBg,
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .navigationBarsPadding()
+                .padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(card.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Color.White)
+            card.subtitle?.let {
+                Text(it, color = Color.White.copy(alpha = 0.65f), style = MaterialTheme.typography.bodyMedium)
+            }
+            Spacer(Modifier.height(8.dp))
+            Surface(onClick = onPlay, shape = RoundedCornerShape(12.dp), color = Color.White.copy(alpha = 0.08f), modifier = Modifier.fillMaxWidth()) {
+                Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.PlayArrow, null, tint = SpotifyGreen)
+                    Spacer(Modifier.width(12.dp))
+                    Text("Play", color = Color.White, style = MaterialTheme.typography.bodyLarge)
+                }
+            }
+            if (downloadState != DownloadState.Downloading) {
+                Surface(onClick = onDownload, shape = RoundedCornerShape(12.dp), color = Color.White.copy(alpha = 0.08f), modifier = Modifier.fillMaxWidth()) {
+                    Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            if (downloadState == DownloadState.Complete) Icons.Default.DownloadDone else Icons.Default.Download,
+                            null,
+                            tint = SpotifyGreen,
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            if (downloadState == DownloadState.Complete) "Re-download for offline" else "Download for offline",
+                            color = Color.White,
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                    }
+                }
+            } else {
+                Text("Download in progress…", color = Color.White.copy(alpha = 0.65f), modifier = Modifier.padding(16.dp))
             }
         }
     }
@@ -149,49 +259,58 @@ private fun HomeCardArt(
     val artUrl by produceState<String?>(initialValue = null, card.id, card.artPath, card.playlistId, artLoadKey) {
         value = repository.resolveHomeCardArtUrl(card.id, card.artPath, card.playlistId, card.playTarget)
     }
-    SubcomposeAsyncImage(
+    BockArtwork(
         model = artUrl,
-        contentDescription = card.title,
-        modifier = modifier.background(MaterialTheme.colorScheme.surfaceVariant),
-        contentScale = ContentScale.Crop,
-        loading = { HomeCardArtPlaceholder(Modifier.fillMaxSize()) },
-        error = { HomeCardArtPlaceholder(Modifier.fillMaxSize()) },
-        success = { SubcomposeAsyncImageContent() },
+        title = card.title,
+        modifier = modifier,
+        shape = RoundedCornerShape(10.dp),
+        fallbackFontSize = 18.sp,
     )
 }
 
-@Composable
-private fun HomeCardArtPlaceholder(modifier: Modifier = Modifier) {
-    Box(modifier, contentAlignment = Alignment.Center) {
-        Icon(
-            Icons.Default.Album,
-            contentDescription = null,
-            modifier = Modifier.size(40.dp),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
-        )
-    }
-}
-
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun PlaylistArtTile(
     card: HomeCard,
     repository: BockMediaRepository,
     onPlay: (HomeCard) -> Unit,
+    onLongPress: () -> Unit,
     artLoadKey: Any,
+    downloaded: Boolean,
+    downloading: Boolean,
+    downloadProgress: Float,
 ) {
     Column(
         modifier = Modifier
             .width(124.dp)
-            .clickable { onPlay(card) },
+            .combinedClickable(
+                onClick = { onPlay(card) },
+                onLongClick = onLongPress,
+            ),
     ) {
-        HomeCardArt(
-            card = card,
-            repository = repository,
-            artLoadKey = artLoadKey,
-            modifier = Modifier
-                .size(124.dp)
-                .clip(RoundedCornerShape(10.dp)),
-        )
+        Box {
+            HomeCardArt(
+                card = card,
+                repository = repository,
+                artLoadKey = artLoadKey,
+                modifier = Modifier
+                    .size(124.dp)
+                    .clip(RoundedCornerShape(10.dp)),
+            )
+            if (downloading) {
+                DownloadProgressOverlay(downloadProgress, Modifier.matchParentSize())
+            } else if (downloaded) {
+                Icon(
+                    Icons.Default.DownloadDone,
+                    contentDescription = "Downloaded",
+                    tint = SpotifyGreen,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(6.dp)
+                        .size(18.dp),
+                )
+            }
+        }
         Spacer(Modifier.height(4.dp))
         Text(
             card.title,
@@ -213,18 +332,26 @@ private fun PlaylistArtTile(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun GenreMixTile(
     card: HomeCard,
     repository: BockMediaRepository,
     onPlay: (HomeCard) -> Unit,
+    onLongPress: () -> Unit,
     artLoadKey: Any,
+    downloaded: Boolean,
+    downloading: Boolean,
+    downloadProgress: Float,
 ) {
     Box(
         modifier = Modifier
             .size(width = 140.dp, height = 140.dp)
             .clip(RoundedCornerShape(10.dp))
-            .clickable { onPlay(card) },
+            .combinedClickable(
+                onClick = { onPlay(card) },
+                onLongClick = onLongPress,
+            ),
     ) {
         HomeCardArt(
             card = card,
@@ -246,6 +373,19 @@ private fun GenreMixTile(
                     ),
                 ),
         )
+        if (downloading) {
+            DownloadProgressOverlay(downloadProgress, Modifier.matchParentSize())
+        } else if (downloaded) {
+            Icon(
+                Icons.Default.DownloadDone,
+                contentDescription = "Downloaded",
+                tint = SpotifyGreen,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(8.dp)
+                    .size(20.dp),
+            )
+        }
         Column(
             Modifier
                 .align(Alignment.BottomStart)
@@ -268,6 +408,40 @@ private fun GenreMixTile(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun DownloadProgressOverlay(progress: Float, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier.background(Color.Black.copy(alpha = 0.45f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            CircularProgressIndicator(
+                progress = { progress.coerceIn(0f, 1f) },
+                modifier = Modifier.size(36.dp),
+                color = SpotifyGreen,
+                trackColor = Color.White.copy(alpha = 0.25f),
+                strokeWidth = 3.dp,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "${(progress * 100).toInt()}%",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+            )
+        }
+        LinearProgressIndicator(
+            progress = { progress.coerceIn(0f, 1f) },
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .height(4.dp),
+            color = SpotifyGreen,
+            trackColor = Color.Transparent,
+        )
     }
 }
 

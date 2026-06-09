@@ -13,8 +13,8 @@ android {
         applicationId = "com.bockmedia.console"
         minSdk = 26
         targetSdk = 35
-        versionCode = 5
-        versionName = "2.1.0"
+        versionCode = 6
+        versionName = "2.2.0"
         // Bock Media server endpoints (override via local.properties if needed)
         val localProps = rootProject.file("local.properties")
         fun prop(name: String) = if (localProps.exists()) {
@@ -128,6 +128,10 @@ dependencies {
     implementation("androidx.browser:browser:1.8.0")
     implementation("androidx.work:work-runtime-ktx:2.10.0")
     implementation("androidx.media:media:1.7.0")
+    val media3 = "1.5.1"
+    implementation("androidx.media3:media3-exoplayer:$media3")
+    implementation("androidx.media3:media3-session:$media3")
+    implementation("androidx.media3:media3-datasource-okhttp:$media3")
     implementation("com.patrykandpatrick.vico:compose-m3:2.0.0-alpha.28")
 
     debugImplementation("androidx.compose.ui:ui-tooling")

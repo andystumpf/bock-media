@@ -19,12 +19,27 @@ data class SummaryResponse(
 
 @Serializable
 data class HealthResponse(
-    val status: String? = null,
-    val uptime: String? = null,
-    val uptimeSeconds: Double? = null,
-    val services: JsonObject? = null,
-    val tunnel: JsonElement? = null,
-    val backend: JsonElement? = null,
+    val uptimeSeconds: Int? = null,
+    val lastAlexaHit: Double? = null,
+    val lastAlexaHitAgo: Int? = null,
+    val watchdogFresh: Boolean? = null,
+    val watchdogAgeSeconds: Int? = null,
+    val backend: Boolean? = null,
+    val tunnel: Boolean? = null,
+    @SerialName("backendHttp") val backendHttp: Boolean? = null,
+    @SerialName("tunnelReachable") val tunnelReachable: Boolean? = null,
+    val publicLatencyMs: Int? = null,
+    val publicStatus: Int? = null,
+    val alexaAuth: Boolean? = null,
+    val skillTesting: JsonElement? = null,
+    val plexConfigured: Boolean? = null,
+    val plexReachable: Boolean? = null,
+)
+
+@Serializable
+data class PlaylistCoverResponse(
+    @SerialName("playlistId") val playlistId: String? = null,
+    val path: String? = null,
 )
 
 @Serializable
@@ -55,9 +70,12 @@ data class DashboardQuickResponse(
 )
 
 @Serializable
+data class FavoritesResponse(val items: List<FavoriteItem> = emptyList())
+
+@Serializable
 data class FavoriteItem(
     val path: String = "",
-    val track: String? = null,
+    @SerialName("title") val track: String? = null,
     val artist: String? = null,
     val album: String? = null,
     val count: Int = 0,
@@ -256,6 +274,17 @@ data class AlbumItem(
     val artist: String? = null,
     @SerialName("track_count") val tracks: Int = 0,
     val year: Int? = null,
+    @SerialName("art_path") val artPath: String? = null,
+)
+
+@Serializable
+data class GenresResponse(val items: List<GenreItem> = emptyList(), val total: Int = 0)
+
+@Serializable
+data class GenreItem(
+    val name: String = "",
+    @SerialName("track_count") val tracks: Int = 0,
+    @SerialName("art_path") val artPath: String? = null,
 )
 
 @Serializable

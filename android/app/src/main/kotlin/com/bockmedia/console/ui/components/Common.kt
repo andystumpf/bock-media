@@ -2,6 +2,7 @@ package com.bockmedia.console.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import com.bockmedia.console.domain.model.PlayTarget
@@ -28,9 +29,14 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.runtime.collectAsState
+import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.PushPin
+import com.bockmedia.console.local.PinnedDevicesStore
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.material.icons.filled.Speaker
 import androidx.compose.material.icons.filled.SpeakerGroup
+import androidx.compose.material.icons.filled.Shuffle
 import kotlinx.coroutines.launch
 
 private val SpotifyGreen = Color(0xFF1DB954)
@@ -106,12 +112,19 @@ fun SearchField(
     onValueChange: (String) -> Unit,
     placeholder: String,
     modifier: Modifier = Modifier,
+    onFocusChanged: ((Boolean) -> Unit)? = null,
 ) {
     BockTextField(
         value = value,
         onValueChange = onValueChange,
         placeholder = placeholder,
-        modifier = modifier,
+        modifier = modifier.then(
+            if (onFocusChanged != null) {
+                Modifier.onFocusChanged { onFocusChanged(it.isFocused) }
+            } else {
+                Modifier
+            },
+        ),
         leadingIcon = {
             Icon(
                 Icons.Default.Search,
@@ -269,8 +282,12 @@ fun DevicePickerSheet(
     shuffleDefault: Boolean = false,
     onDismiss: () -> Unit,
     onPlay: suspend (device: String, shuffle: Boolean, deviceLabel: String) -> Unit,
+    onPlayOnPhone: (shuffle: Boolean) -> Unit = {},
     onPlayError: suspend (Throwable) -> Unit = {},
 ) {
+    val context = LocalContext.current
+    val pinnedStore = remember { PinnedDevicesStore(context) }
+    val pinned by pinnedStore.pinnedValues.collectAsState(initial = emptyList())
     val scope = rememberCoroutineScope()
     var deviceOptions by remember { mutableStateOf<List<DeviceOption>>(emptyList()) }
     var deviceValue by remember { mutableStateOf("") }
@@ -289,6 +306,13 @@ fun DevicePickerSheet(
             deviceValue = deviceOptions.firstOrNull { !it.label.contains("offline", true) }?.value
                 ?: deviceOptions.firstOrNull()?.value.orEmpty()
         }.onFailure { error = it.message }.also { loading = false }
+    }
+
+    val orderedOptions = remember(deviceOptions, pinned) {
+        val pinnedSet = pinned.toSet()
+        val pinnedOpts = pinned.mapNotNull { value -> deviceOptions.find { it.value == value } }
+        val rest = deviceOptions.filter { it.value !in pinnedSet }
+        pinnedOpts + rest
     }
 
     ModalBottomSheet(
@@ -349,13 +373,31 @@ fun DevicePickerSheet(
                 }
                 error != null -> ErrorText(error!!)
                 else -> {
+                    Surface(
+                        onClick = { scope.launch { onPlayOnPhone(shuffle) } },
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color.White.copy(alpha = 0.1f),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Row(
+                            Modifier.padding(horizontal = 14.dp, vertical = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(Icons.Default.PhoneAndroid, null, tint = SpotifyGreen, modifier = Modifier.size(24.dp))
+                            Spacer(Modifier.width(14.dp))
+                            Text("This phone", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = Color.White)
+                        }
+                    }
+
+                    Spacer(Modifier.height(8.dp))
+
                     LazyColumn(
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(max = 280.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        items(deviceOptions, key = { it.value }) { opt ->
+                        items(orderedOptions, key = { it.value }) { opt ->
                             val selected = opt.value == deviceValue
                             val offline = opt.label.contains("offline", ignoreCase = true)
                             Surface(
@@ -392,6 +434,16 @@ fun DevicePickerSheet(
                                             contentDescription = "Selected",
                                             tint = SpotifyGreen,
                                             modifier = Modifier.size(22.dp),
+                                        )
+                                    }
+                                    IconButton(onClick = {
+                                        scope.launch { pinnedStore.toggle(opt.value) }
+                                    }) {
+                                        Icon(
+                                            Icons.Default.PushPin,
+                                            contentDescription = "Pin speaker",
+                                            tint = if (opt.value in pinned) SpotifyGreen else SpotifyMuted,
+                                            modifier = Modifier.size(18.dp),
                                         )
                                     }
                                 }
