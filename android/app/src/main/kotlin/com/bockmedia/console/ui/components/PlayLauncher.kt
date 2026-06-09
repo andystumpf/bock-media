@@ -6,6 +6,7 @@ import com.bockmedia.console.data.api.bockJson
 import com.bockmedia.console.data.api.dto.PlayResponse
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.PlayTarget
+import com.bockmedia.console.domain.model.PlaybackFocus
 import retrofit2.HttpException
 
 suspend fun repositoryPlay(
@@ -26,6 +27,14 @@ suspend fun repositoryPlay(
     is PlayTarget.Song -> repository.playOnDevice(
         device, "song", name = target.title, path = target.path, shuffle = shuffle,
     )
+    is PlayTarget.Radio -> when (target.seedKind) {
+        PlayTarget.RadioSeedKind.Artist, PlayTarget.RadioSeedKind.Genre ->
+            repository.playOnDevice(device, "artist", name = target.name, shuffle = shuffle)
+        PlayTarget.RadioSeedKind.Song ->
+            repository.playOnDevice(
+                device, "song", name = target.name, path = target.path, shuffle = shuffle,
+            )
+    }
 }
 
 private fun playErrorMessage(e: Throwable): String {
@@ -45,18 +54,25 @@ fun PlayTargetLauncher(
     remoteConfigured: Boolean,
     snackbarHostState: SnackbarHostState,
     onClear: () -> Unit,
+    onPlayStarted: (deviceValue: String, deviceLabel: String?) -> Unit = { _, _ -> },
 ) {
-    if (target == null || !remoteConfigured) return
+    if (target == null) return
     var showPicker by remember(target) { mutableStateOf(true) }
     if (showPicker) {
         DevicePickerSheet(
             repository = repository,
+            playLabel = target.label,
+            remoteOk = remoteConfigured,
+            shuffleDefault = target.shuffleDefault,
             onDismiss = { showPicker = false; onClear() },
-            onPlay = { device, shuffle ->
+            onPlay = { device, shuffle, deviceLabel ->
                 val response = repositoryPlay(repository, target, device, shuffle)
                 if (response.ok) {
+                    val label = response.device ?: deviceLabel
+                    PlaybackFocus.notePlayStarted(device, label)
+                    onPlayStarted(device, label)
                     snackbarHostState.showSnackbar(
-                        "Playing \"${target.label}\" on ${response.device ?: device}",
+                        "Playing \"${target.label}\" on $label",
                     )
                 } else {
                     snackbarHostState.showSnackbar(response.error ?: "Play failed")

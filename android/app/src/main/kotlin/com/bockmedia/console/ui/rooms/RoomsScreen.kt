@@ -9,6 +9,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.bockmedia.console.data.api.dto.RoomItem
 import com.bockmedia.console.data.repository.BockMediaRepository
+import com.bockmedia.console.ui.components.BockPullRefresh
 import com.bockmedia.console.ui.components.ErrorText
 import com.bockmedia.console.ui.components.LoadingBox
 import kotlinx.coroutines.delay
@@ -23,6 +24,7 @@ fun RoomsScreen(repository: BockMediaRepository) {
     var error by remember { mutableStateOf<String?>(null) }
     var playRoom by remember { mutableStateOf<RoomItem?>(null) }
     var playlistName by remember { mutableStateOf("") }
+    var refreshing by remember { mutableStateOf(false) }
 
     suspend fun load() {
         runCatching {
@@ -31,6 +33,7 @@ fun RoomsScreen(repository: BockMediaRepository) {
             remoteOk = st.configured && st.authenticated == true
         }.onFailure { error = it.message }
         loading = false
+        refreshing = false
     }
 
     LaunchedEffect(Unit) { load() }
@@ -71,7 +74,12 @@ fun RoomsScreen(repository: BockMediaRepository) {
     when {
         loading -> LoadingBox()
         error != null -> ErrorText(error!!) { scope.launch { load() } }
-        else -> BockLazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        else -> BockPullRefresh(
+            isRefreshing = refreshing,
+            onRefresh = { refreshing = true; scope.launch { load() } },
+            modifier = Modifier.fillMaxSize(),
+        ) {
+        BockLazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(rooms) { room ->
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(12.dp)) {
@@ -85,6 +93,7 @@ fun RoomsScreen(repository: BockMediaRepository) {
                     }
                 }
             }
+        }
         }
     }
 }

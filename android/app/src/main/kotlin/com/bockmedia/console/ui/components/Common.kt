@@ -1,14 +1,20 @@
 package com.bockmedia.console.ui.components
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import com.bockmedia.console.domain.model.PlayTarget
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.bockmedia.console.data.api.dto.AlexaDevice
 import com.bockmedia.console.data.api.dto.DeviceGroup
@@ -18,10 +24,19 @@ import com.bockmedia.console.ui.util.formatTime24
 import com.bockmedia.console.ui.util.parseTime24
 import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material.icons.filled.Speaker
+import androidx.compose.material.icons.filled.SpeakerGroup
 import kotlinx.coroutines.launch
+
+private val SpotifyGreen = Color(0xFF1DB954)
+private val SpotifySheetBg = Color(0xFF282828)
+private val SpotifyRowSelected = Color(0xFF3E3E3E)
+private val SpotifyMuted = Color(0xFFB3B3B3)
 
 @Composable
 fun LoadingBox(modifier: Modifier = Modifier) {
@@ -182,8 +197,19 @@ fun BockTimeField(
     var showPicker by remember { mutableStateOf(false) }
     val (hour, minute) = parseTime24(time24)
     val display = formatTime12(time24)
-    Box(modifier = modifier.clickable { showPicker = true }) {
-        BockTextField(display, {}, "Time", readOnly = true)
+
+    Box(modifier = modifier) {
+        BockTextField(
+            value = display,
+            onValueChange = {},
+            placeholder = "Time",
+            readOnly = true,
+        )
+        Box(
+            Modifier
+                .matchParentSize()
+                .clickable { showPicker = true },
+        )
     }
     if (showPicker) {
         val state = rememberTimePickerState(
@@ -238,76 +264,215 @@ fun PaginationBar(page: Int, totalPages: Int, onPage: (Int) -> Unit) {
 @Composable
 fun DevicePickerSheet(
     repository: BockMediaRepository,
+    playLabel: String? = null,
+    remoteOk: Boolean = true,
+    shuffleDefault: Boolean = false,
     onDismiss: () -> Unit,
-    onPlay: suspend (device: String, shuffle: Boolean) -> Unit,
+    onPlay: suspend (device: String, shuffle: Boolean, deviceLabel: String) -> Unit,
     onPlayError: suspend (Throwable) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
-    var devices by remember { mutableStateOf<List<AlexaDevice>>(emptyList()) }
-    var groups by remember { mutableStateOf<List<DeviceGroup>>(emptyList()) }
-    var shuffle by remember { mutableStateOf(false) }
+    var deviceOptions by remember { mutableStateOf<List<DeviceOption>>(emptyList()) }
+    var deviceValue by remember { mutableStateOf("") }
+    var shuffle by remember(shuffleDefault) { mutableStateOf(shuffleDefault) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
+    var playing by remember { mutableStateOf(false) }
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     LaunchedEffect(Unit) {
         loading = true
         runCatching {
-            devices = repository.alexaRemoteDevices().devices
-            groups = repository.deviceGroups().items
+            val devices = repository.alexaRemoteDevices().devices
+            val groups = repository.deviceGroups().items
+            deviceOptions = buildDeviceOptions(groups, devices)
+            deviceValue = deviceOptions.firstOrNull { !it.label.contains("offline", true) }?.value
+                ?: deviceOptions.firstOrNull()?.value.orEmpty()
         }.onFailure { error = it.message }.also { loading = false }
     }
 
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.padding(16.dp).navigationBarsPadding()) {
-            Text("Play on device", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(8.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(checked = shuffle, onCheckedChange = { shuffle = it })
-                Text("Shuffle (mix)")
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = SpotifySheetBg,
+        dragHandle = {
+            Box(
+                Modifier
+                    .padding(top = 12.dp, bottom = 4.dp)
+                    .size(width = 40.dp, height = 4.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(Color.White.copy(alpha = 0.35f)),
+            )
+        },
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .navigationBarsPadding()
+                .padding(bottom = 20.dp),
+        ) {
+            Text(
+                "Play on",
+                style = MaterialTheme.typography.labelLarge,
+                color = SpotifyMuted,
+            )
+            Text(
+                playLabel ?: "Choose a speaker",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 4.dp, bottom = 16.dp),
+            )
+
+            if (!remoteOk) {
+                Text(
+                    "Connect Alexa remote in Settings to play.",
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(bottom = 12.dp),
+                )
             }
+
             when {
-                loading -> CircularProgressIndicator()
+                loading -> {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(160.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CircularProgressIndicator(color = SpotifyGreen)
+                    }
+                }
                 error != null -> ErrorText(error!!)
                 else -> {
-                    BockLazyColumn(Modifier.heightIn(max = 400.dp)) {
-                        if (groups.isNotEmpty()) {
-                            item { Text("Groups", style = MaterialTheme.typography.labelLarge) }
-                            items(groups) { g ->
-                                ListItem(
-                                    headlineContent = { Text(g.name) },
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable {
-                                            scope.launch {
-                                                runCatching {
-                                                    onPlay("group:${g.id}", shuffle)
-                                                }.onFailure { onPlayError(it) }
-                                                onDismiss()
-                                            }
-                                        },
-                                )
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 280.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        items(deviceOptions, key = { it.value }) { opt ->
+                            val selected = opt.value == deviceValue
+                            val offline = opt.label.contains("offline", ignoreCase = true)
+                            Surface(
+                                onClick = { if (!offline) deviceValue = opt.value },
+                                enabled = !offline,
+                                shape = RoundedCornerShape(12.dp),
+                                color = if (selected) SpotifyRowSelected else Color.White.copy(alpha = 0.06f),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Row(
+                                    Modifier.padding(horizontal = 14.dp, vertical = 14.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Icon(
+                                        if (opt.value.startsWith("group:")) Icons.Default.SpeakerGroup
+                                        else Icons.Default.Speaker,
+                                        contentDescription = null,
+                                        tint = if (offline) SpotifyMuted.copy(alpha = 0.5f) else Color.White,
+                                        modifier = Modifier.size(24.dp),
+                                    )
+                                    Spacer(Modifier.width(14.dp))
+                                    Text(
+                                        opt.label,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                        color = if (offline) SpotifyMuted else Color.White,
+                                        modifier = Modifier.weight(1f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    if (selected) {
+                                        Icon(
+                                            Icons.Default.Check,
+                                            contentDescription = "Selected",
+                                            tint = SpotifyGreen,
+                                            modifier = Modifier.size(22.dp),
+                                        )
+                                    }
+                                }
                             }
                         }
-                        item { Text("Speakers", style = MaterialTheme.typography.labelLarge) }
-                        items(devices) { d ->
-                            ListItem(
-                                headlineContent = { Text(d.name ?: d.serial ?: "?") },
-                                supportingContent = {
-                                    Text(if (d.online) "Online" else "Offline")
-                                },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        val serial = d.serial ?: d.name ?: return@clickable
-                                        scope.launch {
-                                            runCatching {
-                                                onPlay(serial, shuffle)
-                                            }.onFailure { onPlayError(it) }
-                                            onDismiss()
-                                        }
-                                    },
+                    }
+
+                    Spacer(Modifier.height(16.dp))
+
+                    Surface(
+                        onClick = { if (remoteOk) shuffle = !shuffle },
+                        enabled = remoteOk,
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color.White.copy(alpha = 0.06f),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Row(
+                            Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                Icons.Default.Shuffle,
+                                contentDescription = null,
+                                tint = if (shuffle) SpotifyGreen else Color.White,
+                                modifier = Modifier.size(22.dp),
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            Text(
+                                "Shuffle",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = Color.White,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Switch(
+                                checked = shuffle,
+                                onCheckedChange = { shuffle = it },
+                                enabled = remoteOk,
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.White,
+                                    checkedTrackColor = SpotifyGreen,
+                                    uncheckedThumbColor = Color.White,
+                                    uncheckedTrackColor = Color.White.copy(alpha = 0.25f),
+                                ),
                             )
                         }
+                    }
+
+                    Spacer(Modifier.height(16.dp))
+
+                    Button(
+                        onClick = {
+                            if (deviceValue.isBlank()) return@Button
+                            scope.launch {
+                                playing = true
+                                runCatching {
+                                    val label = deviceOptions.find { it.value == deviceValue }?.label ?: deviceValue
+                                    onPlay(deviceValue, shuffle, label)
+                                }.onFailure { onPlayError(it) }
+                                playing = false
+                                onDismiss()
+                            }
+                        },
+                        enabled = !playing && deviceValue.isNotBlank() && remoteOk,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp),
+                        shape = CircleShape,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = SpotifyGreen,
+                            contentColor = Color.Black,
+                            disabledContainerColor = SpotifyGreen.copy(alpha = 0.35f),
+                            disabledContentColor = Color.Black.copy(alpha = 0.45f),
+                        ),
+                    ) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(24.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            if (playing) "Starting…" else "Play",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                        )
                     }
                 }
             }

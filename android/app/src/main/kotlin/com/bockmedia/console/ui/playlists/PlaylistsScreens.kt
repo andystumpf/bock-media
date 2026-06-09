@@ -15,6 +15,7 @@ import com.bockmedia.console.data.api.dto.SmartPlaylist
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.PlayTarget
 import com.bockmedia.console.ui.components.*
+import com.bockmedia.console.ui.components.BockPullRefresh
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -143,62 +144,141 @@ fun PlaylistDetailScreen(
 ) {
     val scope = rememberCoroutineScope()
     var name by remember { mutableStateOf("") }
+    var editName by remember { mutableStateOf("") }
     var tracks by remember { mutableStateOf<List<PlaylistTrack>>(emptyList()) }
+    var total by remember { mutableIntStateOf(0) }
     var filter by remember { mutableStateOf("") }
+    var sortBy by remember { mutableStateOf("title") }
+    var sortOrder by remember { mutableStateOf("asc") }
+    var page by remember { mutableIntStateOf(1) }
     var loading by remember { mutableStateOf(true) }
+    var refreshing by remember { mutableStateOf(false) }
+    var showRename by remember { mutableStateOf(false) }
+    val pageSize = 50
 
     suspend fun load() {
-        loading = true
+        loading = tracks.isEmpty()
         runCatching {
-            val d = repository.playlistDetail(playlistId, q = filter.ifBlank { null })
+            val d = repository.playlistDetail(
+                playlistId,
+                page = page,
+                limit = pageSize,
+                q = filter.ifBlank { null },
+                sortBy = sortBy,
+                order = sortOrder,
+            )
             name = d.name
+            editName = d.name
             tracks = d.tracks
+            total = d.total.takeIf { it > 0 } ?: d.tracks.size
         }
         loading = false
+        refreshing = false
     }
 
-    LaunchedEffect(playlistId) { load() }
+    LaunchedEffect(playlistId, page, sortBy, sortOrder) { load() }
     LaunchedEffect(filter) {
         delay(400)
+        page = 1
         load()
     }
 
+    if (showRename) {
+        AlertDialog(
+            onDismissRequest = { showRename = false },
+            title = { Text("Rename playlist") },
+            text = { BockTextField(editName, { editName = it }, "Name") },
+            confirmButton = {
+                TextButton(onClick = {
+                    scope.launch {
+                        repository.renamePlaylist(playlistId, editName.trim())
+                        showRename = false
+                        load()
+                    }
+                }) { Text("Save") }
+            },
+            dismissButton = { TextButton(onClick = { showRename = false }) { Text("Cancel") } },
+        )
+    }
+
     Column(Modifier.fillMaxSize()) {
-        Row(Modifier.padding(8.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, null) }
-            Text(name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+        Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(name, style = MaterialTheme.typography.titleMedium)
+                Text("$total tracks", style = MaterialTheme.typography.labelSmall)
+            }
             if (remoteOk) PlayButton(onClick = { onPlay(PlayTarget.Playlist(playlistId, name)) })
+            IconButton(onClick = { showRename = true }) { Icon(Icons.Default.Edit, "Rename") }
             IconButton(onClick = {
                 scope.launch { repository.deletePlaylist(playlistId); onBack() }
             }) { Icon(Icons.Default.Delete, null) }
         }
-        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
             SearchField(filter, { filter = it }, "Filter tracks")
-        }
-        if (loading) LoadingBox(Modifier.weight(1f)) else {
-            BockLazyColumn(Modifier.weight(1f)) {
-                items(tracks) { t ->
-                    ListItem(
-                        headlineContent = { Text(t.title ?: "—") },
-                        supportingContent = { Text("${t.artist ?: ""} · ${t.album ?: ""}") },
-                        trailingContent = {
-                            Row {
-                                if (remoteOk && t.path != null) {
-                                    PlayButton(onClick = { onPlay(PlayTarget.Song(t.path, t.title ?: "")) })
-                                }
-                                IconButton(onClick = {
-                                    scope.launch {
-                                        t.path?.let { repository.removePlaylistTrack(playlistId, it) }
-                                        load()
-                                    }
-                                }) { Icon(Icons.Default.Remove, null) }
-                            }
-                        },
-                    )
-                }
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SortChip("Title", sortBy == "title") { sortBy = "title"; page = 1 }
+                SortChip("Artist", sortBy == "artist") { sortBy = "artist"; page = 1 }
+                SortChip("Album", sortBy == "album") { sortBy = "album"; page = 1 }
+                SortChip("↑", sortOrder == "asc") { sortOrder = "asc"; page = 1 }
+                SortChip("↓", sortOrder == "desc") { sortOrder = "desc"; page = 1 }
             }
         }
+        if (loading && tracks.isEmpty()) {
+            LoadingBox(Modifier.weight(1f))
+        } else {
+            BockPullRefresh(
+                isRefreshing = refreshing,
+                onRefresh = { refreshing = true; scope.launch { load() } },
+                modifier = Modifier.weight(1f),
+            ) {
+                BockLazyColumn(Modifier.fillMaxSize()) {
+                    items(tracks.size) { idx ->
+                        val t = tracks[idx]
+                        val trackNum = (page - 1) * pageSize + idx + 1
+                        ListItem(
+                            leadingContent = { Text("$trackNum", style = MaterialTheme.typography.labelMedium) },
+                            headlineContent = { Text(t.title ?: "—") },
+                            supportingContent = {
+                                Text(
+                                    listOfNotNull(
+                                        t.artist?.takeIf { it.isNotBlank() },
+                                        t.album?.takeIf { it.isNotBlank() },
+                                        t.duration?.let { formatDuration(it) },
+                                    ).joinToString(" · "),
+                                )
+                            },
+                            trailingContent = {
+                                Row {
+                                    if (remoteOk && t.path != null) {
+                                        PlayButton(onClick = { onPlay(PlayTarget.Song(t.path, t.title ?: "")) })
+                                    }
+                                    IconButton(onClick = {
+                                        scope.launch {
+                                            t.path?.let { repository.removePlaylistTrack(playlistId, it) }
+                                            load()
+                                        }
+                                    }) { Icon(Icons.Default.Remove, null) }
+                                }
+                            },
+                        )
+                    }
+                }
+            }
+            PaginationBar(page, ((total + pageSize - 1) / pageSize).coerceAtLeast(1)) { page = it }
+        }
     }
+}
+
+@Composable
+private fun SortChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    FilterChip(selected = selected, onClick = onClick, label = { Text(label) })
+}
+
+private fun formatDuration(seconds: Int): String {
+    val m = seconds / 60
+    val s = seconds % 60
+    return "%d:%02d".format(m, s)
 }
 
 @Composable

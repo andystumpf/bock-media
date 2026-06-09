@@ -3,6 +3,7 @@ package com.bockmedia.console.widget
 import android.content.Context
 import com.bockmedia.console.BockMediaApp
 import com.bockmedia.console.data.api.dto.NowPlayingDeviceItem
+import com.bockmedia.console.domain.model.PlaybackFocus
 import com.bockmedia.console.media.NowPlayingNotificationManager
 import kotlinx.coroutines.runBlocking
 
@@ -17,15 +18,17 @@ object NowPlayingController {
             return
         }
 
-        val snap = runCatching {
+        val fetched = runCatching {
             runBlocking {
                 val api = BockMediaApp.apiBlocking(appContext)
                 val resp = api.nowPlayingDevices()
+                var alexaDevices = emptyList<com.bockmedia.console.data.api.dto.AlexaDevice>()
                 var alexaSerialByName = emptyMap<String, String>()
                 var remoteOk = false
                 if (resp.controlsAvailable) {
                     runCatching {
-                        alexaSerialByName = api.alexaRemoteDevices().devices.mapNotNull { d ->
+                        alexaDevices = api.alexaRemoteDevices().devices
+                        alexaSerialByName = alexaDevices.mapNotNull { d ->
                             val name = d.name?.lowercase()?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
                             val serial = d.serial?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
                             name to serial
@@ -33,22 +36,29 @@ object NowPlayingController {
                         remoteOk = true
                     }
                 }
-                NowPlayingSessionStore.Snapshot(
-                    items = resp.items,
-                    controlsAvailable = resp.controlsAvailable,
-                    baseUrl = base,
-                    alexaSerialByName = alexaSerialByName,
-                    remoteOk = remoteOk,
+                Pair(
+                    NowPlayingSessionStore.Snapshot(
+                        items = resp.items,
+                        controlsAvailable = resp.controlsAvailable,
+                        baseUrl = base,
+                        alexaSerialByName = alexaSerialByName,
+                        remoteOk = remoteOk,
+                    ),
+                    alexaDevices,
                 )
             }
         }.getOrNull() ?: return
 
+        val snap = fetched.first
+        val alexaDevices = fetched.second
         NowPlayingSessionStore.snapshot = snap
         if (snap.items.isEmpty()) {
             NowPlayingSessionStore.focusedDeviceId = null
-        } else if (snap.items.none { it.deviceId == NowPlayingSessionStore.focusedDeviceId }) {
-            NowPlayingSessionStore.focusedDeviceId =
-                snap.items.firstOrNull { !it.paused }?.deviceId ?: snap.items.first().deviceId
+        } else {
+            PlaybackFocus.syncPendingFocus(snap.items, alexaDevices)
+            NowPlayingSessionStore.focusedDeviceId = PlaybackFocus.focusedDeviceId
+                ?: snap.items.firstOrNull { !it.paused }?.deviceId
+                ?: snap.items.first().deviceId
         }
     }
 

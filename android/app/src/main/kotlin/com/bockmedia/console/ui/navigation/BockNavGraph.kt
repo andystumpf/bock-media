@@ -1,17 +1,11 @@
 package com.bockmedia.console.ui.navigation
 
 import androidx.compose.foundation.layout.*
-import com.bockmedia.console.ui.components.BockLazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material3.Icon
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -19,38 +13,51 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.bockmedia.console.data.api.dto.NowPlayingDeviceItem
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.PlayTarget
+import com.bockmedia.console.domain.model.PlaybackFocus
 import com.bockmedia.console.ui.AlexaAuthMonitor
 import com.bockmedia.console.ui.alexaControlsAvailable
 import com.bockmedia.console.ui.analytics.AnalyticsScreen
 import com.bockmedia.console.ui.automation.AutomationScreen
+import com.bockmedia.console.ui.components.AccountMenuButton
+import com.bockmedia.console.ui.components.MiniNowPlayingBar
 import com.bockmedia.console.ui.components.PlayTargetLauncher
-import com.bockmedia.console.ui.dashboard.DashboardScreen
 import com.bockmedia.console.ui.devices.DevicesScreen
+import com.bockmedia.console.ui.home.HomeScreen
 import com.bockmedia.console.ui.library.AlbumsScreen
 import com.bockmedia.console.ui.library.ArtistsScreen
+import com.bockmedia.console.ui.library.LibraryScreen
 import com.bockmedia.console.ui.library.SongsScreen
 import com.bockmedia.console.ui.nowplaying.NowPlayingScreen
+import com.bockmedia.console.ui.nowplaying.resolveSerial
 import com.bockmedia.console.ui.playlists.PlaylistDetailScreen
 import com.bockmedia.console.ui.playlists.PlaylistsScreen
 import com.bockmedia.console.ui.rooms.RoomsScreen
-import com.bockmedia.console.ui.routines.RoutinesScreen
 import com.bockmedia.console.ui.search.SearchScreen
 import com.bockmedia.console.ui.settings.SettingsScreen
 import com.bockmedia.console.ui.watchfolders.WatchFoldersScreen
-import kotlinx.coroutines.launch
 import java.net.URLDecoder
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BockApp(repository: BockMediaRepository, onChangeServer: () -> Unit, deepLinkRoute: String? = null) {
     val navController = rememberNavController()
-    val drawerState = rememberDrawerState(DrawerValue.Closed)
-    val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     var playTarget by remember { mutableStateOf<PlayTarget?>(null) }
+    var playbackFocusGeneration by remember { mutableIntStateOf(PlaybackFocus.generation) }
     var remoteOk by remember { mutableStateOf(false) }
+    var alexaDevices by remember { mutableStateOf(emptyList<com.bockmedia.console.data.api.dto.AlexaDevice>()) }
+
+    val navBackStackEntry by navController.currentBackStackEntryAsState()
+    val fullRoute = navBackStackEntry?.destination?.route
+    val header = resolveScreenHeader(fullRoute)
+    val showBottomNav = isBottomNavRoute(fullRoute)
+    val showMiniBar = showBottomNav
+    val isHome = fullRoute?.substringBefore("/") == BockRoute.Home.route
+    val isNowPlaying = fullRoute?.substringBefore("/") == BockRoute.NowPlaying.route
+    val showAccount = showBottomNav && !isHome
 
     LaunchedEffect(repository) {
         runCatching {
@@ -70,66 +77,104 @@ fun BockApp(repository: BockMediaRepository, onChangeServer: () -> Unit, deepLin
 
     AlexaAuthMonitor(repository, snackbarHostState)
 
-    PlayTargetLauncher(repository, playTarget, remoteOk, snackbarHostState) { playTarget = null }
+    PlayTargetLauncher(
+        repository,
+        playTarget,
+        remoteOk,
+        snackbarHostState,
+        onClear = { playTarget = null },
+        onPlayStarted = { _, _ -> playbackFocusGeneration = PlaybackFocus.generation },
+    )
 
-    ModalNavigationDrawer(
-        drawerState = drawerState,
-        drawerContent = {
-            ModalDrawerSheet(
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .widthIn(max = 272.dp),
-            ) {
-                Column(Modifier.fillMaxSize()) {
-                    Text(
-                        "Bock Media",
-                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 6.dp),
-                        style = MaterialTheme.typography.titleMedium,
+    suspend fun runMiniControl(dev: NowPlayingDeviceItem, action: String) {
+        val serial = resolveSerial(dev, alexaDevices) ?: return
+        runCatching {
+            repository.deviceControl(dev.deviceId, dev.deviceName ?: "", serial, action)
+        }
+    }
+
+    Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
+        containerColor = MaterialTheme.colorScheme.background,
+        topBar = {
+            if (!isHome && !isNowPlaying) {
+                TopAppBar(
+                    title = { Text(header.title) },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.background,
+                        scrolledContainerColor = MaterialTheme.colorScheme.background,
+                    ),
+                    navigationIcon = {
+                        if (header.showBack) {
+                            IconButton(onClick = { navController.popBackStack() }) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+                            }
+                        }
+                    },
+                    actions = {
+                        if (showAccount) {
+                            AccountMenuButton { route ->
+                                navController.navigate(route) { launchSingleTop = true }
+                            }
+                        }
+                    },
+                )
+            }
+        },
+        bottomBar = {
+            Column {
+                if (showMiniBar) {
+                    MiniNowPlayingBar(
+                        repository = repository,
+                        remoteOk = remoteOk,
+                        playbackFocusGeneration = playbackFocusGeneration,
+                        onOpenNowPlaying = {
+                            navController.navigate(BockRoute.NowPlaying.route) {
+                                launchSingleTop = true
+                            }
+                        },
+                        onControl = { dev, action ->
+                            if (alexaDevices.isEmpty()) {
+                                runCatching { alexaDevices = repository.alexaRemoteDevices().devices }
+                            }
+                            runMiniControl(dev, action)
+                        },
                     )
-                    HorizontalDivider(modifier = Modifier.padding(horizontal = 12.dp))
-                    BockLazyColumn(
-                        modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(top = 3.dp, bottom = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                }
+                if (showBottomNav) {
+                    NavigationBar(
+                        containerColor = MaterialTheme.colorScheme.background,
                     ) {
-                        items(BockRoute.drawerRoutes, key = { it.route }) { route ->
-                            CompactDrawerItem(
-                                route = route,
-                                selected = currentRoute(navController) == route.route,
+                        BockRoute.bottomNavRoutes.forEach { route ->
+                            val selected = fullRoute?.substringBefore("/") == route.route
+                            NavigationBarItem(
+                                selected = selected,
                                 onClick = {
-                                    navController.navigate(route.route) { launchSingleTop = true }
-                                    scope.launch { drawerState.close() }
+                                    navController.navigate(route.route) {
+                                        launchSingleTop = true
+                                        popUpTo(BockRoute.Home.route) { saveState = true }
+                                        restoreState = true
+                                    }
                                 },
+                                icon = { Icon(route.icon, route.title) },
+                                label = { Text(route.title) },
                             )
                         }
                     }
                 }
             }
         },
-    ) {
-        Scaffold(
-            snackbarHost = { SnackbarHost(snackbarHostState) },
-            topBar = {
-                TopAppBar(
-                    title = { Text(titleForRoute(currentRoute(navController))) },
-                    navigationIcon = {
-                        IconButton(onClick = { scope.launch { drawerState.open() } }) {
-                            Icon(Icons.Default.Menu, "Menu")
-                        }
-                    },
-                )
-            },
-        ) { padding ->
-            BockNavHost(
-                navController = navController,
-                repository = repository,
-                remoteOk = remoteOk,
-                snackbarHostState = snackbarHostState,
-                onPlay = { playTarget = it },
-                onChangeServer = onChangeServer,
-                modifier = Modifier.padding(padding),
-            )
-        }
+    ) { padding ->
+        BockNavHost(
+            navController = navController,
+            repository = repository,
+            remoteOk = remoteOk,
+            snackbarHostState = snackbarHostState,
+            onPlay = { playTarget = it },
+            onChangeServer = onChangeServer,
+            playbackFocusGeneration = playbackFocusGeneration,
+            modifier = Modifier.padding(padding),
+        )
     }
 }
 
@@ -141,15 +186,39 @@ private fun BockNavHost(
     snackbarHostState: SnackbarHostState,
     onPlay: (PlayTarget) -> Unit,
     onChangeServer: () -> Unit,
+    playbackFocusGeneration: Int = 0,
     modifier: Modifier = Modifier,
 ) {
-    NavHost(navController, startDestination = BockRoute.NowPlaying.route, modifier = modifier) {
-        composable(BockRoute.Dashboard.route) {
-            DashboardScreen(repository, onPlay) { navController.navigate(BockRoute.Settings.route) }
+    NavHost(navController, startDestination = BockRoute.Home.route, modifier = modifier) {
+        composable(BockRoute.Home.route) {
+            HomeScreen(
+                repository = repository,
+                remoteOk = remoteOk,
+                onPlay = onPlay,
+                onAccountNavigate = { route ->
+                    navController.navigate(route) { launchSingleTop = true }
+                },
+            )
         }
-        composable(BockRoute.NowPlaying.route) { NowPlayingScreen(repository, snackbarHostState) }
-        composable(BockRoute.Rooms.route) { RoomsScreen(repository) }
+        composable(BockRoute.NowPlaying.route) {
+            NowPlayingScreen(
+                repository = repository,
+                snackbarHostState = snackbarHostState,
+                onBack = { navController.popBackStack() },
+                playbackFocusGeneration = playbackFocusGeneration,
+            )
+        }
+        composable(BockRoute.Library.route) {
+            LibraryScreen(
+                repository = repository,
+                onOpenArtists = { navController.navigate(BockRoute.Artists.route) },
+                onOpenAlbums = { navController.navigate(BockRoute.Albums.route) },
+                onOpenSongs = { navController.navigate(BockRoute.Songs.route) },
+                onOpenPlaylists = { navController.navigate(BockRoute.Playlists.route) },
+            )
+        }
         composable(BockRoute.Search.route) { SearchScreen(repository, remoteOk, onPlay) }
+        composable(BockRoute.Automations.route) { AutomationScreen(repository) }
         composable(BockRoute.Playlists.route) {
             PlaylistsScreen(repository, remoteOk, onPlay) { id ->
                 navController.navigate(playlistDetailRoute(id))
@@ -201,64 +270,9 @@ private fun BockNavHost(
         }
         composable(BockRoute.Songs.route) { SongsScreen(repository, null, null, remoteOk, onPlay) }
         composable(BockRoute.WatchFolders.route) { WatchFoldersScreen(repository) }
+        composable(BockRoute.Rooms.route) { RoomsScreen(repository) }
         composable(BockRoute.Devices.route) { DevicesScreen(repository) }
-        composable(BockRoute.Automation.route) { AutomationScreen(repository) }
-        composable(BockRoute.Routines.route) { RoutinesScreen(repository) }
         composable(BockRoute.Analytics.route) { AnalyticsScreen(repository) }
         composable(BockRoute.Settings.route) { SettingsScreen(repository, onChangeServer) }
-    }
-}
-
-@Composable
-private fun currentRoute(navController: NavHostController): String? {
-    val entry = navController.currentBackStackEntryAsState().value ?: return null
-    return entry.destination.route?.substringBefore("/")
-}
-
-private fun titleForRoute(route: String?): String =
-    BockRoute.drawerRoutes.find { it.route == route }?.title ?: "Bock Media"
-
-@Composable
-private fun CompactDrawerItem(
-    route: BockRoute,
-    selected: Boolean,
-    onClick: () -> Unit,
-) {
-    val containerColor = if (selected) {
-        MaterialTheme.colorScheme.secondaryContainer
-    } else {
-        MaterialTheme.colorScheme.surface
-    }
-    val contentColor = if (selected) {
-        MaterialTheme.colorScheme.onSecondaryContainer
-    } else {
-        MaterialTheme.colorScheme.onSurface
-    }
-    Surface(
-        onClick = onClick,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 8.dp)
-            .height(40.dp),
-        shape = RoundedCornerShape(7.dp),
-        color = containerColor,
-        contentColor = contentColor,
-    ) {
-        Row(
-            Modifier.fillMaxSize().padding(horizontal = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                route.icon,
-                contentDescription = null,
-                modifier = Modifier.size(20.dp),
-            )
-            Spacer(Modifier.width(12.dp))
-            Text(
-                route.title,
-                style = MaterialTheme.typography.bodyMedium,
-                maxLines = 1,
-            )
-        }
     }
 }

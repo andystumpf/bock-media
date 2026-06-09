@@ -7,6 +7,7 @@ import com.bockmedia.console.data.auth.BockAuthInterceptor
 import com.bockmedia.console.data.local.AppPreferences
 import com.bockmedia.console.data.network.ServerEndpointResolver
 import com.bockmedia.console.data.repository.BockMediaRepository
+import com.bockmedia.console.domain.model.HomeFeedCache
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -78,6 +79,8 @@ class BockMediaApp(context: Context) {
         cachedApi = null
         cachedBaseUrl = null
         ServerEndpointResolver.invalidate()
+        repository.clearCaches()
+        HomeFeedCache.invalidate()
     }
 
     suspend fun buildAuthenticatedHttpClient(): OkHttpClient {
