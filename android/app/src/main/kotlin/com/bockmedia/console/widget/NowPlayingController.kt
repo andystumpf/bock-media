@@ -2,6 +2,7 @@ package com.bockmedia.console.widget
 
 import android.content.Context
 import com.bockmedia.console.BockMediaApp
+import com.bockmedia.console.local.ClientIdStore
 import com.bockmedia.console.data.api.dto.NowPlayingDeviceItem
 import com.bockmedia.console.domain.model.PlaybackFocus
 import com.bockmedia.console.media.NowPlayingNotificationManager
@@ -21,7 +22,9 @@ object NowPlayingController {
         val fetched = runCatching {
             runBlocking {
                 val api = BockMediaApp.apiBlocking(appContext)
-                val resp = api.nowPlayingDevices()
+                val resp = api.nowPlayingDevices(
+                    viewerClientId = ClientIdStore.clientId(appContext),
+                )
                 var alexaDevices = emptyList<com.bockmedia.console.data.api.dto.AlexaDevice>()
                 var alexaSerialByName = emptyMap<String, String>()
                 var remoteOk = false

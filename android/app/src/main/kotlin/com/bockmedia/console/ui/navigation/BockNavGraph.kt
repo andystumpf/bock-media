@@ -1,10 +1,14 @@
 package com.bockmedia.console.ui.navigation
 
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -18,7 +22,12 @@ import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.PlayTarget
 import com.bockmedia.console.domain.model.PlaybackFocus
 import com.bockmedia.console.ui.AlexaAuthMonitor
-import com.bockmedia.console.ui.alexaControlsAvailable
+import com.bockmedia.console.ui.refreshAlexaControlsAvailable
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import com.bockmedia.console.ui.analytics.AnalyticsScreen
 import com.bockmedia.console.ui.automation.AutomationScreen
 import com.bockmedia.console.ui.components.AccountMenuButton
@@ -53,6 +62,7 @@ fun BockApp(repository: BockMediaRepository, deepLinkRoute: String? = null) {
     var playbackFocusGeneration by remember { mutableIntStateOf(PlaybackFocus.generation) }
     var remoteOk by remember { mutableStateOf(false) }
     var alexaDevices by remember { mutableStateOf(emptyList<com.bockmedia.console.data.api.dto.AlexaDevice>()) }
+    val scope = rememberCoroutineScope()
 
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val fullRoute = navBackStackEntry?.destination?.route
@@ -63,10 +73,21 @@ fun BockApp(repository: BockMediaRepository, deepLinkRoute: String? = null) {
     val isNowPlaying = fullRoute?.substringBefore("/") == BockRoute.NowPlaying.route
     val showAccount = showBottomNav && !isHome
 
+    val lifecycleOwner = LocalLifecycleOwner.current
     LaunchedEffect(repository) {
-        runCatching {
-            remoteOk = alexaControlsAvailable(repository.alexaRemoteStatus())
+        while (true) {
+            remoteOk = refreshAlexaControlsAvailable(repository)
+            delay(60_000)
         }
+    }
+    DisposableEffect(lifecycleOwner, repository, scope) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                scope.launch { remoteOk = refreshAlexaControlsAvailable(repository) }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     LaunchedEffect(deepLinkRoute) {
@@ -126,62 +147,67 @@ fun BockApp(repository: BockMediaRepository, deepLinkRoute: String? = null) {
             }
         },
         bottomBar = {
-            Column {
-                if (showMiniBar) {
-                    MiniNowPlayingBar(
-                        repository = repository,
-                        remoteOk = remoteOk,
-                        playbackFocusGeneration = playbackFocusGeneration,
-                        onOpenNowPlaying = {
-                            navController.navigate(BockRoute.NowPlaying.route) {
-                                launchSingleTop = true
-                            }
-                        },
-                        onControl = { dev, action ->
-                            if (alexaDevices.isEmpty()) {
-                                runCatching { alexaDevices = repository.alexaRemoteDevices().devices }
-                            }
-                            runMiniControl(dev, action)
-                        },
-                    )
-                }
-                if (showBottomNav) {
-                    NavigationBar(
-                        containerColor = MaterialTheme.colorScheme.background,
-                    ) {
-                        BockRoute.bottomNavRoutes.forEach { route ->
-                            val selected = fullRoute?.substringBefore("/") == route.route
-                            NavigationBarItem(
-                                selected = selected,
-                                onClick = {
-                                    navController.navigate(route.route) {
-                                        launchSingleTop = true
-                                        popUpTo(BockRoute.Home.route) { saveState = true }
-                                        restoreState = true
-                                    }
-                                },
-                                icon = { Icon(route.icon, route.title) },
-                                label = { Text(route.title) },
-                            )
-                        }
+            if (showBottomNav) {
+                NavigationBar(
+                    containerColor = MaterialTheme.colorScheme.background,
+                ) {
+                    BockRoute.bottomNavRoutes.forEach { route ->
+                        val selected = fullRoute?.substringBefore("/") == route.route
+                        NavigationBarItem(
+                            selected = selected,
+                            onClick = {
+                                navController.navigate(route.route) {
+                                    launchSingleTop = true
+                                    popUpTo(BockRoute.Home.route) { saveState = true }
+                                    restoreState = true
+                                }
+                            },
+                            icon = { Icon(route.icon, route.title) },
+                            label = { Text(route.title) },
+                        )
                     }
                 }
             }
         },
     ) { padding ->
-        BockNavHost(
-            navController = navController,
-            repository = repository,
-            remoteOk = remoteOk,
-            snackbarHostState = snackbarHostState,
-            onPlay = { playTarget = it },
-            playbackFocusGeneration = playbackFocusGeneration,
+        Box(
             modifier = if (isNowPlaying) {
                 Modifier.fillMaxSize()
             } else {
                 Modifier.padding(padding)
             },
-        )
+        ) {
+            BockNavHost(
+                navController = navController,
+                repository = repository,
+                remoteOk = remoteOk,
+                snackbarHostState = snackbarHostState,
+                onPlay = { playTarget = it },
+                playbackFocusGeneration = playbackFocusGeneration,
+                modifier = Modifier.fillMaxSize(),
+            )
+            if (showMiniBar) {
+                MiniNowPlayingBar(
+                    repository = repository,
+                    remoteOk = remoteOk,
+                    playbackFocusGeneration = playbackFocusGeneration,
+                    onOpenNowPlaying = {
+                        navController.navigate(BockRoute.NowPlaying.route) {
+                            launchSingleTop = true
+                        }
+                    },
+                    onControl = { dev, action ->
+                        if (alexaDevices.isEmpty()) {
+                            runCatching { alexaDevices = repository.alexaRemoteDevices().devices }
+                        }
+                        runMiniControl(dev, action)
+                    },
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth(),
+                )
+            }
+        }
     }
 }
 

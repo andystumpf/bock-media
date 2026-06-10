@@ -35,7 +35,7 @@ fun BockArtwork(
     val request = remember(model) {
         ImageRequest.Builder(context)
             .data(model)
-            .crossfade(180)
+            .crossfade(80)
             .memoryCacheKey(model.toString())
             .diskCacheKey(model.toString())
             .build()

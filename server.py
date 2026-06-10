@@ -2515,9 +2515,12 @@ def register_device(device_id, default_name=None, supported_interfaces=None):
             'firstSeen': now,
             'lastSeen': now,
             'fingerprint': incoming_fp,
+            'platform': 'alexa',
         }
     else:
         entry['lastSeen'] = now
+        if not entry.get('platform'):
+            entry['platform'] = 'alexa'
         if default_name and not entry.get('name'):
             entry['name'] = default_name
         if incoming_fp:
@@ -2575,6 +2578,9 @@ def devices():
             'lastSeen':    e.get('lastSeen'),
             'firstSeen':   e.get('firstSeen'),
             'fingerprint': e.get('fingerprint') or '',
+            'platform':    e.get('platform') or ('alexa' if did.startswith('amzn1.') else 'unknown'),
+            'connectCount': e.get('connectCount', 0),
+            'downloadCount': e.get('downloadCount', 0),
         })
     result.sort(key=lambda x: x.get('lastSeen') or 0, reverse=True)
     return jsonify(result)
@@ -2853,6 +2859,88 @@ def recent():
         print(f'Recent error: {e}')
         return jsonify({'items': [], 'total': 0})
 
+# ── API: Client analytics (Android / iOS) ────────────────────────────────────
+
+@app.route('/api/clients/report', methods=['POST'])
+def client_report():
+    """Mobile clients report connect, play, and download events."""
+    body = request.get_json(silent=True) or {}
+    client_id = (body.get('clientId') or '').strip()
+    event = (body.get('event') or '').strip().lower()
+    platform = (body.get('platform') or '').strip().lower()
+    device_name = (body.get('deviceName') or '').strip()
+
+    if not client_id:
+        return jsonify({'error': 'clientId required'}), 400
+    if event not in ('connect', 'play', 'download', 'playback'):
+        return jsonify({'error': 'event must be connect, play, download, or playback'}), 400
+
+    did = register_client_device(client_id, platform=platform, device_name=device_name)
+    if not did:
+        return jsonify({'error': 'invalid clientId'}), 400
+
+    now_iso = datetime.datetime.now().isoformat(timespec='seconds')
+    label = _device_label(did)
+
+    if event == 'connect':
+        _record_client_connect(did)
+        return jsonify({'ok': True, 'deviceId': did})
+
+    if event == 'play':
+        track = (body.get('track') or '').strip()
+        artist = (body.get('artist') or '').strip() or None
+        album = (body.get('album') or '').strip() or None
+        filepath = (body.get('filepath') or body.get('path') or '').strip()
+        if not track and not filepath:
+            return jsonify({'error': 'track or filepath required for play'}), 400
+        append_stream_history({
+            'track': track or os.path.splitext(os.path.basename(filepath))[0],
+            'artist': artist,
+            'album': album,
+            'filepath': filepath,
+            'device': label,
+            'deviceId': did,
+            'platform': platform or None,
+            'date': now_iso,
+        })
+        _write_client_np_state(did, {
+            'track': track,
+            'artist': artist,
+            'album': album,
+            'filepath': filepath,
+            'playing': True,
+            'paused': False,
+            'offset_ms': 0,
+            'duration_ms': int(body.get('duration_ms') or body.get('durationMs') or 0),
+        }, platform=platform)
+        return jsonify({'ok': True, 'deviceId': did})
+
+    if event == 'playback':
+        _write_client_np_state(did, body, platform=platform)
+        return jsonify({'ok': True, 'deviceId': did})
+
+    # download
+    title = (body.get('collectionTitle') or body.get('title') or '').strip()
+    kind = (body.get('collectionKind') or body.get('kind') or '').strip()
+    track_count = int(body.get('trackCount') or body.get('tracks') or 0)
+    append_download_history({
+        'deviceId': did,
+        'device': label,
+        'platform': platform or None,
+        'collectionTitle': title,
+        'collectionKind': kind,
+        'trackCount': track_count,
+        'date': now_iso,
+    })
+    store = _load_devices()
+    entry = store.get(did)
+    if entry is not None:
+        entry['downloadCount'] = int(entry.get('downloadCount') or 0) + 1
+        entry['lastSeen'] = time.time()
+        _save_devices(store)
+    return jsonify({'ok': True, 'deviceId': did})
+
+
 # ── API: Analytics ───────────────────────────────────────────────────────────
 
 def _row_dt(row):
@@ -2886,24 +2974,13 @@ def analytics_export():
             to_dt = datetime.datetime.fromisoformat(to_str).replace(hour=23, minute=59, second=59)
     except Exception:
         pass
-    if from_dt or to_dt:
-        filtered = []
-        for r in rows:
-            ts = _row_dt(r)
-            if not ts:
-                continue
-            if from_dt and ts < from_dt:
-                continue
-            if to_dt and ts > to_dt:
-                continue
-            filtered.append(r)
-        rows = filtered
+    rows = _filter_history_rows(rows, from_dt, to_dt)
     rows = [r for r in rows
             if r.get('deviceId', '') not in ('DEVICE_ALPHA', 'DEVICE_BETA')
             and not r.get('test')]
     buf = StringIO()
     w = csv.writer(buf)
-    w.writerow(['date', 'track', 'artist', 'album', 'device', 'filepath'])
+    w.writerow(['date', 'track', 'artist', 'album', 'device', 'platform', 'filepath'])
     for r in rows:
         w.writerow([
             r.get('date') or r.get('timestamp') or '',
@@ -2911,6 +2988,7 @@ def analytics_export():
             r.get('artist') or '',
             r.get('album') or '',
             r.get('device') or '',
+            r.get('platform') or '',
             r.get('filepath') or '',
         ])
     return Response(
@@ -2941,18 +3019,7 @@ def analytics():
     except Exception:
         pass
 
-    if from_dt or to_dt:
-        filtered = []
-        for r in rows:
-            ts = _row_dt(r)
-            if not ts:
-                continue
-            if from_dt and ts < from_dt:
-                continue
-            if to_dt and ts > to_dt:
-                continue
-            filtered.append(r)
-        rows = filtered
+    rows = _filter_history_rows(rows, from_dt, to_dt)
 
     # Strip test/placeholder rows that were never real device plays
     rows = [r for r in rows
@@ -2960,6 +3027,7 @@ def analytics():
             and not r.get('test')]
 
     total = len(rows)
+    download_rows = _filter_history_rows(_read_download_history(), from_dt, to_dt)
     EMPTY = {
         'totalPlays': 0, 'uniqueTracks': 0, 'uniqueArtists': 0, 'uniqueAlbums': 0,
         'topTracks': [], 'topArtists': [], 'topAlbums': [], 'topDevices': [],
@@ -2975,9 +3043,13 @@ def analytics():
         'repeatRate':      {'repeated': 0, 'total': 0, 'pct': 0},
         'mostActiveDay':   None,
         'entity_activity': {},
+        'deviceBreakdown': [],
         'dateRange': {'from': from_str, 'to': to_str},
     }
-    if total == 0:
+    device_store = _load_devices()
+    device_breakdown = _build_device_breakdown(rows, download_rows, device_store)
+    if total == 0 and not download_rows and not any(d.get('connects') for d in device_breakdown):
+        EMPTY['deviceBreakdown'] = device_breakdown
         _analytics_cache[cache_key] = {'data': EMPTY, 'ts': time.time()}
         return jsonify(EMPTY)
 
@@ -3219,6 +3291,7 @@ def analytics():
             'tracks':  entity_series(track_day_ctr,  top5_tracks,  lambda k: k[0]),
             'devices': entity_series(device_day_ctr, top5_devices),
         },
+        'deviceBreakdown': _build_device_breakdown(rows, download_rows, device_store),
         'dateRange': {'from': from_str, 'to': to_str},
     }
     _analytics_cache[cache_key] = {'data': result, 'ts': time.time()}
@@ -3243,12 +3316,211 @@ def _parse_stream_message(title, description):
 
 STREAM_HISTORY_PATH = os.path.join(HERE, 'streaming_history.jsonl')
 _STREAM_HISTORY_MAX = 5000
+DOWNLOAD_HISTORY_PATH = os.path.join(HERE, 'download_history.jsonl')
+_DOWNLOAD_HISTORY_MAX = 5000
+_CLIENT_CONNECT_DEBOUNCE_SEC = 3600
 
 _analytics_cache: dict = {}
 _ANALYTICS_TTL = 60  # seconds
 
 def _bust_analytics_cache():
     _analytics_cache.clear()
+
+def _client_device_id(client_id):
+    cid = (client_id or '').strip().lower()
+    if not cid:
+        return None
+    return f'client-{cid}'
+
+def _is_client_device(device_id):
+    return bool(device_id) and str(device_id).startswith('client-')
+
+_CLIENT_NP_HEARTBEAT_STALE_SECONDS = 45
+
+def _write_client_np_state(device_id, body, platform=None):
+    """Live now-playing row for a mobile client (web dashboard + household view)."""
+    if body.get('stopped'):
+        write_np_state_for_device(device_id, None)
+        return
+    track = (body.get('track') or '').strip()
+    artist = (body.get('artist') or '').strip() or None
+    album = (body.get('album') or '').strip() or None
+    filepath = (body.get('filepath') or body.get('path') or '').strip() or None
+    if not track and not filepath:
+        write_np_state_for_device(device_id, None)
+        return
+    playing = body.get('playing')
+    if playing is None:
+        playing = not bool(body.get('paused'))
+    paused = bool(body.get('paused')) and not bool(playing)
+    write_np_state_for_device(device_id, {
+        'track': track or (os.path.splitext(os.path.basename(filepath))[0] if filepath else ''),
+        'artist': artist,
+        'album': album,
+        'filepath': filepath,
+        'playing': bool(playing),
+        'paused': paused,
+        'offset_ms': int(body.get('offset_ms') or body.get('offsetMs') or 0),
+        'duration_ms': int(body.get('duration_ms') or body.get('durationMs') or 0),
+        'timestamp': time.time(),
+        'platform': platform,
+    })
+
+def _expire_stale_client_playback(payload):
+    """Drop mobile client rows when the app stops heartbeating."""
+    now = time.time()
+    devices = payload.get('devices', {}) or {}
+    changed = False
+    for did in list(devices.keys()):
+        if not _is_client_device(did):
+            continue
+        st = devices.get(did) or {}
+        ts = st.get('timestamp') or 0
+        if not st.get('playing') and not st.get('paused'):
+            devices.pop(did, None)
+            changed = True
+            continue
+        if ts and now - ts > _CLIENT_NP_HEARTBEAT_STALE_SECONDS:
+            devices.pop(did, None)
+            changed = True
+    return changed
+
+def register_client_device(client_id, platform=None, device_name=None):
+    """Register or refresh a mobile client install in devices.json."""
+    did = _client_device_id(client_id)
+    if not did:
+        return None
+    data = _load_devices()
+    now = time.time()
+    plat = (platform or '').strip().lower() or 'unknown'
+    entry = data.get(did)
+    if not entry:
+        label = (device_name or '').strip() or f'{plat.title()} {client_id[:8]}'
+        data[did] = {
+            'name': label,
+            'firstSeen': now,
+            'lastSeen': now,
+            'platform': plat,
+            'connectCount': 0,
+            'downloadCount': 0,
+        }
+    else:
+        entry['lastSeen'] = now
+        if plat and plat != 'unknown':
+            entry['platform'] = plat
+        if device_name:
+            cur = (entry.get('name') or '').strip()
+            auto = not cur or cur.lower() == f'{plat} {client_id[:8]}'.lower()
+            if auto or cur.startswith('Android ') or cur.startswith('Ios '):
+                entry['name'] = device_name
+    _save_devices(data)
+    return did
+
+def _record_client_connect(device_id):
+    """Count a client session connect, debounced to once per hour."""
+    data = _load_devices()
+    entry = data.get(device_id)
+    if not entry:
+        return
+    now = time.time()
+    last = entry.get('lastConnectAt') or 0
+    if now - last >= _CLIENT_CONNECT_DEBOUNCE_SEC:
+        entry['connectCount'] = int(entry.get('connectCount') or 0) + 1
+        entry['lastConnectAt'] = now
+    entry['lastSeen'] = now
+    _save_devices(data)
+
+def append_download_history(entry):
+    try:
+        with open(DOWNLOAD_HISTORY_PATH, 'a') as f:
+            f.write(json.dumps(entry) + '\n')
+        _bust_analytics_cache()
+    except Exception as e:
+        print(f'download history write error: {e}', flush=True)
+
+def _read_download_history():
+    rows = []
+    try:
+        with open(DOWNLOAD_HISTORY_PATH) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rows.append(json.loads(line))
+                except Exception:
+                    continue
+    except FileNotFoundError:
+        pass
+    if len(rows) > _DOWNLOAD_HISTORY_MAX:
+        rows = rows[-_DOWNLOAD_HISTORY_MAX:]
+        try:
+            with open(DOWNLOAD_HISTORY_PATH, 'w') as f:
+                for r in rows:
+                    f.write(json.dumps(r) + '\n')
+        except Exception:
+            pass
+    return rows
+
+def _filter_history_rows(rows, from_dt, to_dt):
+    if not from_dt and not to_dt:
+        return rows
+    filtered = []
+    for r in rows:
+        ts = _row_dt(r)
+        if not ts:
+            continue
+        if from_dt and ts < from_dt:
+            continue
+        if to_dt and ts > to_dt:
+            continue
+        filtered.append(r)
+    return filtered
+
+def _build_device_breakdown(play_rows, download_rows, device_store):
+    """Per-device connects, plays, and downloads for the analytics dashboard."""
+    stats = {}
+
+    def _ensure(did):
+        primary = _resolve_device_id(did, device_store) if did else ''
+        if not primary:
+            return None
+        if primary not in stats:
+            entry = device_store.get(primary) or {}
+            if entry.get('aliasOf'):
+                return None
+            stats[primary] = {
+                'deviceId': primary,
+                'name': entry.get('name') or _device_label(primary),
+                'platform': entry.get('platform') or ('alexa' if primary.startswith('amzn1.') else 'unknown'),
+                'plays': 0,
+                'downloads': 0,
+                'connects': int(entry.get('connectCount') or 0),
+                'lastSeen': entry.get('lastSeen'),
+                'firstSeen': entry.get('firstSeen'),
+            }
+        return primary
+
+    for r in play_rows:
+        did = r.get('deviceId') or ''
+        primary = _ensure(did)
+        if primary:
+            stats[primary]['plays'] += 1
+
+    for r in download_rows:
+        did = r.get('deviceId') or ''
+        primary = _ensure(did)
+        if primary:
+            stats[primary]['downloads'] += 1
+
+    for did, entry in device_store.items():
+        if entry.get('aliasOf'):
+            continue
+        _ensure(did)
+
+    breakdown = list(stats.values())
+    breakdown.sort(key=lambda x: (x['plays'] + x['downloads'], x.get('lastSeen') or 0), reverse=True)
+    return breakdown
 
 def append_stream_history(entry):
     try:
@@ -4226,24 +4498,58 @@ def _m3u_first_paths(source, limit=12):
     return out
 
 
-@app.route('/api/playlists/<playlist_id>/cover')
-def playlist_cover(playlist_id):
-    """Fast cover art path for a playlist — reads only the first few .m3u entries."""
-    key, _entry = _find_playlist_key(_load_playlists_tree().getroot(), playlist_id)
+def _playlist_cover_path_from_tree(root, playlist_id):
+    """Resolve first track path for playlist cover art (shared by single + batch endpoints)."""
+    key, _entry = _find_playlist_key(root, playlist_id)
     if key is None:
-        return jsonify({'error': 'not_found'}), 404
+        return None
     meta = _playlist_meta_from_key(key)
     source = meta.get('source') or ''
     paths = _m3u_first_paths(source, limit=12)
-    art_path = None
-    if paths:
-        rows = db_query(
-            f'SELECT path FROM songs_cache WHERE path IN ({",".join("?" * len(paths))}) '
-            f'AND path IS NOT NULL AND path != "" LIMIT 1',
-            paths,
-        ) or []
-        art_path = (rows[0].get('path') if rows else None) or paths[0]
+    if not paths:
+        return None
+    rows = db_query(
+        f'SELECT path FROM songs_cache WHERE path IN ({",".join("?" * len(paths))}) '
+        f'AND path IS NOT NULL AND path != "" LIMIT 1',
+        paths,
+    ) or []
+    return (rows[0].get('path') if rows else None) or paths[0]
+
+
+@app.route('/api/playlists/<playlist_id>/cover')
+def playlist_cover(playlist_id):
+    """Fast cover art path for a playlist — reads only the first few .m3u entries."""
+    root = _load_playlists_tree().getroot()
+    art_path = _playlist_cover_path_from_tree(root, playlist_id)
+    if art_path is None and _find_playlist_key(root, playlist_id)[0] is None:
+        return jsonify({'error': 'not_found'}), 404
     return jsonify({'playlistId': playlist_id, 'path': art_path})
+
+
+@app.route('/api/playlists/covers', methods=['POST'])
+def playlist_covers_batch():
+    """Batch playlist cover paths for home grids — one playlist tree load for many ids."""
+    body = request.get_json(silent=True) or {}
+    raw_ids = body.get('ids') or []
+    if not isinstance(raw_ids, list):
+        return jsonify({'error': 'ids must be an array'}), 400
+    ids = []
+    seen = set()
+    for raw in raw_ids:
+        pid = str(raw or '').strip()
+        if not pid or pid in seen:
+            continue
+        seen.add(pid)
+        ids.append(pid)
+        if len(ids) >= 200:
+            break
+    root = _load_playlists_tree().getroot()
+    covers = {}
+    for pid in ids:
+        path = _playlist_cover_path_from_tree(root, pid)
+        if path:
+            covers[pid] = path
+    return jsonify({'covers': covers})
 
 
 @app.route('/api/playlists/<playlist_id>')
@@ -5193,12 +5499,20 @@ def nowplaying_sleep():
 def nowplaying_devices():
     payload = _canonicalize_np(_prune_np(_read_all_np() or {'devices': {}}))
     _expire_stale_playing(payload)
+    if _expire_stale_client_playback(payload):
+        pass
     _write_all_np(payload)
     devices = payload.get('devices', {})
     known = set(_load_devices().keys())
+    device_store = _load_devices()
+    # Mobile apps pass viewerClientId to hide other phones/tablets; web omits it.
+    viewer_client_id = (request.args.get('viewerClientId') or '').strip()
+    mobile_view = bool(viewer_client_id)
     items = []
     for did, st in devices.items():
         if not st.get('playing') and not st.get('paused'):
+            continue
+        if mobile_view and _is_client_device(did):
             continue
         if did == 'default' or (did not in known and not _is_msp_pseudo(did)):
             continue
@@ -5214,6 +5528,8 @@ def nowplaying_devices():
                 'context': st.get('context'),
                 'sourceLabel': st.get('sourceLabel') or st.get('playlist') or st.get('context') or '',
             }
+        entry = device_store.get(did) or {}
+        platform = st.get('platform') or entry.get('platform')
         items.append({
             'deviceId':   did,
             'deviceName': _device_label(did) or did[-6:],
@@ -5231,6 +5547,7 @@ def nowplaying_devices():
             'playlistId': src.get('playlistId'),
             'context': src.get('context'),
             'sourceLabel': src.get('sourceLabel'),
+            'platform': platform,
         })
     items.sort(key=lambda x: (x.get('paused'), -(x.get('timestamp') or 0)))
     controls = False

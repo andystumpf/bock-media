@@ -1,22 +1,20 @@
 package com.bockmedia.console.ui.home
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import com.bockmedia.console.ui.components.BockLazyColumn
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.bockmedia.console.data.repository.BockMediaRepository
+import com.bockmedia.console.domain.model.*
 import com.bockmedia.console.local.OfflineDownloadManager
-import com.bockmedia.console.domain.model.HomeFeedCache
-import com.bockmedia.console.domain.model.HomeFeedLoader
-import com.bockmedia.console.domain.model.HomeFilter
-import com.bockmedia.console.domain.model.PlayTarget
-import com.bockmedia.console.domain.model.buildOfflineHomeSection
-import com.bockmedia.console.domain.model.matches
+import com.bockmedia.console.local.downloadId
 import com.bockmedia.console.ui.components.*
+import com.bockmedia.console.ui.theme.BockMuted
 import kotlinx.coroutines.launch
 
 @Composable
@@ -29,12 +27,25 @@ fun HomeScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var feed by remember { mutableStateOf<com.bockmedia.console.domain.model.HomeFeed?>(null) }
+    var feed by remember { mutableStateOf<HomeFeed?>(null) }
     var loading by remember { mutableStateOf(true) }
     var refreshing by remember { mutableStateOf(false) }
     var filter by remember { mutableStateOf(HomeFilter.All) }
     var error by remember { mutableStateOf<String?>(null) }
-    var offlineSection by remember { mutableStateOf<com.bockmedia.console.domain.model.HomeSection?>(null) }
+    var offlineSection by remember { mutableStateOf<HomeSection?>(null) }
+    var showAllSection by remember { mutableStateOf<HomeSection?>(null) }
+    var actionCard by remember { mutableStateOf<HomeCard?>(null) }
+    var artworkEpoch by remember { mutableIntStateOf(0) }
+    val downloadStatuses by OfflineDownloadManager.statuses.collectAsState()
+
+    fun warmArtwork(homeFeed: HomeFeed?) {
+        val cards = homeFeed?.sections.orEmpty().flatMap { it.cards } ?: return
+        artworkEpoch++
+        scope.launch {
+            HomeArtworkResolver.warmPlaylistCovers(repository, cards)
+            artworkEpoch++
+        }
+    }
 
     suspend fun loadOffline() {
         offlineSection = buildOfflineHomeSection(context)
@@ -47,6 +58,7 @@ fun HomeScreen(
             val fresh = HomeFeedLoader.load(repository)
             HomeFeedCache.put(fresh)
             feed = fresh
+            warmArtwork(fresh)
         }.onFailure { error = it.message }
         loading = false
         refreshing = false
@@ -57,6 +69,7 @@ fun HomeScreen(
         HomeFeedCache.getIfFresh()?.let { cached ->
             feed = cached
             loading = false
+            artworkEpoch++
         }
         load()
         loadOffline()
@@ -66,9 +79,45 @@ fun HomeScreen(
         if (filter == HomeFilter.Offline) loadOffline()
     }
 
+    val jumpBackIn = feed?.sections?.firstOrNull { it.kind == HomeSectionKind.JumpBackIn }
+    val showShortcuts = filter == HomeFilter.All && jumpBackIn != null
+
     val sections = when (filter) {
         HomeFilter.Offline -> listOfNotNull(offlineSection)
-        else -> feed?.sections.orEmpty().filter { filter.matches(it.kind) }
+        else -> feed?.sections.orEmpty()
+            .filter { filter.matches(it.kind) }
+            .filter { section ->
+                !(showShortcuts && section.kind == HomeSectionKind.JumpBackIn)
+            }
+    }
+
+    actionCard?.let { card ->
+        HomeCardActionSheet(
+            card = card,
+            downloadState = downloadStatuses[card.playTarget.downloadId()]?.state,
+            onDismiss = { actionCard = null },
+            onPlay = {
+                HomeTileEngagement.recordSelection(card.id)
+                actionCard = null
+                onPlay(card.playTarget)
+            },
+            onDownload = {
+                actionCard = null
+                OfflineDownloadManager.download(context, card.playTarget)
+            },
+        )
+    }
+
+    showAllSection?.let { section ->
+        HomeSectionShowAllSheet(
+            section = section,
+            onDismiss = { showAllSection = null },
+            onPlay = { card ->
+                HomeTileEngagement.recordSelection(card.id)
+                showAllSection = null
+                onPlay(card.playTarget)
+            },
+        )
     }
 
     BockPullRefresh(
@@ -85,7 +134,6 @@ fun HomeScreen(
                         selected = filter,
                         onSelect = { filter = it },
                         onAccountNavigate = onAccountNavigate,
-                        onOpenDownloads = onOpenDownloads,
                     )
                 }
                 if (!remoteOk) {
@@ -97,33 +145,68 @@ fun HomeScreen(
                         )
                     }
                 }
-                if (sections.isEmpty()) {
+                if (showShortcuts) {
                     item {
-                        Text(
-                            when (filter) {
-                                HomeFilter.Offline -> "Nothing downloaded yet — tap download on Home tiles or long-press for more."
-                                else -> "Nothing here yet — play some music and your mixes will appear."
+                        HomeShortcutGrid(
+                            cards = jumpBackIn!!.cards,
+                            repository = repository,
+                            artworkEpoch = artworkEpoch,
+                            onPlay = { card ->
+                                HomeTileEngagement.recordSelection(card.id)
+                                onPlay(card.playTarget)
                             },
-                            modifier = Modifier.padding(16.dp),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            onLongPress = { actionCard = it },
                         )
                     }
+                }
+                if (sections.isEmpty() && !showShortcuts) {
+                    item { HomeEmptyState(filter) }
                 } else {
                     items(sections.size, key = { "${filter.name}-${sections[it].id}" }) { index ->
                         SpotifyHomeSection(
                             section = sections[index],
                             repository = repository,
-                            onPlay = { card -> onPlay(card.playTarget) },
-                            onDownload = { card ->
-                                OfflineDownloadManager.download(context, card.playTarget)
+                            artworkEpoch = artworkEpoch,
+                            onPlay = { card ->
+                                HomeTileEngagement.recordSelection(card.id)
+                                onPlay(card.playTarget)
                             },
-                            compactTop = index == 0,
-                            artLoadKey = filter,
+                            onLongPress = { actionCard = it },
+                            onShowAll = { showAllSection = it },
                         )
                     }
                 }
-                item { Spacer(Modifier.height(8.dp)) }
+                item { Spacer(Modifier.height(24.dp)) }
             }
         }
+    }
+}
+
+@Composable
+private fun HomeEmptyState(filter: HomeFilter) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            if (filter == HomeFilter.Offline) "Nothing downloaded yet" else "Nothing here yet",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+            textAlign = TextAlign.Center,
+        )
+        Text(
+            if (filter == HomeFilter.Offline) {
+                "Download playlists from Home tiles or long-press for more."
+            } else {
+                "Pull down to refresh, or search for music to play."
+            },
+            style = MaterialTheme.typography.bodyMedium,
+            color = BockMuted,
+            textAlign = TextAlign.Center,
+        )
     }
 }

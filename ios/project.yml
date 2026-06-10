@@ -1,0 +1,108 @@
+name: BockMedia
+options:
+  bundleIdPrefix: com.bockmedia
+  deploymentTarget:
+    iOS: "17.0"
+  groupSortPosition: top
+  createIntermediateGroups: true
+configs:
+  Debug: debug
+  Release: release
+configFiles:
+  Debug: Config.xcconfig
+  Release: Config.xcconfig
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    # Team ID lives in Config.xcconfig — do not hardcode "" here or xcodegen wipes Xcode's selection.
+    DEVELOPMENT_TEAM: $(DEVELOPMENT_TEAM)
+    CODE_SIGN_STYLE: Automatic
+targets:
+  BockMedia:
+    type: application
+    platform: iOS
+    sources:
+      - path: BockMedia
+    dependencies:
+      - target: BockMediaWidget
+        embed: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.bockmedia.console
+        CODE_SIGN_ENTITLEMENTS: BockMedia/BockMedia.entitlements
+        MARKETING_VERSION: "2.3.0"
+        CURRENT_PROJECT_VERSION: "7"
+        INFOPLIST_KEY_CFBundleDisplayName: Bock Media
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIRequiresFullScreen: true
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        ENABLE_PREVIEWS: YES
+    info:
+      path: BockMedia/Info.plist
+      properties:
+        BOCK_LOCAL_SERVER_URL: $(BOCK_LOCAL_SERVER_URL)
+        BOCK_EXTERNAL_SERVER_URL: $(BOCK_EXTERNAL_SERVER_URL)
+        BOCK_MOBILE_API_TOKEN: $(BOCK_MOBILE_API_TOKEN)
+        BOCK_ADMIN_USER: $(BOCK_ADMIN_USER)
+        BOCK_ADMIN_PASSWORD: $(BOCK_ADMIN_PASSWORD)
+        UILaunchScreen:
+          UIColorName: ""
+          UIImageName: ""
+          UIRed: 0.078
+          UIGreen: 0.078
+          UIBlue: 0.078
+        CFBundleURLTypes:
+          - CFBundleURLName: com.bockmedia.console
+            CFBundleURLSchemes:
+              - bockmedia
+        UIBackgroundModes:
+          - audio
+          - fetch
+          - processing
+        BGTaskSchedulerPermittedIdentifiers:
+          - com.bockmedia.console.offline-refresh
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+          NSAllowsArbitraryLoadsForMedia: true
+          NSAllowsLocalNetworking: true
+  BockMediaWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: BockMediaWidget
+      - path: BockMedia/Widget
+        excludes:
+          - WidgetSessionBridge.swift
+      - path: BockMedia/Resources/Assets.xcassets
+      - path: BockMedia/UI/Theme/BockIcons.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.bockmedia.console.widget
+        CODE_SIGN_ENTITLEMENTS: BockMediaWidget/BockMediaWidget.entitlements
+        MARKETING_VERSION: "2.3.0"
+        CURRENT_PROJECT_VERSION: "7"
+        INFOPLIST_KEY_CFBundleDisplayName: Bock Media
+        SKIP_INSTALL: YES
+    info:
+      path: BockMediaWidget/Info.plist
+      properties:
+        CFBundleDisplayName: Bock Media
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+          NSAllowsArbitraryLoadsForMedia: true
+          NSAllowsLocalNetworking: true
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+  BockMediaTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: BockMediaTests
+    dependencies:
+      - target: BockMedia
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.bockmedia.console.tests
+        GENERATE_INFOPLIST_FILE: YES

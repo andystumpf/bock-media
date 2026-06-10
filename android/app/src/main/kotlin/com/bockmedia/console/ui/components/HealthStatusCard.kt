@@ -91,7 +91,16 @@ fun HealthStatusCard(
             }
 
             when {
-                loading && health == null -> LinearProgressIndicator(Modifier.fillMaxWidth())
+                loading && health == null -> {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(48.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        BockProgressIndicator(size = 32.dp)
+                    }
+                }
                 loadError != null -> Text(loadError!!, color = MaterialTheme.colorScheme.error)
                 health != null -> HealthDetails(health!!, plex)
             }

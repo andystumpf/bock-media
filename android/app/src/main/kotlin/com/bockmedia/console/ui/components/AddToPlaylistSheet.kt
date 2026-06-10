@@ -100,7 +100,7 @@ fun AddToPlaylistSheet(
             }
             if (loading) {
                 Box(Modifier.fillMaxWidth().height(120.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
+                    BockProgressIndicator()
                 }
             } else {
                 playlists.forEach { pl ->

@@ -7,7 +7,10 @@ import com.bockmedia.console.data.auth.BockAuthInterceptor
 import com.bockmedia.console.data.local.AppPreferences
 import com.bockmedia.console.data.network.ServerEndpointResolver
 import com.bockmedia.console.data.repository.BockMediaRepository
+import com.bockmedia.console.local.ClientIdStore
+import com.bockmedia.console.domain.model.HomeArtworkCache
 import com.bockmedia.console.domain.model.HomeFeedCache
+import com.bockmedia.console.domain.model.HomeTileEngagement
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -17,8 +20,12 @@ import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import java.util.concurrent.TimeUnit
 
-class BockMediaApp(context: Context) {
-    val preferences = AppPreferences(context.applicationContext)
+class BockMediaApp(private val appContext: Context) {
+    val preferences = AppPreferences(appContext.applicationContext)
+
+    init {
+        HomeTileEngagement.init(appContext.applicationContext)
+    }
 
     private var cachedBaseUrl: String? = null
     private var cachedApi: BockMediaApi? = null
@@ -31,6 +38,7 @@ class BockMediaApp(context: Context) {
             apiProvider = { api() },
             baseUrlProvider = { resolveBaseUrl() },
             preferences = preferences,
+            clientIdProvider = { ClientIdStore.clientId(appContext) },
         )
     }
 
@@ -81,6 +89,7 @@ class BockMediaApp(context: Context) {
         ServerEndpointResolver.invalidate()
         repository.clearCaches()
         HomeFeedCache.invalidate()
+        HomeArtworkCache.invalidate()
     }
 
     suspend fun buildAuthenticatedHttpClient(): OkHttpClient {

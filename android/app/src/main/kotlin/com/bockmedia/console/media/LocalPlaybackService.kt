@@ -24,6 +24,7 @@ import androidx.media3.session.MediaSessionService
 import com.bockmedia.console.BockMediaApp
 import com.bockmedia.console.MainActivity
 import com.bockmedia.console.R
+import com.bockmedia.console.data.analytics.DeviceAnalyticsReporter
 import kotlinx.coroutines.runBlocking
 
 class LocalPlaybackService : MediaSessionService() {
@@ -31,6 +32,9 @@ class LocalPlaybackService : MediaSessionService() {
     private var mediaSession: MediaSession? = null
     private var titles: List<String> = emptyList()
     private var artists: List<String> = emptyList()
+    private var albums: List<String> = emptyList()
+    private var paths: List<String> = emptyList()
+    private var lastReportedIndex = -1
     private val progressHandler = Handler(Looper.getMainLooper())
     private val progressRunnable = object : Runnable {
         override fun run() {
@@ -52,6 +56,9 @@ class LocalPlaybackService : MediaSessionService() {
                 val urls = intent.getStringArrayListExtra(EXTRA_URLS).orEmpty()
                 titles = intent.getStringArrayListExtra(EXTRA_TITLES).orEmpty()
                 artists = intent.getStringArrayListExtra(EXTRA_ARTISTS).orEmpty()
+                albums = intent.getStringArrayListExtra(EXTRA_ALBUMS).orEmpty()
+                paths = intent.getStringArrayListExtra(EXTRA_PATHS).orEmpty()
+                lastReportedIndex = -1
                 val start = intent.getIntExtra(EXTRA_START_INDEX, 0).coerceAtLeast(0)
                 startPlayback(urls, start)
             }
@@ -59,6 +66,7 @@ class LocalPlaybackService : MediaSessionService() {
             ACTION_NEXT -> player?.seekToNextMediaItem()
             ACTION_PREVIOUS -> player?.seekToPreviousMediaItem()
             ACTION_STOP -> {
+                DeviceAnalyticsReporter.clearPlayback(this)
                 stopProgressUpdates()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 player?.release()
@@ -89,8 +97,21 @@ class LocalPlaybackService : MediaSessionService() {
         exo.setMediaItems(items, startIndex.coerceAtMost(items.lastIndex), 0)
         exo.prepare()
         exo.play()
+        reportPlayIfNeeded(startIndex.coerceAtMost(items.lastIndex))
         startProgressUpdates()
         startForeground(NOTIFICATION_ID, buildNotification())
+    }
+
+    private fun reportPlayIfNeeded(index: Int) {
+        if (index == lastReportedIndex || index !in paths.indices) return
+        lastReportedIndex = index
+        val track = com.bockmedia.console.domain.model.LocalTrack(
+            path = paths[index],
+            title = titles.getOrNull(index).orEmpty().ifBlank { "Unknown" },
+            artist = artists.getOrNull(index),
+            album = albums.getOrNull(index),
+        )
+        DeviceAnalyticsReporter.reportPlay(this, track)
     }
 
     private fun startProgressUpdates() {
@@ -126,6 +147,7 @@ class LocalPlaybackService : MediaSessionService() {
 
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 syncState(exo)
+                reportPlayIfNeeded(exo.currentMediaItemIndex)
                 startForeground(NOTIFICATION_ID, buildNotification())
             }
 
@@ -147,12 +169,29 @@ class LocalPlaybackService : MediaSessionService() {
 
     private fun syncState(exo: ExoPlayer) {
         val duration = exo.duration
+        val durationMs = if (duration == C.TIME_UNSET || duration < 0) 0 else duration
         LocalPlaybackController.onServiceState(
             index = exo.currentMediaItemIndex,
             isPlaying = exo.isPlaying,
             positionMs = exo.currentPosition.coerceAtLeast(0),
-            durationMs = if (duration == C.TIME_UNSET || duration < 0) 0 else duration,
+            durationMs = durationMs,
         )
+        val idx = exo.currentMediaItemIndex
+        if (idx in paths.indices) {
+            val track = com.bockmedia.console.domain.model.LocalTrack(
+                path = paths[idx],
+                title = titles.getOrNull(idx).orEmpty().ifBlank { "Unknown" },
+                artist = artists.getOrNull(idx),
+                album = albums.getOrNull(idx),
+            )
+            DeviceAnalyticsReporter.reportPlayback(
+                this,
+                track,
+                playing = exo.isPlaying,
+                offsetMs = exo.currentPosition.coerceAtLeast(0),
+                durationMs = durationMs,
+            )
+        }
     }
 
     private fun buildNotification(): Notification {
@@ -258,6 +297,8 @@ class LocalPlaybackService : MediaSessionService() {
         const val EXTRA_URLS = "urls"
         const val EXTRA_TITLES = "titles"
         const val EXTRA_ARTISTS = "artists"
+        const val EXTRA_ALBUMS = "albums"
+        const val EXTRA_PATHS = "paths"
         const val EXTRA_START_INDEX = "startIndex"
         private const val CHANNEL_ID = "local_playback"
         private const val NOTIFICATION_ID = 42

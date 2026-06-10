@@ -20,7 +20,7 @@ fun SplashScreen(message: String = "Connecting…") {
                 modifier = Modifier.size(96.dp),
             )
             Spacer(Modifier.height(24.dp))
-            CircularProgressIndicator(strokeWidth = 2.dp)
+            BockProgressIndicator(size = 48.dp)
             Spacer(Modifier.height(12.dp))
             Text(
                 message,

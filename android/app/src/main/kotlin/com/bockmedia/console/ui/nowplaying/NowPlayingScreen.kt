@@ -107,7 +107,7 @@ fun NowPlayingScreen(
 
     suspend fun refreshLive() {
         val np = repository.nowPlayingDevices()
-        items = np.items
+        items = np.items.filter { !it.deviceId.startsWith("client-") }
         controlsAvailable = np.controlsAvailable
         remoteOk = alexaControlsAvailable(repository.alexaRemoteStatus())
         if (controlsAvailable && remoteOk && alexaDevices.isEmpty()) {
@@ -702,6 +702,12 @@ private fun SpotifyNowPlayingPage(
                             showSleepAndShuffle = !isLocal,
                             modifier = Modifier.padding(top = 4.dp),
                         )
+                        SpotifyStopButton(
+                            onClick = { onControl(displayDev, "stop") },
+                            modifier = Modifier
+                                .padding(horizontal = 24.dp)
+                                .padding(top = 4.dp, bottom = 4.dp),
+                        )
 
                         val serial = if (isLocal) null else resolveSerial(displayDev, alexaDevices)
                         if (serial != null) {
@@ -1008,6 +1014,41 @@ private fun SpotifyProgressBar(
                     color = Color.White.copy(alpha = 0.65f),
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun SpotifyStopButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        onClick = onClick,
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(50),
+        color = Color.White.copy(alpha = 0.1f),
+    ) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Default.Stop,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(20.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "Stop",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = Color.White,
+            )
         }
     }
 }

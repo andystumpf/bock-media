@@ -8,6 +8,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -37,6 +38,7 @@ fun MiniNowPlayingBar(
     playbackFocusGeneration: Int = 0,
     onOpenNowPlaying: () -> Unit,
     onControl: suspend (NowPlayingDeviceItem, String) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -84,7 +86,7 @@ fun MiniNowPlayingBar(
     }
     val barGradient = Brush.verticalGradient(colors = listOf(MiniBarTop, MiniBarBottom))
 
-    Box(Modifier.fillMaxWidth().background(barGradient)) {
+    Box(modifier.fillMaxWidth().background(barGradient)) {
         Row(
             Modifier
                 .fillMaxWidth()
@@ -149,6 +151,25 @@ fun MiniNowPlayingBar(
                     Icon(
                         Icons.Default.SkipNext,
                         contentDescription = "Next",
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                IconButton(
+                    onClick = {
+                        scope.launch {
+                            if (localItem != null) {
+                                LocalPlaybackController.stop(context)
+                            } else {
+                                onControl(dev, "stop")
+                            }
+                            refreshRemote()
+                        }
+                    },
+                    modifier = Modifier.size(40.dp),
+                ) {
+                    Icon(
+                        Icons.Default.Stop,
+                        contentDescription = "Stop",
                         tint = MaterialTheme.colorScheme.primary,
                     )
                 }

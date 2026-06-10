@@ -81,6 +81,31 @@ class TestBrowse:
         data = client.get('/api/playlists/pl-1/cover').get_json()
         assert data.get('path') == '/music/a.mp3'
 
+    def test_playlist_covers_batch(self, client, monkeypatch):
+        import xml.etree.ElementTree as ET
+
+        monkeypatch.setattr(
+            server,
+            '_load_playlists_tree',
+            lambda: ET.ElementTree(ET.Element('playlists')),
+        )
+
+        def fake_find(root, pid):
+            return ('key1', None) if pid in ('pl-1', 'pl-2') else (None, None)
+
+        monkeypatch.setattr(server, '_find_playlist_key', fake_find)
+        monkeypatch.setattr(server, '_playlist_meta_from_key', lambda key: {'source': '/fake/list.m3u'})
+        monkeypatch.setattr(server, '_m3u_first_paths', lambda source, limit=12: ['/music/a.mp3'])
+        monkeypatch.setattr(
+            server,
+            'db_query',
+            lambda sql, params=(): [{'path': '/music/a.mp3'}],
+        )
+        data = client.post('/api/playlists/covers', json={'ids': ['pl-1', 'pl-2', 'missing']}).get_json()
+        assert data['covers']['pl-1'] == '/music/a.mp3'
+        assert data['covers']['pl-2'] == '/music/a.mp3'
+        assert 'missing' not in data['covers']
+
     def test_songs_paginated(self, client):
         data = client.get('/api/songs?page=1&limit=3').get_json()
         assert 'items' in data and 'total' in data
@@ -394,3 +419,87 @@ class TestLibrarySearchSongMatch:
         data = rv.get_json()
         assert data['name'] == 'Evening Jazz'
         assert len(data.get('rules', [])) == 2
+
+
+class TestClientAnalytics:
+    def test_connect_registers_device(self, client, isolated_paths):
+        rv = client.post('/api/clients/report', data=json.dumps({
+            'clientId': 'abc-123-test',
+            'platform': 'android',
+            'deviceName': 'Pixel Test',
+            'event': 'connect',
+        }), content_type='application/json')
+        assert rv.status_code == 200
+        assert rv.get_json()['deviceId'] == 'client-abc-123-test'
+        devices = client.get('/api/devices').get_json()
+        match = next(d for d in devices if d['deviceId'] == 'client-abc-123-test')
+        assert match['platform'] == 'android'
+        assert match['connectCount'] == 1
+
+    def test_play_appends_stream_history(self, client, isolated_paths):
+        rv = client.post('/api/clients/report', data=json.dumps({
+            'clientId': 'play-test-id',
+            'platform': 'ios',
+            'deviceName': 'iPhone Test',
+            'event': 'play',
+            'track': 'Test Song',
+            'artist': 'Test Artist',
+            'filepath': '/music/test.mp3',
+        }), content_type='application/json')
+        assert rv.status_code == 200
+        analytics = client.get('/api/analytics').get_json()
+        assert analytics['totalPlays'] == 1
+        breakdown = analytics['deviceBreakdown']
+        row = next(d for d in breakdown if d['deviceId'] == 'client-play-test-id')
+        assert row['plays'] == 1
+        assert row['platform'] == 'ios'
+
+    def test_download_recorded(self, client, isolated_paths):
+        rv = client.post('/api/clients/report', data=json.dumps({
+            'clientId': 'dl-test-id',
+            'platform': 'android',
+            'event': 'download',
+            'collectionTitle': 'Road Trip',
+            'collectionKind': 'playlist',
+            'trackCount': 12,
+        }), content_type='application/json')
+        assert rv.status_code == 200
+        analytics = client.get('/api/analytics').get_json()
+        row = next(d for d in analytics['deviceBreakdown'] if d['deviceId'] == 'client-dl-test-id')
+        assert row['downloads'] == 1
+
+    def test_playback_updates_now_playing(self, client, isolated_paths):
+        cid = 'np-playback-test'
+        rv = client.post('/api/clients/report', data=json.dumps({
+            'clientId': cid,
+            'platform': 'ios',
+            'deviceName': 'iPhone NP',
+            'event': 'playback',
+            'track': 'Live Track',
+            'artist': 'Artist',
+            'filepath': '/music/live.mp3',
+            'playing': True,
+            'paused': False,
+            'offset_ms': 12000,
+            'duration_ms': 180000,
+        }), content_type='application/json')
+        assert rv.status_code == 200
+        did = f'client-{cid}'
+        all_items = client.get('/api/nowplaying_devices').get_json()['items']
+        row = next(i for i in all_items if i['deviceId'] == did)
+        assert row['track'] == 'Live Track'
+        assert row['platform'] == 'ios'
+        mobile = client.get(f'/api/nowplaying_devices?viewerClientId={cid}').get_json()['items']
+        assert all(not i['deviceId'].startswith('client-') for i in mobile)
+
+    def test_connect_debounced_within_hour(self, client, isolated_paths):
+        body = json.dumps({
+            'clientId': 'debounce-id',
+            'platform': 'android',
+            'event': 'connect',
+        })
+        client.post('/api/clients/report', data=body, content_type='application/json')
+        client.post('/api/clients/report', data=body, content_type='application/json')
+        devices = client.get('/api/devices').get_json()
+        match = next(d for d in devices if d['deviceId'] == 'client-debounce-id')
+        assert match['connectCount'] == 1

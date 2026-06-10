@@ -334,6 +334,21 @@ intent tests exercise actual fuzzy-matching paths.
 UI tests live under `tests/ui/` (Playwright; install separately with
 `npm install` in that directory).
 
+### Mobile apps
+
+| Platform | Path | Status |
+|----------|------|--------|
+| **Android** | [`android/`](android/) | Full client (Jetpack Compose), v2.3 |
+| **iOS** | [`ios/`](ios/) | Native SwiftUI — Phase 0–2 (browse, remote play, Now Playing; see [`docs/IOS_BUILD_PLAN.md`](docs/IOS_BUILD_PLAN.md)) |
+
+Shared API contract: [`shared/api-contract/api-contract.yaml`](shared/api-contract/api-contract.yaml).
+
+iOS build (requires full Xcode on macOS):
+
+```bash
+cd ios && xcodegen generate && open BockMedia.xcodeproj
+```
+
 ---
 
 ## License

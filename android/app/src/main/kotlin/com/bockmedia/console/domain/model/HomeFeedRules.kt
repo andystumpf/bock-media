@@ -1,6 +1,8 @@
 package com.bockmedia.console.domain.model
 
+import com.bockmedia.console.data.api.dto.PlaylistSummary
 import com.bockmedia.console.data.api.dto.StreamHistoryItem
+import kotlin.random.Random
 
 /**
  * Client-side rules for Spotify-style home rows (until a dedicated /api/home exists).
@@ -82,4 +84,15 @@ object HomeFeedRules {
             .maxByOrNull { it.value }
             ?.key
             ?.let { key -> history.firstOrNull { it.artist.equals(key, true) }?.artist }
+
+    fun isSpecialHomePlaylistName(name: String): Boolean =
+        isDailyMixName(name) || isDiscoverName(name) || isGenreMixPlaylistName(name) || isExplicitRadioPlaylistName(name)
+
+    fun browsablePlaylists(all: List<PlaylistSummary>): List<PlaylistSummary> =
+        all.filter { it.tracks > 0 && !isSpecialHomePlaylistName(it.name) }
+
+    fun shuffledBrowsablePlaylists(all: List<PlaylistSummary>, seed: Long): List<PlaylistSummary> {
+        val safeSeed = if (seed == 0L) 0x4d595449L else seed
+        return browsablePlaylists(all).shuffled(Random(safeSeed))
+    }
 }

@@ -29,9 +29,8 @@ android {
         val externalServerUrl = prop("bockmedia.externalServerUrl")
             .ifBlank { "http://142.56.8.193:3001" }
         val mobileApiToken = prop("bockmedia.mobileApiToken")
-            .ifBlank { "LXAddEVrzkaoWBgHXqHYEFr2e2UprVL0" }
-        val adminUser = prop("bockmedia.adminUser").ifBlank { "morejava" }
-        val adminPassword = prop("bockmedia.adminPassword").ifBlank { "TwWnvnNS7qKFJ1JagSk2" }
+        val adminUser = prop("bockmedia.adminUser")
+        val adminPassword = prop("bockmedia.adminPassword")
         buildConfigField("String", "DEFAULT_LOCAL_SERVER_URL", "\"$localServerUrl\"")
         buildConfigField("String", "DEFAULT_EXTERNAL_SERVER_URL", "\"$externalServerUrl\"")
         buildConfigField("String", "DEFAULT_SERVER_URL", "\"$localServerUrl\"")

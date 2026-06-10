@@ -100,6 +100,8 @@ object LocalPlaybackController {
             putStringArrayListExtra(LocalPlaybackService.EXTRA_URLS, ArrayList(urls))
             putStringArrayListExtra(LocalPlaybackService.EXTRA_TITLES, ArrayList(ordered.map { it.title }))
             putStringArrayListExtra(LocalPlaybackService.EXTRA_ARTISTS, ArrayList(ordered.map { it.displayArtist }))
+            putStringArrayListExtra(LocalPlaybackService.EXTRA_ALBUMS, ArrayList(ordered.map { it.album.orEmpty() }))
+            putStringArrayListExtra(LocalPlaybackService.EXTRA_PATHS, ArrayList(ordered.map { it.path }))
             putExtra(LocalPlaybackService.EXTRA_START_INDEX, startIndex.coerceIn(0, ordered.lastIndex))
         }
         context.startForegroundService(intent)

@@ -4,6 +4,7 @@ import android.content.Context
 import com.bockmedia.console.BockMediaApp
 import com.bockmedia.console.data.local.AppPreferences
 import com.bockmedia.console.domain.model.PlayTarget
+import com.bockmedia.console.data.analytics.DeviceAnalyticsReporter
 import com.bockmedia.console.media.LocalPlaybackQueueResolver
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -219,6 +220,14 @@ object OfflineDownloadManager {
             store.saveManifest(manifest)
             store.pruneOrphanFiles(id, mergedTracks)
             updateStatus(id, OfflineCollectionStatus(manifest, DownloadState.Complete, 1f))
+            if (!resyncOnly) {
+                DeviceAnalyticsReporter.reportDownload(
+                    context,
+                    collectionTitle = title,
+                    collectionKind = kind,
+                    trackCount = mergedTracks.size,
+                )
+            }
         }.onFailure { e ->
             val partial = store.readManifest(id)
             val progress = partial?.let { store.completionProgress(it) } ?: 0f

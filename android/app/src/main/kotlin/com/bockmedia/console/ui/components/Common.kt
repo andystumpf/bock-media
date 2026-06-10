@@ -56,10 +56,25 @@ fun TabScreenHeader(title: String, modifier: Modifier = Modifier) {
     )
 }
 
+/** Matches iOS `ProgressView().tint(BockColors.green)` — thin Spotify-green spinner. */
+@Composable
+fun BockProgressIndicator(
+    modifier: Modifier = Modifier,
+    size: androidx.compose.ui.unit.Dp = 40.dp,
+    color: Color = BockGreen,
+) {
+    CircularProgressIndicator(
+        modifier = modifier.then(Modifier.size(size)),
+        color = color,
+        strokeWidth = 2.dp,
+        trackColor = color.copy(alpha = 0.2f),
+    )
+}
+
 @Composable
 fun LoadingBox(modifier: Modifier = Modifier) {
     Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        CircularProgressIndicator()
+        BockProgressIndicator()
     }
 }
 
@@ -307,11 +322,14 @@ fun DevicePickerSheet(
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
     var playing by remember { mutableStateOf(false) }
+    var remoteReady by remember(remoteOk) { mutableStateOf(remoteOk) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     LaunchedEffect(Unit) {
         loading = true
+        error = null
         runCatching {
+            remoteReady = com.bockmedia.console.ui.refreshAlexaControlsAvailable(repository)
             val devices = repository.alexaRemoteDevices().devices
             val groups = repository.deviceGroups().items
             deviceOptions = buildDeviceOptions(groups, devices)
@@ -374,9 +392,15 @@ fun DevicePickerSheet(
                 modifier = Modifier.padding(top = 4.dp, bottom = 16.dp),
             )
 
-            if (!remoteOk) {
-                Text(
-                    "Connect Alexa remote in Settings to play.",
+            when {
+                error != null && isServerConnectionError(error!!) -> Text(
+                    "Can't reach your Bock Media server. Connect to home Wi‑Fi or check external access in Settings.",
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(bottom = 12.dp),
+                )
+                !remoteReady -> Text(
+                    "Connect Alexa remote in Settings to play on speakers.",
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(bottom = 12.dp),
@@ -391,7 +415,7 @@ fun DevicePickerSheet(
                             .height(160.dp),
                         contentAlignment = Alignment.Center,
                     ) {
-                        CircularProgressIndicator(color = BockGreen)
+                        BockProgressIndicator()
                     }
                 }
                 error != null -> ErrorText(error!!)
@@ -477,8 +501,8 @@ fun DevicePickerSheet(
                     Spacer(Modifier.height(16.dp))
 
                     Surface(
-                        onClick = { if (remoteOk) shuffle = !shuffle },
-                        enabled = remoteOk,
+                        onClick = { if (remoteReady) shuffle = !shuffle },
+                        enabled = remoteReady,
                         shape = RoundedCornerShape(12.dp),
                         color = Color.White.copy(alpha = 0.06f),
                         modifier = Modifier.fillMaxWidth(),
@@ -503,7 +527,7 @@ fun DevicePickerSheet(
                             Switch(
                                 checked = shuffle,
                                 onCheckedChange = { shuffle = it },
-                                enabled = remoteOk,
+                                enabled = remoteReady,
                                 colors = SwitchDefaults.colors(
                                     checkedThumbColor = Color.White,
                                     checkedTrackColor = BockGreen,
@@ -529,7 +553,7 @@ fun DevicePickerSheet(
                                 onDismiss()
                             }
                         },
-                        enabled = !playing && deviceValue.isNotBlank() && remoteOk,
+                        enabled = !playing && deviceValue.isNotBlank() && remoteReady,
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(52.dp),
@@ -553,6 +577,14 @@ fun DevicePickerSheet(
             }
         }
     }
+}
+
+private fun isServerConnectionError(message: String): Boolean {
+    val m = message.lowercase()
+    return m.contains("failed to connect") ||
+        m.contains("timeout") ||
+        m.contains("unable to resolve host") ||
+        m.contains("network is unreachable")
 }
 
 private fun Modifier.clickableRow(onClick: () -> Unit): Modifier =

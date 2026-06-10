@@ -2,17 +2,20 @@ package com.bockmedia.console.ui.components
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -20,34 +23,33 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.bockmedia.console.data.repository.BockMediaRepository
+import com.bockmedia.console.domain.model.HomeArtworkCache
+import com.bockmedia.console.domain.model.HomeArtworkResolver
 import com.bockmedia.console.domain.model.HomeCard
 import com.bockmedia.console.domain.model.HomeFilter
 import com.bockmedia.console.domain.model.HomeSection
 import com.bockmedia.console.domain.model.HomeSectionKind
 import com.bockmedia.console.local.DownloadState
-import com.bockmedia.console.local.OfflineDownloadManager
-import com.bockmedia.console.local.downloadId
 import com.bockmedia.console.ui.theme.*
 
 private val PillShape = RoundedCornerShape(50)
-private val SpotifySheetBg = Color(0xFF282828)
+private val ArtShape = RoundedCornerShape(4.dp)
+private val TileSize = 148.dp
 
 @Composable
 fun HomeHeader(
     selected: HomeFilter,
     onSelect: (HomeFilter) -> Unit,
     onAccountNavigate: (String) -> Unit,
-    onOpenDownloads: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val gradient = Brush.verticalGradient(
-        colors = listOf(HomeGradientTop, HomeGradientBottom),
+        colors = listOf(HomeGradientTop, HomeGradientBottom, HomeGradientBottom),
     )
 
     Box(
@@ -59,22 +61,20 @@ fun HomeHeader(
             Modifier
                 .fillMaxWidth()
                 .statusBarsPadding()
-                .padding(bottom = 4.dp),
+                .padding(horizontal = 16.dp)
+                .padding(top = 8.dp, bottom = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(start = 16.dp, end = 4.dp),
+                Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 HomeGreeting(modifier = Modifier.weight(1f))
                 AccountMenuButton(onAccountNavigate)
             }
-            Spacer(Modifier.height(4.dp))
             HomePillFilters(
                 selected = selected,
                 onSelect = onSelect,
-                onOpenDownloads = onOpenDownloads,
             )
         }
     }
@@ -84,43 +84,27 @@ fun HomeHeader(
 fun HomePillFilters(
     selected: HomeFilter,
     onSelect: (HomeFilter) -> Unit,
-    onOpenDownloads: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    val inactive = HomePillInactive
-    val active = HomePillActive
-    val inactiveText = MaterialTheme.colorScheme.onSurface
-    val activeText = Color(0xFF0F1419)
-    val downloadStatuses by OfflineDownloadManager.statuses.collectAsState()
-    val showDownloadsPill = downloadStatuses.values.any {
-        it.state == DownloadState.Downloading || it.state == DownloadState.Failed
-    }
-
     LazyRow(
         modifier = modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
-        contentPadding = PaddingValues(horizontal = 16.dp),
     ) {
-        if (showDownloadsPill) {
-            item(key = "downloads-pill") {
-                HomeDownloadsPillRow(onOpenDownloads = onOpenDownloads)
-            }
-        }
         items(HomeFilter.entries.toList()) { filter ->
             val isActive = filter == selected
             Surface(
                 onClick = { onSelect(filter) },
                 shape = PillShape,
-                color = if (isActive) active else inactive,
+                color = if (isActive) HomePillActive else HomePillInactive,
                 shadowElevation = if (isActive) 1.dp else 0.dp,
                 tonalElevation = 0.dp,
             ) {
                 Text(
                     filter.label,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Medium,
-                    color = if (isActive) activeText else inactiveText,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = if (isActive) FontWeight.Bold else FontWeight.Medium,
+                    color = if (isActive) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
                 )
             }
         }
@@ -128,64 +112,141 @@ fun HomePillFilters(
 }
 
 @Composable
+fun HomeShortcutGrid(
+    cards: List<HomeCard>,
+    repository: BockMediaRepository,
+    artworkEpoch: Int,
+    onPlay: (HomeCard) -> Unit,
+    onLongPress: (HomeCard) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (cards.isEmpty()) return
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(2),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = modifier
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .heightIn(max = 220.dp),
+        userScrollEnabled = false,
+    ) {
+        items(cards.take(6), key = { "shortcut-${it.id}" }) { card ->
+            HomeShortcutTile(
+                card = card,
+                repository = repository,
+                artworkEpoch = artworkEpoch,
+                onClick = { onPlay(card) },
+                onLongClick = { onLongPress(card) },
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun HomeShortcutTile(
+    card: HomeCard,
+    repository: BockMediaRepository,
+    artworkEpoch: Int,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(56.dp)
+            .clip(RoundedCornerShape(4.dp))
+            .background(SpotifyElevated)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        HomeCardArt(
+            card = card,
+            repository = repository,
+            artworkEpoch = artworkEpoch,
+            modifier = Modifier
+                .size(56.dp)
+                .clip(ArtShape),
+        )
+        Text(
+            card.title,
+            modifier = Modifier
+                .padding(horizontal = 10.dp)
+                .weight(1f),
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Bold,
+            color = Color.White,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            lineHeight = 18.sp,
+        )
+    }
+}
+
+@Composable
 fun SpotifyHomeSection(
     section: HomeSection,
     repository: BockMediaRepository,
+    artworkEpoch: Int,
     onPlay: (HomeCard) -> Unit,
-    onDownload: (HomeCard) -> Unit,
+    onLongPress: (HomeCard) -> Unit,
     modifier: Modifier = Modifier,
-    compactTop: Boolean = false,
-    artLoadKey: Any = Unit,
+    onShowAll: ((HomeSection) -> Unit)? = null,
 ) {
-    var actionCard by remember { mutableStateOf<HomeCard?>(null) }
-    val statuses by OfflineDownloadManager.statuses.collectAsState()
-
-    actionCard?.let { card ->
-        HomeCardActionSheet(
-            card = card,
-            downloadState = statuses[card.playTarget.downloadId()]?.state,
-            onDismiss = { actionCard = null },
-            onPlay = {
-                actionCard = null
-                onPlay(card)
-            },
-            onDownload = {
-                actionCard = null
-                onDownload(card)
-            },
-        )
-    }
-
-    Column(modifier = modifier.padding(top = if (compactTop) 6.dp else 12.dp)) {
-        Text(
-            section.title,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
-        )
+    Column(modifier = modifier.padding(top = 8.dp)) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 8.dp, bottom = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                section.title,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f),
+            )
+            if (onShowAll != null && section.cards.size > 4) {
+                TextButton(
+                    onClick = { onShowAll(section) },
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                ) {
+                    Text(
+                        "Show all",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = BockMuted,
+                    )
+                    Icon(
+                        Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = BockMuted,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+            }
+        }
         LazyRow(
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
             contentPadding = PaddingValues(horizontal = 16.dp),
         ) {
-            items(section.cards, key = { "${artLoadKey}-${it.id}" }) { card ->
-                val downloadStatus = statuses[card.playTarget.downloadId()]
-                val downloaded = downloadStatus?.state == DownloadState.Complete
-                val downloading = downloadStatus?.state == DownloadState.Downloading
-                val downloadProgress = downloadStatus?.progress ?: 0f
+            items(section.cards, key = { it.id }) { card ->
                 when (section.kind) {
                     HomeSectionKind.TopMixes, HomeSectionKind.DailyMixes ->
                         GenreMixTile(
-                            card, repository, onPlay,
-                            onLongPress = { actionCard = card },
-                            onDownload = { onDownload(card) },
-                            artLoadKey, downloaded, downloading, downloadProgress,
+                            card = card,
+                            repository = repository,
+                            artworkEpoch = artworkEpoch,
+                            onPlay = onPlay,
+                            onLongPress = { onLongPress(card) },
                         )
                     else -> PlaylistArtTile(
-                        card, repository, onPlay,
-                        onLongPress = { actionCard = card },
-                        onDownload = { onDownload(card) },
-                        artLoadKey, downloaded, downloading, downloadProgress,
+                        card = card,
+                        repository = repository,
+                        artworkEpoch = artworkEpoch,
+                        onPlay = onPlay,
+                        onLongPress = { onLongPress(card) },
                     )
                 }
             }
@@ -195,7 +256,7 @@ fun SpotifyHomeSection(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun HomeCardActionSheet(
+fun HomeCardActionSheet(
     card: HomeCard,
     downloadState: DownloadState?,
     onDismiss: () -> Unit,
@@ -206,7 +267,7 @@ private fun HomeCardActionSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = SpotifySheetBg,
+        containerColor = SpotifyElevated,
     ) {
         Column(
             Modifier
@@ -214,38 +275,116 @@ private fun HomeCardActionSheet(
                 .padding(horizontal = 20.dp)
                 .navigationBarsPadding()
                 .padding(bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Text(card.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Color.White)
+            Text(
+                card.title,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+            )
             card.subtitle?.let {
-                Text(it, color = Color.White.copy(alpha = 0.65f), style = MaterialTheme.typography.bodyMedium)
+                Text(it, color = BockMuted, style = MaterialTheme.typography.bodyMedium)
             }
-            Spacer(Modifier.height(8.dp))
-            Surface(onClick = onPlay, shape = RoundedCornerShape(12.dp), color = Color.White.copy(alpha = 0.08f), modifier = Modifier.fillMaxWidth()) {
+            Surface(
+                onClick = onPlay,
+                shape = RoundedCornerShape(4.dp),
+                color = Color.White.copy(alpha = 0.1f),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
                 Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.PlayArrow, null, tint = BockGreen)
+                    Icon(Icons.Default.PlayArrow, contentDescription = null, tint = BockGreen)
                     Spacer(Modifier.width(12.dp))
-                    Text("Play", color = Color.White, style = MaterialTheme.typography.bodyLarge)
+                    Text("Play", color = Color.White, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold)
                 }
             }
             if (downloadState != DownloadState.Downloading) {
-                Surface(onClick = onDownload, shape = RoundedCornerShape(12.dp), color = Color.White.copy(alpha = 0.08f), modifier = Modifier.fillMaxWidth()) {
+                Surface(
+                    onClick = onDownload,
+                    shape = RoundedCornerShape(4.dp),
+                    color = Color.White.copy(alpha = 0.1f),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
                     Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            if (downloadState == DownloadState.Complete) Icons.Default.DownloadDone else Icons.Default.Download,
-                            null,
-                            tint = BockGreen,
-                        )
+                        Icon(Icons.Default.Download, contentDescription = null, tint = BockGreen)
                         Spacer(Modifier.width(12.dp))
                         Text(
                             if (downloadState == DownloadState.Complete) "Re-download for offline" else "Download for offline",
                             color = Color.White,
                             style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.Bold,
                         )
                     }
                 }
             } else {
-                Text("Download in progress…", color = Color.White.copy(alpha = 0.65f), modifier = Modifier.padding(16.dp))
+                Text("Download in progress…", color = BockMuted, modifier = Modifier.padding(16.dp))
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun HomeSectionShowAllSheet(
+    section: HomeSection,
+    onDismiss: () -> Unit,
+    onPlay: (HomeCard) -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = SpotifyElevated,
+    ) {
+        Column(Modifier.fillMaxWidth()) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    section.title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(start = 12.dp),
+                )
+                TextButton(onClick = onDismiss) {
+                    Text("Done", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+                }
+            }
+            Column(
+                Modifier
+                    .verticalScroll(rememberScrollState())
+                    .navigationBarsPadding()
+                    .padding(bottom = 24.dp),
+            ) {
+                section.cards.forEach { card ->
+                    Surface(
+                        onClick = { onPlay(card) },
+                        color = SpotifyElevated,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column(
+                            Modifier.padding(horizontal = 20.dp, vertical = 14.dp),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            Text(
+                                card.title,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                style = MaterialTheme.typography.bodyLarge,
+                            )
+                            card.subtitle?.let {
+                                Text(it, color = BockMuted, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+                }
             }
         }
     }
@@ -255,17 +394,18 @@ private fun HomeCardActionSheet(
 private fun HomeCardArt(
     card: HomeCard,
     repository: BockMediaRepository,
-    artLoadKey: Any,
+    artworkEpoch: Int,
     modifier: Modifier = Modifier,
 ) {
-    val artUrl by produceState<String?>(initialValue = null, card.id, card.artPath, card.playlistId, artLoadKey) {
-        value = repository.resolveHomeCardArtUrl(card.id, card.artPath, card.playlistId, card.playTarget)
+    var artUrl by remember(card.id) { mutableStateOf<String?>(HomeArtworkCache.urlFor(card.id)) }
+    LaunchedEffect(card.id, artworkEpoch) {
+        artUrl = HomeArtworkResolver.resolveUrl(repository, card)
     }
     BockArtwork(
         model = artUrl,
         title = card.title,
         modifier = modifier,
-        shape = RoundedCornerShape(10.dp),
+        shape = ArtShape,
         fallbackFontSize = 18.sp,
     )
 }
@@ -275,74 +415,41 @@ private fun HomeCardArt(
 private fun PlaylistArtTile(
     card: HomeCard,
     repository: BockMediaRepository,
+    artworkEpoch: Int,
     onPlay: (HomeCard) -> Unit,
     onLongPress: () -> Unit,
-    onDownload: () -> Unit,
-    artLoadKey: Any,
-    downloaded: Boolean,
-    downloading: Boolean,
-    downloadProgress: Float,
 ) {
     Column(
         modifier = Modifier
-            .width(124.dp)
+            .width(TileSize)
             .combinedClickable(
                 onClick = { onPlay(card) },
                 onLongClick = onLongPress,
             ),
     ) {
-        Box {
-            HomeCardArt(
-                card = card,
-                repository = repository,
-                artLoadKey = artLoadKey,
-                modifier = Modifier
-                    .size(124.dp)
-                    .clip(RoundedCornerShape(10.dp)),
-            )
-            if (downloading) {
-                DownloadProgressOverlay(downloadProgress, Modifier.matchParentSize())
-            } else if (downloaded) {
-                Icon(
-                    Icons.Default.DownloadDone,
-                    contentDescription = "Downloaded",
-                    tint = BockGreen,
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(6.dp)
-                        .size(18.dp),
-                )
-            }
-            if (!downloading) {
-                IconButton(
-                    onClick = onDownload,
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .size(32.dp),
-                ) {
-                    Icon(
-                        if (downloaded) Icons.Default.DownloadDone else Icons.Default.Download,
-                        contentDescription = "Download",
-                        tint = BockGreen,
-                        modifier = Modifier.size(18.dp),
-                    )
-                }
-            }
-        }
-        Spacer(Modifier.height(4.dp))
+        HomeCardArt(
+            card = card,
+            repository = repository,
+            artworkEpoch = artworkEpoch,
+            modifier = Modifier
+                .size(TileSize)
+                .clip(ArtShape),
+        )
+        Spacer(Modifier.height(8.dp))
         Text(
             card.title,
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.SemiBold,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Bold,
+            color = Color.White,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
-            lineHeight = MaterialTheme.typography.bodySmall.lineHeight,
+            lineHeight = 18.sp,
         )
         card.subtitle?.let {
             Text(
                 it,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall,
+                color = BockMuted,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -355,18 +462,15 @@ private fun PlaylistArtTile(
 private fun GenreMixTile(
     card: HomeCard,
     repository: BockMediaRepository,
+    artworkEpoch: Int,
     onPlay: (HomeCard) -> Unit,
     onLongPress: () -> Unit,
-    onDownload: () -> Unit,
-    artLoadKey: Any,
-    downloaded: Boolean,
-    downloading: Boolean,
-    downloadProgress: Float,
 ) {
+    val accent = mixAccentColor(card.id)
     Box(
         modifier = Modifier
-            .size(width = 140.dp, height = 140.dp)
-            .clip(RoundedCornerShape(10.dp))
+            .size(TileSize)
+            .clip(ArtShape)
             .combinedClickable(
                 onClick = { onPlay(card) },
                 onLongClick = onLongPress,
@@ -375,7 +479,7 @@ private fun GenreMixTile(
         HomeCardArt(
             card = card,
             repository = repository,
-            artLoadKey = artLoadKey,
+            artworkEpoch = artworkEpoch,
             modifier = Modifier.fillMaxSize(),
         )
         Box(
@@ -385,49 +489,21 @@ private fun GenreMixTile(
                     Brush.verticalGradient(
                         colors = listOf(
                             Color.Transparent,
-                            MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
+                            accent.copy(alpha = 0.25f),
                             Color.Black.copy(alpha = 0.72f),
                         ),
-                        startY = 40f,
                     ),
                 ),
         )
-        if (downloading) {
-            DownloadProgressOverlay(downloadProgress, Modifier.matchParentSize())
-        } else if (downloaded) {
-            Icon(
-                Icons.Default.DownloadDone,
-                contentDescription = "Downloaded",
-                tint = BockGreen,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(8.dp)
-                    .size(20.dp),
-            )
-        }
-        if (!downloading) {
-            IconButton(
-                onClick = onDownload,
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .size(36.dp),
-            ) {
-                Icon(
-                    if (downloaded) Icons.Default.DownloadDone else Icons.Default.Download,
-                    contentDescription = "Download",
-                    tint = BockGreen,
-                    modifier = Modifier.size(20.dp),
-                )
-            }
-        }
         Column(
             Modifier
                 .align(Alignment.BottomStart)
-                .padding(8.dp),
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             Text(
                 card.title,
-                style = MaterialTheme.typography.titleSmall,
+                style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
                 color = Color.White,
                 maxLines = 2,
@@ -436,46 +512,13 @@ private fun GenreMixTile(
             card.subtitle?.let {
                 Text(
                     it,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Color.White.copy(alpha = 0.88f),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White.copy(alpha = 0.85f),
                     maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }
-    }
-}
-
-@Composable
-private fun DownloadProgressOverlay(progress: Float, modifier: Modifier = Modifier) {
-    Box(
-        modifier = modifier.background(Color.Black.copy(alpha = 0.45f)),
-        contentAlignment = Alignment.Center,
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            CircularProgressIndicator(
-                progress = { progress.coerceIn(0f, 1f) },
-                modifier = Modifier.size(36.dp),
-                color = BockGreen,
-                trackColor = Color.White.copy(alpha = 0.25f),
-                strokeWidth = 3.dp,
-            )
-            Spacer(Modifier.height(6.dp))
-            Text(
-                "${(progress * 100).toInt()}%",
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Bold,
-                color = Color.White,
-            )
-        }
-        LinearProgressIndicator(
-            progress = { progress.coerceIn(0f, 1f) },
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .height(4.dp),
-            color = BockGreen,
-            trackColor = Color.Transparent,
-        )
     }
 }
 

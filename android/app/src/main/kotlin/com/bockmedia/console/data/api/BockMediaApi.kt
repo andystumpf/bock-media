@@ -28,7 +28,9 @@ interface BockMediaApi {
     ): RecentResponse
 
     @GET("api/nowplaying_devices")
-    suspend fun nowPlayingDevices(): NowPlayingDevicesResponse
+    suspend fun nowPlayingDevices(
+        @Query("viewerClientId") viewerClientId: String? = null,
+    ): NowPlayingDevicesResponse
 
     @GET("api/nowplaying")
     suspend fun streamHistory(
@@ -56,6 +58,9 @@ interface BockMediaApi {
 
     @GET("api/playlists/{id}/cover")
     suspend fun playlistCover(@Path("id") id: String): PlaylistCoverResponse
+
+    @POST("api/playlists/covers")
+    suspend fun playlistCoversBatch(@Body body: PlaylistCoversBatchRequest): PlaylistCoversBatchResponse
 
     @GET("api/playlists/{id}")
     suspend fun playlistDetail(
@@ -193,6 +198,9 @@ interface BockMediaApi {
 
     @POST("api/automations/{id}/run")
     suspend fun runAutomation(@Path("id") id: String): OkResponse
+
+    @POST("api/clients/report")
+    suspend fun reportClientEvent(@Body body: JsonObject): OkResponse
 
     @GET("api/analytics")
     suspend fun analytics(

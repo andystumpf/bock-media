@@ -3,6 +3,7 @@ package com.bockmedia.console.data.repository
 import com.bockmedia.console.data.api.BockMediaApi
 import com.bockmedia.console.data.api.dto.*
 import com.bockmedia.console.data.local.AppPreferences
+import com.bockmedia.console.domain.model.HomeArtworkCache
 import com.bockmedia.console.domain.model.PlayTarget
 import com.bockmedia.console.domain.model.SearchSuggestion
 import com.bockmedia.console.domain.model.SearchSuggestionKind
@@ -26,6 +27,7 @@ class BockMediaRepository(
     private val apiProvider: suspend () -> BockMediaApi,
     private val baseUrlProvider: suspend () -> String,
     private val preferences: AppPreferences,
+    private val clientIdProvider: () -> String = { "" },
 ) {
     private suspend fun api() = apiProvider()
 
@@ -39,12 +41,27 @@ class BockMediaRepository(
 
     /** Fast cover lookup — reads only the first tracks from the playlist file on the server. */
     suspend fun playlistCoverPath(playlistId: String, variantKey: String = playlistId): String? {
+        HomeArtworkCache.playlistPath(playlistId)?.let { return it }
         playlistTrackPathsCache[playlistId]?.firstOrNull()?.let { return it }
         val path = runCatching {
             api().playlistCover(playlistId).path?.takeIf { it.isNotBlank() }
         }.getOrNull() ?: return null
         playlistTrackPathsCache[playlistId] = listOf(path)
+        HomeArtworkCache.storePlaylistPath(playlistId, path)
         return path
+    }
+
+    suspend fun prefetchPlaylistCoverPaths(ids: Collection<String>) {
+        val missing = ids.map { it.trim() }.filter { it.isNotBlank() }.distinct()
+            .filter { HomeArtworkCache.playlistPath(it) == null && playlistTrackPathsCache[it].isNullOrEmpty() }
+        if (missing.isEmpty()) return
+        val covers = runCatching {
+            api().playlistCoversBatch(PlaylistCoversBatchRequest(missing)).covers
+        }.getOrDefault(emptyMap())
+        if (covers.isNotEmpty()) {
+            HomeArtworkCache.storePlaylistPaths(covers)
+            covers.forEach { (id, path) -> playlistTrackPathsCache[id] = listOf(path) }
+        }
     }
 
     suspend fun artworkUrlForPlaylist(playlistId: String, variantKey: String = playlistId): String? =
@@ -105,9 +122,9 @@ class BockMediaRepository(
         playlistId: String?,
         playTarget: PlayTarget,
     ): String? {
-        artPath?.let { return artworkUrl(it) }
         val pick = kotlin.math.abs(cardId.hashCode())
-        playlistId?.let { return artworkUrlForPlaylist(it, cardId) }
+        playlistId?.let { return artworkUrlForPlaylist(it, it) }
+        artPath?.let { return artworkUrl(it) }
         return when (playTarget) {
             is PlayTarget.Album -> {
                 runCatching {
@@ -164,7 +181,10 @@ class BockMediaRepository(
     suspend fun dashboardQuick() = api().dashboardQuick()
     suspend fun playbackStatus() = api().playbackStatus()
     suspend fun recent(page: Int, limit: Int) = api().recent(page, limit)
-    suspend fun nowPlayingDevices() = api().nowPlayingDevices()
+    suspend fun nowPlayingDevices(): NowPlayingDevicesResponse {
+        val viewer = clientIdProvider().trim().ifBlank { null }
+        return api().nowPlayingDevices(viewerClientId = viewer)
+    }
     suspend fun streamHistory(page: Int, limit: Int) = api().streamHistory(page, limit)
     suspend fun rooms() = api().rooms()
     suspend fun search(q: String, limit: Int = 30): SearchResponse {
@@ -260,6 +280,7 @@ class BockMediaRepository(
     suspend fun alexaRemoteStatus() = api().alexaRemoteStatus()
     suspend fun automations() = api().automations()
     suspend fun analytics(from: String? = null, to: String? = null) = api().analytics(from, to)
+    suspend fun reportClientEvent(body: JsonObject) = api().reportClientEvent(body)
     suspend fun ignored() = api().ignored()
     suspend fun settings() = api().settings()
     suspend fun config() = api().config()

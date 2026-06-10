@@ -64,6 +64,7 @@ def isolated_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(server, 'DATA_DIR', str(mma_dir))
     monkeypatch.setattr(server, 'DEVICES_PATH', str(state_dir / 'devices.json'))
     monkeypatch.setattr(server, 'STREAM_HISTORY_PATH', str(state_dir / 'streaming_history.jsonl'))
+    monkeypatch.setattr(server, 'DOWNLOAD_HISTORY_PATH', str(state_dir / 'download_history.jsonl'))
     monkeypatch.setattr(server, 'CONFIG_PATH', str(state_dir / 'config.json'))
     monkeypatch.setattr(server, 'QUEUES_PATH', str(state_dir / 'queues.json'))
     monkeypatch.setattr(server, 'NP_STATE_PATH', str(state_dir / 'nowplaying_state.json'))

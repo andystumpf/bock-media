@@ -43,6 +43,12 @@ data class PlaylistCoverResponse(
 )
 
 @Serializable
+data class PlaylistCoversBatchRequest(val ids: List<String> = emptyList())
+
+@Serializable
+data class PlaylistCoversBatchResponse(val covers: Map<String, String> = emptyMap())
+
+@Serializable
 data class RecentResponse(val items: List<RecentPlayRequestItem> = emptyList(), val total: Int = 0)
 
 @Serializable

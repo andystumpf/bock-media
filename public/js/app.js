@@ -825,7 +825,7 @@ register('nowplaying', async () => {
     if (card) card.outerHTML = buildCurrentCard(window._npItems, window._npControlsAvailable);
     refreshCurrentTrack();
     npLoadVolumes();
-  }, 5000);
+  }, 2000);
   _npTickTimer = setInterval(npTickTimes, 1000);
 });
 
@@ -948,7 +948,7 @@ function buildDeviceRow(d, controlsAvailable = false) {
           ${d.artist ? `<div class="np-artist">${escHtml(d.artist)}</div>` : ''}
           ${d.album ? `<div class="np-album">${escHtml(d.album)}</div>` : ''}
           ${(d.sourceLabel || d.playlist) ? `<div class="np-playlist"><i class="fa fa-list"></i> ${escHtml(d.sourceLabel || d.playlist)}</div>` : ''}
-          <div class="np-device-label">Device: ${escHtml(d.deviceName || (d.deviceId || '').slice(-12) || 'default')}<span class="np-time" data-device-id="${escHtml(d.deviceId)}">${npTimeText(d)}</span></div>
+          <div class="np-device-label">Device: ${escHtml(d.deviceName || (d.deviceId || '').slice(-12) || 'default')}${d.platform ? ` <span class="badge" style="font-size:10px;text-transform:uppercase">${escHtml(d.platform)}</span>` : (String(d.deviceId || '').startsWith('client-') ? ' <span class="badge" style="font-size:10px">mobile</span>' : '')}<span class="np-time" data-device-id="${escHtml(d.deviceId)}">${npTimeText(d)}</span></div>
           ${npProgressHtml(d)}
           ${npUpcomingHtml(d)}
         </div>
@@ -3599,11 +3599,13 @@ async function _loadAnalytics() {
   if (_anTo)   params.push(`to=${_anTo}`);
   if (params.length) url += '?' + params.join('&');
   const data = await API(url);
-  if (!data || !data.totalPlays) {
+  const hasDeviceActivity = (data?.deviceBreakdown || []).some(d =>
+    (d.plays || 0) + (d.downloads || 0) + (d.connects || 0) > 0);
+  if (!data || (!data.totalPlays && !hasDeviceActivity)) {
     renderPage('Analytics', `
       <div class="card" style="margin-bottom:20px">${_anDatePickerHtml(data)}</div>
-      <div class="empty-state"><i class="fa fa-chart-bar"></i><p>No streaming history yet.</p>
-        <p style="font-size:12px;margin-top:8px">Start playing music through Alexa to build analytics.</p></div>`);
+      <div class="empty-state"><i class="fa fa-chart-bar"></i><p>No device activity yet.</p>
+        <p style="font-size:12px;margin-top:8px">Play music on Alexa, Android, or iOS — or download offline on Android — to build analytics.</p></div>`);
     _restoreDateInputs();
     return;
   }
@@ -3788,6 +3790,58 @@ async function libFavorite(path, title, artist) {
   else showToast('Failed', true);
 }
 
+function _platformIcon(platform) {
+  const p = (platform || '').toLowerCase();
+  if (p === 'android') return '<i class="fa fa-android" style="color:#3ddc84"></i>';
+  if (p === 'ios') return '<i class="fa fa-apple" style="color:#555"></i>';
+  if (p === 'alexa') return '<i class="fa fa-volume-up" style="color:#00caff"></i>';
+  return '<i class="fa fa-circle-question" style="color:#aab"></i>';
+}
+
+function _formatLastSeen(ts) {
+  if (!ts) return '—';
+  const sec = Math.max(0, Math.floor(Date.now() / 1000 - ts));
+  if (sec < 60) return 'just now';
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
+  return `${Math.floor(sec / 86400)}d ago`;
+}
+
+function _buildDeviceBreakdownHTML(devices) {
+  const rows = (devices || []).filter(d =>
+    (d.plays || 0) + (d.downloads || 0) + (d.connects || 0) > 0);
+  if (!rows.length) return '';
+  return `
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-header"><h3><i class="fa fa-mobile-screen"></i> Device Activity</h3></div>
+      <div class="card-body" style="padding:0;overflow-x:auto">
+        <table class="data-table" style="width:100%;font-size:13px">
+          <thead>
+            <tr>
+              <th style="text-align:left;padding:10px 14px">Device</th>
+              <th>Platform</th>
+              <th>Connects</th>
+              <th>Plays</th>
+              <th>Downloads</th>
+              <th>Last seen</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map(d => `
+              <tr>
+                <td style="padding:10px 14px;font-weight:600">${escHtml(d.name || d.deviceId || '—')}</td>
+                <td style="text-align:center">${_platformIcon(d.platform)} <span style="font-size:11px;color:#778">${escHtml((d.platform || 'unknown').toUpperCase())}</span></td>
+                <td style="text-align:center">${fmtNum(d.connects || 0)}</td>
+                <td style="text-align:center">${fmtNum(d.plays || 0)}</td>
+                <td style="text-align:center">${fmtNum(d.downloads || 0)}</td>
+                <td style="text-align:center;color:#778;font-size:12px">${_formatLastSeen(d.lastSeen)}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
 function _buildAnalyticsHTML(d) {
   const sk  = d.listeningStreak  || {current: d.currentStreak || 0, longest: d.longestStreak || 0};
   const cov = d.catalogCoverage  || {};
@@ -3799,6 +3853,8 @@ function _buildAnalyticsHTML(d) {
 
   return `
     <div class="card" style="margin-bottom:20px">${_anDatePickerHtml(d)}</div>
+
+    ${_buildDeviceBreakdownHTML(d.deviceBreakdown)}
 
     <div class="stats-grid">
       <div class="stat-card">

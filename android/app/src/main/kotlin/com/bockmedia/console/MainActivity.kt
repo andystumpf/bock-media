@@ -50,7 +50,12 @@ class MainActivity : ComponentActivity() {
                     if (app.preferences.isRememberMeSync()) {
                         app.preferences.applyBuildDefaultsIfEmpty()
                         runCatching { app.repository.testConnection() }
-                            .onSuccess { hasServer = true; return@LaunchedEffect }
+                            .onSuccess {
+                                hasServer = true
+                                com.bockmedia.console.data.analytics.DeviceAnalyticsReporter
+                                    .reportConnect(this@MainActivity)
+                                return@LaunchedEffect
+                            }
                     }
                     hasServer = false
                 }

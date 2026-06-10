@@ -10,6 +10,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.bockmedia.console.BockMediaApp
 import com.bockmedia.console.BuildConfig
+import com.bockmedia.console.ui.components.BockProgressIndicator
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import retrofit2.HttpException
@@ -70,7 +71,11 @@ fun SetupScreen(onConnected: () -> Unit) {
                         app.preferences.setMobileToken(mobileToken.takeIf { it.isNotBlank() })
                         app.invalidateApi()
                         app.repository.testConnection()
-                            .onSuccess { onConnected() }
+                            .onSuccess {
+                                com.bockmedia.console.data.analytics.DeviceAnalyticsReporter
+                                    .reportConnect(context)
+                                onConnected()
+                            }
                             .onFailure { e ->
                                 error = when (e) {
                                     is HttpException -> when (e.code()) {
@@ -88,7 +93,14 @@ fun SetupScreen(onConnected: () -> Unit) {
             enabled = !loading,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            if (loading) CircularProgressIndicator(Modifier.size(20.dp)) else Text("Sign in")
+            if (loading) {
+                BockProgressIndicator(
+                    size = 20.dp,
+                    color = MaterialTheme.colorScheme.onPrimary,
+                )
+            } else {
+                Text("Sign in")
+            }
         }
         Spacer(Modifier.height(16.dp))
         Text(

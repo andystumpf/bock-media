@@ -30,8 +30,8 @@ fun rememberArtworkUrl(
         variantKey,
     ) {
         value = when {
+            !playlistId.isNullOrBlank() -> repository.artworkUrlForPlaylist(playlistId, playlistId)
             !artPath.isNullOrBlank() -> repository.artworkUrl(artPath)
-            !playlistId.isNullOrBlank() -> repository.artworkUrlForPlaylist(playlistId, variantKey)
             !albumName.isNullOrBlank() -> repository.resolveAlbumArtUrl(albumName, albumArtist ?: artistName)
             !artistName.isNullOrBlank() -> repository.resolveArtistArtUrl(artistName)
             else -> null
