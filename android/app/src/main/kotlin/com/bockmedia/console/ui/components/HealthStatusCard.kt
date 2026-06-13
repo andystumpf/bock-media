@@ -14,9 +14,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.bockmedia.console.data.api.dto.AlexaRemoteStatus
+import com.bockmedia.console.ui.alexaRemotePlayMessage
+import com.bockmedia.console.ui.effectiveLoginError
+import com.bockmedia.console.ui.effectiveLoginStatus
+import com.bockmedia.console.ui.effectiveLoginUrl
 import com.bockmedia.console.data.api.dto.HealthResponse
 import com.bockmedia.console.data.api.dto.PlexSyncStatusResponse
+import com.bockmedia.console.data.api.dto.AlexaRemoteStatus
 import com.bockmedia.console.data.repository.BockMediaRepository
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -55,18 +59,18 @@ fun HealthStatusCard(
 
     LaunchedEffect(repository) { load() }
 
-    LaunchedEffect(alexaRemote?.loginStatus) {
-        val status = alexaRemote?.loginStatus ?: return@LaunchedEffect
+    LaunchedEffect(alexaRemote?.effectiveLoginStatus()) {
+        val status = alexaRemote?.effectiveLoginStatus() ?: return@LaunchedEffect
         if (status != "waiting" && status != "starting") return@LaunchedEffect
         while (true) {
             delay(2000)
             alexaRemote = runCatching { repository.alexaLoginState() }.getOrNull()
-            if (alexaRemote?.loginStatus == "success" || alexaRemote?.authenticated == true) {
+            if (alexaRemote?.effectiveLoginStatus() == "success" || alexaRemote?.authenticated == true) {
                 onMessage("Alexa login successful")
                 load()
                 break
             }
-            if (alexaRemote?.loginStatus == "error" || alexaRemote?.loginStatus == "stopped") break
+            if (alexaRemote?.effectiveLoginStatus() in setOf("error", "stopped")) break
         }
     }
 
@@ -110,9 +114,20 @@ fun HealthStatusCard(
                     remote = status,
                     onStartLogin = {
                         scope.launch {
-                            alexaRemote = repository.alexaLoginStart()
-                            alexaRemote?.loginUrl?.let { url ->
-                                CustomTabsIntent.Builder().build().launchUrl(context, Uri.parse(url))
+                            runCatching {
+                                alexaRemote = repository.alexaLoginStart()
+                                val url = alexaRemote?.effectiveLoginUrl()
+                                if (url != null) {
+                                    CustomTabsIntent.Builder().build().launchUrl(context, Uri.parse(url))
+                                    onMessage("Sign in to Amazon in the browser, then return here.")
+                                } else {
+                                    onMessage(
+                                        alexaRemote?.effectiveLoginError()
+                                            ?: "No login URL from server. Use home Wi‑Fi or set loginProxyHost in config.json.",
+                                    )
+                                }
+                            }.onFailure {
+                                onMessage(it.message ?: "Could not start Alexa login")
                             }
                         }
                     },
@@ -202,13 +217,28 @@ private fun AlexaRemoteSection(
     Text("Alexa remote", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
     when {
         remote.authenticated == true -> Text("Connected — Play on device and volume controls available", color = BockGreen)
-        remote.configured != true -> Text("Not configured on server", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        remote.configured != true -> Text(
+            "Not configured on server — add alexaRemote.email to config.json on the server.",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         else -> {
-            val status = remote.loginStatus ?: "needs login"
+            val status = remote.effectiveLoginStatus() ?: "needs login"
             Text("Status: $status", color = WarnAmber)
-            remote.loginError?.let {
+            remote.effectiveLoginError()?.let {
                 Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
             }
+            remote.effectiveLoginUrl()?.let { url ->
+                Text(
+                    "Login page: $url",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Text(
+                "You must reach the login page on the same network as the server (home Wi‑Fi), or forward port ${remote.loginProxyPort ?: remote.port ?: 3005} on your router.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = onStartLogin) { Text("Start browser login") }
                 if (status == "waiting" || status == "starting") {

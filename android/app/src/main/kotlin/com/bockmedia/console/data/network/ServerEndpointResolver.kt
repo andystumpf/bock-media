@@ -51,13 +51,12 @@ object ServerEndpointResolver {
         if (!external.isNullOrBlank() && probe(externalClient, external)) {
             return@withContext cache(AppPreferences.normalizeUrl(external))
         }
-        // Neither endpoint answered — prefer LAN (common when public IP / port-forward is down).
-        // Do not cache: the next call should re-probe instead of sticking on a dead host for 30s.
-        if (!local.isNullOrBlank()) {
-            return@withContext AppPreferences.normalizeUrl(local)
-        }
+        // Neither endpoint answered — prefer external when away from home; don't cache dead URLs.
         if (!external.isNullOrBlank()) {
             return@withContext AppPreferences.normalizeUrl(external)
+        }
+        if (!local.isNullOrBlank()) {
+            return@withContext AppPreferences.normalizeUrl(local)
         }
         throw IllegalStateException("No server URL configured")
     }

@@ -9,6 +9,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.bockmedia.console.BockMediaApp
+import com.bockmedia.console.ui.alexaRemotePlayMessage
+import com.bockmedia.console.ui.rememberAlexaRemoteStatus
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.*
 import com.bockmedia.console.local.OfflineDownloadManager
@@ -37,6 +40,8 @@ fun HomeScreen(
     var actionCard by remember { mutableStateOf<HomeCard?>(null) }
     var artworkEpoch by remember { mutableIntStateOf(0) }
     val downloadStatuses by OfflineDownloadManager.statuses.collectAsState()
+    val alexaStatus by rememberAlexaRemoteStatus(repository)
+    val alexaBanner = alexaRemotePlayMessage(alexaStatus).takeIf { !remoteOk }
 
     fun warmArtwork(homeFeed: HomeFeed?) {
         val cards = homeFeed?.sections.orEmpty().flatMap { it.cards } ?: return
@@ -55,11 +60,19 @@ fun HomeScreen(
         if (feed == null) loading = true
         error = null
         runCatching {
-            val fresh = HomeFeedLoader.load(repository)
-            HomeFeedCache.put(fresh)
-            feed = fresh
-            warmArtwork(fresh)
-        }.onFailure { error = it.message }
+            var fresh = HomeFeedLoader.load(repository)
+            if (fresh.sections.isEmpty()) {
+                BockMediaApp.get(context).invalidateApi()
+                fresh = HomeFeedLoader.load(repository)
+            }
+            if (fresh.sections.isNotEmpty()) {
+                HomeFeedCache.put(fresh)
+                feed = fresh
+                warmArtwork(fresh)
+            } else if (feed == null) {
+                error = "Could not load your library. Pull down to refresh or check server connection in Settings."
+            }
+        }.onFailure { error = it.message ?: "Could not load home" }
         loading = false
         refreshing = false
     }
@@ -136,10 +149,10 @@ fun HomeScreen(
                         onAccountNavigate = onAccountNavigate,
                     )
                 }
-                if (!remoteOk) {
+                if (alexaBanner != null) {
                     item {
                         Text(
-                            "Connect Alexa remote in Settings to play from Home.",
+                            alexaBanner,
                             color = MaterialTheme.colorScheme.error,
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                         )

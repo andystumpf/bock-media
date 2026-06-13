@@ -5,9 +5,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -121,23 +118,31 @@ fun HomeShortcutGrid(
     modifier: Modifier = Modifier,
 ) {
     if (cards.isEmpty()) return
-    LazyVerticalGrid(
-        columns = GridCells.Fixed(2),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+    val shortcuts = cards.take(6)
+    Column(
         modifier = modifier
-            .padding(horizontal = 16.dp, vertical = 8.dp)
-            .heightIn(max = 220.dp),
-        userScrollEnabled = false,
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        items(cards.take(6), key = { "shortcut-${it.id}" }) { card ->
-            HomeShortcutTile(
-                card = card,
-                repository = repository,
-                artworkEpoch = artworkEpoch,
-                onClick = { onPlay(card) },
-                onLongClick = { onLongPress(card) },
-            )
+        shortcuts.chunked(2).forEach { rowCards ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                rowCards.forEach { card ->
+                    HomeShortcutTile(
+                        card = card,
+                        repository = repository,
+                        artworkEpoch = artworkEpoch,
+                        onClick = { onPlay(card) },
+                        onLongClick = { onLongPress(card) },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                if (rowCards.size == 1) {
+                    Spacer(Modifier.weight(1f))
+                }
+            }
         }
     }
 }
@@ -150,9 +155,10 @@ private fun HomeShortcutTile(
     artworkEpoch: Int,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .height(56.dp)
             .clip(RoundedCornerShape(4.dp))

@@ -218,6 +218,8 @@ def _api_auth_required():
         return False
     return _cfg_flag('mobileApi', 'allowExternalAccess')
 
+_console_auth_required = _api_auth_required
+
 def _auth_required():
     return Response('Authentication required', 401,
                     {'WWW-Authenticate': 'Basic realm="Bock Media"'})
@@ -696,6 +698,8 @@ def _api_auth_required():
         return False
     return _cfg_flag('mobileApi', 'allowExternalAccess')
 
+_console_auth_required = _api_auth_required
+
 def _auth_required():
     return Response('Authentication required', 401,
                     {'WWW-Authenticate': 'Basic realm="Bock Media"'})
@@ -1154,6 +1158,18 @@ def _alexa_remote_http_status(code):
         return 400
     return 500
 
+def _alexa_login_browser_host(bind_host):
+    """Host name to show for the OAuth proxy — reachable from the current client."""
+    bind_host = (bind_host or '').strip() or '127.0.0.1'
+    cfg_host = ((load_config().get('alexaRemote') or {}).get('loginProxyHost') or '').strip()
+    if cfg_host:
+        return cfg_host
+    req_host = _host_ip()
+    if not _is_lan_request() and req_host and not _is_private_ip(req_host) and _is_private_ip(bind_host):
+        return req_host
+    return bind_host
+
+
 def _alexa_remote_payload(probe=False):
     try:
         import alexa_remote
@@ -1167,19 +1183,30 @@ def _alexa_remote_payload(probe=False):
     else:
         authenticated = alexa_remote.cached_authenticated()
     login = alexa_remote.proxy_login_state() if configured else {}
-    host = login.get('host') or alexa_remote.lan_ip()
+    bind_host = login.get('host') or alexa_remote.lan_ip()
     port = login.get('port') or int((alexa_remote.cfg() or {}).get('loginProxyPort') or 3005)
+    browser_host = _alexa_login_browser_host(bind_host)
+    raw_url = login.get('url')
+    if raw_url and browser_host != bind_host:
+        login_url = f'http://{browser_host}:{port}'
+    else:
+        login_url = raw_url or f'http://{browser_host}:{port}'
+    login_status = login.get('status') or 'idle'
+    login_error = login.get('error')
     return {
         'available': True,
         'configured': configured,
         'authenticated': authenticated,
         'deviceCount': alexa_remote.cached_device_count() if configured else 0,
-        'loginCommand': f'python3 scripts/alexa_login.py --proxy --host {host} --port {port}',
+        'loginCommand': f'python3 scripts/alexa_login.py --proxy --host {bind_host} --port {port}',
         'loginProxyPort': port,
-        'loginProxyHost': host,
-        'loginUrl': login.get('url') or f'http://{host}:{port}',
-        'loginStatus': login.get('status') or 'idle',
-        'loginError': login.get('error'),
+        'loginProxyHost': browser_host,
+        'loginUrl': login_url,
+        'url': login_url,
+        'loginStatus': login_status,
+        'status': login_status,
+        'loginError': login_error,
+        'error': login_error,
     }
 
 
@@ -1199,17 +1226,8 @@ def alexa_remote_login_state():
         import alexa_remote
     except Exception as e:
         return jsonify({'error': str(e)}), 503
-    st = alexa_remote.proxy_login_state()
-    st['configured'] = alexa_remote.is_configured()
     probe = request.args.get('probe', '1').lower() in ('1', 'true', 'yes')
-    if st['configured']:
-        if probe:
-            st['authenticated'] = alexa_remote.is_authenticated(probe=True)
-        else:
-            st['authenticated'] = alexa_remote.cached_authenticated()
-    else:
-        st['authenticated'] = None
-    return jsonify(st)
+    return jsonify(_alexa_remote_payload(probe=probe))
 
 
 @app.route('/api/alexa_remote/login/start', methods=['POST'])
@@ -1219,11 +1237,13 @@ def alexa_remote_login_start():
     body = request.get_json(silent=True) or {}
     try:
         import alexa_remote
-        st = alexa_remote.start_proxy_login(
+        alexa_remote.start_proxy_login(
             host=(body.get('host') or '').strip() or None,
             port=body.get('port'),
         )
-        return jsonify({'ok': True, **st})
+        payload = _alexa_remote_payload(probe=False)
+        payload['ok'] = True
+        return jsonify(payload)
     except ImportError:
         return jsonify({'error': 'alexapy not installed', 'code': 'not_installed'}), 503
     except Exception as e:
@@ -1238,8 +1258,10 @@ def alexa_remote_login_stop():
         return _auth_required()
     try:
         import alexa_remote
-        st = alexa_remote.stop_proxy_login()
-        return jsonify({'ok': True, **st})
+        alexa_remote.stop_proxy_login()
+        payload = _alexa_remote_payload(probe=False)
+        payload['ok'] = True
+        return jsonify(payload)
     except ImportError:
         return jsonify({'error': 'alexapy not installed'}), 503
 

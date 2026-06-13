@@ -20,6 +20,8 @@ import androidx.compose.ui.unit.dp
 import com.bockmedia.console.data.api.dto.AlexaDevice
 import com.bockmedia.console.data.api.dto.DeviceGroup
 import com.bockmedia.console.data.repository.BockMediaRepository
+import com.bockmedia.console.ui.alexaRemotePlayMessage
+import com.bockmedia.console.ui.refreshAlexaControlsAvailable
 import com.bockmedia.console.ui.util.formatTime12
 import com.bockmedia.console.ui.util.formatTime24
 import com.bockmedia.console.ui.util.parseTime24
@@ -323,13 +325,15 @@ fun DevicePickerSheet(
     var error by remember { mutableStateOf<String?>(null) }
     var playing by remember { mutableStateOf(false) }
     var remoteReady by remember(remoteOk) { mutableStateOf(remoteOk) }
+    var alexaStatus by remember { mutableStateOf<com.bockmedia.console.data.api.dto.AlexaRemoteStatus?>(null) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     LaunchedEffect(Unit) {
         loading = true
         error = null
         runCatching {
-            remoteReady = com.bockmedia.console.ui.refreshAlexaControlsAvailable(repository)
+            remoteReady = refreshAlexaControlsAvailable(repository)
+            alexaStatus = repository.alexaRemoteStatus(probe = true)
             val devices = repository.alexaRemoteDevices().devices
             val groups = repository.deviceGroups().items
             deviceOptions = buildDeviceOptions(groups, devices)
@@ -400,7 +404,8 @@ fun DevicePickerSheet(
                     modifier = Modifier.padding(bottom = 12.dp),
                 )
                 !remoteReady -> Text(
-                    "Connect Alexa remote in Settings to play on speakers.",
+                    alexaRemotePlayMessage(alexaStatus)
+                        ?: "Connect Alexa remote in Settings to play on speakers.",
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(bottom = 12.dp),

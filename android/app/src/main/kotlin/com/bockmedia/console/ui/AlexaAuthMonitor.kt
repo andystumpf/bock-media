@@ -40,7 +40,7 @@ fun AlexaAuthMonitor(
 fun rememberAlexaRemoteStatus(repository: BockMediaRepository): State<AlexaRemoteStatus?> {
     val state = remember { mutableStateOf<AlexaRemoteStatus?>(null) }
     LaunchedEffect(repository) {
-        runCatching { state.value = repository.alexaRemoteStatus() }
+        runCatching { state.value = repository.alexaRemoteStatus(probe = true) }
     }
     return state
 }
@@ -48,5 +48,32 @@ fun rememberAlexaRemoteStatus(repository: BockMediaRepository): State<AlexaRemot
 fun alexaControlsAvailable(status: AlexaRemoteStatus?): Boolean =
     status?.configured == true && status.authenticated == true
 
+fun AlexaRemoteStatus.effectiveLoginStatus(): String? =
+    loginStatus?.takeIf { it.isNotBlank() } ?: status?.takeIf { it.isNotBlank() }
+
+fun AlexaRemoteStatus.effectiveLoginUrl(): String? {
+    loginUrl?.takeIf { it.isNotBlank() }?.let { return it }
+    url?.takeIf { it.isNotBlank() }?.let { return it }
+    val h = loginProxyHost?.takeIf { it.isNotBlank() } ?: host?.takeIf { it.isNotBlank() }
+    val p = loginProxyPort ?: port
+    return if (!h.isNullOrBlank() && p != null) "http://$h:$p" else null
+}
+
+fun AlexaRemoteStatus.effectiveLoginError(): String? =
+    loginError?.takeIf { it.isNotBlank() } ?: error?.takeIf { it.isNotBlank() }
+
+fun alexaRemotePlayMessage(status: AlexaRemoteStatus?): String? {
+    if (status == null) {
+        return "Can't reach server for Alexa status. Check your connection in Settings."
+    }
+    if (!status.configured) {
+        return "Alexa remote isn't configured on the server (alexaRemote in config.json)."
+    }
+    if (status.authenticated != true) {
+        return "Sign in to Alexa in Settings → Start browser login. Use home Wi‑Fi or forward port 3005."
+    }
+    return null
+}
+
 suspend fun refreshAlexaControlsAvailable(repository: BockMediaRepository): Boolean =
-    runCatching { alexaControlsAvailable(repository.alexaRemoteStatus()) }.getOrDefault(false)
+    runCatching { alexaControlsAvailable(repository.alexaRemoteStatus(probe = true)) }.getOrDefault(false)

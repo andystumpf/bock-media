@@ -15,7 +15,7 @@ import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import com.bockmedia.console.widget.NowPlayingController
 import com.bockmedia.console.widget.NowPlayingSessionStore
-import com.bockmedia.console.widget.NowPlayingWidget
+import androidx.core.app.NotificationManagerCompat
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
@@ -52,6 +52,11 @@ class NowPlayingMonitorService : Service() {
             }
         }
         return START_STICKY
+    }
+
+    override fun onDestroy() {
+        releaseMediaSession()
+        super.onDestroy()
     }
 
     private fun updateSession() {
@@ -163,9 +168,27 @@ class NowPlayingMonitorService : Service() {
         }
 
         fun stop(context: Context) {
-            context.startService(
-                Intent(context, NowPlayingMonitorService::class.java).apply { action = ACTION_STOP },
+            val appContext = context.applicationContext
+            NotificationManagerCompat.from(appContext).cancel(
+                NowPlayingNotificationManager.NOTIFICATION_ID,
             )
+            releaseMediaSession()
+            // stopService works from background; startService(STOP) throws on Android 12+.
+            appContext.stopService(Intent(appContext, NowPlayingMonitorService::class.java))
+        }
+
+        private fun releaseMediaSession() {
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                mediaSession?.isActive = false
+                mediaSession?.release()
+                mediaSession = null
+                return
+            }
+            mainHandler.post {
+                mediaSession?.isActive = false
+                mediaSession?.release()
+                mediaSession = null
+            }
         }
     }
 }

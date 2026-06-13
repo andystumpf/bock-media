@@ -42,4 +42,18 @@ class NavTitlesTest {
         assertEquals("", resolveScreenHeader(route = BockRoute.Library.route).title)
         assertEquals("", resolveScreenHeader(route = BockRoute.Automations.route).title)
     }
+
+    @Test
+    fun resolveScreenHeader_handlesGenreRouteWithoutCrash() {
+        val header = resolveScreenHeader(route = "genre/Rock", genre = "Rock")
+        assertEquals("Rock", header.title)
+        assertEquals(true, header.showBack)
+    }
+
+    @Test
+    fun resolveScreenHeader_unknownTopRouteDoesNotCrash() {
+        val header = resolveScreenHeader(route = "unknown/sub")
+        assertEquals("Bock Media", header.title)
+        assertEquals(true, header.showBack)
+    }
 }

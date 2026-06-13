@@ -73,10 +73,34 @@ struct AlexaRemoteStatus: Codable {
     var available: Bool = false
     var deviceCount: Int?
     var loginStatus: String?
+    var status: String?
     var loginUrl: String?
+    var url: String?
     var loginError: String?
+    var error: String?
     var loginProxyHost: String?
+    var host: String?
     var loginProxyPort: Int?
+    var port: Int?
+
+    var effectiveLoginStatus: String? {
+        let s = loginStatus?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let s, !s.isEmpty { return s }
+        let t = status?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return t?.isEmpty == false ? t : nil
+    }
+
+    var effectiveLoginURL: URL? {
+        if let loginUrl, let url = URL(string: loginUrl) { return url }
+        if let url, let parsed = URL(string: url) { return parsed }
+        let h = loginProxyHost?.trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? host?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let p = loginProxyPort ?? port
+        if let h, !h.isEmpty, let p {
+            return URL(string: "http://\(h):\(p)")
+        }
+        return nil
+    }
 }
 
 struct NowPlayingDevicesResponse: Codable {

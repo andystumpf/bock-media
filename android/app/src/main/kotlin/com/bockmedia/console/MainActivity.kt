@@ -94,7 +94,6 @@ class MainActivity : ComponentActivity() {
                 DisposableEffect(lifecycleOwner, app, hasServer) {
                     val observer = LifecycleEventObserver { _, event ->
                         if (event == Lifecycle.Event.ON_RESUME && hasServer == true) {
-                            app.invalidateApi()
                             lifecycleOwner.lifecycleScope.launch {
                                 withContext(Dispatchers.IO) {
                                     NowPlayingWidget.refreshSession(applicationContext)

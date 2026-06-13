@@ -252,7 +252,7 @@ interface BockMediaApi {
     suspend fun clearCache(): OkResponse
 
     @GET("api/alexa_remote/status")
-    suspend fun alexaRemoteStatus(): AlexaRemoteStatus
+    suspend fun alexaRemoteStatus(@Query("probe") probe: String? = null): AlexaRemoteStatus
 
     @GET("api/alexa_remote/devices")
     suspend fun alexaRemoteDevices(): AlexaDevicesResponse

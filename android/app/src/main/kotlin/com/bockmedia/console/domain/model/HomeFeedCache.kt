@@ -18,6 +18,7 @@ object HomeFeedCache {
     }
 
     fun put(value: HomeFeed) {
+        if (value.sections.isEmpty()) return
         feed = value
         cachedAtMs = System.currentTimeMillis()
     }

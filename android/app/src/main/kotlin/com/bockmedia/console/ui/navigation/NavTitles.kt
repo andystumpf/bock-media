@@ -12,6 +12,7 @@ fun resolveScreenHeader(entry: NavBackStackEntry?): ScreenHeader {
         route = route,
         artist = args?.getString("artist"),
         album = args?.getString("album"),
+        genre = args?.getString("name"),
     )
 }
 
@@ -19,6 +20,7 @@ internal fun resolveScreenHeader(
     route: String?,
     artist: String? = null,
     album: String? = null,
+    genre: String? = null,
 ): ScreenHeader {
     if (route.isNullOrBlank()) return ScreenHeader("Bock Media", showBack = false)
     return when (route) {
@@ -35,6 +37,10 @@ internal fun resolveScreenHeader(
             val name = decodeNavArg(album)
             ScreenHeader(name.ifBlank { "Songs" }, showBack = true)
         }
+        ROUTE_GENRE -> {
+            val name = decodeNavArg(genre)
+            ScreenHeader(name.ifBlank { "Genre" }, showBack = true)
+        }
         else -> when {
             route.startsWith("playlists/detail/") -> ScreenHeader("Playlist", showBack = true)
             route.startsWith("albums/") && route != BockRoute.Albums.route -> {
@@ -49,6 +55,10 @@ internal fun resolveScreenHeader(
                 val name = decodeNavArg(route.removePrefix("songs/album/"))
                 ScreenHeader(name.ifBlank { "Songs" }, showBack = true)
             }
+            route.startsWith("genre/") -> {
+                val name = decodeNavArg(route.removePrefix("genre/"))
+                ScreenHeader(name.ifBlank { "Genre" }, showBack = true)
+            }
             else -> {
                 val top = route.substringBefore("/")
                 val bottomNavTops = BockRoute.bottomNavRoutes.map { it.route }
@@ -56,12 +66,20 @@ internal fun resolveScreenHeader(
                 val title = if (top in bottomNavTops) {
                     ""
                 } else {
-                    BockRoute.allRoutes.find { it.route == top }?.title ?: "Bock Media"
+                    titleForRouteTop(top)
                 }
                 ScreenHeader(title, showBack = showBack)
             }
         }
     }
+}
+
+private fun titleForRouteTop(top: String): String {
+    return BockRoute.allRoutes.firstOrNull { it.route == top }?.title
+        ?: when (top) {
+            "genre" -> "Genre"
+            else -> "Bock Media"
+        }
 }
 
 private fun decodeNavArg(value: String?): String {

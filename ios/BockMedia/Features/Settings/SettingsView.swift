@@ -208,8 +208,8 @@ struct SettingsView: View {
     private func startAlexaLogin() async {
         do {
             let status = try await appState.repository.startAlexaLogin()
-            guard let urlString = status.loginUrl, let url = URL(string: urlString) else {
-                loginMessage = status.loginError ?? "No login URL returned"
+            guard let url = status.effectiveLoginURL else {
+                loginMessage = status.loginError ?? status.error ?? "No login URL returned"
                 return
             }
             await openLoginURL(url)

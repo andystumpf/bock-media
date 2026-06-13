@@ -108,13 +108,14 @@ object NowPlayingNotificationManager {
             .setLargeIcon(loadArtwork(context, item.filepath))
 
         val enabled = NowPlayingSessionStore.canControl(item)
+        val deviceName = item.deviceName?.takeIf { it.isNotBlank() } ?: item.deviceId
         if (enabled) {
             builder.addAction(
                 android.R.drawable.ic_media_previous,
                 context.getString(R.string.notification_previous),
                 NowPlayingWidget.pendingAction(
                     context, NowPlayingWidget.ACTION_PREVIOUS,
-                    item.deviceId, item.deviceName!!, 9001,
+                    item.deviceId, deviceName, 9001,
                 ),
             )
             val toggleAction = if (item.paused) NowPlayingWidget.ACTION_PLAY else NowPlayingWidget.ACTION_PAUSE
@@ -129,7 +130,7 @@ object NowPlayingNotificationManager {
                 toggleLabel,
                 NowPlayingWidget.pendingAction(
                     context, toggleAction,
-                    item.deviceId, item.deviceName, 9002,
+                    item.deviceId, deviceName, 9002,
                 ),
             )
             builder.addAction(
@@ -137,7 +138,7 @@ object NowPlayingNotificationManager {
                 context.getString(R.string.notification_next),
                 NowPlayingWidget.pendingAction(
                     context, NowPlayingWidget.ACTION_NEXT,
-                    item.deviceId, item.deviceName, 9003,
+                    item.deviceId, deviceName, 9003,
                 ),
             )
         }

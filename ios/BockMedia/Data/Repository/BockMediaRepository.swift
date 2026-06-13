@@ -444,7 +444,15 @@ final class BockMediaRepository: ObservableObject {
 
     func startAlexaLogin() async throws -> AlexaRemoteStatus {
         try await ensureAPI()
-        return try await api.alexaLoginStart()
+        let active = try await resolveBaseURL()
+        var body: [String: Any] = [:]
+        if let activeHost = URL(string: active)?.host,
+           let local = preferences.localServerURL,
+           let localHost = URL(string: local)?.host,
+           activeHost != localHost {
+            body["host"] = activeHost
+        }
+        return try await api.alexaLoginStart(body: body)
     }
 
     func runAutomation(_ id: String) async throws {

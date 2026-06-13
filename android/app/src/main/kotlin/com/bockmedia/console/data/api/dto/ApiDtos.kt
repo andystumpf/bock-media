@@ -107,11 +107,16 @@ data class AlexaRemoteStatus(
     val authenticated: Boolean? = null,
     val available: Boolean = false,
     val deviceCount: Int? = null,
-    val loginStatus: String? = null,
-    val loginUrl: String? = null,
-    val loginError: String? = null,
-    val loginProxyHost: String? = null,
-    val loginProxyPort: Int? = null,
+    @SerialName("loginStatus") val loginStatus: String? = null,
+    @SerialName("status") val status: String? = null,
+    @SerialName("loginUrl") val loginUrl: String? = null,
+    @SerialName("url") val url: String? = null,
+    @SerialName("loginError") val loginError: String? = null,
+    @SerialName("error") val error: String? = null,
+    @SerialName("loginProxyHost") val loginProxyHost: String? = null,
+    @SerialName("host") val host: String? = null,
+    @SerialName("loginProxyPort") val loginProxyPort: Int? = null,
+    @SerialName("port") val port: Int? = null,
 )
 
 @Serializable

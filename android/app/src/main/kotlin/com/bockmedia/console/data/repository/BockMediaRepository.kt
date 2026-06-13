@@ -277,7 +277,8 @@ class BockMediaRepository(
     suspend fun mergeCandidates() = api().mergeCandidates()
     suspend fun deviceGroups() = api().deviceGroups()
     suspend fun alexaRemoteDevices() = api().alexaRemoteDevices()
-    suspend fun alexaRemoteStatus() = api().alexaRemoteStatus()
+    suspend fun alexaRemoteStatus(probe: Boolean = false) =
+        api().alexaRemoteStatus(probe = if (probe) "1" else null)
     suspend fun automations() = api().automations()
     suspend fun analytics(from: String? = null, to: String? = null) = api().analytics(from, to)
     suspend fun reportClientEvent(body: JsonObject) = api().reportClientEvent(body)
@@ -540,7 +541,16 @@ class BockMediaRepository(
         }
     }.getOrDefault("Unknown")
 
-    suspend fun alexaLoginStart() = api().alexaLoginStart()
+    suspend fun alexaLoginStart(): AlexaRemoteStatus {
+        val body = buildJsonObject {
+            val activeHost = runCatching { AppPreferences.hostOf(baseUrl()) }.getOrNull()
+            val localHost = preferences.getLocalServerUrlSync()?.let { AppPreferences.hostOf(it) }
+            if (!activeHost.isNullOrBlank() && activeHost != localHost) {
+                put("host", activeHost)
+            }
+        }
+        return api().alexaLoginStart(body)
+    }
     suspend fun alexaLoginStop() = api().alexaLoginStop()
     suspend fun alexaLoginState() = api().alexaLoginState()
 }

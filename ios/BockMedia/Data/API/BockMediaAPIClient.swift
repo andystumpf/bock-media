@@ -337,8 +337,8 @@ final class BockMediaAPIClient {
         try await post("api/nowplaying/sleep", body: body)
     }
 
-    func alexaLoginStart() async throws -> AlexaRemoteStatus {
-        try await post("api/alexa_remote/login/start", body: [:])
+    func alexaLoginStart(body: [String: Any] = [:]) async throws -> AlexaRemoteStatus {
+        try await post("api/alexa_remote/login/start", body: body)
     }
 
     // MARK: - HTTP
