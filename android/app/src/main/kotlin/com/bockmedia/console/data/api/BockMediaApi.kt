@@ -2,6 +2,7 @@ package com.bockmedia.console.data.api
 
 import com.bockmedia.console.data.api.dto.*
 import kotlinx.serialization.json.JsonObject
+import okhttp3.ResponseBody
 import retrofit2.http.*
 
 interface BockMediaApi {
@@ -17,13 +18,6 @@ interface BockMediaApi {
     @GET("api/dashboard/quick")
     suspend fun dashboardQuick(): DashboardQuickResponse
 
-    @GET("api/dashboard/bootstrap")
-    suspend fun dashboardBootstrap(
-        @Query("probe") probe: Int = 0,
-        @Query("page") page: Int = 1,
-        @Query("limit") limit: Int = 10,
-    ): DashboardBootstrapResponse
-
     @GET("api/playback/status")
     suspend fun playbackStatus(): PlaybackStatusResponse
 
@@ -34,7 +28,9 @@ interface BockMediaApi {
     ): RecentResponse
 
     @GET("api/nowplaying_devices")
-    suspend fun nowPlayingDevices(): NowPlayingDevicesResponse
+    suspend fun nowPlayingDevices(
+        @Query("viewerClientId") viewerClientId: String? = null,
+    ): NowPlayingDevicesResponse
 
     @GET("api/nowplaying")
     suspend fun streamHistory(
@@ -59,6 +55,12 @@ interface BockMediaApi {
         @Query("sortBy") sortBy: String? = null,
         @Query("order") order: String? = null,
     ): PlaylistsResponse
+
+    @GET("api/playlists/{id}/cover")
+    suspend fun playlistCover(@Path("id") id: String): PlaylistCoverResponse
+
+    @POST("api/playlists/covers")
+    suspend fun playlistCoversBatch(@Body body: PlaylistCoversBatchRequest): PlaylistCoversBatchResponse
 
     @GET("api/playlists/{id}")
     suspend fun playlistDetail(
@@ -125,7 +127,11 @@ interface BockMediaApi {
         @Query("limit") limit: Int = 50,
         @Query("search") search: String = "",
         @Query("artist") artist: String? = null,
+        @Query("sort") sort: String? = null,
     ): AlbumsResponse
+
+    @GET("api/genres")
+    suspend fun genres(@Query("limit") limit: Int = 20): GenresResponse
 
     @GET("api/songs")
     suspend fun songs(
@@ -193,11 +199,21 @@ interface BockMediaApi {
     @POST("api/automations/{id}/run")
     suspend fun runAutomation(@Path("id") id: String): OkResponse
 
+    @POST("api/clients/report")
+    suspend fun reportClientEvent(@Body body: JsonObject): OkResponse
+
     @GET("api/analytics")
     suspend fun analytics(
         @Query("from") from: String? = null,
         @Query("to") to: String? = null,
     ): AnalyticsResponse
+
+    @GET("api/analytics/export")
+    @Streaming
+    suspend fun analyticsExport(
+        @Query("from") from: String? = null,
+        @Query("to") to: String? = null,
+    ): ResponseBody
 
     @GET("api/ignored")
     suspend fun ignored(): IgnoredResponse
@@ -209,7 +225,7 @@ interface BockMediaApi {
     suspend fun removeIgnored(@Body body: JsonObject): OkResponse
 
     @GET("api/favorites")
-    suspend fun favorites(): JsonObject
+    suspend fun favorites(): FavoritesResponse
 
     @POST("api/favorites")
     suspend fun addFavorite(@Body body: JsonObject): OkResponse
@@ -229,9 +245,6 @@ interface BockMediaApi {
     @POST("api/config")
     suspend fun saveConfig(@Body body: JsonObject): OkResponse
 
-    @GET("api/artwork_url")
-    suspend fun artworkUrl(@Query("path") path: String): ArtworkUrlResponse
-
     @GET("api/localip")
     suspend fun localIp(): LocalIpResponse
 
@@ -242,7 +255,7 @@ interface BockMediaApi {
     suspend fun alexaRemoteStatus(): AlexaRemoteStatus
 
     @GET("api/alexa_remote/devices")
-    suspend fun alexaRemoteDevices(@Query("probe") probe: Int = 0): AlexaDevicesResponse
+    suspend fun alexaRemoteDevices(): AlexaDevicesResponse
 
     @POST("api/alexa_remote/play")
     suspend fun alexaRemotePlay(@Body body: JsonObject): PlayResponse

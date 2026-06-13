@@ -10,63 +10,29 @@ import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "bockmedia")
 
 class AppPreferences(private val context: Context) {
-    private val secure = SecureCredentialStore(context)
     private val keyLocalUrl = stringPreferencesKey("local_server_url")
     private val keyExternalUrl = stringPreferencesKey("external_server_url")
     /** Legacy single-URL key — migrated to external on read. */
     private val keyServerUrl = stringPreferencesKey("server_url")
     private val keyAdminUser = stringPreferencesKey("admin_user")
-    private val keyLegacyAdminPass = stringPreferencesKey("admin_pass")
-    private val keyLegacyMobileToken = stringPreferencesKey("mobile_token")
+    private val keyAdminPass = stringPreferencesKey("admin_pass")
+    private val keyMobileToken = stringPreferencesKey("mobile_token")
     private val keyRememberMe = booleanPreferencesKey("remember_me")
-    private val keyLastResolvedUrl = stringPreferencesKey("last_resolved_url")
+    private val keyDownloadWifiOnly = booleanPreferencesKey("download_wifi_only")
 
     val rememberMe: Flow<Boolean> = context.dataStore.data.map { it[keyRememberMe] == true }
+    val downloadWifiOnly: Flow<Boolean> = context.dataStore.data.map { it[keyDownloadWifiOnly] == true }
 
     val localServerUrl: Flow<String?> = context.dataStore.data.map { it[keyLocalUrl] }
     val externalServerUrl: Flow<String?> = context.dataStore.data.map { it[keyExternalUrl] }
 
     val adminUser: Flow<String?> = context.dataStore.data.map { it[keyAdminUser] }
-    val adminPass: Flow<String?> = kotlinx.coroutines.flow.flow {
-        migrateLegacySecrets()
-        emit(secure.getAdminPass())
-    }
-    val mobileToken: Flow<String?> = kotlinx.coroutines.flow.flow {
-        migrateLegacySecrets()
-        emit(secure.getMobileToken())
-    }
-
-    private var secretsMigrated = false
-    private val migrateMutex = Mutex()
-
-    private suspend fun migrateLegacySecrets() {
-        if (secretsMigrated) return
-        migrateMutex.withLock {
-            if (secretsMigrated) return
-            val prefs = context.dataStore.data.first()
-            val legacyPass = prefs[keyLegacyAdminPass]
-            val legacyToken = prefs[keyLegacyMobileToken]
-            if (!legacyPass.isNullOrBlank() && secure.getAdminPass().isNullOrBlank()) {
-                secure.setAdminPass(legacyPass)
-            }
-            if (!legacyToken.isNullOrBlank() && secure.getMobileToken().isNullOrBlank()) {
-                secure.setMobileToken(legacyToken)
-            }
-            if (!legacyPass.isNullOrBlank() || !legacyToken.isNullOrBlank()) {
-                context.dataStore.edit {
-                    it.remove(keyLegacyAdminPass)
-                    it.remove(keyLegacyMobileToken)
-                }
-            }
-            secretsMigrated = true
-        }
-    }
+    val adminPass: Flow<String?> = context.dataStore.data.map { it[keyAdminPass] }
+    val mobileToken: Flow<String?> = context.dataStore.data.map { it[keyMobileToken] }
 
     suspend fun getLocalServerUrlSync(): String? = localServerUrl.first()?.takeIf { it.isNotBlank() }
 
@@ -92,29 +58,31 @@ class AppPreferences(private val context: Context) {
             it.remove(keyLocalUrl)
             it.remove(keyExternalUrl)
             it.remove(keyServerUrl)
-            it.remove(keyLastResolvedUrl)
         }
-    }
-
-    suspend fun getLastResolvedUrlSync(): String? =
-        context.dataStore.data.first()[keyLastResolvedUrl]?.takeIf { it.isNotBlank() }
-
-    suspend fun setLastResolvedUrl(url: String) {
-        context.dataStore.edit { it[keyLastResolvedUrl] = normalizeUrl(url) }
     }
 
     suspend fun setAdminCredentials(user: String?, pass: String?) {
         context.dataStore.edit {
             if (user.isNullOrBlank()) it.remove(keyAdminUser) else it[keyAdminUser] = user
+            if (pass.isNullOrBlank()) it.remove(keyAdminPass) else it[keyAdminPass] = pass
         }
-        secure.setAdminPass(pass)
     }
 
     suspend fun setMobileToken(token: String?) {
-        secure.setMobileToken(token)
+        context.dataStore.edit {
+            if (token.isNullOrBlank()) it.remove(keyMobileToken) else it[keyMobileToken] = token
+        }
     }
 
     suspend fun isRememberMeSync(): Boolean = rememberMe.first()
+
+    suspend fun isDownloadWifiOnlySync(): Boolean = downloadWifiOnly.first()
+
+    suspend fun setDownloadWifiOnly(wifiOnly: Boolean) {
+        context.dataStore.edit { prefs ->
+            if (wifiOnly) prefs[keyDownloadWifiOnly] = true else prefs.remove(keyDownloadWifiOnly)
+        }
+    }
 
     suspend fun setRememberMe(remember: Boolean) {
         context.dataStore.edit { prefs ->
@@ -129,12 +97,16 @@ class AppPreferences(private val context: Context) {
         }
     }
 
-    suspend fun applyBuildDefaultsIfEmpty() {
-        if (hasAnyServerUrl()) return
+    /** Always use build-time LAN / external URLs — not user-editable. */
+    suspend fun applyBuildServerUrls() {
         setServerUrls(
             local = com.bockmedia.console.BuildConfig.DEFAULT_LOCAL_SERVER_URL.takeIf { it.isNotBlank() },
             external = com.bockmedia.console.BuildConfig.DEFAULT_EXTERNAL_SERVER_URL.takeIf { it.isNotBlank() },
         )
+    }
+
+    suspend fun applyBuildDefaultsIfEmpty() {
+        applyBuildServerUrls()
         if (adminUser.first().isNullOrBlank()) {
             setAdminCredentials(
                 com.bockmedia.console.BuildConfig.DEFAULT_ADMIN_USER.takeIf { it.isNotBlank() },
@@ -168,20 +140,28 @@ class AppPreferences(private val context: Context) {
         fun isValidUrl(raw: String): Boolean {
             if (raw.isBlank()) return false
             return try {
-                val uri = android.net.Uri.parse(normalizeUrl(raw))
+                val uri = java.net.URI(normalizeUrl(raw))
                 !uri.host.isNullOrBlank()
             } catch (_: Exception) {
                 false
             }
         }
 
-        fun artworkUrl(base: String, filepath: String?): String? {
-            if (filepath.isNullOrBlank()) return null
+        fun encodeMediaPath(filepath: String): String {
             val rel = filepath.trimStart('/')
-            val encoded = rel.split('/').joinToString("/") { segment ->
+            return rel.split('/').joinToString("/") { segment ->
                 java.net.URLEncoder.encode(segment, "UTF-8").replace("+", "%20")
             }
-            return "${normalizeUrl(base)}/artwork/$encoded"
+        }
+
+        fun artworkUrl(base: String, filepath: String?): String? {
+            if (filepath.isNullOrBlank()) return null
+            return "${normalizeUrl(base)}/artwork/${encodeMediaPath(filepath)}"
+        }
+
+        fun streamUrl(base: String, filepath: String?): String? {
+            if (filepath.isNullOrBlank()) return null
+            return "${normalizeUrl(base)}/stream/${encodeMediaPath(filepath)}"
         }
 
         fun hostOf(raw: String?): String? {

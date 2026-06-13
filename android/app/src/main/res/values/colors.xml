@@ -3,4 +3,5 @@
     <color name="bock_navy">#30426A</color>
     <color name="bock_gold">#E99D1A</color>
     <color name="bock_muted">#667085</color>
+    <color name="bock_black">#000000</color>
 </resources>

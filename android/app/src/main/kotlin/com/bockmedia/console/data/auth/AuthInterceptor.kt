@@ -14,25 +14,17 @@ class BockAuthInterceptor(
     override fun intercept(chain: Interceptor.Chain): Response {
         val host = chain.request().url.host.lowercase()
         if (host in localHostsProvider()) {
-            val user = usernameProvider()?.trim()?.takeIf { it.isNotEmpty() }
-            val pass = passwordProvider()?.trim()?.takeIf { it.isNotEmpty() }
-            val token = tokenProvider()?.trim()?.takeIf { it.isNotEmpty() }
-            if (user == null && pass == null && token == null) {
-                return chain.proceed(chain.request())
-            }
-            val builder = chain.request().newBuilder()
-            when {
-                token != null -> builder.header("Authorization", "Bearer $token")
-                user != null && pass != null -> builder.header("Authorization", Credentials.basic(user, pass))
-            }
-            return chain.proceed(builder.build())
+            return chain.proceed(chain.request())
         }
         val token = tokenProvider()?.trim()?.takeIf { it.isNotEmpty() }
         val user = usernameProvider()?.trim()?.takeIf { it.isNotEmpty() }
         val pass = passwordProvider()?.trim()?.takeIf { it.isNotEmpty() }
         val builder = chain.request().newBuilder()
         when {
-            // Token alone is enough for external access; don't send dummy Basic auth.
+            token != null && user != null && pass != null -> {
+                builder.header("Authorization", Credentials.basic(user, pass))
+                builder.header("X-BockMedia-Token", token)
+            }
             token != null -> builder.header("Authorization", "Bearer $token")
             user != null && pass != null -> builder.header("Authorization", Credentials.basic(user, pass))
         }

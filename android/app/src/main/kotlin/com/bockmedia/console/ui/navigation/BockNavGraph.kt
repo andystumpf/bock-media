@@ -1,288 +1,382 @@
 package com.bockmedia.console.ui.navigation
 
-import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
-import com.bockmedia.console.ui.components.BockLazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.zIndex
+import androidx.navigation.NavHostController
+import androidx.navigation.NavType
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
+import com.bockmedia.console.data.api.dto.NowPlayingDeviceItem
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.PlayTarget
+import com.bockmedia.console.domain.model.PlaybackFocus
 import com.bockmedia.console.ui.AlexaAuthMonitor
-import com.bockmedia.console.ui.alexaControlsAvailable
+import com.bockmedia.console.ui.refreshAlexaControlsAvailable
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import com.bockmedia.console.ui.analytics.AnalyticsScreen
 import com.bockmedia.console.ui.automation.AutomationScreen
+import com.bockmedia.console.ui.components.AccountMenuButton
+import com.bockmedia.console.ui.components.MiniNowPlayingBar
 import com.bockmedia.console.ui.components.PlayTargetLauncher
-import com.bockmedia.console.ui.dashboard.DashboardScreen
+import com.bockmedia.console.ui.downloads.DownloadsScreen
+import com.bockmedia.console.ui.favorites.FavoritesScreen
+import com.bockmedia.console.ui.recent.RecentRequestsScreen
+import com.bockmedia.console.ui.routines.RoutinesScreen
 import com.bockmedia.console.ui.devices.DevicesScreen
+import com.bockmedia.console.ui.home.HomeScreen
 import com.bockmedia.console.ui.library.AlbumsScreen
 import com.bockmedia.console.ui.library.ArtistsScreen
+import com.bockmedia.console.ui.library.LibraryScreen
 import com.bockmedia.console.ui.library.SongsScreen
 import com.bockmedia.console.ui.nowplaying.NowPlayingScreen
+import com.bockmedia.console.ui.nowplaying.resolveSerial
 import com.bockmedia.console.ui.playlists.PlaylistDetailScreen
 import com.bockmedia.console.ui.playlists.PlaylistsScreen
 import com.bockmedia.console.ui.rooms.RoomsScreen
-import com.bockmedia.console.ui.routines.RoutinesScreen
+import com.bockmedia.console.ui.search.GenreDetailScreen
 import com.bockmedia.console.ui.search.SearchScreen
 import com.bockmedia.console.ui.settings.SettingsScreen
-import com.bockmedia.console.ui.watchfolders.WatchFoldersScreen
-import kotlinx.coroutines.delay
-
-/** Nested screens pushed on top of a drawer tab (no NavHost — crash-safe on device). */
-private sealed class OverlayScreen {
-    data class PlaylistDetail(val id: String) : OverlayScreen()
-    data class AlbumsArtist(val artist: String) : OverlayScreen()
-    data class SongsArtist(val artist: String) : OverlayScreen()
-    data class SongsAlbum(val album: String, val artist: String?) : OverlayScreen()
-}
+import java.net.URLDecoder
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun BockApp(repository: BockMediaRepository, onChangeServer: () -> Unit, deepLinkRoute: String? = null) {
-    var topRoute by rememberSaveable { mutableStateOf(BockRoute.Dashboard.route) }
-    var overlay by remember { mutableStateOf<OverlayScreen?>(null) }
-    var drawerOpen by remember { mutableStateOf(false) }
+fun BockApp(repository: BockMediaRepository, deepLinkRoute: String? = null) {
+    val navController = rememberNavController()
     val snackbarHostState = remember { SnackbarHostState() }
     var playTarget by remember { mutableStateOf<PlayTarget?>(null) }
+    var playbackFocusGeneration by remember { mutableIntStateOf(PlaybackFocus.generation) }
     var remoteOk by remember { mutableStateOf(false) }
-    var extrasReady by remember { mutableStateOf(false) }
+    var alexaDevices by remember { mutableStateOf(emptyList<com.bockmedia.console.data.api.dto.AlexaDevice>()) }
+    val scope = rememberCoroutineScope()
 
+    val navBackStackEntry by navController.currentBackStackEntryAsState()
+    val fullRoute = navBackStackEntry?.destination?.route
+    val header = resolveScreenHeader(navBackStackEntry)
+    val showBottomNav = isBottomNavRoute(fullRoute)
+    val showMiniBar = showBottomNav
+    val isHome = fullRoute?.substringBefore("/") == BockRoute.Home.route
+    val isNowPlaying = fullRoute?.substringBefore("/") == BockRoute.NowPlaying.route
+    val showAccount = showBottomNav && !isHome
+
+    val lifecycleOwner = LocalLifecycleOwner.current
     LaunchedEffect(repository) {
-        delay(400)
-        runCatching { remoteOk = alexaControlsAvailable(repository.alexaRemoteStatus()) }
-        extrasReady = true
+        while (true) {
+            remoteOk = refreshAlexaControlsAvailable(repository)
+            delay(60_000)
+        }
+    }
+    DisposableEffect(lifecycleOwner, repository, scope) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                scope.launch { remoteOk = refreshAlexaControlsAvailable(repository) }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     LaunchedEffect(deepLinkRoute) {
         deepLinkRoute?.let { route ->
-            val dest = route.removePrefix("#").trim()
-            if (dest.isNotBlank()) topRoute = dest.substringBefore("/")
+            val dest = when {
+                route.startsWith("#") -> route.removePrefix("#")
+                else -> route
+            }
+            if (dest.isNotBlank()) navController.navigate(dest) { launchSingleTop = true }
         }
     }
 
-    if (extrasReady) {
-        AlexaAuthMonitor(repository, snackbarHostState)
-        PlayTargetLauncher(repository, playTarget, remoteOk, snackbarHostState) { playTarget = null }
+    AlexaAuthMonitor(repository, snackbarHostState)
+
+    PlayTargetLauncher(
+        repository,
+        playTarget,
+        remoteOk,
+        snackbarHostState,
+        onClear = { playTarget = null },
+        onPlayStarted = { _, _ -> playbackFocusGeneration = PlaybackFocus.generation },
+    )
+
+    suspend fun runMiniControl(dev: NowPlayingDeviceItem, action: String) {
+        val serial = resolveSerial(dev, alexaDevices) ?: return
+        runCatching {
+            repository.deviceControl(dev.deviceId, dev.deviceName ?: "", serial, action)
+        }
     }
 
-    BackHandler(drawerOpen) { drawerOpen = false }
-    BackHandler(!drawerOpen && overlay != null) { overlay = null }
-
-    val showingOverlay = overlay != null
-    val title = titleForScreen(topRoute, overlay)
-
-    Box(Modifier.fillMaxSize()) {
-        Scaffold(
-            snackbarHost = { SnackbarHost(snackbarHostState) },
-            topBar = {
+    Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
+        containerColor = MaterialTheme.colorScheme.background,
+        topBar = {
+            if (!isHome && !isNowPlaying) {
                 TopAppBar(
-                    title = { Text(title) },
+                    title = { Text(header.title) },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.background,
+                        scrolledContainerColor = MaterialTheme.colorScheme.background,
+                    ),
                     navigationIcon = {
-                        if (showingOverlay) {
-                            IconButton(onClick = { overlay = null }) {
+                        if (header.showBack) {
+                            IconButton(onClick = { navController.popBackStack() }) {
                                 Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
                             }
-                        } else {
-                            IconButton(onClick = { drawerOpen = true }) {
-                                Icon(Icons.Default.Menu, "Menu")
+                        }
+                    },
+                    actions = {
+                        if (showAccount) {
+                            AccountMenuButton { route ->
+                                navController.navigate(route) { launchSingleTop = true }
                             }
                         }
                     },
                 )
-            },
-        ) { padding ->
-            Box(Modifier.padding(padding).fillMaxSize()) {
-                when (val o = overlay) {
-                    is OverlayScreen.PlaylistDetail -> PlaylistDetailScreen(
-                        repository,
-                        o.id,
-                        remoteOk,
-                        onPlay = { playTarget = it },
-                    ) { overlay = null }
-
-                    is OverlayScreen.AlbumsArtist -> AlbumsScreen(
-                        repository,
-                        o.artist,
-                        remoteOk,
-                        onPlay = { playTarget = it },
-                        onOpenAlbum = { album, artist ->
-                            overlay = OverlayScreen.SongsAlbum(album, artist)
-                        },
-                    )
-
-                    is OverlayScreen.SongsArtist -> SongsScreen(
-                        repository,
-                        o.artist,
-                        null,
-                        remoteOk,
-                        onPlay = { playTarget = it },
-                    )
-
-                    is OverlayScreen.SongsAlbum -> SongsScreen(
-                        repository,
-                        o.artist,
-                        o.album,
-                        remoteOk,
-                        onPlay = { playTarget = it },
-                    )
-
-                    null -> MainScreen(
-                        route = topRoute,
-                        repository = repository,
-                        remoteOk = remoteOk,
-                        snackbarHostState = snackbarHostState,
-                        onPlay = { playTarget = it },
-                        onChangeServer = onChangeServer,
-                        onNavigateSettings = { topRoute = BockRoute.Settings.route },
-                        onOpenPlaylist = { id -> overlay = OverlayScreen.PlaylistDetail(id) },
-                        onOpenArtist = { artist -> overlay = OverlayScreen.AlbumsArtist(artist) },
-                        onOpenAlbumSongs = { album, artist ->
-                            overlay = OverlayScreen.SongsAlbum(album, artist)
-                        },
-                    )
-                }
             }
-        }
-
-        if (drawerOpen) {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .zIndex(1f),
-            ) {
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.32f))
-                        .clickable { drawerOpen = false },
-                )
-                ModalDrawerSheet(
-                    modifier = Modifier
-                        .fillMaxHeight()
-                        .widthIn(max = 272.dp),
+        },
+        bottomBar = {
+            if (showBottomNav) {
+                NavigationBar(
+                    containerColor = MaterialTheme.colorScheme.background,
                 ) {
-                    Column(Modifier.fillMaxSize()) {
-                        Text(
-                            "Bock Media",
-                            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 6.dp),
-                            style = MaterialTheme.typography.titleMedium,
+                    BockRoute.bottomNavRoutes.forEach { route ->
+                        val selected = fullRoute?.substringBefore("/") == route.route
+                        NavigationBarItem(
+                            selected = selected,
+                            onClick = {
+                                navController.navigate(route.route) {
+                                    launchSingleTop = true
+                                    popUpTo(BockRoute.Home.route) { saveState = true }
+                                    restoreState = true
+                                }
+                            },
+                            icon = { Icon(route.icon, route.title) },
+                            label = { Text(route.title) },
                         )
-                        HorizontalDivider(modifier = Modifier.padding(horizontal = 12.dp))
-                        BockLazyColumn(
-                            modifier = Modifier.weight(1f),
-                            contentPadding = PaddingValues(top = 3.dp, bottom = 8.dp),
-                            verticalArrangement = Arrangement.spacedBy(2.dp),
-                        ) {
-                            items(BockRoute.drawerRoutes, key = { it.route }) { route ->
-                                CompactDrawerItem(
-                                    route = route,
-                                    selected = topRoute == route.route && overlay == null,
-                                    onClick = {
-                                        topRoute = route.route
-                                        overlay = null
-                                        drawerOpen = false
-                                    },
-                                )
-                            }
-                        }
                     }
                 }
+            }
+        },
+    ) { padding ->
+        Box(
+            modifier = if (isNowPlaying) {
+                Modifier.fillMaxSize()
+            } else {
+                Modifier.padding(padding)
+            },
+        ) {
+            BockNavHost(
+                navController = navController,
+                repository = repository,
+                remoteOk = remoteOk,
+                snackbarHostState = snackbarHostState,
+                onPlay = { playTarget = it },
+                playbackFocusGeneration = playbackFocusGeneration,
+                modifier = Modifier.fillMaxSize(),
+            )
+            if (showMiniBar) {
+                MiniNowPlayingBar(
+                    repository = repository,
+                    remoteOk = remoteOk,
+                    playbackFocusGeneration = playbackFocusGeneration,
+                    onOpenNowPlaying = {
+                        navController.navigate(BockRoute.NowPlaying.route) {
+                            launchSingleTop = true
+                        }
+                    },
+                    onControl = { dev, action ->
+                        if (alexaDevices.isEmpty()) {
+                            runCatching { alexaDevices = repository.alexaRemoteDevices().devices }
+                        }
+                        runMiniControl(dev, action)
+                    },
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth(),
+                )
             }
         }
     }
 }
 
 @Composable
-private fun MainScreen(
-    route: String,
+private fun BockNavHost(
+    navController: NavHostController,
     repository: BockMediaRepository,
     remoteOk: Boolean,
     snackbarHostState: SnackbarHostState,
     onPlay: (PlayTarget) -> Unit,
-    onChangeServer: () -> Unit,
-    onNavigateSettings: () -> Unit,
-    onOpenPlaylist: (String) -> Unit,
-    onOpenArtist: (String) -> Unit,
-    onOpenAlbumSongs: (String, String?) -> Unit,
+    playbackFocusGeneration: Int = 0,
+    modifier: Modifier = Modifier,
 ) {
-    when (route) {
-        BockRoute.Dashboard.route -> DashboardScreen(repository, remoteOk, onPlay, onNavigateSettings)
-        BockRoute.NowPlaying.route -> NowPlayingScreen(repository, snackbarHostState)
-        BockRoute.Rooms.route -> RoomsScreen(repository)
-        BockRoute.Search.route -> SearchScreen(repository, remoteOk, onPlay)
-        BockRoute.Playlists.route -> PlaylistsScreen(repository, remoteOk, onPlay, onOpenPlaylist)
-        BockRoute.Artists.route -> ArtistsScreen(repository, remoteOk, onPlay, onOpenArtist)
-        BockRoute.Albums.route -> AlbumsScreen(
-            repository,
-            null,
-            remoteOk,
-            onPlay,
-            onOpenAlbumSongs,
-        )
-        BockRoute.Songs.route -> SongsScreen(repository, null, null, remoteOk, onPlay)
-        BockRoute.WatchFolders.route -> WatchFoldersScreen(repository)
-        BockRoute.Devices.route -> DevicesScreen(repository)
-        BockRoute.Automation.route -> AutomationScreen(repository)
-        BockRoute.Routines.route -> RoutinesScreen(repository)
-        BockRoute.Analytics.route -> AnalyticsScreen(repository)
-        BockRoute.Settings.route -> SettingsScreen(repository, onChangeServer)
-        else -> DashboardScreen(repository, remoteOk, onPlay, onNavigateSettings)
-    }
-}
-
-private fun titleForScreen(topRoute: String, overlay: OverlayScreen?): String = when (overlay) {
-    is OverlayScreen.PlaylistDetail -> "Playlist"
-    is OverlayScreen.AlbumsArtist -> "Albums · ${overlay.artist}"
-    is OverlayScreen.SongsArtist -> "Songs · ${overlay.artist}"
-    is OverlayScreen.SongsAlbum -> overlay.album.ifBlank { "Songs" }
-    null -> BockRoute.drawerRoutes.find { it.route == topRoute }?.title ?: "Bock Media"
-}
-
-@Composable
-private fun CompactDrawerItem(
-    route: BockRoute,
-    selected: Boolean,
-    onClick: () -> Unit,
-) {
-    val containerColor = if (selected) {
-        MaterialTheme.colorScheme.secondaryContainer
-    } else {
-        MaterialTheme.colorScheme.surface
-    }
-    val contentColor = if (selected) {
-        MaterialTheme.colorScheme.onSecondaryContainer
-    } else {
-        MaterialTheme.colorScheme.onSurface
-    }
-    Surface(
-        onClick = onClick,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 8.dp)
-            .height(40.dp),
-        shape = RoundedCornerShape(7.dp),
-        color = containerColor,
-        contentColor = contentColor,
-    ) {
-        Row(
-            Modifier.fillMaxSize().padding(horizontal = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(route.icon, contentDescription = route.title, modifier = Modifier.size(20.dp))
-            Spacer(Modifier.width(12.dp))
-            Text(route.title, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+    NavHost(navController, startDestination = BockRoute.Home.route, modifier = modifier) {
+        composable(BockRoute.Home.route) {
+            HomeScreen(
+                repository = repository,
+                remoteOk = remoteOk,
+                onPlay = onPlay,
+                onAccountNavigate = { route ->
+                    navController.navigate(route) { launchSingleTop = true }
+                },
+                onOpenDownloads = {
+                    navController.navigate(BockRoute.Downloads.route) { launchSingleTop = true }
+                },
+            )
+        }
+        composable(BockRoute.NowPlaying.route) {
+            NowPlayingScreen(
+                repository = repository,
+                snackbarHostState = snackbarHostState,
+                onBack = { navController.popBackStack() },
+                playbackFocusGeneration = playbackFocusGeneration,
+            )
+        }
+        composable(BockRoute.Library.route) {
+            LibraryScreen(
+                repository = repository,
+                remoteOk = remoteOk,
+                onPlay = onPlay,
+                onOpenPlaylist = { id -> navController.navigate(playlistDetailRoute(id)) },
+                onOpenArtist = { name -> navController.navigate("songs/artist/${android.net.Uri.encode(name)}") },
+                onOpenAlbum = { name -> navController.navigate("songs/album/${android.net.Uri.encode(name)}") },
+                onOpenFavorites = { navController.navigate(BockRoute.Favorites.route) },
+                onOpenPlaylists = { navController.navigate(BockRoute.Playlists.route) },
+            )
+        }
+        composable(BockRoute.Favorites.route) {
+            FavoritesScreen(
+                repository = repository,
+                remoteOk = remoteOk,
+                onPlay = onPlay,
+                onBrowseSearch = { navController.navigate(BockRoute.Search.route) },
+                onOpenLibrary = { navController.navigate(BockRoute.Library.route) },
+            )
+        }
+        composable(BockRoute.Downloads.route) {
+            DownloadsScreen(
+                onOpenPlaylist = { id ->
+                    navController.navigate(playlistDetailRoute(id))
+                },
+                snackbarHostState = snackbarHostState,
+                onOpenNowPlaying = {
+                    navController.navigate(BockRoute.NowPlaying.route) { launchSingleTop = true }
+                },
+            )
+        }
+        composable(BockRoute.Routines.route) { RoutinesScreen(repository) }
+        composable(BockRoute.RecentRequests.route) { RecentRequestsScreen(repository) }
+        composable(BockRoute.Search.route) {
+            SearchScreen(
+                repository,
+                remoteOk,
+                onPlay,
+                onOpenArtist = { navController.navigate(albumsArtistRoute(it)) },
+                onOpenAlbum = { album, _ -> navController.navigate(songsAlbumRoute(album)) },
+                onOpenGenre = { name -> navController.navigate(genreRoute(name)) },
+                snackbarHostState = snackbarHostState,
+            )
+        }
+        composable(
+            ROUTE_GENRE,
+            arguments = listOf(navArgument("name") { type = NavType.StringType }),
+        ) { entry ->
+            val genreName = URLDecoder.decode(entry.arguments?.getString("name") ?: "", "UTF-8")
+            GenreDetailScreen(
+                genreName = genreName,
+                repository = repository,
+                remoteOk = remoteOk,
+                onPlay = onPlay,
+                onOpenArtist = { navController.navigate(albumsArtistRoute(it)) },
+                onOpenAlbum = { album, artist -> navController.navigate(songsAlbumRoute(album)) },
+            )
+        }
+        composable(BockRoute.Automations.route) { AutomationScreen(repository) }
+        composable(BockRoute.Playlists.route) {
+            PlaylistsScreen(repository, remoteOk, onPlay) { id ->
+                navController.navigate(playlistDetailRoute(id))
+            }
+        }
+        composable(
+            ROUTE_PLAYLIST_DETAIL,
+            arguments = listOf(navArgument("id") { type = NavType.StringType }),
+        ) { entry ->
+            PlaylistDetailScreen(
+                repository,
+                entry.arguments?.getString("id") ?: "",
+                remoteOk,
+                onPlay,
+            ) { navController.popBackStack() }
+        }
+        composable(BockRoute.Artists.route) {
+            ArtistsScreen(repository, remoteOk, onPlay) { artist ->
+                navController.navigate(albumsArtistRoute(artist))
+            }
+        }
+        composable(
+            ROUTE_ALBUMS_ARTIST,
+            arguments = listOf(navArgument("artist") { type = NavType.StringType }),
+        ) { entry ->
+            val artist = URLDecoder.decode(entry.arguments?.getString("artist") ?: "", "UTF-8")
+            AlbumsScreen(repository, artist, remoteOk, onPlay, { album ->
+                navController.navigate(songsAlbumRoute(album))
+            })
+        }
+        composable(BockRoute.Albums.route) {
+            AlbumsScreen(repository, null, remoteOk, onPlay, { album ->
+                navController.navigate(songsAlbumRoute(album))
+            })
+        }
+        composable(
+            ROUTE_SONGS_ARTIST,
+            arguments = listOf(navArgument("artist") { type = NavType.StringType }),
+        ) { entry ->
+            val artist = URLDecoder.decode(entry.arguments?.getString("artist") ?: "", "UTF-8")
+            SongsScreen(repository, artist, null, remoteOk, onPlay)
+        }
+        composable(
+            ROUTE_SONGS_ALBUM,
+            arguments = listOf(navArgument("album") { type = NavType.StringType }),
+        ) { entry ->
+            val album = URLDecoder.decode(entry.arguments?.getString("album") ?: "", "UTF-8")
+            SongsScreen(repository, null, album, remoteOk, onPlay)
+        }
+        composable(BockRoute.Songs.route) { SongsScreen(repository, null, null, remoteOk, onPlay) }
+        composable(BockRoute.Rooms.route) {
+            RoomsScreen(
+                repository = repository,
+                remoteOk = remoteOk,
+                onPlay = onPlay,
+                onOpenNowPlaying = {
+                    navController.navigate(BockRoute.NowPlaying.route) { launchSingleTop = true }
+                },
+            )
+        }
+        composable(BockRoute.Devices.route) { DevicesScreen(repository) }
+        composable(BockRoute.Analytics.route) { AnalyticsScreen(repository) }
+        composable(BockRoute.Settings.route) {
+            SettingsScreen(
+                repository = repository,
+                snackbarHostState = snackbarHostState,
+                onOpenNowPlaying = {
+                    navController.navigate(BockRoute.NowPlaying.route) { launchSingleTop = true }
+                },
+                onOpenPlaylist = { id ->
+                    navController.navigate(playlistDetailRoute(id))
+                },
+                onOpenPlaylists = { navController.navigate(BockRoute.Playlists.route) },
+            )
         }
     }
 }

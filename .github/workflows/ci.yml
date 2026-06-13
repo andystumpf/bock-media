@@ -33,3 +33,24 @@ jobs:
       - name: Run jsdom UI tests
         working-directory: tests/ui
         run: node --test test_app.mjs
+
+  ios-tests:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Prepare iOS build config
+        working-directory: ios
+        run: cp Config.xcconfig.example Config.xcconfig
+      - name: Generate Xcode project
+        working-directory: ios
+        run: xcodegen generate
+      - name: Build and test
+        working-directory: ios
+        run: |
+          xcodebuild test \
+            -project BockMedia.xcodeproj \
+            -scheme BockMedia \
+            -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' \
+            CODE_SIGNING_ALLOWED=NO

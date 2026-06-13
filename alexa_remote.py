@@ -14,8 +14,6 @@ without warning. Cookies also expire periodically — re-run scripts/alexa_login
 if calls start returning not_authenticated.
 """
 import asyncio
-import contextlib
-import fcntl
 import json
 import os
 import socket
@@ -24,7 +22,7 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.environ.get('OURMEDIA_DATA_DIR', os.path.expanduser('~/.bockmedia'))
-CONFIG_PATH = os.path.join(DATA_DIR, 'config.json')
+CONFIG_PATH = os.path.join(HERE, 'config.json')
 
 # Device families that can render audio (exclude Fire TV remotes, the app, etc.)
 _PLAYABLE_FAMILIES = {'ECHO', 'ROOK', 'KNIGHT', 'WHA', 'FIRE_TV', 'TABLET'}
@@ -73,91 +71,29 @@ def is_configured():
 # this inline in a request hot path; the health-check timer refreshes it.
 _AUTH_CACHE = {'ts': 0.0, 'ok': None}
 _AUTH_CACHE_TTL = 120.0
-_DEVICES_CACHE = {'ts': 0.0, 'items': None, 'count': 0}
-_DEVICES_CACHE_TTL = 300.0
-_AUTH_REFRESH_INTERVAL = 120.0
-_auth_refresh_started = False
-_PROBE_LOCK_PATH = os.path.join(DATA_DIR, '.alexa_probe.lock')
-_PROBE_TIMEOUT = 20.0
-
-
-@contextlib.contextmanager
-def _amazon_probe_slot(blocking=False):
-    """One live Amazon probe at a time across gunicorn workers."""
-    os.makedirs(DATA_DIR, exist_ok=True)
-    lf = open(_PROBE_LOCK_PATH, 'w')
-    acquired = False
-    try:
-        flags = fcntl.LOCK_EX if blocking else (fcntl.LOCK_EX | fcntl.LOCK_NB)
-        fcntl.flock(lf, flags)
-        acquired = True
-        yield True
-    except BlockingIOError:
-        yield False
-    finally:
-        if acquired:
-            try:
-                fcntl.flock(lf, fcntl.LOCK_UN)
-            except Exception:
-                pass
-        lf.close()
 
 
 def invalidate_auth_cache():
     """Force the next is_authenticated() probe to re-check the session."""
     _AUTH_CACHE['ts'] = 0.0
     _AUTH_CACHE['ok'] = None
-    _DEVICES_CACHE['ts'] = 0.0
-    _DEVICES_CACHE['items'] = None
-    _DEVICES_CACHE['count'] = 0
 
 
-def cached_authenticated(max_age=_AUTH_CACHE_TTL):
-    """Return cached auth state without a network probe. None if unknown."""
-    if not is_configured():
-        return None
-    now = time.time()
-    if _AUTH_CACHE['ok'] is not None and (now - _AUTH_CACHE['ts']) < max_age:
-        return _AUTH_CACHE['ok']
-    return None
-
-
-def cached_device_count(max_age=_DEVICES_CACHE_TTL):
-    """Return cached Echo count without calling Amazon."""
-    if not is_configured():
-        return 0
-    now = time.time()
-    if _DEVICES_CACHE['items'] is not None and (now - _DEVICES_CACHE['ts']) < max_age:
-        return _DEVICES_CACHE['count']
-    return 0
-
-
-def _probe_auth_live():
-    async def _probe():
-        login = await _login_from_cookie()
-        await login.close()
-    run_coro(_probe())
-    return True
-
-
-def is_authenticated(max_age=_AUTH_CACHE_TTL, probe=True, _locked=False):
+def is_authenticated(max_age=_AUTH_CACHE_TTL):
     """Cached check that the saved Alexa session is still valid. Returns
-    True/False, or None if not configured. With probe=False, never hits Amazon."""
+    True/False, or None if not configured. Swallows all errors -> False."""
     if not is_configured():
         return None
-    now = time.time()
+    import time as _time
+    now = _time.time()
     if _AUTH_CACHE['ok'] is not None and (now - _AUTH_CACHE['ts']) < max_age:
         return _AUTH_CACHE['ok']
-    if not probe:
-        return None
+    async def _probe():
+        login = await _login_from_cookie()  # raises if not authenticated
+        await login.close()
+        return True
     try:
-        if _locked:
-            ok = _probe_auth_live()
-        else:
-            with _amazon_probe_slot(blocking=False) as acquired:
-                if not acquired:
-                    return _AUTH_CACHE['ok'] if _AUTH_CACHE['ok'] is not None else False
-                ok = _probe_auth_live()
+        ok = run(_probe())
     except Exception:
         ok = False
     _AUTH_CACHE['ts'] = now
@@ -165,51 +101,12 @@ def is_authenticated(max_age=_AUTH_CACHE_TTL, probe=True, _locked=False):
     return ok
 
 
-def refresh_auth_cache():
-    """Background-friendly live probe; updates _AUTH_CACHE."""
-    if not is_configured():
-        return None
-    return is_authenticated(probe=True, _locked=True)
-
-
-def start_auth_refresh_thread():
-    """Periodic Amazon auth probe so HTTP handlers never need probe=True."""
-    global _auth_refresh_started
-    if _auth_refresh_started or not is_configured():
-        return
-    import threading
-
-    def _loop():
-        time.sleep(45)
-        while True:
-            try:
-                with _amazon_probe_slot(blocking=True) as acquired:
-                    if acquired:
-                        is_authenticated(probe=True, _locked=True)
-                        if cached_authenticated() is True:
-                            list_devices(probe=True, _locked=True)
-            except Exception:
-                pass
-            time.sleep(_AUTH_REFRESH_INTERVAL)
-
-    threading.Thread(target=_loop, name='alexa-auth-refresh', daemon=True).start()
-    _auth_refresh_started = True
-
-
 def _outputpath(filename):
     return os.path.join(DATA_DIR, filename)
 
 
 def run(coro):
-    """Run a coroutine; serializes Amazon I/O across workers."""
-    with _amazon_probe_slot(blocking=True) as acquired:
-        if not acquired:
-            raise AlexaRemoteError('probe_busy')
-        return run_coro(asyncio.wait_for(coro, timeout=_PROBE_TIMEOUT))
-
-
-def run_coro(coro):
-    """Like run(), but without the outer probe lock (caller holds it)."""
+    """Run a coroutine on a throwaway event loop (Flask is sync)."""
     loop = asyncio.new_event_loop()
     try:
         return loop.run_until_complete(coro)
@@ -290,26 +187,8 @@ async def _list_devices():
         await login.close()
 
 
-def list_devices(probe=True, _locked=False):
-    """Return playable Echo list. Updates device cache when probe=True."""
-    if not probe:
-        cached = _DEVICES_CACHE.get('items')
-        if cached is not None:
-            return list(cached)
-        return []
-    if _locked:
-        items = run_coro(_list_devices())
-    else:
-        with _amazon_probe_slot(blocking=False) as acquired:
-            if not acquired:
-                cached = _DEVICES_CACHE.get('items')
-                return list(cached) if cached is not None else []
-            items = run_coro(_list_devices())
-    now = time.time()
-    _DEVICES_CACHE['ts'] = now
-    _DEVICES_CACHE['items'] = items
-    _DEVICES_CACHE['count'] = len(items)
-    return items
+def list_devices():
+    return run(_list_devices())
 
 
 def _match(devices, target):
@@ -549,8 +428,6 @@ def start_proxy_login(host=None, port=None):
             return proxy_login_state()
 
     host = (host or cfg().get('loginProxyHost') or lan_ip()).strip()
-    if host in ('0.0.0.0', '::', ''):
-        host = lan_ip()
     port = int(port or cfg().get('loginProxyPort') or 3005)
 
     _LOGIN_CANCEL.clear()

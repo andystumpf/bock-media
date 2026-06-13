@@ -1,16 +1,25 @@
 package com.bockmedia.console.data.repository
 
 import com.bockmedia.console.data.api.BockMediaApi
-import com.bockmedia.console.data.api.bockJson
 import com.bockmedia.console.data.api.dto.*
-import com.bockmedia.console.data.local.ApiResponseCache
 import com.bockmedia.console.data.local.AppPreferences
-import kotlinx.serialization.encodeToString
+import com.bockmedia.console.domain.model.HomeArtworkCache
+import com.bockmedia.console.domain.model.PlayTarget
+import com.bockmedia.console.domain.model.SearchSuggestion
+import com.bockmedia.console.domain.model.SearchSuggestionKind
+import com.bockmedia.console.domain.model.filterSearchSongHits
+import com.bockmedia.console.media.PlaybackArtwork
+import android.content.Context
+import java.io.File
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
+import okhttp3.ResponseBody
+import java.util.concurrent.ConcurrentHashMap
 
 class ApiException(val code: String, message: String) : Exception(message)
 
@@ -18,34 +27,151 @@ class BockMediaRepository(
     private val apiProvider: suspend () -> BockMediaApi,
     private val baseUrlProvider: suspend () -> String,
     private val preferences: AppPreferences,
-    private val cache: ApiResponseCache,
+    private val clientIdProvider: () -> String = { "" },
 ) {
     private suspend fun api() = apiProvider()
 
-    private suspend inline fun <reified T> cached(
-        key: String,
-        ttlMs: Long,
-        forceRefresh: Boolean = false,
-        fetch: suspend () -> T,
-    ): T {
-        if (!forceRefresh) {
-            cache.read(key, ttlMs)?.let { runCatching { return bockJson.decodeFromString<T>(it) }.getOrNull() }
-        }
-        val fresh = fetch()
-        runCatching { cache.write(key, bockJson.encodeToString(fresh)) }
-        return fresh
+    private val playlistTrackPathsCache = ConcurrentHashMap<String, List<String>>()
+    private val artistCoverPathsCache = ConcurrentHashMap<String, List<String>>()
+    private val albumCoverPathCache = ConcurrentHashMap<String, String>()
+    @Volatile private var cachedBaseUrl: String? = null
+
+    private suspend fun baseUrl(): String =
+        cachedBaseUrl ?: baseUrlProvider().also { cachedBaseUrl = it }
+
+    /** Fast cover lookup — reads only the first tracks from the playlist file on the server. */
+    suspend fun playlistCoverPath(playlistId: String, variantKey: String = playlistId): String? {
+        HomeArtworkCache.playlistPath(playlistId)?.let { return it }
+        playlistTrackPathsCache[playlistId]?.firstOrNull()?.let { return it }
+        val path = runCatching {
+            api().playlistCover(playlistId).path?.takeIf { it.isNotBlank() }
+        }.getOrNull() ?: return null
+        playlistTrackPathsCache[playlistId] = listOf(path)
+        HomeArtworkCache.storePlaylistPath(playlistId, path)
+        return path
     }
 
-    /** Stale-while-revalidate: returns cached body immediately if present. */
-    fun readStaleDashboard(): DashboardBootstrapResponse? =
-        cache.readStale("dashboard_bootstrap")?.let {
-            runCatching { bockJson.decodeFromString<DashboardBootstrapResponse>(it) }.getOrNull()
+    suspend fun prefetchPlaylistCoverPaths(ids: Collection<String>) {
+        val missing = ids.map { it.trim() }.filter { it.isNotBlank() }.distinct()
+            .filter { HomeArtworkCache.playlistPath(it) == null && playlistTrackPathsCache[it].isNullOrEmpty() }
+        if (missing.isEmpty()) return
+        val covers = runCatching {
+            api().playlistCoversBatch(PlaylistCoversBatchRequest(missing)).covers
+        }.getOrDefault(emptyMap())
+        if (covers.isNotEmpty()) {
+            HomeArtworkCache.storePlaylistPaths(covers)
+            covers.forEach { (id, path) -> playlistTrackPathsCache[id] = listOf(path) }
         }
+    }
 
-    suspend fun dashboardBootstrap(forceRefresh: Boolean = false): DashboardBootstrapResponse =
-        cached("dashboard_bootstrap", ApiResponseCache.TTL_DASHBOARD_MS, forceRefresh) {
-            api().dashboardBootstrap(probe = 0)
+    suspend fun artworkUrlForPlaylist(playlistId: String, variantKey: String = playlistId): String? =
+        playlistCoverPath(playlistId, variantKey)?.let { artworkUrl(it) }
+
+    suspend fun artistCoverPathAt(artistName: String, pick: Int = 0): String? {
+        val key = artistName.trim().lowercase()
+        if (key.isEmpty()) return null
+        val paths = artistCoverPathsCache.getOrPut(key) {
+            runCatching {
+                songs(page = 1, search = artistName, artist = artistName)
+                    .items.mapNotNull { it.path?.takeIf { path -> path.isNotBlank() } }
+                    .distinct()
+            }.getOrDefault(emptyList())
         }
+        if (paths.isEmpty()) return null
+        return paths[kotlin.math.abs(pick) % paths.size]
+    }
+
+    suspend fun resolveArtistArtUrl(artistName: String): String? =
+        artistCoverPathAt(artistName)?.let { artworkUrl(it) }
+
+    suspend fun resolveAlbumArtUrl(albumName: String, artist: String? = null): String? =
+        albumCoverPath(albumName, artist)?.let { artworkUrl(it) }
+
+    private suspend fun albumCoverPath(albumName: String, artist: String? = null): String? {
+        val key = "${albumName.trim().lowercase()}|${artist?.trim()?.lowercase().orEmpty()}"
+        if (key == "|") return null
+        albumCoverPathCache[key]?.let { return it }
+        val path = runCatching {
+            songs(page = 1, search = albumName, artist = artist, album = albumName, limit = 1)
+                .items.firstOrNull()?.path?.takeIf { it.isNotBlank() }
+        }.getOrNull() ?: return null
+        albumCoverPathCache[key] = path
+        return path
+    }
+
+    suspend fun cacheArtPath(albumName: String, artist: String?, path: String?) {
+        if (path.isNullOrBlank()) return
+        val key = "${albumName.trim().lowercase()}|${artist?.trim()?.lowercase().orEmpty()}"
+        if (key != "|") albumCoverPathCache[key] = path
+    }
+
+    suspend fun cacheArtistArtPath(artistName: String, path: String?) {
+        if (path.isNullOrBlank()) return
+        val key = artistName.trim().lowercase()
+        if (key.isEmpty()) return
+        artistCoverPathsCache.compute(key) { _, existing ->
+            val list = existing?.toMutableList() ?: mutableListOf()
+            if (path !in list) list.add(0, path)
+            list
+        }
+    }
+
+    suspend fun resolveHomeCardArtUrl(
+        cardId: String,
+        artPath: String?,
+        playlistId: String?,
+        playTarget: PlayTarget,
+    ): String? {
+        val pick = kotlin.math.abs(cardId.hashCode())
+        playlistId?.let { return artworkUrlForPlaylist(it, it) }
+        artPath?.let { return artworkUrl(it) }
+        return when (playTarget) {
+            is PlayTarget.Album -> {
+                runCatching {
+                    val paths = songs(page = 1, search = playTarget.name, artist = playTarget.artist, album = playTarget.name)
+                        .items.mapNotNull { it.path?.takeIf { path -> path.isNotBlank() } }
+                        .distinct()
+                    paths.getOrNull(pick % paths.size.coerceAtLeast(1))
+                }.getOrNull()?.let { artworkUrl(it) }
+            }
+            is PlayTarget.Artist -> artistCoverPathAt(playTarget.name, pick)?.let { artworkUrl(it) }
+            is PlayTarget.Radio -> {
+                playTarget.path?.let { return artworkUrl(it) }
+                artistCoverPathAt(playTarget.name, pick)?.let { artworkUrl(it) }
+            }
+            else -> null
+        }
+    }
+
+    suspend fun resolveOfflineManifestArtUrl(manifest: com.bockmedia.console.local.OfflineCollectionManifest): String? {
+        manifest.coverArtPath?.let { return artworkUrl(it) }
+        val paths = manifest.tracks.map { it.path }.filter { it.isNotBlank() }.distinct()
+        if (paths.isNotEmpty()) {
+            val pick = kotlin.math.abs(manifest.id.hashCode()) % paths.size
+            return artworkUrl(paths[pick])
+        }
+        manifest.sourcePlaylistId?.let { return artworkUrlForPlaylist(it, manifest.id) }
+        manifest.legacyPlaylistId?.let { return artworkUrlForPlaylist(it, manifest.id) }
+        return when (manifest.kind) {
+            "artist" -> artistCoverPathAt(manifest.title, manifest.id.hashCode())?.let { artworkUrl(it) }
+            "album" -> {
+                val artist = manifest.tracks.firstOrNull()?.artist
+                runCatching {
+                    songs(page = 1, search = manifest.title, artist = artist, album = manifest.title)
+                        .items.mapNotNull { it.path?.takeIf { path -> path.isNotBlank() } }
+                        .firstOrNull()
+                }.getOrNull()?.let { artworkUrl(it) }
+            }
+            else -> null
+        }
+    }
+
+    fun clearCaches() {
+        cachedBaseUrl = null
+        playlistTrackPathsCache.clear()
+        artistCoverPathsCache.clear()
+        albumCoverPathCache.clear()
+    }
 
     suspend fun testConnection(): Result<HealthResponse> = runCatching { api().health() }
 
@@ -55,50 +181,126 @@ class BockMediaRepository(
     suspend fun dashboardQuick() = api().dashboardQuick()
     suspend fun playbackStatus() = api().playbackStatus()
     suspend fun recent(page: Int, limit: Int) = api().recent(page, limit)
-    suspend fun nowPlayingDevices(forceRefresh: Boolean = false) =
-        cached("nowplaying_devices", ApiResponseCache.TTL_NOW_PLAYING_MS, forceRefresh) {
-            api().nowPlayingDevices()
-        }
+    suspend fun nowPlayingDevices(): NowPlayingDevicesResponse {
+        val viewer = clientIdProvider().trim().ifBlank { null }
+        return api().nowPlayingDevices(viewerClientId = viewer)
+    }
     suspend fun streamHistory(page: Int, limit: Int) = api().streamHistory(page, limit)
     suspend fun rooms() = api().rooms()
-    suspend fun search(q: String) = api().search(q)
-    suspend fun playlists(search: String = "", page: Int = 1, limit: Int = 100) =
-        cached("playlists_${search}_${page}_$limit", ApiResponseCache.TTL_PLAYLISTS_MS) {
-            api().playlists(page = page, limit = limit, search = search)
+    suspend fun search(q: String, limit: Int = 30): SearchResponse {
+        val response = api().search(q, limit = limit)
+        val filtered = response.copy(songs = filterSearchSongHits(q, response.songs))
+        filtered.artists.forEach { hit ->
+            val name = hit.name ?: return@forEach
+            hit.path?.let { cacheArtistArtPath(name, it) }
         }
+        filtered.albums.forEach { hit ->
+            val name = hit.name ?: hit.album ?: return@forEach
+            hit.path?.let { cacheArtPath(name, hit.artist, it) }
+        }
+        return filtered
+    }
+    suspend fun playlists(search: String = "", page: Int = 1, limit: Int = 500) =
+        api().playlists(page = page, limit = limit, search = search)
 
-    suspend fun smartPlaylists() =
-        cached("smart_playlists", ApiResponseCache.TTL_PLAYLISTS_MS) { api().smartPlaylists() }
+    suspend fun resolvePlaylistId(name: String): String? {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return null
+        return runCatching {
+            playlists(search = trimmed, limit = 50).items
+                .firstOrNull { it.name.equals(trimmed, ignoreCase = true) }
+                ?.id
+                ?.takeIf { it.isNotBlank() }
+        }.getOrNull()
+    }
 
-    suspend fun playlistDetail(id: String, page: Int = 1, q: String? = null, sortBy: String? = null, order: String? = null) =
-        api().playlistDetail(id, page = page, q = q, sortBy = sortBy, order = order)
+    suspend fun playlistDetail(
+        id: String,
+        page: Int = 1,
+        limit: Int = 50,
+        q: String? = null,
+        sortBy: String? = null,
+        order: String? = null,
+    ) = api().playlistDetail(id, page = page, limit = limit, q = q, sortBy = sortBy, order = order)
 
-    suspend fun artists(page: Int, search: String) = api().artists(page = page, search = search)
-    suspend fun albums(page: Int, search: String, artist: String? = null) =
-        api().albums(page = page, search = search, artist = artist)
+    suspend fun smartPlaylists() = api().smartPlaylists()
+    suspend fun artists(page: Int, search: String, limit: Int = 50) =
+        api().artists(page = page, search = search, limit = limit)
+    suspend fun albums(page: Int, search: String, artist: String? = null, limit: Int = 50, sort: String? = null) =
+        api().albums(page = page, search = search, artist = artist, limit = limit, sort = sort)
 
-    suspend fun songs(page: Int, search: String, artist: String? = null, album: String? = null) =
-        api().songs(page = page, search = search, artist = artist, album = album)
+    suspend fun recentAlbums(limit: Int = 12) = albums(page = 1, search = "", limit = limit, sort = "year")
+
+    suspend fun genres(limit: Int = 20) = api().genres(limit = limit)
+
+    suspend fun resolveSearchHitArtUrl(
+        kind: SearchSuggestionKind,
+        hit: SearchHit,
+        variantKey: String,
+    ): String? {
+        hit.path?.let { return artworkUrl(it) }
+        return when (kind) {
+            SearchSuggestionKind.Playlist -> hit.id?.let { artworkUrlForPlaylist(it, variantKey) }
+            SearchSuggestionKind.Artist -> hit.name?.let { resolveArtistArtUrl(it) }
+            SearchSuggestionKind.Album -> resolveAlbumArtUrl(hit.name ?: hit.album.orEmpty(), hit.artist)
+            SearchSuggestionKind.Song -> null
+        }
+    }
+
+    suspend fun resolveSuggestionArtUrl(suggestion: SearchSuggestion): String? {
+        suggestion.path?.let { return artworkUrl(it) }
+        return when (suggestion.kind) {
+            SearchSuggestionKind.Playlist -> suggestion.id?.let { artworkUrlForPlaylist(it, suggestion.title) }
+            SearchSuggestionKind.Artist -> resolveArtistArtUrl(suggestion.title)
+            SearchSuggestionKind.Album -> resolveAlbumArtUrl(suggestion.title, suggestion.artist)
+            SearchSuggestionKind.Song -> null
+        }
+    }
+
+    suspend fun resolveGenreArtUrl(genre: com.bockmedia.console.data.api.dto.GenreItem): String? {
+        genre.artPath?.let { return artworkUrl(it) }
+        return runCatching {
+            songs(page = 1, search = genre.name, limit = 1).items.firstOrNull()?.path
+        }.getOrNull()?.let { artworkUrl(it) }
+    }
+
+    suspend fun resolveAlbumItemArtUrl(album: com.bockmedia.console.data.api.dto.AlbumItem): String? {
+        album.artPath?.let { return artworkUrl(it) }
+        return resolveAlbumArtUrl(album.name, album.artist)
+    }
+
+    suspend fun songs(page: Int, search: String, artist: String? = null, album: String? = null, limit: Int = 100) =
+        api().songs(page = page, search = search, artist = artist, album = album, limit = limit)
 
     suspend fun watchFolders() = api().watchFolders()
     suspend fun devices() = api().devices()
     suspend fun mergeCandidates() = api().mergeCandidates()
     suspend fun deviceGroups() = api().deviceGroups()
-    suspend fun alexaRemoteDevices(probe: Boolean = false) = api().alexaRemoteDevices(if (probe) 1 else 0)
-    suspend fun alexaRemoteStatus() =
-        cached("alexa_remote_status", 60_000L) { api().alexaRemoteStatus() }
+    suspend fun alexaRemoteDevices() = api().alexaRemoteDevices()
+    suspend fun alexaRemoteStatus() = api().alexaRemoteStatus()
     suspend fun automations() = api().automations()
     suspend fun analytics(from: String? = null, to: String? = null) = api().analytics(from, to)
+    suspend fun reportClientEvent(body: JsonObject) = api().reportClientEvent(body)
     suspend fun ignored() = api().ignored()
-    suspend fun settings(): JsonObject = api().settings()
-    suspend fun config(): JsonObject = api().config()
+    suspend fun settings() = api().settings()
+    suspend fun config() = api().config()
     suspend fun localIp() = api().localIp()
     suspend fun identifyStatus() = api().identifyStatus()
 
     suspend fun artworkUrl(filepath: String?): String? {
         if (filepath.isNullOrBlank()) return null
-        return runCatching { api().artworkUrl(filepath).url }.getOrNull()
-            ?: AppPreferences.artworkUrl(baseUrlProvider(), filepath)
+        val base = runCatching { baseUrl() }.getOrNull() ?: return null
+        return AppPreferences.artworkUrl(base, filepath)
+    }
+
+    suspend fun resolvePlaybackArtUrl(
+        context: Context,
+        libraryPath: String?,
+        localFile: File? = null,
+    ): String? {
+        libraryPath?.let { artworkUrl(it) }?.let { return it }
+        localFile?.let { PlaybackArtwork.embeddedArtUri(context.applicationContext, it) }?.let { return it }
+        return null
     }
 
     suspend fun playOnDevice(
@@ -163,6 +365,13 @@ class BockMediaRepository(
         api().removeFavorite(buildJsonObject { put("path", path) })
     }
 
+    suspend fun favorites(): List<FavoriteItem> = api().favorites().items
+
+    suspend fun streamUrl(filepath: String?): String? {
+        val base = runCatching { baseUrlProvider() }.getOrNull() ?: return null
+        return AppPreferences.streamUrl(base, filepath)
+    }
+
     suspend fun addIgnored(path: String) {
         api().addIgnored(buildJsonObject { put("path", path) })
     }
@@ -209,20 +418,74 @@ class BockMediaRepository(
         })
 
     suspend fun createSmartPlaylist(name: String, genre: String?, artist: String?, maxTracks: Int) {
+        val rules = buildJsonArray {
+            genre?.takeIf { it.isNotBlank() }?.let {
+                add(buildJsonObject { put("type", "genre"); put("value", it) })
+            }
+            artist?.takeIf { it.isNotBlank() }?.let {
+                add(buildJsonObject { put("type", "artist"); put("value", it) })
+            }
+            add(buildJsonObject { put("type", "limit"); put("value", maxTracks) })
+        }
         api().createSmartPlaylist(buildJsonObject {
             put("name", name)
+            put("rules", rules)
             put("refresh", true)
-            putJsonArray("rules") {
-                genre?.takeIf { it.isNotBlank() }?.let {
-                    add(buildJsonObject { put("type", "genre"); put("value", it) })
-                }
-                artist?.takeIf { it.isNotBlank() }?.let {
-                    add(buildJsonObject { put("type", "artist"); put("value", it) })
-                }
-                add(buildJsonObject { put("type", "limit"); put("value", maxTracks) })
-            }
         })
     }
+
+    suspend fun updateSmartPlaylist(
+        id: String,
+        name: String,
+        genre: String?,
+        artist: String?,
+        maxTracks: Int,
+        enabled: Boolean,
+    ) {
+        val rules = buildJsonArray {
+            genre?.takeIf { it.isNotBlank() }?.let {
+                add(buildJsonObject { put("type", "genre"); put("value", it) })
+            }
+            artist?.takeIf { it.isNotBlank() }?.let {
+                add(buildJsonObject { put("type", "artist"); put("value", it) })
+            }
+            add(buildJsonObject { put("type", "limit"); put("value", maxTracks) })
+        }
+        api().updateSmartPlaylist(id, buildJsonObject {
+            put("name", name)
+            put("rules", rules)
+            put("enabled", enabled)
+            put("refresh", true)
+        })
+    }
+
+    suspend fun addPlaylistTrack(playlistId: String, path: String) {
+        val tracks = mutableListOf<String>()
+        var page = 1
+        while (true) {
+            val detail = playlistDetail(playlistId, page = page, limit = 500)
+            tracks.addAll(detail.tracks.mapNotNull { it.path })
+            if (detail.tracks.size < 500 || tracks.size >= detail.total) break
+            page++
+        }
+        if (path in tracks) return
+        tracks.add(path)
+        api().updatePlaylist(playlistId, buildJsonObject {
+            putJsonArray("tracks") { tracks.forEach { add(JsonPrimitive(it)) } }
+        })
+    }
+
+    suspend fun exportAnalyticsCsv(from: String?, to: String?, cacheDir: java.io.File): File {
+        val body = api().analyticsExport(from, to)
+        val file = java.io.File(cacheDir, "bock_media_streams.csv")
+        body.byteStream().use { input ->
+            file.outputStream().use { output -> input.copyTo(output) }
+        }
+        return file
+    }
+
+    suspend fun loadSettingsJson(): JsonObject = api().settings()
+    suspend fun loadConfigJson(): JsonObject = api().config()
 
     suspend fun refreshSmartPlaylist(id: String) = api().refreshSmartPlaylist(id)
     suspend fun deleteSmartPlaylist(id: String) = api().deleteSmartPlaylist(id)
@@ -238,19 +501,22 @@ class BockMediaRepository(
 
     suspend fun dismissMergeCandidate(id: String) = api().dismissMergeCandidate(id)
     suspend fun identifyDevices() = api().identifyDevices()
-    suspend fun testDevice(serial: String) = api().testDevice(buildJsonObject { put("serial", serial) })
+    suspend fun testDevice(serial: String, name: String? = null) = api().testDevice(buildJsonObject {
+        put("serial", serial)
+        name?.let { put("name", it) }
+    })
 
     suspend fun createDeviceGroup(name: String, devices: List<String>) {
         api().createDeviceGroup(buildJsonObject {
             put("name", name)
-            putJsonArray("members") { devices.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) } }
+            putJsonArray("devices") { devices.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) } }
         })
     }
 
     suspend fun updateDeviceGroup(id: String, name: String, devices: List<String>) {
         api().updateDeviceGroup(id, buildJsonObject {
             put("name", name)
-            putJsonArray("members") { devices.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) } }
+            putJsonArray("devices") { devices.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) } }
         })
     }
 
@@ -261,9 +527,19 @@ class BockMediaRepository(
     suspend fun deleteAutomation(id: String) = api().deleteAutomation(id)
     suspend fun runAutomation(id: String) = api().runAutomation(id)
 
-    suspend fun saveSettings(body: JsonObject): OkResponse = api().saveSettings(body)
-    suspend fun saveConfig(body: JsonObject): OkResponse = api().saveConfig(body)
+    suspend fun saveSettings(body: JsonObject) = api().saveSettings(body)
+    suspend fun saveConfig(body: JsonObject) = api().saveConfig(body)
     suspend fun clearCache() = api().clearCache()
+
+    suspend fun connectionSummary(): String = runCatching {
+        val active = baseUrl()
+        val local = preferences.getLocalServerUrlSync()?.let { AppPreferences.normalizeUrl(it) }
+        when {
+            local != null && active.startsWith(local) -> "LAN · $local"
+            else -> "External · $active"
+        }
+    }.getOrDefault("Unknown")
+
     suspend fun alexaLoginStart() = api().alexaLoginStart()
     suspend fun alexaLoginStop() = api().alexaLoginStop()
     suspend fun alexaLoginState() = api().alexaLoginState()

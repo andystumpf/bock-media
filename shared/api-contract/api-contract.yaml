@@ -1,0 +1,260 @@
+openapi: 3.0.3
+info:
+  title: Bock Media Mobile API
+  version: "2.3.0"
+  description: |
+    REST API contract shared by Android and iOS clients.
+    Source of truth: android/.../BockMediaApi.kt + dto/ApiDtos.kt
+servers:
+  - url: http://192.168.1.187:3001
+    description: LAN
+  - url: http://142.56.8.193:3001
+    description: External
+paths:
+  /api/health:
+    get:
+      summary: Health check
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /api/summary:
+    get:
+      summary: Library counts
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SummaryResponse"
+  /api/clients/report:
+    post:
+      summary: Mobile client analytics (connect, play, download)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [clientId, event]
+              properties:
+                clientId: { type: string }
+                platform: { type: string, enum: [android, ios] }
+                deviceName: { type: string }
+                event: { type: string, enum: [connect, play, download, playback] }
+                playing: { type: boolean }
+                paused: { type: boolean }
+                stopped: { type: boolean }
+                offset_ms: { type: integer }
+                duration_ms: { type: integer }
+                track: { type: string }
+                artist: { type: string }
+                album: { type: string }
+                filepath: { type: string }
+                collectionTitle: { type: string }
+                collectionKind: { type: string }
+                trackCount: { type: integer }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  deviceId: { type: string }
+  /api/dashboard/quick:
+    get:
+      summary: Recent plays and favorites for home
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardQuickResponse"
+  /api/search:
+    get:
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 30 }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResponse"
+  /api/playlists:
+    get:
+      parameters:
+        - { name: page, in: query, schema: { type: integer } }
+        - { name: limit, in: query, schema: { type: integer } }
+        - { name: search, in: query, schema: { type: string } }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlaylistsResponse"
+  /api/playlists/play:
+    post:
+      summary: Start playback on Alexa device
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [device, kind]
+              properties:
+                device: { type: string }
+                kind: { type: string, enum: [playlist, artist, album, song] }
+                name: { type: string }
+                id: { type: string }
+                path: { type: string }
+                artist: { type: string }
+                shuffle: { type: boolean }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlayResponse"
+  /api/alexa_remote/status:
+    get:
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlexaRemoteStatus"
+  /api/alexa_remote/devices:
+    get:
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlexaDevicesResponse"
+  /api/nowplaying_devices:
+    get:
+      parameters:
+        - name: viewerClientId
+          in: query
+          required: false
+          schema: { type: string }
+          description: When set (mobile apps), hides other phones/tablets; web omits this to show all devices.
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NowPlayingDevicesResponse"
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      properties:
+        uptimeSeconds: { type: integer }
+        alexaAuth: { type: boolean }
+        backend: { type: boolean }
+    SummaryResponse:
+      type: object
+      properties:
+        songs: { type: integer }
+        artists: { type: integer }
+        albums: { type: integer }
+        playlists: { type: integer }
+    DashboardQuickResponse:
+      type: object
+      properties:
+        recent:
+          type: array
+          items: { $ref: "#/components/schemas/RecentItem" }
+        favorites:
+          type: array
+          items: { $ref: "#/components/schemas/FavoriteItem" }
+    RecentItem:
+      type: object
+      properties:
+        track: { type: string }
+        artist: { type: string }
+        playlist: { type: string }
+        path: { type: string }
+    FavoriteItem:
+      type: object
+      properties:
+        path: { type: string }
+        title: { type: string }
+        artist: { type: string }
+    SearchResponse:
+      type: object
+      properties:
+        playlists: { type: array, items: { $ref: "#/components/schemas/SearchHit" } }
+        artists: { type: array, items: { $ref: "#/components/schemas/SearchHit" } }
+        songs: { type: array, items: { $ref: "#/components/schemas/SearchHit" } }
+    SearchHit:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        title: { type: string }
+        path: { type: string }
+    PlaylistsResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/PlaylistSummary" }
+    PlaylistSummary:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        trackCount: { type: integer }
+    PlayResponse:
+      type: object
+      properties:
+        ok: { type: boolean }
+        device: { type: string }
+        error: { type: string }
+    AlexaRemoteStatus:
+      type: object
+      properties:
+        configured: { type: boolean }
+        available: { type: boolean }
+        authenticated: { type: boolean }
+    AlexaDevicesResponse:
+      type: object
+      properties:
+        devices:
+          type: array
+          items: { $ref: "#/components/schemas/AlexaDevice" }
+    AlexaDevice:
+      type: object
+      properties:
+        name: { type: string }
+        serial: { type: string }
+        online: { type: boolean }
+    NowPlayingDevicesResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/NowPlayingDeviceItem" }
+        controlsAvailable: { type: boolean }
+    NowPlayingDeviceItem:
+      type: object
+      properties:
+        deviceId: { type: string }
+        deviceName: { type: string }
+        track: { type: string }
+        artist: { type: string }
+        paused: { type: boolean }

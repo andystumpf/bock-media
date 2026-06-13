@@ -13,8 +13,8 @@ android {
         applicationId = "com.bockmedia.console"
         minSdk = 26
         targetSdk = 35
-        versionCode = 14
-        versionName = "2.1.1"
+        versionCode = 7
+        versionName = "2.3.0"
         // Bock Media server endpoints (override via local.properties if needed)
         val localProps = rootProject.file("local.properties")
         fun prop(name: String) = if (localProps.exists()) {
@@ -27,6 +27,7 @@ android {
         val localServerUrl = prop("bockmedia.localServerUrl")
             .ifBlank { "http://192.168.1.187:3001" }
         val externalServerUrl = prop("bockmedia.externalServerUrl")
+            .ifBlank { "http://142.56.8.193:3001" }
         val mobileApiToken = prop("bockmedia.mobileApiToken")
         val adminUser = prop("bockmedia.adminUser")
         val adminPassword = prop("bockmedia.adminPassword")
@@ -73,7 +74,7 @@ android {
             }
         }
         debug {
-            // Same applicationId as release so sideload APK matches shortcuts/deep links.
+            applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
         }
     }
@@ -122,11 +123,14 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 
     implementation("io.coil-kt:coil-compose:2.7.0")
-    implementation("androidx.security:security-crypto:1.0.0")
     implementation("androidx.datastore:datastore-preferences:1.1.1")
     implementation("androidx.browser:browser:1.8.0")
     implementation("androidx.work:work-runtime-ktx:2.10.0")
     implementation("androidx.media:media:1.7.0")
+    val media3 = "1.5.1"
+    implementation("androidx.media3:media3-exoplayer:$media3")
+    implementation("androidx.media3:media3-session:$media3")
+    implementation("androidx.media3:media3-datasource-okhttp:$media3")
     implementation("com.patrykandpatrick.vico:compose-m3:2.0.0-alpha.28")
 
     debugImplementation("androidx.compose.ui:ui-tooling")

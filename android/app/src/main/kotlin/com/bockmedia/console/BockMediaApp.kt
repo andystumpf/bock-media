@@ -4,11 +4,13 @@ import android.content.Context
 import com.bockmedia.console.data.api.BockMediaApi
 import com.bockmedia.console.data.api.bockJson
 import com.bockmedia.console.data.auth.BockAuthInterceptor
-import com.bockmedia.console.data.local.ApiResponseCache
 import com.bockmedia.console.data.local.AppPreferences
-import com.bockmedia.console.data.network.NetworkHints
 import com.bockmedia.console.data.network.ServerEndpointResolver
 import com.bockmedia.console.data.repository.BockMediaRepository
+import com.bockmedia.console.local.ClientIdStore
+import com.bockmedia.console.domain.model.HomeArtworkCache
+import com.bockmedia.console.domain.model.HomeFeedCache
+import com.bockmedia.console.domain.model.HomeTileEngagement
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -18,10 +20,12 @@ import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import java.util.concurrent.TimeUnit
 
-class BockMediaApp(context: Context) {
-    val preferences = AppPreferences(context.applicationContext)
-    val responseCache = ApiResponseCache(context.applicationContext)
-    private val appContext = context.applicationContext
+class BockMediaApp(private val appContext: Context) {
+    val preferences = AppPreferences(appContext.applicationContext)
+
+    init {
+        HomeTileEngagement.init(appContext.applicationContext)
+    }
 
     private var cachedBaseUrl: String? = null
     private var cachedApi: BockMediaApi? = null
@@ -34,7 +38,7 @@ class BockMediaApp(context: Context) {
             apiProvider = { api() },
             baseUrlProvider = { resolveBaseUrl() },
             preferences = preferences,
-            cache = responseCache,
+            clientIdProvider = { ClientIdStore.clientId(appContext) },
         )
     }
 
@@ -46,8 +50,8 @@ class BockMediaApp(context: Context) {
         val external = preferences.getExternalServerUrlSync()
         return ServerEndpointResolver.resolve(
             preferences = preferences,
-            authProbeClient = buildHttpClient(user, pass, token, local, external),
-            preferExternal = !NetworkHints.onWifi(appContext),
+            localProbeClient = buildPlainHttpClient(),
+            externalProbeClient = buildHttpClient(user, pass, token, local, external),
             forceRefresh = forceRefresh,
         )
     }
@@ -83,6 +87,9 @@ class BockMediaApp(context: Context) {
         cachedApi = null
         cachedBaseUrl = null
         ServerEndpointResolver.invalidate()
+        repository.clearCaches()
+        HomeFeedCache.invalidate()
+        HomeArtworkCache.invalidate()
     }
 
     suspend fun buildAuthenticatedHttpClient(): OkHttpClient {
@@ -120,6 +127,13 @@ class BockMediaApp(context: Context) {
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .addInterceptor(BockAuthInterceptor({ localHosts }, { user }, { pass }, { token }))
+            .apply {
+                if (BuildConfig.DEBUG) {
+                    addInterceptor(HttpLoggingInterceptor().apply {
+                        level = HttpLoggingInterceptor.Level.BASIC
+                    })
+                }
+            }
             .build()
     }
 

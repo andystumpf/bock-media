@@ -1,5 +1,6 @@
 package com.bockmedia.console.ui.components
 
+import androidx.compose.foundation.gestures.ScrollableDefaults
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.lazy.LazyColumn
@@ -13,41 +14,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
 @Composable
+fun bockFlingBehavior() = ScrollableDefaults.flingBehavior()
+
+@Composable
 fun rememberBockScrollState() = rememberScrollState()
 
 @Composable
-fun Modifier.bockVerticalScroll(): Modifier {
-    val state = rememberScrollState()
-    return verticalScroll(state)
-}
-
-@Composable
-fun Modifier.bockVerticalScroll(state: androidx.compose.foundation.ScrollState): Modifier =
-    verticalScroll(state)
+fun Modifier.bockVerticalScroll(state: androidx.compose.foundation.ScrollState = rememberBockScrollState()): Modifier =
+    verticalScroll(state, flingBehavior = bockFlingBehavior())
 
 @Composable
 fun BockLazyColumn(
     modifier: Modifier = Modifier,
-    contentPadding: PaddingValues = PaddingValues(0.dp),
-    verticalArrangement: Arrangement.Vertical = Arrangement.Top,
-    reverseLayout: Boolean = false,
-    content: LazyListScope.() -> Unit,
-) {
-    val state = rememberLazyListState()
-    LazyColumn(
-        modifier = modifier,
-        state = state,
-        contentPadding = contentPadding,
-        verticalArrangement = verticalArrangement,
-        reverseLayout = reverseLayout,
-        content = content,
-    )
-}
-
-@Composable
-fun BockLazyColumn(
-    modifier: Modifier = Modifier,
-    state: LazyListState,
+    state: LazyListState = rememberLazyListState(),
     contentPadding: PaddingValues = PaddingValues(0.dp),
     verticalArrangement: Arrangement.Vertical = Arrangement.Top,
     reverseLayout: Boolean = false,
@@ -59,6 +38,7 @@ fun BockLazyColumn(
         contentPadding = contentPadding,
         verticalArrangement = verticalArrangement,
         reverseLayout = reverseLayout,
+        flingBehavior = bockFlingBehavior(),
         content = content,
     )
 }

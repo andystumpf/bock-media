@@ -2,6 +2,8 @@ package com.bockmedia.console.ui.automation
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -17,6 +19,26 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 
+private val DAY_LABELS = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+private enum class DayPreset { Daily, Weekdays, Weekends, Custom }
+
+private fun presetDays(preset: DayPreset): Set<Int> = when (preset) {
+    DayPreset.Daily -> (0..6).toSet()
+    DayPreset.Weekdays -> setOf(0, 1, 2, 3, 4)
+    DayPreset.Weekends -> setOf(5, 6)
+    DayPreset.Custom -> emptySet()
+}
+
+private fun formatAutomationDays(days: List<Int>): String {
+    if (days.isEmpty()) return "No days"
+    val set = days.toSet()
+    if (set.size == 7) return "Daily"
+    if (set == setOf(0, 1, 2, 3, 4)) return "Mon–Fri"
+    if (set == setOf(5, 6)) return "Weekends"
+    return days.sorted().joinToString(", ") { DAY_LABELS.getOrElse(it) { "?" } }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AutomationScreen(repository: BockMediaRepository) {
@@ -24,21 +46,8 @@ fun AutomationScreen(repository: BockMediaRepository) {
     var items by remember { mutableStateOf<List<AutomationItem>>(emptyList()) }
     var remoteOk by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(true) }
-    var editId by remember { mutableStateOf<String?>(null) }
-    var label by remember { mutableStateOf("") }
-    var playlistSearch by remember { mutableStateOf("") }
-    var playlistPick by remember { mutableStateOf<Pair<String?, String?>>(null to null) }
-    var deviceValue by remember { mutableStateOf("") }
-    var deviceName by remember { mutableStateOf("") }
-    var deviceOptions by remember { mutableStateOf<List<DeviceOption>>(emptyList()) }
-    var time by remember { mutableStateOf("08:00") }
-    var volume by remember { mutableStateOf("") }
-    var shuffle by remember { mutableStateOf(false) }
-    var enabled by remember { mutableStateOf(true) }
-    var playlistHits by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
-    var message by remember { mutableStateOf<String?>(null) }
-    var messageError by remember { mutableStateOf(false) }
-    var selectedDays by remember { mutableStateOf((0..6).toSet()) }
+    var showSheet by remember { mutableStateOf(false) }
+    var editItem by remember { mutableStateOf<AutomationItem?>(null) }
 
     suspend fun load() {
         loading = true
@@ -46,16 +55,126 @@ fun AutomationScreen(repository: BockMediaRepository) {
             items = repository.automations().items
             val st = repository.alexaRemoteStatus()
             remoteOk = st.configured && st.authenticated == true
-            if (remoteOk) {
-                val devs = repository.alexaRemoteDevices(probe = true).devices
-                val groups = repository.deviceGroups().items
-                deviceOptions = buildDeviceOptions(groups, devs)
-            }
         }
         loading = false
     }
 
     LaunchedEffect(Unit) { load() }
+
+    Scaffold(
+        modifier = Modifier.fillMaxSize(),
+        floatingActionButton = {
+            if (remoteOk) {
+                FloatingActionButton(onClick = { editItem = null; showSheet = true }) {
+                    Icon(Icons.Default.Add, contentDescription = "Add automation")
+                }
+            }
+        },
+    ) { padding ->
+        Column(Modifier.fillMaxSize().padding(padding)) {
+            TabScreenHeader("Automations")
+            if (!remoteOk) {
+                Text(
+                    "Configure Alexa remote in Settings first.",
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+            }
+            if (loading) {
+                LoadingBox(Modifier.weight(1f))
+            } else {
+                BockLazyColumn(
+                    modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    items(items, key = { it.id }) { auto ->
+                        ListItem(
+                            headlineContent = { Text(auto.name.ifBlank { auto.label }) },
+                            supportingContent = {
+                                Text(
+                                    "${formatTime12(auto.time ?: "08:00")} · ${formatAutomationDays(auto.days)} · ${auto.playlistName ?: auto.playlist ?: ""} · ${auto.deviceName ?: auto.device ?: ""}",
+                                )
+                            },
+                            trailingContent = {
+                                Row {
+                                    TextButton(onClick = { scope.launch { repository.runAutomation(auto.id) } }) {
+                                        Text("Run")
+                                    }
+                                    TextButton(onClick = {
+                                        editItem = auto
+                                        showSheet = true
+                                    }) { Text("Edit") }
+                                    TextButton(onClick = {
+                                        scope.launch { repository.deleteAutomation(auto.id); load() }
+                                    }) { Text("Delete") }
+                                }
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    if (showSheet && remoteOk) {
+        AutomationFormSheet(
+            repository = repository,
+            editItem = editItem,
+            onDismiss = { showSheet = false; editItem = null },
+            onSaved = {
+                showSheet = false
+                editItem = null
+                scope.launch { load() }
+            },
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AutomationFormSheet(
+    repository: BockMediaRepository,
+    editItem: AutomationItem?,
+    onDismiss: () -> Unit,
+    onSaved: () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var label by remember(editItem) { mutableStateOf(editItem?.name?.ifBlank { editItem.label } ?: editItem?.label ?: "") }
+    var playlistSearch by remember(editItem) { mutableStateOf(editItem?.playlistName ?: editItem?.playlist ?: "") }
+    var playlistPick by remember(editItem) {
+        mutableStateOf((editItem?.playlistId to (editItem?.playlistName ?: editItem?.playlist)))
+    }
+    var deviceValue by remember(editItem) { mutableStateOf(editItem?.device ?: "") }
+    var deviceName by remember(editItem) { mutableStateOf(editItem?.deviceName ?: "") }
+    var deviceOptions by remember { mutableStateOf<List<DeviceOption>>(emptyList()) }
+    var time by remember(editItem) { mutableStateOf(editItem?.time ?: "08:00") }
+    var volume by remember(editItem) { mutableStateOf(editItem?.volume?.toString() ?: "") }
+    var shuffle by remember(editItem) { mutableStateOf(editItem?.shuffle ?: false) }
+    var enabled by remember(editItem) { mutableStateOf(editItem?.enabled ?: true) }
+    var playlistHits by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    var dayPreset by remember(editItem) {
+        mutableStateOf(
+            when {
+                editItem == null -> DayPreset.Daily
+                editItem.days.toSet() == presetDays(DayPreset.Daily) -> DayPreset.Daily
+                editItem.days.toSet() == presetDays(DayPreset.Weekdays) -> DayPreset.Weekdays
+                editItem.days.toSet() == presetDays(DayPreset.Weekends) -> DayPreset.Weekends
+                else -> DayPreset.Custom
+            },
+        )
+    }
+    var customDays by remember(editItem) {
+        mutableStateOf(editItem?.days?.toSet() ?: presetDays(DayPreset.Daily))
+    }
+
+    LaunchedEffect(Unit) {
+        runCatching {
+            val devs = repository.alexaRemoteDevices().devices
+            val groups = repository.deviceGroups().items
+            deviceOptions = buildDeviceOptions(groups, devs)
+        }
+    }
+
     LaunchedEffect(playlistSearch, playlistPick) {
         delay(250)
         if (playlistPick.first != null || playlistSearch.length < 1) {
@@ -67,213 +186,114 @@ fun AutomationScreen(repository: BockMediaRepository) {
         }
     }
 
-    fun resetForm() {
-        editId = null
-        label = ""
-        playlistSearch = ""
-        playlistPick = null to null
-        playlistHits = emptyList()
-        deviceValue = ""
-        deviceName = ""
-        time = "08:00"
-        volume = ""
-        shuffle = false
-        enabled = true
-        selectedDays = (0..6).toSet()
+    val selectedDays = when (dayPreset) {
+        DayPreset.Custom -> customDays
+        else -> presetDays(dayPreset)
     }
 
-    BockLazyColumn(
-        modifier = Modifier.fillMaxSize().padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        message?.let {
-            item {
-                Text(
-                    it,
-                    color = if (messageError) MaterialTheme.colorScheme.error
-                    else MaterialTheme.colorScheme.primary,
-                )
-            }
-        }
-        if (!remoteOk) {
-            item {
-                Text("Configure Alexa remote in Settings first.", color = MaterialTheme.colorScheme.error)
-            }
-        } else {
-            item {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    BockTextField(label, { label = it }, "Label")
-                    SearchField(
-                        playlistSearch,
-                        { query ->
-                            playlistSearch = query
-                            if (playlistPick.second != null && query != playlistPick.second) {
-                                playlistPick = null to null
-                            }
-                        },
-                        "Search playlist",
-                    )
-                    if (playlistPick.first == null && playlistHits.isNotEmpty()) {
-                        playlistHits.take(8).forEach { (id, name) ->
-                            TextButton(onClick = {
-                                playlistPick = id to name
-                                playlistSearch = name
-                                playlistHits = emptyList()
-                            }) { Text(name) }
-                        }
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .navigationBarsPadding()
+                .padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                if (editItem != null) "Edit automation" else "New automation",
+                style = MaterialTheme.typography.titleLarge,
+            )
+            BockTextField(label, { label = it }, "Label")
+            SearchField(
+                playlistSearch,
+                { query ->
+                    playlistSearch = query
+                    if (playlistPick.second != null && query != playlistPick.second) {
+                        playlistPick = null to null
                     }
-                    playlistPick.second?.let { selected ->
-                        Text(
-                            "Selected: $selected",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.primary,
+                },
+                "Search playlist",
+            )
+            if (playlistPick.first == null && playlistHits.isNotEmpty()) {
+                playlistHits.take(8).forEach { (id, name) ->
+                    TextButton(onClick = {
+                        playlistPick = id to name
+                        playlistSearch = name
+                        playlistHits = emptyList()
+                    }) { Text(name) }
+                }
+            }
+            DeviceSelectField(
+                options = deviceOptions,
+                selectedValue = deviceValue,
+                onSelect = { opt ->
+                    deviceValue = opt.value
+                    deviceName = opt.label.replace(" (offline)", "")
+                },
+                placeholder = "Select device…",
+            )
+            BockTimeField(time, { time = it })
+            BockTextField(volume, { volume = it }, "Volume (optional)")
+            Text("Days", style = MaterialTheme.typography.labelLarge)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                DayPreset.entries.forEach { preset ->
+                    FilterChip(
+                        selected = dayPreset == preset,
+                        onClick = {
+                            dayPreset = preset
+                            if (preset != DayPreset.Custom) customDays = presetDays(preset)
+                        },
+                        label = { Text(preset.name) },
+                    )
+                }
+            }
+            if (dayPreset == DayPreset.Custom) {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
+                    DAY_LABELS.forEachIndexed { index, day ->
+                        FilterChip(
+                            selected = index in customDays,
+                            onClick = {
+                                customDays = if (index in customDays) customDays - index else customDays + index
+                            },
+                            label = { Text(day) },
                         )
-                    }
-                    DeviceSelectField(
-                        options = deviceOptions,
-                        selectedValue = deviceValue,
-                        onSelect = { opt ->
-                            deviceValue = opt.value
-                            deviceName = opt.label.replace(" (offline)", "")
-                        },
-                        placeholder = "Select device…",
-                    )
-                    BockTimeField(time, { time = it })
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        listOf("Mon" to 0, "Tue" to 1, "Wed" to 2, "Thu" to 3, "Fri" to 4, "Sat" to 5, "Sun" to 6).forEach { (label, day) ->
-                            val on = day in selectedDays
-                            FilterChip(
-                                selected = on,
-                                onClick = {
-                                    selectedDays = if (on) selectedDays - day else selectedDays + day
-                                },
-                                label = { Text(label) },
-                            )
-                        }
-                    }
-                    BockTextField(volume, { volume = it }, "Volume (optional)")
-                    Row {
-                        Checkbox(shuffle, { shuffle = it })
-                        Text("Shuffle")
-                        Spacer(Modifier.width(16.dp))
-                        Checkbox(enabled, { enabled = it })
-                        Text("Enabled")
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = {
-                            scope.launch {
-                                message = null
-                                messageError = false
-                                if (deviceValue.isBlank()) {
-                                    message = "Select a device"
-                                    messageError = true
-                                    return@launch
-                                }
-                                if (playlistPick.first == null && playlistPick.second == null) {
-                                    message = "Select a playlist"
-                                    messageError = true
-                                    return@launch
-                                }
-                                if (selectedDays.isEmpty()) {
-                                    message = "Select at least one day"
-                                    messageError = true
-                                    return@launch
-                                }
-                                val body = buildJsonObject {
-                                    put("name", label)
-                                    playlistPick.first?.let { put("playlistId", it) }
-                                    playlistPick.second?.let { put("playlistName", it) }
-                                    put("device", deviceValue)
-                                    put("deviceName", deviceName)
-                                    put("time", time)
-                                    putJsonArray("days") { selectedDays.sorted().forEach { add(JsonPrimitive(it)) } }
-                                    volume.toIntOrNull()?.let { put("volume", it) }
-                                    put("shuffle", shuffle)
-                                    put("enabled", enabled)
-                                }
-                                runCatching {
-                                    val resp = if (editId != null) {
-                                        repository.updateAutomation(editId!!, body)
-                                    } else {
-                                        repository.createAutomation(body)
-                                    }
-                                    if (!resp.ok) error(resp.error ?: "Save failed")
-                                    message = if (editId != null) "Automation updated" else "Automation added"
-                                    resetForm()
-                                    load()
-                                }.onFailure {
-                                    message = it.message ?: "Save failed"
-                                    messageError = true
-                                }
-                            }
-                        }) { Text(if (editId != null) "Update" else "Add automation") }
-                        if (editId != null) {
-                            TextButton(onClick = { resetForm() }) { Text("Cancel edit") }
-                        }
                     }
                 }
             }
-        }
-
-        if (loading) {
-            item { LoadingBox(Modifier.height(120.dp)) }
-        } else {
-            items(items, key = { it.id }) { auto ->
-                ListItem(
-                    headlineContent = { Text(auto.name.ifBlank { auto.label }) },
-                    supportingContent = {
-                        Text(
-                            "${formatTime12(auto.time ?: "08:00")} · ${auto.playlistName ?: auto.playlist ?: ""} · ${auto.deviceName ?: auto.device ?: ""}",
-                        )
-                    },
-                    trailingContent = {
-                        Row {
-                            TextButton(onClick = {
-                                scope.launch {
-                                    message = null
-                                    messageError = false
-                                    runCatching {
-                                        val resp = repository.runAutomation(auto.id)
-                                        if (!resp.ok) error(resp.error ?: "Run failed")
-                                        message = "Ran ${auto.name.ifBlank { auto.label }}"
-                                    }.onFailure {
-                                        message = it.message ?: "Run failed"
-                                        messageError = true
-                                    }
-                                }
-                            }) {
-                                Text("Run")
+            Row {
+                Checkbox(shuffle, { shuffle = it })
+                Text("Shuffle")
+                Spacer(Modifier.width(16.dp))
+                Checkbox(enabled, { enabled = it })
+                Text("Enabled")
+            }
+            Button(
+                onClick = {
+                    scope.launch {
+                        val body = buildJsonObject {
+                            put("name", label)
+                            playlistPick.first?.let { put("playlistId", it) }
+                            playlistPick.second?.let { put("playlistName", it) }
+                            put("device", deviceValue)
+                            put("deviceName", deviceName)
+                            put("time", time)
+                            putJsonArray("days") {
+                                selectedDays.sorted().forEach { add(JsonPrimitive(it)) }
                             }
-                            TextButton(onClick = {
-                                editId = auto.id
-                                label = auto.name.ifBlank { auto.label }
-                                val plName = auto.playlistName ?: auto.playlist
-                                playlistPick = auto.playlistId to plName
-                                playlistSearch = plName ?: ""
-                                playlistHits = emptyList()
-                                deviceValue = auto.device ?: ""
-                                deviceName = auto.deviceName ?: deviceOptions
-                                    .find { it.value == auto.device }?.label?.replace(" (offline)", "")
-                                    ?: auto.device ?: ""
-                                time = auto.time ?: "08:00"
-                                volume = auto.volume?.toString() ?: ""
-                                shuffle = auto.shuffle
-                                enabled = auto.enabled
-                                selectedDays = auto.days.toSet().ifEmpty { (0..6).toSet() }
-                            }) { Text("Edit") }
-                            TextButton(onClick = {
-                                scope.launch {
-                                    runCatching { repository.deleteAutomation(auto.id) }
-                                        .onFailure {
-                                            message = it.message ?: "Delete failed"
-                                            messageError = true
-                                        }
-                                    load()
-                                }
-                            }) { Text("Delete") }
+                            volume.toIntOrNull()?.let { put("volume", it) }
+                            put("shuffle", shuffle)
+                            put("enabled", enabled)
                         }
-                    },
-                )
+                        if (editItem != null) repository.updateAutomation(editItem.id, body)
+                        else repository.createAutomation(body)
+                        onSaved()
+                    }
+                },
+                enabled = label.isNotBlank() && deviceValue.isNotBlank() && selectedDays.isNotEmpty(),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(if (editItem != null) "Save" else "Add automation")
             }
         }
     }

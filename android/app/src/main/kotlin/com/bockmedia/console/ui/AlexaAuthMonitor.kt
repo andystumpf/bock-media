@@ -47,3 +47,6 @@ fun rememberAlexaRemoteStatus(repository: BockMediaRepository): State<AlexaRemot
 
 fun alexaControlsAvailable(status: AlexaRemoteStatus?): Boolean =
     status?.configured == true && status.authenticated == true
+
+suspend fun refreshAlexaControlsAvailable(repository: BockMediaRepository): Boolean =
+    runCatching { alexaControlsAvailable(repository.alexaRemoteStatus()) }.getOrDefault(false)

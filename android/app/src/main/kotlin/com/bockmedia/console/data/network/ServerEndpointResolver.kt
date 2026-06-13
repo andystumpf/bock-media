@@ -2,18 +2,16 @@ package com.bockmedia.console.data.network
 
 import com.bockmedia.console.data.local.AppPreferences
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
 
-/** Picks the reachable server URL (LAN or external). Caches aggressively for mobile. */
+/** Picks LAN URL when reachable, otherwise the external static IP. */
 object ServerEndpointResolver {
     private var cachedUrl: String? = null
     private var cachedAtMs = 0L
-    private const val CACHE_TTL_MS = 300_000L // 5 min — avoid re-probing on every screen
+    private const val CACHE_TTL_MS = 30_000L
 
     fun invalidate() {
         cachedUrl = null
@@ -22,8 +20,8 @@ object ServerEndpointResolver {
 
     suspend fun resolve(
         preferences: AppPreferences,
-        authProbeClient: OkHttpClient,
-        preferExternal: Boolean = false,
+        localProbeClient: OkHttpClient,
+        externalProbeClient: OkHttpClient,
         forceRefresh: Boolean = false,
     ): String = withContext(Dispatchers.IO) {
         if (!forceRefresh) {
@@ -36,64 +34,32 @@ object ServerEndpointResolver {
 
         val local = preferences.getLocalServerUrlSync()
         val external = preferences.getExternalServerUrlSync()
-        val probeClient = authProbeClient.newBuilder()
-            .connectTimeout(5, TimeUnit.SECONDS)
-            .readTimeout(8, TimeUnit.SECONDS)
-            .callTimeout(12, TimeUnit.SECONDS)
+        val probeClient = localProbeClient.newBuilder()
+            .connectTimeout(2, TimeUnit.SECONDS)
+            .readTimeout(2, TimeUnit.SECONDS)
+            .callTimeout(3, TimeUnit.SECONDS)
+            .build()
+        val externalClient = externalProbeClient.newBuilder()
+            .connectTimeout(4, TimeUnit.SECONDS)
+            .readTimeout(4, TimeUnit.SECONDS)
+            .callTimeout(6, TimeUnit.SECONDS)
             .build()
 
-        // Last-known-good URL (persisted) — one fast probe before scanning.
-        preferences.getLastResolvedUrlSync()?.let { last ->
-            if (probe(probeClient, last)) {
-                preferences.setLastResolvedUrl(last)
-                return@withContext cache(AppPreferences.normalizeUrl(last))
-            }
+        if (!local.isNullOrBlank() && probe(probeClient, local)) {
+            return@withContext cache(AppPreferences.normalizeUrl(local))
         }
-
-        val candidates = buildList {
-            if (preferExternal) {
-                external?.takeIf { it.isNotBlank() }?.let { add(it) }
-                local?.takeIf { it.isNotBlank() }?.let { add(it) }
-            } else {
-                local?.takeIf { it.isNotBlank() }?.let { add(it) }
-                external?.takeIf { it.isNotBlank() }?.let { add(it) }
-            }
-        }.distinct()
-
-        if (candidates.isEmpty()) {
-            throw IllegalStateException("No reachable Bock Media server URL")
+        if (!external.isNullOrBlank() && probe(externalClient, external)) {
+            return@withContext cache(AppPreferences.normalizeUrl(external))
         }
-
-        // Probe all candidates in parallel — total wait ≈ one timeout, not N×.
-        val winner = coroutineScope {
-            candidates.map { base ->
-                async {
-                    val norm = AppPreferences.normalizeUrl(base)
-                    if (probe(probeClient, norm)) norm else null
-                }
-            }.mapNotNull { it.await() }.firstOrNull()
+        // Neither endpoint answered — prefer LAN (common when public IP / port-forward is down).
+        // Do not cache: the next call should re-probe instead of sticking on a dead host for 30s.
+        if (!local.isNullOrBlank()) {
+            return@withContext AppPreferences.normalizeUrl(local)
         }
-
-        if (winner != null) {
-            preferences.setLastResolvedUrl(winner)
-            return@withContext cache(winner)
+        if (!external.isNullOrBlank()) {
+            return@withContext AppPreferences.normalizeUrl(external)
         }
-        if (candidates.any { probeAuthFailed(probeClient, AppPreferences.normalizeUrl(it)) }) {
-            throw IllegalStateException(
-                "Server reachable but authentication failed — check Mobile API token in Settings",
-            )
-        }
-        throw IllegalStateException("No reachable Bock Media server URL")
-    }
-
-    private fun probeAuthFailed(client: OkHttpClient, base: String): Boolean {
-        val url = "${AppPreferences.normalizeUrl(base)}/api/health"
-        val request = Request.Builder().url(url).get().build()
-        return try {
-            client.newCall(request).execute().use { it.code == 401 }
-        } catch (_: Exception) {
-            false
-        }
+        throw IllegalStateException("No server URL configured")
     }
 
     private fun cache(url: String): String {

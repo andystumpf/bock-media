@@ -1,120 +1,242 @@
 package com.bockmedia.console.ui.settings
 
-import android.net.Uri
-import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.foundation.layout.*
 import com.bockmedia.console.ui.components.bockVerticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.bockmedia.console.data.repository.BockMediaRepository
-import com.bockmedia.console.ui.components.BockTextField
+import com.bockmedia.console.ui.components.HealthStatusCard
+import com.bockmedia.console.ui.components.LibraryStatsCard
 import com.bockmedia.console.ui.components.LoadingBox
-import kotlinx.coroutines.delay
+import com.bockmedia.console.BockMediaApp
+import com.bockmedia.console.ui.downloads.DownloadsManagementSection
+import com.bockmedia.console.ui.watchfolders.WatchFoldersSection
 import kotlinx.coroutines.launch
-import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.put
 
 @Composable
 fun SettingsScreen(
     repository: BockMediaRepository,
-    onChangeServer: () -> Unit,
+    snackbarHostState: SnackbarHostState? = null,
+    onOpenNowPlaying: () -> Unit = {},
+    onOpenPlaylist: (String) -> Unit = {},
+    onOpenPlaylists: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val app = remember { BockMediaApp.get(context) }
+    var wifiOnlyDownloads by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(true) }
-    var settings by remember { mutableStateOf<JsonObject?>(null) }
-    var publicUrl by remember { mutableStateOf("") }
-    var launchPrompt by remember { mutableStateOf(false) }
-    var remote by remember { mutableStateOf<com.bockmedia.console.data.api.dto.AlexaRemoteStatus?>(null) }
-    var defaultPlaylist by remember { mutableStateOf("") }
     var message by remember { mutableStateOf<String?>(null) }
-    var error by remember { mutableStateOf<String?>(null) }
 
-    suspend fun load() {
+    LaunchedEffect(Unit) {
         loading = true
-        error = null
-        runCatching {
-            settings = repository.settings()
-            val cfg = repository.config()
-            publicUrl = cfg["publicUrl"]?.jsonPrimitive?.content ?: ""
-            launchPrompt = cfg["launchPlaylistPrompt"]?.jsonPrimitive?.content == "true"
-            defaultPlaylist = settings?.get("DefaultPlaylist")?.jsonPrimitive?.content ?: ""
-            remote = repository.alexaRemoteStatus()
-        }.onFailure { error = it.message ?: "Failed to load settings" }
+        wifiOnlyDownloads = app.preferences.isDownloadWifiOnlySync()
         loading = false
-    }
-
-    LaunchedEffect(Unit) { load() }
-
-    LaunchedEffect(remote?.loginStatus) {
-        if (remote?.loginStatus == "waiting" || remote?.loginStatus == "starting") {
-            while (true) {
-                delay(2000)
-                remote = repository.alexaLoginState()
-                if (remote?.loginStatus == "success" || remote?.authenticated == true) {
-                    message = "Alexa login successful"
-                    break
-                }
-                if (remote?.loginStatus == "error" || remote?.loginStatus == "stopped") break
-            }
-            load()
-        }
     }
 
     Column(Modifier.fillMaxSize().bockVerticalScroll().padding(16.dp)) {
         message?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
-        error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         if (loading) LoadingBox() else {
-            Card(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-                Column(Modifier.padding(12.dp)) {
-                    Text("Alexa Remote", style = MaterialTheme.typography.titleSmall)
-                    Text("Status: ${if (remote?.authenticated == true) "Connected" else remote?.loginStatus ?: "—"}")
-                    remote?.loginUrl?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = {
-                            scope.launch {
-                                remote = repository.alexaLoginStart()
-                                remote?.loginUrl?.let { url ->
-                                    CustomTabsIntent.Builder().build().launchUrl(context, Uri.parse(url))
-                                }
-                            }
-                        }) { Text("Start browser login") }
-                        TextButton(onClick = { scope.launch { repository.alexaLoginStop(); load() } }) { Text("Cancel") }
+            LibraryStatsCard(repository = repository, modifier = Modifier.padding(bottom = 16.dp))
+            TextButton(onClick = onOpenPlaylists, modifier = Modifier.padding(bottom = 8.dp)) {
+                Text("Manage playlists")
+            }
+            SettingsSectionHeader(
+                title = "Downloads",
+                icon = Icons.Default.Download,
+                subtitle = "Offline music saved on this phone",
+            )
+            DownloadsManagementSection(
+                embedded = true,
+                onOpenPlaylist = onOpenPlaylist,
+                snackbarHostState = snackbarHostState,
+                onOpenNowPlaying = onOpenNowPlaying,
+            )
+            Card(Modifier.fillMaxWidth()) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Download over Wi‑Fi only", fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "Cellular downloads pause until you're on Wi‑Fi",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
+                    Switch(
+                        checked = wifiOnlyDownloads,
+                        onCheckedChange = { checked ->
+                            wifiOnlyDownloads = checked
+                            scope.launch { app.preferences.setDownloadWifiOnly(checked) }
+                        },
+                    )
                 }
             }
-            BockTextField(defaultPlaylist, { defaultPlaylist = it }, "Default playlist")
-            BockTextField(publicUrl, { publicUrl = it }, "Public URL")
-            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                Checkbox(launchPrompt, { launchPrompt = it })
-                Text("Launch playlist prompt")
-            }
-            Button(onClick = {
-                scope.launch {
-                    error = null
-                    message = null
-                    runCatching {
-                        val settingsResp = repository.saveSettings(buildJsonObject { put("DefaultPlaylist", defaultPlaylist) })
-                        if (!settingsResp.ok) error = settingsResp.error ?: "Settings save failed"
-                        val configResp = repository.saveConfig(buildJsonObject {
-                            put("publicUrl", publicUrl)
-                            put("launchPlaylistPrompt", launchPrompt)
-                        })
-                        if (!configResp.ok) error = configResp.error ?: "Config save failed"
-                        if (error == null) message = "Settings saved"
-                    }.onFailure { error = it.message ?: "Save failed" }
+
+            Spacer(Modifier.height(16.dp))
+            SettingsSectionHeader(
+                title = "Watch folders",
+                icon = Icons.Default.Folder,
+                subtitle = "Library folders scanned on the server",
+            )
+            WatchFoldersSection(repository = repository)
+
+            Spacer(Modifier.height(16.dp))
+            ServerConfigSection(
+                repository = repository,
+                onMessage = { msg ->
+                    message = msg
+                    scope.launch { snackbarHostState?.showSnackbar(msg) }
+                },
+            )
+
+            Spacer(Modifier.height(16.dp))
+            HealthStatusCard(
+                repository = repository,
+                onMessage = { msg ->
+                    message = msg
+                    scope.launch {
+                        snackbarHostState?.showSnackbar(msg)
+                    }
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun ServerConfigSection(
+    repository: BockMediaRepository,
+    onMessage: (String) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var expanded by remember { mutableStateOf(false) }
+    var confirmed by remember { mutableStateOf(false) }
+    var loading by remember { mutableStateOf(false) }
+    var defaultPlaylist by remember { mutableStateOf("") }
+    var publicUrl by remember { mutableStateOf("") }
+    var flacSupport by remember { mutableStateOf("") }
+    var transcodeBitrate by remember { mutableStateOf("") }
+
+    LaunchedEffect(expanded, confirmed) {
+        if (!expanded || !confirmed) return@LaunchedEffect
+        loading = true
+        runCatching {
+            val settings = repository.loadSettingsJson()
+            val config = repository.loadConfigJson()
+            defaultPlaylist = settings["defaultPlaylist"]?.jsonPrimitive?.content.orEmpty()
+            publicUrl = config["publicUrl"]?.jsonPrimitive?.content.orEmpty()
+            flacSupport = settings["flacSupport"]?.jsonPrimitive?.content.orEmpty()
+            transcodeBitrate = settings["transcodeBitrate"]?.jsonPrimitive?.content.orEmpty()
+        }.onFailure { onMessage(it.message ?: "Failed to load server config") }
+        loading = false
+    }
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp)) {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Default.Settings, null, modifier = Modifier.size(22.dp))
+                Spacer(Modifier.width(8.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Server config", fontWeight = FontWeight.Bold)
+                    Text(
+                        "Power-user server preferences",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
-            }) { Text("Save settings") }
-            TextButton(onClick = { scope.launch { repository.clearCache(); message = "Artwork cache cleared" } }) {
-                Text("Clear artwork cache")
+                Switch(checked = expanded, onCheckedChange = { expanded = it; if (!it) confirmed = false })
             }
-            TextButton(onClick = onChangeServer) { Text("Change server URL") }
+            if (expanded) {
+                if (!confirmed) {
+                    Text(
+                        "Changes affect the Bock Media server. Continue?",
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                    TextButton(onClick = { confirmed = true }) { Text("Load server settings") }
+                } else if (loading) {
+                    LoadingBox(Modifier.height(120.dp))
+                } else {
+                    OutlinedTextField(
+                        defaultPlaylist,
+                        { defaultPlaylist = it },
+                        label = { Text("Default playlist name") },
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    )
+                    OutlinedTextField(
+                        publicUrl,
+                        { publicUrl = it },
+                        label = { Text("Public URL") },
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    )
+                    Text(
+                        "Read-only: FLAC support = $flacSupport · Transcode bitrate = $transcodeBitrate",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                runCatching {
+                                    repository.saveSettings(buildJsonObject {
+                                        put("defaultPlaylist", JsonPrimitive(defaultPlaylist))
+                                    })
+                                    repository.saveConfig(buildJsonObject {
+                                        put("publicUrl", JsonPrimitive(publicUrl))
+                                    })
+                                    onMessage("Server settings saved")
+                                }.onFailure { onMessage(it.message ?: "Save failed") }
+                            }
+                        },
+                        modifier = Modifier.padding(top = 12.dp),
+                    ) { Text("Save") }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsSectionHeader(
+    title: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector? = null,
+    subtitle: String? = null,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        icon?.let {
+            Icon(it, contentDescription = null, modifier = Modifier.size(22.dp))
+            Spacer(Modifier.width(8.dp))
+        }
+        Column {
+            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            subtitle?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
     }
 }

@@ -2,10 +2,15 @@ package com.bockmedia.console.ui.components
 
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.*
+import androidx.compose.ui.platform.LocalContext
 import com.bockmedia.console.data.api.bockJson
 import com.bockmedia.console.data.api.dto.PlayResponse
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.PlayTarget
+import com.bockmedia.console.domain.model.PlaybackFocus
+import com.bockmedia.console.local.LastDeviceStore
+import com.bockmedia.console.media.LocalPlaybackController
+import kotlinx.coroutines.launch
 import retrofit2.HttpException
 
 suspend fun repositoryPlay(
@@ -14,9 +19,12 @@ suspend fun repositoryPlay(
     device: String,
     shuffle: Boolean,
 ): PlayResponse = when (target) {
-    is PlayTarget.Playlist -> repository.playOnDevice(
-        device, "playlist", name = target.name, id = target.id, shuffle = shuffle,
-    )
+    is PlayTarget.Playlist -> {
+        val playlistId = target.id.ifBlank { repository.resolvePlaylistId(target.name).orEmpty() }
+        repository.playOnDevice(
+            device, "playlist", name = target.name, id = playlistId.ifBlank { null }, shuffle = shuffle,
+        )
+    }
     is PlayTarget.Artist -> repository.playOnDevice(
         device, "artist", name = target.name, shuffle = shuffle,
     )
@@ -26,6 +34,14 @@ suspend fun repositoryPlay(
     is PlayTarget.Song -> repository.playOnDevice(
         device, "song", name = target.title, path = target.path, shuffle = shuffle,
     )
+    is PlayTarget.Radio -> when (target.seedKind) {
+        PlayTarget.RadioSeedKind.Artist, PlayTarget.RadioSeedKind.Genre ->
+            repository.playOnDevice(device, "artist", name = target.name, shuffle = shuffle)
+        PlayTarget.RadioSeedKind.Song ->
+            repository.playOnDevice(
+                device, "song", name = target.name, path = target.path, shuffle = shuffle,
+            )
+    }
 }
 
 private fun playErrorMessage(e: Throwable): String {
@@ -45,28 +61,44 @@ fun PlayTargetLauncher(
     remoteConfigured: Boolean,
     snackbarHostState: SnackbarHostState,
     onClear: () -> Unit,
+    onPlayStarted: (deviceValue: String, deviceLabel: String?) -> Unit = { _, _ -> },
 ) {
+    if (target == null) return
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    LaunchedEffect(target, remoteConfigured) {
-        if (target != null && !remoteConfigured) {
-            snackbarHostState.showSnackbar("Configure Alexa in Settings to play on a device")
-            onClear()
-        }
-    }
-    if (target == null || !remoteConfigured) return
     var showPicker by remember(target) { mutableStateOf(true) }
     if (showPicker) {
         DevicePickerSheet(
             repository = repository,
+            playLabel = target.label,
+            remoteOk = remoteConfigured,
+            shuffleDefault = target.shuffleDefault,
             onDismiss = { showPicker = false; onClear() },
-            onPlay = { device, shuffle ->
+            onPlay = { device, shuffle, deviceLabel ->
                 val response = repositoryPlay(repository, target, device, shuffle)
                 if (response.ok) {
+                    val label = response.device ?: deviceLabel
+                    PlaybackFocus.notePlayStarted(device, label)
+                    scope.launch { LastDeviceStore(context).setLastDevice(device) }
+                    onPlayStarted(device, label)
                     snackbarHostState.showSnackbar(
-                        "Playing \"${target.label}\" on ${response.device ?: device}",
+                        "Playing \"${target.label}\" on $label",
                     )
                 } else {
                     snackbarHostState.showSnackbar(response.error ?: "Play failed")
+                }
+            },
+            onPlayOnPhone = { shuffle ->
+                scope.launch {
+                    LocalPlaybackController.playTarget(context, target, shuffle)
+                    val err = LocalPlaybackController.state.value.error
+                    if (err != null) {
+                        snackbarHostState.showSnackbar(err)
+                    } else {
+                        snackbarHostState.showSnackbar("Playing \"${target.label}\" on this phone")
+                        showPicker = false
+                        onClear()
+                    }
                 }
             },
             onPlayError = { e ->

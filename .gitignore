@@ -1,3 +1,13 @@
+# macOS / Xcode user state
+.DS_Store
+**/.DS_Store
+**/xcuserdata/
+*.xcuserstate
+*.xcschememanagement.plist
+
+# iOS local build config (copy from Config.xcconfig.example)
+ios/Config.xcconfig
+
 # Runtime state (auto-generated, not committed)
 *.bak
 nowplaying_state.json

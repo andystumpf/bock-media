@@ -1,10 +1,9 @@
 package com.bockmedia.console.ui.watchfolders
 
 import androidx.compose.foundation.layout.*
-import com.bockmedia.console.ui.components.BockLazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -15,7 +14,10 @@ import com.bockmedia.console.ui.components.LoadingBox
 import kotlinx.coroutines.launch
 
 @Composable
-fun WatchFoldersScreen(repository: BockMediaRepository) {
+fun WatchFoldersSection(
+    repository: BockMediaRepository,
+    modifier: Modifier = Modifier,
+) {
     val scope = rememberCoroutineScope()
     var items by remember { mutableStateOf<List<WatchFolder>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
@@ -29,23 +31,19 @@ fun WatchFoldersScreen(repository: BockMediaRepository) {
         loading = false
     }
 
-    LaunchedEffect(Unit) { load() }
+    LaunchedEffect(repository) { load() }
 
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         when {
-            loading -> LoadingBox(Modifier.weight(1f))
+            loading -> LoadingBox(Modifier.fillMaxWidth().heightIn(min = 80.dp))
             error != null -> ErrorText(error!!, onRetry = { scope.launch { load() } })
-            items.isEmpty() -> {
-                Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
-                    Text("No watch folders configured.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-            else -> {
-                BockLazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(items, key = { it.guid ?: it.path ?: it.hashCode().toString() }) { wf ->
-                        WatchFolderCard(wf)
-                    }
-                }
+            items.isEmpty() -> Text(
+                "No watch folders configured.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = 8.dp),
+            )
+            else -> items.forEach { wf ->
+                WatchFolderCard(wf)
             }
         }
     }
@@ -58,7 +56,7 @@ private fun WatchFolderCard(wf: WatchFolder) {
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
                     wf.label?.takeIf { it.isNotBlank() } ?: wf.path ?: "Folder",

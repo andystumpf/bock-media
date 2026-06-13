@@ -1,9 +1,7 @@
 package com.bockmedia.console.ui.setup
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
 import com.bockmedia.console.ui.components.bockVerticalScroll
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -12,31 +10,25 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.bockmedia.console.BockMediaApp
 import com.bockmedia.console.BuildConfig
-import com.bockmedia.console.data.local.AppPreferences
+import com.bockmedia.console.ui.components.BockProgressIndicator
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.delay
 import retrofit2.HttpException
 
 @Composable
-fun SetupScreen(onConnected: () -> Unit, initialError: String? = null) {
+fun SetupScreen(onConnected: () -> Unit) {
     val context = LocalContext.current
     val app = remember { BockMediaApp.get(context) }
     val scope = rememberCoroutineScope()
-    var localUrl by remember { mutableStateOf(BuildConfig.DEFAULT_LOCAL_SERVER_URL) }
-    var externalUrl by remember { mutableStateOf(BuildConfig.DEFAULT_EXTERNAL_SERVER_URL) }
     var adminUser by remember { mutableStateOf(BuildConfig.DEFAULT_ADMIN_USER) }
     var adminPass by remember { mutableStateOf(BuildConfig.DEFAULT_ADMIN_PASSWORD) }
     var mobileToken by remember { mutableStateOf(BuildConfig.DEFAULT_MOBILE_API_TOKEN) }
     var rememberMe by remember { mutableStateOf(true) }
-    var error by remember { mutableStateOf(initialError) }
+    var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        localUrl = app.preferences.getLocalServerUrlSync()
-            ?: BuildConfig.DEFAULT_LOCAL_SERVER_URL
-        externalUrl = app.preferences.getExternalServerUrlSync()
-            ?: BuildConfig.DEFAULT_EXTERNAL_SERVER_URL
+        app.preferences.applyBuildServerUrls()
         adminUser = app.preferences.adminUser.first()
             ?: BuildConfig.DEFAULT_ADMIN_USER
         adminPass = app.preferences.adminPass.first()
@@ -53,46 +45,9 @@ fun SetupScreen(onConnected: () -> Unit, initialError: String? = null) {
         Text("Bock Media", style = MaterialTheme.typography.headlineMedium)
         Text("Sign in to your server", style = MaterialTheme.typography.bodyMedium)
         Spacer(Modifier.height(24.dp))
-        OutlinedTextField(
-            localUrl,
-            { localUrl = it },
-            label = { Text("Local URL (Wi‑Fi / LAN)") },
-            placeholder = { Text("http://192.168.1.187:3001") },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-        )
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(
-            externalUrl,
-            { externalUrl = it },
-            label = { Text("External URL (cellular / away)") },
-            placeholder = { Text("http://142.56.8.193:3001") },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-        )
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(
-            mobileToken,
-            { mobileToken = it },
-            label = { Text("Mobile API token (required away from home)") },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-        )
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(
-            adminUser,
-            { adminUser = it },
-            label = { Text("Username (optional)") },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-        )
-        OutlinedTextField(
-            adminPass,
-            { adminPass = it },
-            label = { Text("Password (optional)") },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-        )
+        OutlinedTextField(adminUser, { adminUser = it }, label = { Text("Username (external only)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+        OutlinedTextField(adminPass, { adminPass = it }, label = { Text("Password (external only)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+        OutlinedTextField(mobileToken, { mobileToken = it }, label = { Text("Mobile API token") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
         Row(
             Modifier.fillMaxWidth().padding(top = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -104,71 +59,53 @@ fun SetupScreen(onConnected: () -> Unit, initialError: String? = null) {
         Spacer(Modifier.height(16.dp))
         Button(
             onClick = {
-                val local = localUrl.trim()
-                val external = externalUrl.trim()
-                val token = mobileToken.trim()
-                val user = adminUser.trim()
-                val pass = adminPass.trim()
                 when {
-                    local.isBlank() && external.isBlank() ->
-                        error = "Enter at least a local or external URL"
-                    local.isNotBlank() && !AppPreferences.isValidUrl(local) ->
-                        error = "Invalid local URL"
-                    external.isNotBlank() && !AppPreferences.isValidUrl(external) ->
-                        error = "Invalid external URL"
-                    external.isNotBlank() && token.isBlank() && (user.isBlank() || pass.isBlank()) ->
-                        error = "Mobile API token required for external URL (or username and password)"
+                    adminUser.isBlank() || adminPass.isBlank() ->
+                        error = "Username and password required"
                     else -> scope.launch {
                         loading = true
                         error = null
-                        var connected = false
-                        try {
-                            app.preferences.setRememberMe(rememberMe)
-                            app.preferences.setServerUrls(
-                                local = local.takeIf { it.isNotBlank() },
-                                external = external.takeIf { it.isNotBlank() },
-                            )
-                            app.preferences.setAdminCredentials(
-                                user.takeIf { it.isNotBlank() },
-                                pass.takeIf { it.isNotBlank() },
-                            )
-                            app.preferences.setMobileToken(token.takeIf { it.isNotBlank() })
-                            app.invalidateApi()
-                            val result = app.repository.testConnection()
-                            if (result.isSuccess) {
-                                connected = true
-                                // Let setup screen dispose before swapping to main UI.
-                                delay(100)
+                        app.preferences.applyBuildServerUrls()
+                        app.preferences.setRememberMe(rememberMe)
+                        app.preferences.setAdminCredentials(adminUser.trim(), adminPass)
+                        app.preferences.setMobileToken(mobileToken.takeIf { it.isNotBlank() })
+                        app.invalidateApi()
+                        app.repository.testConnection()
+                            .onSuccess {
+                                com.bockmedia.console.data.analytics.DeviceAnalyticsReporter
+                                    .reportConnect(context)
                                 onConnected()
-                            } else {
-                                error = result.exceptionOrNull().let { e ->
-                                    when (e) {
-                                        is HttpException -> when (e.code()) {
-                                            401 -> "Authentication failed — check Mobile API token"
-                                            403 -> "External API blocked — set mobileApi.allowExternalAccess in config.json"
-                                            else -> "HTTP ${e.code()}"
-                                        }
-                                        else -> e?.message ?: "Connection failed"
+                            }
+                            .onFailure { e ->
+                                error = when (e) {
+                                    is HttpException -> when (e.code()) {
+                                        401 -> "Authentication failed — check username, password, and mobile API token"
+                                        403 -> "External API blocked — set mobileApi.allowExternalAccess in config.json"
+                                        else -> "HTTP ${e.code()}"
                                     }
+                                    else -> e.message ?: "Connection failed"
                                 }
                             }
-                        } catch (e: Exception) {
-                            error = e.message ?: "Sign in failed"
-                        }
-                        if (!connected) loading = false
+                        loading = false
                     }
                 }
             },
             enabled = !loading,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            if (loading) CircularProgressIndicator(Modifier.size(20.dp)) else Text("Sign in")
+            if (loading) {
+                BockProgressIndicator(
+                    size = 20.dp,
+                    color = MaterialTheme.colorScheme.onPrimary,
+                )
+            } else {
+                Text("Sign in")
+            }
         }
         Spacer(Modifier.height(16.dp))
         Text(
-            "Away from home: external URL + Mobile API token only.\n" +
-                "Leave username and password blank — they are not used.\n" +
-                "On Wi‑Fi: local URL works with no credentials.",
+            "Uses your home Wi‑Fi server when reachable, otherwise your external address.\n" +
+                "Password is only sent when away from home.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
