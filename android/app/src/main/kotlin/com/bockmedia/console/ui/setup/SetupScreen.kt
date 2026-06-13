@@ -45,8 +45,8 @@ fun SetupScreen(onConnected: () -> Unit) {
         Text("Bock Media", style = MaterialTheme.typography.headlineMedium)
         Text("Sign in to your server", style = MaterialTheme.typography.bodyMedium)
         Spacer(Modifier.height(24.dp))
-        OutlinedTextField(adminUser, { adminUser = it }, label = { Text("Username (external only)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-        OutlinedTextField(adminPass, { adminPass = it }, label = { Text("Password (external only)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+        OutlinedTextField(adminUser, { adminUser = it }, label = { Text("Username (optional)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+        OutlinedTextField(adminPass, { adminPass = it }, label = { Text("Password (optional)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
         OutlinedTextField(mobileToken, { mobileToken = it }, label = { Text("Mobile API token") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
         Row(
             Modifier.fillMaxWidth().padding(top = 8.dp),
@@ -60,15 +60,18 @@ fun SetupScreen(onConnected: () -> Unit) {
         Button(
             onClick = {
                 when {
-                    adminUser.isBlank() || adminPass.isBlank() ->
-                        error = "Username and password required"
+                    mobileToken.isBlank() && (adminUser.isBlank() || adminPass.isBlank()) ->
+                        error = "Enter Mobile API token (or username and password)"
                     else -> scope.launch {
                         loading = true
                         error = null
                         app.preferences.applyBuildServerUrls()
                         app.preferences.setRememberMe(rememberMe)
-                        app.preferences.setAdminCredentials(adminUser.trim(), adminPass)
-                        app.preferences.setMobileToken(mobileToken.takeIf { it.isNotBlank() })
+                        app.preferences.setAdminCredentials(
+                            adminUser.trim().takeIf { it.isNotBlank() },
+                            adminPass.takeIf { it.isNotBlank() },
+                        )
+                        app.preferences.setMobileToken(mobileToken.trim().takeIf { it.isNotBlank() })
                         app.invalidateApi()
                         app.repository.testConnection()
                             .onSuccess {

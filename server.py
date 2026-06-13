@@ -5,6 +5,7 @@ import os
 import json
 import math
 import glob
+import html
 import shutil
 import base64
 import random
@@ -33,7 +34,6 @@ app = Flask(__name__, static_folder=os.path.join(HERE, 'public'))
 # Service-health bookkeeping (surfaced by /api/health + the dashboard card).
 _START_TIME = time.time()
 _LAST_ALEXA_HIT = 0.0
-HEALTH_STATE_PATH = os.path.join(HERE, 'health_state.json')
 
 # External data locations are machine-specific and live outside this repo, so they
 # are configurable via environment variables (the defaults preserve the original
@@ -43,6 +43,7 @@ HEALTH_STATE_PATH = os.path.join(HERE, 'health_state.json')
 #   OURMEDIA_MUSIC_ROOT – root of the music library that gets streamed
 DB_PATH = os.environ.get('OURMEDIA_DB_PATH', '/mnt/bock/Music/music_organizer.db')
 DATA_DIR = os.environ.get('OURMEDIA_DATA_DIR', '/home/plex/.bockmedia')
+HEALTH_STATE_PATH = os.path.join(DATA_DIR, 'health_state.json')
 
 # ── DB helper ────────────────────────────────────────────────────────────────
 
@@ -218,8 +219,6 @@ def _api_auth_required():
         return False
     return _cfg_flag('mobileApi', 'allowExternalAccess')
 
-_console_auth_required = _api_auth_required
-
 def _auth_required():
     return Response('Authentication required', 401,
                     {'WWW-Authenticate': 'Basic realm="Bock Media"'})
@@ -299,10 +298,51 @@ def _verify_alexa_signature(raw_body, body_json):
         return 'request timestamp outside acceptance window'
     return None
 
+def _app_download_user():
+    try:
+        ad = load_config().get('appDownload') or {}
+    except Exception:
+        ad = {}
+    return (ad.get('username') or _web_username() or 'morejava').strip()
+
+def _app_download_password():
+    try:
+        ad = load_config().get('appDownload') or {}
+        pw = (ad.get('password') or '').strip()
+        if pw:
+            return pw
+    except Exception:
+        pass
+    return get_pref('WebPassword', '').strip()
+
+def _app_download_auth_ok():
+    stored = _app_download_password()
+    if not stored:
+        return False
+    auth = request.authorization
+    return bool(auth and auth.username == _app_download_user() and auth.password == stored)
+
+def _app_apk_path():
+    for p in (
+        os.path.join(DATA_DIR, 'bockmedia-console.apk'),
+        os.path.join(HERE, 'android', 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk'),
+        os.path.join(HERE, 'android', 'app', 'build', 'outputs', 'apk', 'release', 'app-release.apk'),
+    ):
+        if os.path.isfile(p):
+            return p
+    return None
+
+_APP_DOWNLOAD_PATHS = frozenset({'/app', '/download/bockmedia-console.apk'})
+
 @app.before_request
 def check_auth():
     if request.path == '/api/auth/info':
         return None
+
+    if request.path in _APP_DOWNLOAD_PATHS:
+        if _app_download_auth_ok():
+            return None
+        return _auth_required()
 
     if request.path.startswith('/stream/') or request.path.startswith('/artwork/'):
         ua = request.headers.get('User-Agent', '')
@@ -359,6 +399,78 @@ def static_files(filename):
     if filename.rsplit('.', 1)[-1].lower() in ('html', 'js', 'css'):
         resp = _no_cache(resp)
     return resp
+
+@app.route('/app')
+def app_download_page():
+    apk = _app_apk_path()
+    version = 'unknown'
+    if apk:
+        try:
+            with open(os.path.join(HERE, 'android', 'app', 'build.gradle.kts')) as f:
+                for line in f:
+                    if 'versionName' in line:
+                        version = line.split('"')[1]
+                        break
+        except Exception:
+            pass
+    size_mb = round(os.path.getsize(apk) / (1024 * 1024), 1) if apk else None
+    return _no_cache(Response(
+        _render_app_download_html(version, size_mb, apk is not None),
+        mimetype='text/html; charset=utf-8',
+    ))
+
+@app.route('/download/bockmedia-console.apk')
+def app_download_apk():
+    apk = _app_apk_path()
+    if not apk:
+        return Response('Android APK not built yet — run ./gradlew assembleDebug on the server', 404,
+                        {'Content-Type': 'text/plain; charset=utf-8'})
+    return send_file(
+        apk,
+        mimetype='application/vnd.android.package-archive',
+        as_attachment=True,
+        download_name='bockmedia-console.apk',
+        max_age=0,
+    )
+
+def _render_app_download_html(version, size_mb, available):
+    size_line = f'<p class="meta">Build {html.escape(version)} · {size_mb} MB</p>' if available and size_mb else ''
+    btn = (
+        '<a class="btn" href="/download/bockmedia-console.apk">Download APK</a>'
+        if available else
+        '<p class="warn">APK not available on server yet.</p>'
+    )
+    return f'''<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bock Media — Android app</title>
+<style>
+  body {{ font-family: system-ui, sans-serif; background: #f4f6f9; color: #333; margin: 0; min-height: 100vh;
+    display: flex; align-items: center; justify-content: center; padding: 24px; }}
+  .card {{ background: #fff; border-radius: 12px; padding: 32px; max-width: 420px; width: 100%;
+    box-shadow: 0 4px 24px rgba(0,0,0,.08); text-align: center; }}
+  h1 {{ font-size: 1.5rem; margin: 0 0 8px; color: #30426a; }}
+  .meta {{ color: #666; margin: 0 0 20px; font-size: .95rem; }}
+  .btn {{ display: inline-block; background: #30426a; color: #fff; padding: 14px 28px;
+    border-radius: 8px; font-weight: 600; text-decoration: none; }}
+  .btn:hover {{ background: #3d5285; }}
+  .steps {{ text-align: left; margin-top: 24px; font-size: .9rem; color: #555; }}
+  ol {{ margin: 8px 0 0; padding-left: 20px; }}
+</style></head><body>
+<div class="card">
+  <h1>Bock Media Console</h1>
+  <p>Android app for your server</p>
+  {size_line}
+  {btn}
+  <div class="steps">
+    <strong>Install</strong>
+    <ol>
+      <li>Download the APK</li>
+      <li>Allow installs from browser if prompted</li>
+      <li>Open app → enter external URL + Mobile API token</li>
+    </ol>
+  </div>
+</div></body></html>'''
 
 # ── API: Summary ─────────────────────────────────────────────────────────────
 
@@ -541,7 +653,8 @@ def alexa_remote_status():
     except Exception as e:
         return jsonify({'available': False, 'configured': False, 'authenticated': None, 'reason': str(e)})
     configured = alexa_remote.is_configured()
-    # authenticated uses a cached probe (never logs in inline); None when not configured.
+    if request.args.get('probe') in ('1', 'true', 'yes'):
+        alexa_remote.invalidate_auth_cache()
     authenticated = alexa_remote.is_authenticated() if configured else None
     login = alexa_remote.proxy_login_state() if configured else {}
     host = login.get('host') or alexa_remote.lan_ip()
@@ -604,883 +717,6 @@ def _read_health_state():
             return json.load(f)
     except Exception:
         return {}
-
-
-
-def _app_download_user():
-    try:
-        ad = load_config().get('appDownload') or {}
-    except Exception:
-        ad = {}
-    return (ad.get('username') or _web_username() or 'morejava').strip()
-
-def _app_download_password():
-    try:
-        ad = load_config().get('appDownload') or {}
-        pw = (ad.get('password') or '').strip()
-        if pw:
-            return pw
-    except Exception:
-        pass
-    return get_pref('WebPassword', '').strip()
-
-def _app_download_auth_ok():
-    stored = _app_download_password()
-    if not stored:
-        return False
-    auth = request.authorization
-    return bool(auth and auth.username == _app_download_user() and auth.password == stored)
-
-def _app_apk_path():
-    for p in (
-        os.path.join(DATA_DIR, 'bockmedia-console.apk'),
-        os.path.join(HERE, 'android', 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk'),
-        os.path.join(HERE, 'android', 'app', 'build', 'outputs', 'apk', 'release', 'app-release.apk'),
-    ):
-        if os.path.isfile(p):
-            return p
-    return None
-
-_APP_DOWNLOAD_PATHS = frozenset({'/app', '/download/bockmedia-console.apk'})
-
-def _basic_auth_ok():
-    stored = get_pref('WebPassword', '').strip()
-    if not stored:
-        return False
-    auth = request.authorization
-    return bool(auth and auth.username == _web_username() and auth.password == stored)
-
-def _mobile_api_bearer_value():
-    auth_header = request.headers.get('Authorization', '')
-    if auth_header.startswith('Bearer '):
-        return auth_header[7:].strip()
-    return (request.headers.get('X-BockMedia-Token') or '').strip()
-
-def _mobile_api_token_configured():
-    try:
-        return bool((load_config().get('mobileApi') or {}).get('token', '').strip())
-    except Exception:
-        return False
-
-def _mobile_api_token_ok():
-    token = _mobile_api_bearer_value()
-    if not token:
-        return False
-    try:
-        ma = load_config().get('mobileApi') or {}
-        expected = ma.get('token', '').strip()
-        if not expected or token != expected:
-            return False
-        ext = _is_external_request() and not _is_tunnel_request()
-        tun = _is_tunnel_request()
-        if ext:
-            return _cfg_flag('mobileApi', 'allowExternalAccess')
-        if tun:
-            return _cfg_flag('mobileApi', 'allowTunnelApi')
-        return True
-    except Exception:
-        return False
-
-def _mobile_api_only():
-    """True when this request authenticated via Bearer token (not Basic)."""
-    return _mobile_api_token_ok() and not _basic_auth_ok()
-
-def _redact_config(cfg):
-    redacted = dict(cfg)
-    for key in ('alexaRemote', 'mspOauth', 'claude', 'mobileApi'):
-        if key in redacted:
-            redacted[key] = {'_redacted': True}
-    return redacted
-
-def _api_auth_required():
-    """Credentials required for direct external hits (port-forward), not on LAN."""
-    if _is_tunnel_request() or _is_lan_request():
-        return False
-    return _cfg_flag('mobileApi', 'allowExternalAccess')
-
-_console_auth_required = _api_auth_required
-
-def _auth_required():
-    return Response('Authentication required', 401,
-                    {'WWW-Authenticate': 'Basic realm="Bock Media"'})
-
-def _forbidden(msg='Forbidden'):
-    return Response(msg, 403, {'Content-Type': 'text/plain; charset=utf-8'})
-
-# Alexa request-signature verification per
-# https://developer.amazon.com/en-US/docs/alexa/custom-skills/host-a-custom-skill-as-a-web-service.html
-EXPECTED_SKILL_APP_ID = 'amzn1.ask.skill.c13622d4-8780-4bea-93a5-0ded84307466'
-_ALEXA_CERT_HOST = 's3.amazonaws.com'
-_ALEXA_CERT_PATH_PREFIX = '/echo.api/'
-_ALEXA_SIG_SAN = 'echo-api.amazon.com'
-_ALEXA_TIMESTAMP_WINDOW_SEC = 150
-_ALEXA_CERT_CACHE = {}
-
-def _alexa_cert_url_ok(url):
-    p = urlparse(url or '')
-    return (p.scheme == 'https'
-            and p.hostname == _ALEXA_CERT_HOST
-            and p.path.startswith(_ALEXA_CERT_PATH_PREFIX)
-            and (p.port is None or p.port == 443))
-
-def _alexa_cert_validity_window(cert):
-    nbf = getattr(cert, 'not_valid_before_utc', None) or cert.not_valid_before
-    naf = getattr(cert, 'not_valid_after_utc', None) or cert.not_valid_after
-    return nbf, naf
-
-def _alexa_load_cert(url):
-    cached = _ALEXA_CERT_CACHE.get(url)
-    now = datetime.datetime.now(datetime.timezone.utc)
-    if cached is not None:
-        nbf, naf = _alexa_cert_validity_window(cached)
-        if nbf.tzinfo is None: nbf = nbf.replace(tzinfo=datetime.timezone.utc)
-        if naf.tzinfo is None: naf = naf.replace(tzinfo=datetime.timezone.utc)
-        if nbf <= now <= naf:
-            return cached
-    pem = urlopen(url, timeout=5).read()
-    cert = x509.load_pem_x509_certificate(pem, default_backend())
-    nbf, naf = _alexa_cert_validity_window(cert)
-    if nbf.tzinfo is None: nbf = nbf.replace(tzinfo=datetime.timezone.utc)
-    if naf.tzinfo is None: naf = naf.replace(tzinfo=datetime.timezone.utc)
-    if not (nbf <= now <= naf):
-        raise ValueError('certificate not within validity window')
-    san_ext = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
-    if _ALEXA_SIG_SAN not in san_ext.get_values_for_type(x509.DNSName):
-        raise ValueError(f'certificate SAN missing {_ALEXA_SIG_SAN}')
-    _ALEXA_CERT_CACHE[url] = cert
-    return cert
-
-def _verify_alexa_signature(raw_body, body_json):
-    cert_url = request.headers.get('SignatureCertChainUrl', '')
-    if not _alexa_cert_url_ok(cert_url):
-        return 'invalid SignatureCertChainUrl'
-    sig_b64 = request.headers.get('Signature', '')
-    if not sig_b64:
-        return 'missing Signature header'
-    try:
-        sig = base64.b64decode(sig_b64)
-    except Exception:
-        return 'unparsable Signature'
-    try:
-        cert = _alexa_load_cert(cert_url)
-    except Exception as e:
-        return f'cert load failed: {e}'
-    try:
-        cert.public_key().verify(sig, raw_body, rsa_padding.PKCS1v15(), hashes.SHA1())
-    except Exception:
-        return 'signature does not match request body'
-    ts_str = (body_json.get('request') or {}).get('timestamp', '')
-    try:
-        ts = datetime.datetime.strptime(ts_str.replace('Z', ''), '%Y-%m-%dT%H:%M:%S')
-        ts = ts.replace(tzinfo=datetime.timezone.utc)
-    except Exception:
-        return 'malformed request timestamp'
-    if abs((datetime.datetime.now(datetime.timezone.utc) - ts).total_seconds()) > _ALEXA_TIMESTAMP_WINDOW_SEC:
-        return 'request timestamp outside acceptance window'
-    return None
-
-@app.before_request
-def check_auth():
-    if request.path == '/api/auth/info':
-        return None
-
-    if request.path in _APP_DOWNLOAD_PATHS:
-        if _app_download_auth_ok():
-            return None
-        return _auth_required()
-
-    if request.path.startswith('/stream/') or request.path.startswith('/artwork/'):
-        ua = request.headers.get('User-Agent', '')
-        rng = request.headers.get('Range', '')
-        print(f"[STREAM] {request.method} {request.path} ua={ua!r} range={rng!r}", flush=True)
-
-    is_alexa_tunnel_path = any(request.path.startswith(p) for p in _ALEXA_TUNNEL_PREFIXES)
-    external = _is_external_request()
-    tunnel = _is_tunnel_request()
-
-    # Direct port-forward / public-IP access (:3001) — never expose Alexa paths or
-    # anonymous streams. Require admin Basic auth and/or mobileApi Bearer token.
-    if external and not tunnel:
-        if not _cfg_flag('mobileApi', 'allowExternalAccess'):
-            return _forbidden('External access disabled')
-        if any(request.path.startswith(p) for p in ('/alexa', '/music', '/oauth/')):
-            return _forbidden('Alexa endpoints use the Cloudflare tunnel only')
-        if _mobile_api_token_ok() or _basic_auth_ok():
-            return None
-        return _auth_required()
-
-    if tunnel and not is_alexa_tunnel_path:
-        if request.path.startswith('/api/') and (_mobile_api_token_ok() or _basic_auth_ok()):
-            return None
-        if request.path.startswith('/oauth/authorize') and _basic_auth_ok():
-            return None
-        if request.path == '/oauth/token' and request.method == 'POST':
-            # Handler validates MSP client_id/client_secret; still require tunnel proof above.
-            return None
-        return _forbidden()
-
-    if is_alexa_tunnel_path and (tunnel or not external):
-        return None
-
-    if request.path.startswith('/api/') and _mobile_api_token_ok():
-        return None
-
-    if (_is_lan_request() and not tunnel and request.path.startswith('/api/')
-            and request.path != '/api/auth/info' and _console_auth_required()
-            and not (_basic_auth_ok() or _mobile_api_token_ok())):
-        return _auth_required()
-
-    if (request.path.startswith('/api/') and request.path != '/api/auth/info'
-            and not (_basic_auth_ok() or _mobile_api_token_ok())
-            and _mobile_api_token_configured()
-            and not _is_lan_request()):
-        return _auth_required()
-
-    return None  # open when no WebPassword configured
-
-# ── Static files ─────────────────────────────────────────────────────────────
-
-PUBLIC = os.path.join(HERE, 'public')
-
-def _no_cache(resp):
-    """Force revalidation so UI changes show on a normal reload (no hard-refresh)."""
-    resp.headers['Cache-Control'] = 'no-cache, must-revalidate'
-    resp.headers['Pragma'] = 'no-cache'
-    resp.headers['Expires'] = '0'
-    return resp
-
-@app.route('/')
-def index():
-    return _no_cache(send_from_directory(PUBLIC, 'index.html'))
-
-@app.route('/app')
-def app_download_page():
-    apk = _app_apk_path()
-    version = 'unknown'
-    if apk:
-        try:
-            with open(os.path.join(HERE, 'android', 'app', 'build.gradle.kts')) as f:
-                for line in f:
-                    if 'versionName' in line:
-                        version = line.split('"')[1]
-                        break
-        except Exception:
-            pass
-    size_mb = round(os.path.getsize(apk) / (1024 * 1024), 1) if apk else None
-    return _no_cache(Response(
-        _render_app_download_html(version, size_mb, apk is not None),
-        mimetype='text/html; charset=utf-8',
-    ))
-
-@app.route('/download/bockmedia-console.apk')
-def app_download_apk():
-    apk = _app_apk_path()
-    if not apk:
-        return Response('Android APK not built yet — run ./gradlew assembleDebug on the server', 404,
-                        {'Content-Type': 'text/plain; charset=utf-8'})
-    return send_file(
-        apk,
-        mimetype='application/vnd.android.package-archive',
-        as_attachment=True,
-        download_name='bockmedia-console.apk',
-        max_age=0,
-    )
-
-def _render_app_download_html(version, size_mb, available):
-    size_line = f'<p class="meta">Build {html.escape(version)} · {size_mb} MB</p>' if available and size_mb else ''
-    btn = (
-        '<a class="btn" href="/download/bockmedia-console.apk">Download APK</a>'
-        if available else
-        '<p class="warn">APK not available on server yet.</p>'
-    )
-    return f'''<!DOCTYPE html>
-<html lang="en"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Bock Media — Android app</title>
-<style>
-  body {{ font-family: system-ui, sans-serif; background: #f4f6f9; color: #333; margin: 0; min-height: 100vh;
-    display: flex; align-items: center; justify-content: center; padding: 24px; }}
-  .card {{ background: #fff; border-radius: 12px; padding: 32px; max-width: 420px; width: 100%;
-    box-shadow: 0 4px 24px rgba(0,0,0,.08); text-align: center; }}
-  h1 {{ font-size: 1.5rem; margin: 0 0 8px; color: #30426a; }}
-  .meta {{ color: #666; margin: 0 0 20px; font-size: .95rem; }}
-  .btn {{ display: inline-block; background: #30426a; color: #fff; padding: 14px 28px;
-    border-radius: 8px; font-weight: 600; text-decoration: none; }}
-  .btn:hover {{ background: #3d5285; }}
-  .steps {{ text-align: left; margin-top: 24px; font-size: .9rem; color: #555; line-height: 1.5; }}
-  .warn {{ color: #b45309; }}
-</style></head><body>
-<div class="card">
-  <h1>Bock Media Console</h1>
-  <p>Android app for your server</p>
-  {size_line}
-  {btn}
-  <div class="steps">
-    <strong>Install</strong>
-    <ol>
-      <li>Download the APK</li>
-      <li>Allow installs from browser if prompted</li>
-      <li>Open app → enter external URL + Mobile API token</li>
-    </ol>
-  </div>
-</div></body></html>'''
-
-@app.route('/<path:filename>')
-def static_files(filename):
-    resp = send_from_directory(PUBLIC, filename)
-    # App shell (html/js/css) must always revalidate; let images/fonts cache.
-    if filename.rsplit('.', 1)[-1].lower() in ('html', 'js', 'css'):
-        resp = _no_cache(resp)
-    return resp
-
-# ── API: Summary ─────────────────────────────────────────────────────────────
-
-@app.route('/api/summary')
-def summary():
-    stats = _summary_stats()
-    if stats is None:
-        return jsonify({'error': 'library database unavailable', 'dbError': True}), 503
-    return jsonify(stats)
-
-
-def _summary_stats():
-    cached = catalog_cache.read_summary_cache(DATA_DIR)
-    if cached:
-        return cached
-    songs = db_one('SELECT COUNT(*) as count FROM songs_cache')
-    artists = db_one(
-        'SELECT COUNT(DISTINCT artist) as count FROM songs_cache '
-        'WHERE artist IS NOT NULL AND artist != ""',
-    )
-    albums = db_one(
-        'SELECT COUNT(DISTINCT album) as count FROM songs_cache '
-        'WHERE album IS NOT NULL AND album != ""',
-    )
-    if _db_last_error:
-        return None
-    watch_folders = 0
-    playlists = 0
-    try:
-        wf = ET.parse(os.path.join(DATA_DIR, 'WatchFolders.xml'))
-        watch_folders = len(wf.getroot().findall('WatchFolder'))
-    except Exception:
-        pass
-    try:
-        playlists_xml = os.path.join(DATA_DIR, 'ServerPlaylists.xml')
-        sidecar = catalog_cache.read_playlists_index(DATA_DIR, playlists_xml)
-        if sidecar is not None:
-            playlists = len(sidecar)
-        else:
-            with playlist_xml_lock(DATA_DIR, shared=True):
-                pl = ET.parse(playlists_xml)
-            playlists = len(pl.getroot().findall('Entry'))
-    except Exception:
-        pass
-    stats = {
-        'songs': songs.get('count', 0),
-        'artists': artists.get('count', 0),
-        'albums': albums.get('count', 0),
-        'playlists': playlists,
-        'watchFolders': watch_folders,
-    }
-    catalog_cache.write_summary_cache(DATA_DIR, stats)
-    return stats
-
-# ── API: Watch Folders ───────────────────────────────────────────────────────
-
-_WATCHFOLDERS_CACHE = {'ts': 0.0, 'items': None}
-_WATCHFOLDERS_TTL = 300.0
-
-
-def _watchfolders_payload():
-    now = time.time()
-    cached = _WATCHFOLDERS_CACHE
-    if cached['items'] is not None and (now - cached['ts']) < _WATCHFOLDERS_TTL:
-        return cached['items']
-    try:
-        tree = ET.parse(os.path.join(DATA_DIR, 'WatchFolders.xml'))
-        folders = []
-        for wf in tree.getroot().findall('WatchFolder'):
-            path = xml_text(wf, 'Path')
-            exists = os.path.isdir(path)
-
-            if exists:
-                prefix = path.rstrip('/') + '/'
-                row = db_one(
-                    "SELECT COUNT(*) AS cnt FROM songs_cache WHERE path LIKE ?",
-                    [prefix + '%'],
-                )
-                song_count = row.get('cnt', 0) if row else 0
-                try:
-                    m3u_count = sum(
-                        1 for f in os.listdir(path)
-                        if f.lower().endswith('.m3u')
-                    )
-                except Exception:
-                    m3u_count = 0
-                identified = song_count
-                playlists = m3u_count
-                status = 'Done' if (song_count > 0 or m3u_count > 0) else 'Empty'
-            else:
-                identified = 0
-                playlists = 0
-                status = 'Missing'
-
-            folders.append({
-                'guid':            xml_text(wf, 'Guid'),
-                'path':            path,
-                'label':           xml_text(wf, 'Label'),
-                'status':          status,
-                'count':           xml_int(wf, 'Count'),
-                'identifiedFiles': identified,
-                'errors':          xml_int(wf, 'Errors'),
-                'playlists':       playlists,
-                'type':            xml_text(wf, 'Type'),
-            })
-        _WATCHFOLDERS_CACHE['ts'] = now
-        _WATCHFOLDERS_CACHE['items'] = folders
-        return folders
-    except Exception:
-        return []
-
-
-@app.route('/api/watchfolders')
-def watchfolders():
-    return jsonify(_watchfolders_payload())
-
-# ── API: Playlists ───────────────────────────────────────────────────────────
-
-_API_MAX_LIMIT = 500
-
-
-def _paginate_args(default_limit=50):
-    try:
-        page = max(1, int(request.args.get('page', 1) or 1))
-    except (TypeError, ValueError):
-        page = 1
-    try:
-        limit = int(request.args.get('limit', default_limit) or default_limit)
-    except (TypeError, ValueError):
-        limit = default_limit
-    return page, min(max(limit, 1), _API_MAX_LIMIT)
-
-
-@app.route('/api/playlists')
-def playlists():
-    page, limit = _paginate_args(50)
-    search = request.args.get('search', '').lower()
-    sort_by = (request.args.get('sortBy') or 'name').strip().lower()
-    order = (request.args.get('order') or 'asc').strip().lower()
-    if sort_by in ('tracks', 'track', 'trackcount', 'count'):
-        sort_by = 'trackCount'
-    elif sort_by != 'name':
-        sort_by = 'name'
-    reverse = order == 'desc'
-
-    try:
-        all_playlists = _load_playlist_items()
-        if search:
-            all_playlists = [p for p in all_playlists if search in (p.get('name') or '').lower()]
-
-        if sort_by == 'trackCount':
-            all_playlists.sort(key=lambda x: (x.get('trackCount') or 0, (x.get('name') or '').lower()),
-                               reverse=reverse)
-        else:
-            all_playlists.sort(key=lambda x: (x.get('name') or '').lower(),
-                               reverse=reverse)
-
-        total = len(all_playlists)
-        start = (page - 1) * limit
-        items = all_playlists[start:start + limit]
-        return jsonify({'items': items, 'total': total, 'sortBy': sort_by, 'order': 'desc' if reverse else 'asc'})
-    except Exception as e:
-        print(f'Playlists error: {e}')
-        return jsonify({'error': 'playlist catalog unavailable'}), 503
-
-@app.route('/api/playlists/rename', methods=['POST'])
-def rename_playlist():
-    """Rename a playlist by its stable ID. Both UI and Alexa fuzzy match
-    will then use the new name immediately (no restart needed)."""
-    data = request.get_json() or {}
-    pid     = (data.get('id') or '').strip()
-    new_name = (data.get('name') or '').strip()
-    if not pid:
-        return jsonify({'error': 'id required'}), 400
-    if not new_name:
-        return jsonify({'error': 'name required'}), 400
-    try:
-        ET.register_namespace('xsd', _XSD)
-        ET.register_namespace('xsi', _XSI)
-        with playlist_xml_lock(DATA_DIR, exclusive=True):
-            tree = ET.parse(PLAYLISTS_XML)
-            key, _entry = _find_playlist_key(tree.getroot(), pid)
-            if key is None:
-                return jsonify({'error': 'unknown playlist id'}), 404
-            name_el = key.find('Name')
-            if name_el is None:
-                name_el = ET.SubElement(key, 'Name')
-            old = name_el.text or ''
-            name_el.text = new_name
-            # Bock-managed m3u paths embed the sanitized name — move the file
-            # and repoint SourceID so the old path doesn't orphan.
-            src_el = key.find('SourceID')
-            old_src = (src_el.text or '').strip() if src_el is not None else ''
-            if (old_src and os.path.dirname(os.path.abspath(old_src))
-                    == os.path.abspath(BOCK_PLAYLIST_DIR)):
-                new_src = _m3u_path_for_bock(pid, new_name)
-                if new_src != old_src:
-                    try:
-                        if os.path.isfile(old_src):
-                            os.replace(old_src, new_src)
-                        src_el.text = new_src
-                    except OSError:
-                        pass
-            _backup_playlists_xml()
-            _atomic_xml_write(PLAYLISTS_XML, tree)
-        _invalidate_playlist_entries_cache()
-        _PLAYLIST_TRACKS_CACHE.pop(pid, None)
-        return jsonify({'ok': True, 'id': pid, 'oldName': old, 'name': new_name})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-# ── API: Alexa remote control ("Play on device") ─────────────────────────────
-# Uses the unofficial Alexa API (alexapy) to inject a text command on a chosen
-# Echo, since Amazon gives skills/MSP no way to initiate playback on a device.
-
-def _alexa_alias():
-    return ((load_config().get('msp') or {}).get('alias') or 'bock media').strip()
-
-
-def _alexa_remote_http_status(code):
-    if code == 'not_authenticated':
-        return 401
-    if code in ('not_configured', 'password_required', 'device_not_found', 'invalid_action'):
-        return 400
-    return 500
-
-def _alexa_login_browser_host(bind_host):
-    """Host name to show for the OAuth proxy — reachable from the current client."""
-    bind_host = (bind_host or '').strip() or '127.0.0.1'
-    cfg_host = ((load_config().get('alexaRemote') or {}).get('loginProxyHost') or '').strip()
-    if cfg_host:
-        return cfg_host
-    req_host = _host_ip()
-    if not _is_lan_request() and req_host and not _is_private_ip(req_host) and _is_private_ip(bind_host):
-        return req_host
-    return bind_host
-
-
-def _alexa_remote_payload(probe=False):
-    try:
-        import alexa_remote
-    except Exception as e:
-        return {'available': False, 'configured': False, 'authenticated': None, 'reason': str(e)}
-    configured = alexa_remote.is_configured()
-    if not configured:
-        authenticated = None
-    elif probe:
-        authenticated = alexa_remote.is_authenticated(probe=True)
-    else:
-        authenticated = alexa_remote.cached_authenticated()
-    login = alexa_remote.proxy_login_state() if configured else {}
-    bind_host = login.get('host') or alexa_remote.lan_ip()
-    port = login.get('port') or int((alexa_remote.cfg() or {}).get('loginProxyPort') or 3005)
-    browser_host = _alexa_login_browser_host(bind_host)
-    raw_url = login.get('url')
-    if raw_url and browser_host != bind_host:
-        login_url = f'http://{browser_host}:{port}'
-    else:
-        login_url = raw_url or f'http://{browser_host}:{port}'
-    login_status = login.get('status') or 'idle'
-    login_error = login.get('error')
-    return {
-        'available': True,
-        'configured': configured,
-        'authenticated': authenticated,
-        'deviceCount': alexa_remote.cached_device_count() if configured else 0,
-        'loginCommand': f'python3 scripts/alexa_login.py --proxy --host {bind_host} --port {port}',
-        'loginProxyPort': port,
-        'loginProxyHost': browser_host,
-        'loginUrl': login_url,
-        'url': login_url,
-        'loginStatus': login_status,
-        'status': login_status,
-        'loginError': login_error,
-        'error': login_error,
-    }
-
-
-@app.route('/api/alexa_remote/status')
-def alexa_remote_status():
-    if _console_auth_required() and not (_basic_auth_ok() or _mobile_api_token_ok()):
-        return _auth_required()
-    probe = request.args.get('probe', '0').lower() in ('1', 'true', 'yes')
-    return jsonify(_alexa_remote_payload(probe=probe))
-
-
-@app.route('/api/alexa_remote/login', methods=['GET'])
-def alexa_remote_login_state():
-    if _console_auth_required() and not (_basic_auth_ok() or _mobile_api_token_ok()):
-        return _auth_required()
-    try:
-        import alexa_remote
-    except Exception as e:
-        return jsonify({'error': str(e)}), 503
-    probe = request.args.get('probe', '1').lower() in ('1', 'true', 'yes')
-    return jsonify(_alexa_remote_payload(probe=probe))
-
-
-@app.route('/api/alexa_remote/login/start', methods=['POST'])
-def alexa_remote_login_start():
-    if _console_auth_required() and not (_basic_auth_ok() or _mobile_api_token_ok()):
-        return _auth_required()
-    body = request.get_json(silent=True) or {}
-    try:
-        import alexa_remote
-        alexa_remote.start_proxy_login(
-            host=(body.get('host') or '').strip() or None,
-            port=body.get('port'),
-        )
-        payload = _alexa_remote_payload(probe=False)
-        payload['ok'] = True
-        return jsonify(payload)
-    except ImportError:
-        return jsonify({'error': 'alexapy not installed', 'code': 'not_installed'}), 503
-    except Exception as e:
-        code = str(e)
-        status = 400 if code in ('not_configured', 'password_required') else 500
-        return jsonify({'error': code, 'code': code.split(' — ')[0]}), status
-
-
-@app.route('/api/alexa_remote/login/stop', methods=['POST'])
-def alexa_remote_login_stop():
-    if _console_auth_required() and not (_basic_auth_ok() or _mobile_api_token_ok()):
-        return _auth_required()
-    try:
-        import alexa_remote
-        alexa_remote.stop_proxy_login()
-        payload = _alexa_remote_payload(probe=False)
-        payload['ok'] = True
-        return jsonify(payload)
-    except ImportError:
-        return jsonify({'error': 'alexapy not installed'}), 503
-
-def _read_health_state():
-    try:
-        with open(HEALTH_STATE_PATH) as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-@app.route('/api/health')
-def health():
-    """Single-pane service health for the dashboard. Merges the out-of-process
-    watchdog snapshot (health_state.json: tunnel/backend reachability, public
-    latency, alexapy auth) with in-process facts (uptime, last /alexa hit)."""
-    hs = _read_health_state()
-    now = time.time()
-    state_age = (now - hs.get('ts', 0)) if hs.get('ts') else None
-    # The watchdog runs every 60s; treat a >180s-old snapshot as stale/unknown.
-    fresh = state_age is not None and state_age < 180
-    last_hit = _LAST_ALEXA_HIT or None
-
-    # Skill testing-enablement: the 6-hourly cron can drop a small marker; if
-    # absent we report unknown rather than guessing.
-    skill_testing = 'unknown'
-    try:
-        with open(os.path.join(HERE, 'skill_enablement_state.json')) as f:
-            skill_testing = bool((json.load(f) or {}).get('enabled'))
-    except Exception:
-        pass
-
-    plex = {'configured': False, 'reachable': None}
-    try:
-        import plex_client
-        plex = plex_client.status()
-    except Exception:
-        pass
-
-    return jsonify({
-        'status': 'ok' if fresh else 'degraded',
-        'uptimeSeconds':   int(now - _START_TIME),
-        'lastAlexaHit':    last_hit,
-        'lastAlexaHitAgo': int(now - last_hit) if last_hit else None,
-        'watchdogFresh':   fresh,
-        'watchdogAgeSeconds': int(state_age) if state_age is not None else None,
-        'backend':         hs.get('backend') if fresh else None,
-        'tunnel':          hs.get('tunnel') if fresh else None,
-        'backendHttp':     hs.get('backendHttp') if fresh else None,
-        'tunnelReachable': hs.get('tunnelReachable') if fresh else None,
-        'publicLatencyMs': hs.get('publicLatencyMs') if fresh else None,
-        'publicStatus':    hs.get('publicStatus') if fresh else None,
-        'alexaAuth':       hs.get('alexaAuth') if fresh else None,
-        'skillTesting':    skill_testing,
-        'plexConfigured':  plex.get('configured'),
-        'plexReachable':   plex.get('reachable'),
-    })
-
-# ── Plex sync status (dashboard panel) ───────────────────────────────────────
-
-PLEX_SYNC_LOG = os.path.join(HERE, 'plex-sync.log')
-PLEX_SYNC_STATE = os.path.join(
-    os.environ.get('OURMEDIA_MUSIC_ROOT', '/mnt/bock/Music'),
-    'exportedPlaylists', 'plex', '.plex_sync_state.json',
-)
-
-@app.route('/api/plex_sync/status')
-def plex_sync_status():
-    return jsonify(_plex_sync_payload())
-
-# ── Favorites (starred tracks) ───────────────────────────────────────────────
-
-FAVORITES_PATH = os.path.join(DATA_DIR, 'favorites.json')
-_FAVORITES_LOCK = threading.Lock()
-
-def _load_favorites():
-    with _FAVORITES_LOCK:
-        try:
-            with open(FAVORITES_PATH) as f:
-                data = json.load(f)
-            return data if isinstance(data, list) else []
-        except Exception:
-            return []
-
-def _save_favorites(items):
-    with _FAVORITES_LOCK:
-        _atomic_json_write(FAVORITES_PATH, items)
-
-@app.route('/api/favorites', methods=['GET'])
-def list_favorites():
-    return jsonify({'items': _load_favorites()})
-
-@app.route('/api/favorites', methods=['POST'])
-def add_favorite():
-    body = request.get_json(silent=True) or {}
-    path = (body.get('path') or '').strip()
-    if not path:
-        return jsonify({'error': 'path required'}), 400
-    title, artist, album, _ = track_metadata(path)
-    item = {
-        'path': path,
-        'title': body.get('title') or title,
-        'artist': body.get('artist') or artist,
-        'album': body.get('album') or album,
-        'addedAt': time.time(),
-    }
-    items = _load_favorites()
-    if not any(x.get('path') == path for x in items):
-        items.insert(0, item)
-        _save_favorites(items[:200])
-    return jsonify({'ok': True, 'item': item})
-
-@app.route('/api/favorites', methods=['DELETE'])
-def remove_favorite():
-    body = request.get_json(silent=True) or {}
-    path = (body.get('path') or '').strip()
-    if not path:
-        return jsonify({'error': 'path required'}), 400
-    items = [x for x in _load_favorites() if x.get('path') != path]
-    _save_favorites(items)
-    return jsonify({'ok': True})
-
-@app.route('/api/dashboard/quick')
-def dashboard_quick():
-    return jsonify(_dashboard_quick_payload())
-
-
-def _dashboard_quick_payload():
-    """Recent unique plays + favorites for the dashboard."""
-    seen = set()
-    recent = []
-    for row in reversed(_read_stream_history()):
-        if row.get('test'):
-            continue
-        key = row.get('filepath') or f"{row.get('track')}|{row.get('artist')}"
-        if key in seen:
-            continue
-        seen.add(key)
-        recent.append({
-            'track': row.get('track'),
-            'artist': row.get('artist'),
-            'album': row.get('album'),
-            'filepath': row.get('filepath'),
-            'device': row.get('device'),
-            'date': row.get('date') or row.get('timestamp'),
-        })
-        if len(recent) >= 5:
-            break
-    return {'recent': recent, 'favorites': _load_favorites()[:20]}
-
-
-def _recent_page_payload(page=1, limit=10):
-    try:
-        tree = ET.parse(os.path.join(DATA_DIR, 'PlaylistHistory.xml'))
-        all_entries = list(tree.getroot().findall('Entry'))
-        all_entries.reverse()
-
-        result = []
-        criteria_types = ('Playlist', 'Song', 'Genre', 'Artist', 'Album')
-        for entry in all_entries:
-            val = entry.find('Value')
-            if val is None:
-                continue
-            d = {c.tag: c.text for c in val}
-            heard_type = heard_val = found_type = found_val = None
-            for ctype in criteria_types:
-                if f'Criteria{ctype}' in d and d[f'Criteria{ctype}']:
-                    heard_type = ctype
-                    heard_val = d[f'Criteria{ctype}']
-                if f'Found{ctype}' in d and d[f'Found{ctype}']:
-                    found_type = ctype
-                    found_val = d[f'Found{ctype}']
-            if not heard_val:
-                continue
-            track_count = d.get('TrackCount', '')
-            result.append({
-                'heard': f'{heard_type} = {heard_val}' if heard_type else heard_val,
-                'found': f'{found_type} = {found_val} ({track_count})' if found_type else f'({track_count})',
-                'success': d.get('Success', '0') == '1',
-                'timestamp': d.get('TimeStamp', ''),
-            })
-
-        total = len(result)
-        start = (page - 1) * limit
-        return {'items': result[start:start + limit], 'total': total}
-    except Exception as e:
-        print(f'Recent error: {e}')
-        return {'items': [], 'total': 0}
-
-
-def _plex_sync_payload():
-    state = {}
-    state_mtime = None
-    if os.path.isfile(PLEX_SYNC_STATE):
-        try:
-            state_mtime = os.path.getmtime(PLEX_SYNC_STATE)
-            with open(PLEX_SYNC_STATE) as f:
-                state = json.load(f) or {}
-        except Exception:
-            pass
-    log_lines = []
-    log_mtime = None
-    if os.path.isfile(PLEX_SYNC_LOG):
-        try:
-            log_mtime = os.path.getmtime(PLEX_SYNC_LOG)
-            with open(PLEX_SYNC_LOG, encoding='utf-8', errors='replace') as f:
-                log_lines = f.readlines()[-15:]
-        except Exception:
-            pass
-    return {
-        'playlistCount': len(state) if isinstance(state, dict) else 0,
-        'statePath': PLEX_SYNC_STATE,
-        'stateUpdatedAt': state_mtime,
-        'logPath': PLEX_SYNC_LOG,
-        'logUpdatedAt': log_mtime,
-        'logTail': [ln.rstrip() for ln in log_lines],
-        'cronHint': '*/5 * * * * scripts/sync_plex_playlists.py',
-    }
-
-
 
 @app.route('/api/health')
 def health():
@@ -4449,7 +3685,7 @@ def now_playing():
 
 # ── Config ───────────────────────────────────────────────────────────────────
 
-CONFIG_PATH = os.path.join(HERE, 'config.json')
+CONFIG_PATH = os.path.join(DATA_DIR, 'config.json')
 
 _config_cache: dict = {}
 _config_mtime: float = 0.0

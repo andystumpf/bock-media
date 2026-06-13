@@ -22,7 +22,7 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.environ.get('OURMEDIA_DATA_DIR', os.path.expanduser('~/.bockmedia'))
-CONFIG_PATH = os.path.join(HERE, 'config.json')
+CONFIG_PATH = os.path.join(DATA_DIR, 'config.json')
 
 # Device families that can render audio (exclude Fire TV remotes, the app, etc.)
 _PLAYABLE_FAMILIES = {'ECHO', 'ROOK', 'KNIGHT', 'WHA', 'FIRE_TV', 'TABLET'}

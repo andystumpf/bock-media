@@ -178,6 +178,7 @@ class AppPreferences(private val context: Context) {
                 hostOf(localUrl)?.let { add(it) }
                 add("localhost")
                 add("127.0.0.1")
+                add("10.0.2.2") // Android emulator → host machine
             }
         }
     }
