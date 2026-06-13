@@ -15,10 +15,11 @@ import com.bockmedia.console.BuildConfig
 import com.bockmedia.console.data.local.AppPreferences
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import retrofit2.HttpException
 
 @Composable
-fun SetupScreen(onConnected: () -> Unit) {
+fun SetupScreen(onConnected: () -> Unit, initialError: String? = null) {
     val context = LocalContext.current
     val app = remember { BockMediaApp.get(context) }
     val scope = rememberCoroutineScope()
@@ -28,7 +29,7 @@ fun SetupScreen(onConnected: () -> Unit) {
     var adminPass by remember { mutableStateOf(BuildConfig.DEFAULT_ADMIN_PASSWORD) }
     var mobileToken by remember { mutableStateOf(BuildConfig.DEFAULT_MOBILE_API_TOKEN) }
     var rememberMe by remember { mutableStateOf(true) }
-    var error by remember { mutableStateOf<String?>(null) }
+    var error by remember { mutableStateOf(initialError) }
     var loading by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
@@ -70,9 +71,28 @@ fun SetupScreen(onConnected: () -> Unit) {
             singleLine = true,
         )
         Spacer(Modifier.height(8.dp))
-        OutlinedTextField(adminUser, { adminUser = it }, label = { Text("Username (external only)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-        OutlinedTextField(adminPass, { adminPass = it }, label = { Text("Password (external only)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-        OutlinedTextField(mobileToken, { mobileToken = it }, label = { Text("Mobile API token") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+        OutlinedTextField(
+            mobileToken,
+            { mobileToken = it },
+            label = { Text("Mobile API token (required away from home)") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+        )
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            adminUser,
+            { adminUser = it },
+            label = { Text("Username (optional)") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+        )
+        OutlinedTextField(
+            adminPass,
+            { adminPass = it },
+            label = { Text("Password (optional)") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+        )
         Row(
             Modifier.fillMaxWidth().padding(top = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -86,6 +106,9 @@ fun SetupScreen(onConnected: () -> Unit) {
             onClick = {
                 val local = localUrl.trim()
                 val external = externalUrl.trim()
+                val token = mobileToken.trim()
+                val user = adminUser.trim()
+                val pass = adminPass.trim()
                 when {
                     local.isBlank() && external.isBlank() ->
                         error = "Enter at least a local or external URL"
@@ -93,32 +116,46 @@ fun SetupScreen(onConnected: () -> Unit) {
                         error = "Invalid local URL"
                     external.isNotBlank() && !AppPreferences.isValidUrl(external) ->
                         error = "Invalid external URL"
-                    external.isNotBlank() && (adminUser.isBlank() || adminPass.isBlank()) ->
-                        error = "Username and password required for external URL"
+                    external.isNotBlank() && token.isBlank() && (user.isBlank() || pass.isBlank()) ->
+                        error = "Mobile API token required for external URL (or username and password)"
                     else -> scope.launch {
                         loading = true
                         error = null
-                        app.preferences.setRememberMe(rememberMe)
-                        app.preferences.setServerUrls(
-                            local = local.takeIf { it.isNotBlank() },
-                            external = external.takeIf { it.isNotBlank() },
-                        )
-                        app.preferences.setAdminCredentials(adminUser.trim(), adminPass)
-                        app.preferences.setMobileToken(mobileToken.takeIf { it.isNotBlank() })
-                        app.invalidateApi()
-                        app.repository.testConnection()
-                            .onSuccess { onConnected() }
-                            .onFailure { e ->
-                                error = when (e) {
-                                    is HttpException -> when (e.code()) {
-                                        401 -> "Authentication failed — check username, password, and mobile API token"
-                                        403 -> "External API blocked — set mobileApi.allowExternalAccess in config.json"
-                                        else -> "HTTP ${e.code()}"
+                        var connected = false
+                        try {
+                            app.preferences.setRememberMe(rememberMe)
+                            app.preferences.setServerUrls(
+                                local = local.takeIf { it.isNotBlank() },
+                                external = external.takeIf { it.isNotBlank() },
+                            )
+                            app.preferences.setAdminCredentials(
+                                user.takeIf { it.isNotBlank() },
+                                pass.takeIf { it.isNotBlank() },
+                            )
+                            app.preferences.setMobileToken(token.takeIf { it.isNotBlank() })
+                            app.invalidateApi()
+                            val result = app.repository.testConnection()
+                            if (result.isSuccess) {
+                                connected = true
+                                // Let setup screen dispose before swapping to main UI.
+                                delay(100)
+                                onConnected()
+                            } else {
+                                error = result.exceptionOrNull().let { e ->
+                                    when (e) {
+                                        is HttpException -> when (e.code()) {
+                                            401 -> "Authentication failed — check Mobile API token"
+                                            403 -> "External API blocked — set mobileApi.allowExternalAccess in config.json"
+                                            else -> "HTTP ${e.code()}"
+                                        }
+                                        else -> e?.message ?: "Connection failed"
                                     }
-                                    else -> e.message ?: "Connection failed"
                                 }
                             }
-                        loading = false
+                        } catch (e: Exception) {
+                            error = e.message ?: "Sign in failed"
+                        }
+                        if (!connected) loading = false
                     }
                 }
             },
@@ -129,8 +166,9 @@ fun SetupScreen(onConnected: () -> Unit) {
         }
         Spacer(Modifier.height(16.dp))
         Text(
-            "Tries local URL first (no password). Falls back to external when away.\n" +
-                "Password is only sent to the external URL.",
+            "Away from home: external URL + Mobile API token only.\n" +
+                "Leave username and password blank — they are not used.\n" +
+                "On Wi‑Fi: local URL works with no credentials.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

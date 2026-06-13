@@ -47,6 +47,11 @@ from urllib.parse import quote
 from urllib.request import urlopen
 from xml.sax.saxutils import escape
 
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+from playlist_xml_lock import playlist_xml_lock
+
 PLEX_URL   = os.environ.get('OURMEDIA_PLEX_URL', 'http://localhost:32400').rstrip('/')
 DATA_DIR   = os.environ.get('OURMEDIA_DATA_DIR', '/home/plex/.bockmedia')
 MUSIC_ROOT = os.environ.get('OURMEDIA_MUSIC_ROOT', '/mnt/bock/Music')
@@ -225,6 +230,11 @@ def main():
             tracks = [t for t in fetch_tracks(key, token) if os.path.isfile(t)]
             if len(tracks) < args.min_tracks:
                 skipped += 1
+                # Dropped below the threshold: delete the stale .m3u and leave
+                # it out of new_state so its <Entry> is pruned from the XML.
+                if not args.dry_run and prev and prev.get('m3u') and os.path.isfile(prev['m3u']):
+                    try: os.remove(prev['m3u'])
+                    except OSError: pass
                 continue
             track_count = len(tracks)
             if not args.dry_run:
@@ -263,44 +273,61 @@ def main():
     # ── Merge into ServerPlaylists.xml ──────────────────────────────────────
     ET.register_namespace('xsd', XSD)
     ET.register_namespace('xsi', XSI)
-    tree = ET.parse(SERVER_PLAYLISTS)
-    root = tree.getroot()
+    with playlist_xml_lock(DATA_DIR, exclusive=True):
+        tree = ET.parse(SERVER_PLAYLISTS)
+        root = tree.getroot()
 
-    removed_plex = removed_dupe = kept = 0
-    for entry in list(root.findall('Entry')):
-        key = entry.find('Key')
-        if key is None:
-            continue
-        src = (key.findtext('SourceName') or '').strip().lower()
-        nm = (key.findtext('Name') or '').strip().lower()
-        if src == SOURCE_MARKER:
-            root.remove(entry); removed_plex += 1
-        elif nm in synced_names:
-            root.remove(entry); removed_dupe += 1
+        removed_plex = removed_dupe = kept = 0
+        for entry in list(root.findall('Entry')):
+            key = entry.find('Key')
+            if key is None:
+                continue
+            src = (key.findtext('SourceName') or '').strip().lower()
+            nm = (key.findtext('Name') or '').strip().lower()
+            if src == SOURCE_MARKER:
+                root.remove(entry); removed_plex += 1
+            elif nm in synced_names:
+                root.remove(entry); removed_dupe += 1
+            else:
+                kept += 1
+
+        for _, xml_str in entries:
+            root.append(ET.fromstring(xml_str))
+
+        vlog(f'Existing rows: kept {kept} My-Media, replaced {removed_dupe} name-dupes, '
+             f'rebuilt {removed_plex} prior Plex rows.')
+
+        changed_anything = bool(created or updated or deleted or removed_dupe
+                                or removed_plex != len(entries))
+        if args.dry_run:
+            log('DRY RUN — no files written.')
+            return 0
+
+        wrote_xml = False
+        if changed_anything or removed_plex != len(entries):
+            bak = f'{SERVER_PLAYLISTS}.{_dt.datetime.now():%Y%m%d-%H%M%S}.bak'
+            shutil.copy2(SERVER_PLAYLISTS, bak)
+            # Atomic write (temp file + rename) so a crash never leaves a
+            # truncated ServerPlaylists.xml behind.
+            tmp = SERVER_PLAYLISTS + '.tmp'
+            tree.write(tmp, xml_declaration=True, encoding='utf-8')
+            os.replace(tmp, SERVER_PLAYLISTS)
+            wrote_xml = True
+            log(f'Wrote ServerPlaylists.xml ({len(root.findall("Entry"))} entries). Backup: {bak}')
         else:
-            kept += 1
+            vlog('No playlist changes; ServerPlaylists.xml left untouched.')
+        # Save the cache only after the XML is on disk, so a crash can't leave
+        # the cache ahead of the XML (which would skip the re-sync next run).
+        save_state(new_state)
 
-    for _, xml_str in entries:
-        root.append(ET.fromstring(xml_str))
-
-    vlog(f'Existing rows: kept {kept} My-Media, replaced {removed_dupe} name-dupes, '
-         f'rebuilt {removed_plex} prior Plex rows.')
-
-    changed_anything = bool(created or updated or deleted or removed_dupe
-                            or removed_plex != len(entries))
-    if args.dry_run:
-        log('DRY RUN — no files written.')
-        return 0
-
-    # Always refresh state; only rewrite the (large) XML + backup when needed.
-    save_state(new_state)
-    if changed_anything or removed_plex != len(entries):
-        bak = f'{SERVER_PLAYLISTS}.{_dt.datetime.now():%Y%m%d-%H%M%S}.bak'
-        shutil.copy2(SERVER_PLAYLISTS, bak)
-        tree.write(SERVER_PLAYLISTS, xml_declaration=True, encoding='utf-8')
-        log(f'Wrote ServerPlaylists.xml ({len(root.findall("Entry"))} entries). Backup: {bak}')
-    else:
-        vlog('No playlist changes; ServerPlaylists.xml left untouched.')
+    # Sidecar rebuild takes its own shared lock — must run after the exclusive
+    # lock above is released or it would deadlock against ourselves.
+    if wrote_xml:
+        try:
+            import catalog_cache
+            catalog_cache.rebuild_playlists_index_from_xml(DATA_DIR, SERVER_PLAYLISTS)
+        except Exception as ex:
+            log(f'playlist index sidecar: {ex}')
     return 0
 
 

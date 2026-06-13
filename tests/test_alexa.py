@@ -223,7 +223,11 @@ class TestAudioPlayerEvents:
         post_alexa('AudioPlayer.PlaybackStarted', token=token, device_id=did)
         post_alexa('AudioPlayer.PlaybackStopped', token=token, device_id=did)
         np = client.get('/api/nowplaying_devices').get_json()['items']
-        assert all(item['deviceId'] != did for item in np), 'stopped device should be filtered out'
+        # Recently-stopped rows stay visible (resume window) but must be
+        # flagged stopped, never playing/paused.
+        rows = [item for item in np if item['deviceId'] == did]
+        assert all(item['stopped'] and not item['paused'] for item in rows), \
+            'stopped device must be flagged stopped, not paused/playing'
 
     def test_finished_marks_not_playing(self, client, post_alexa, sample_track, isolated_paths):
         token = server.encode_token({'tracks': [sample_track['path']], 'idx': 0})
@@ -231,7 +235,8 @@ class TestAudioPlayerEvents:
         post_alexa('AudioPlayer.PlaybackStarted', token=token, device_id=did)
         post_alexa('AudioPlayer.PlaybackFinished', token=token, device_id=did)
         np = client.get('/api/nowplaying_devices').get_json()['items']
-        assert all(item['deviceId'] != did for item in np)
+        rows = [item for item in np if item['deviceId'] == did]
+        assert all(item['stopped'] and not item['paused'] for item in rows)
 
     def test_failed_advances_to_next(self, post_alexa, sample_track):
         """PlaybackFailed advances to next track when one is available"""

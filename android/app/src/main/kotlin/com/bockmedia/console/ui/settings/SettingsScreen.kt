@@ -16,6 +16,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
@@ -33,17 +34,19 @@ fun SettingsScreen(
     var remote by remember { mutableStateOf<com.bockmedia.console.data.api.dto.AlexaRemoteStatus?>(null) }
     var defaultPlaylist by remember { mutableStateOf("") }
     var message by remember { mutableStateOf<String?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
 
     suspend fun load() {
         loading = true
+        error = null
         runCatching {
-            settings = repository.settings().settings
-            val cfg = repository.config().config
-            publicUrl = cfg?.get("publicUrl")?.jsonPrimitive?.content ?: ""
-            launchPrompt = cfg?.get("launchPlaylistPrompt")?.jsonPrimitive?.content == "true"
+            settings = repository.settings()
+            val cfg = repository.config()
+            publicUrl = cfg["publicUrl"]?.jsonPrimitive?.content ?: ""
+            launchPrompt = cfg["launchPlaylistPrompt"]?.jsonPrimitive?.content == "true"
             defaultPlaylist = settings?.get("DefaultPlaylist")?.jsonPrimitive?.content ?: ""
             remote = repository.alexaRemoteStatus()
-        }
+        }.onFailure { error = it.message ?: "Failed to load settings" }
         loading = false
     }
 
@@ -66,6 +69,7 @@ fun SettingsScreen(
 
     Column(Modifier.fillMaxSize().bockVerticalScroll().padding(16.dp)) {
         message?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
+        error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         if (loading) LoadingBox() else {
             Card(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
                 Column(Modifier.padding(12.dp)) {
@@ -93,12 +97,18 @@ fun SettingsScreen(
             }
             Button(onClick = {
                 scope.launch {
-                    repository.saveSettings(buildJsonObject { put("DefaultPlaylist", defaultPlaylist) })
-                    repository.saveConfig(buildJsonObject {
-                        put("publicUrl", publicUrl)
-                        put("launchPlaylistPrompt", launchPrompt)
-                    })
-                    message = "Settings saved"
+                    error = null
+                    message = null
+                    runCatching {
+                        val settingsResp = repository.saveSettings(buildJsonObject { put("DefaultPlaylist", defaultPlaylist) })
+                        if (!settingsResp.ok) error = settingsResp.error ?: "Settings save failed"
+                        val configResp = repository.saveConfig(buildJsonObject {
+                            put("publicUrl", publicUrl)
+                            put("launchPlaylistPrompt", launchPrompt)
+                        })
+                        if (!configResp.ok) error = configResp.error ?: "Config save failed"
+                        if (error == null) message = "Settings saved"
+                    }.onFailure { error = it.message ?: "Save failed" }
                 }
             }) { Text("Save settings") }
             TextButton(onClick = { scope.launch { repository.clearCache(); message = "Artwork cache cleared" } }) {

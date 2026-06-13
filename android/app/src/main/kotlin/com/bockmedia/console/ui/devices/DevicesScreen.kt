@@ -31,11 +31,12 @@ fun DevicesScreen(repository: BockMediaRepository) {
     var showNewGroup by remember { mutableStateOf(false) }
 
     suspend fun load() {
+        error = null
         runCatching {
             devices = repository.devices()
             candidates = repository.mergeCandidates().candidates
             groups = repository.deviceGroups().items
-            runCatching { alexaDevices = repository.alexaRemoteDevices().devices }
+            runCatching { alexaDevices = repository.alexaRemoteDevices(probe = true).devices }
             identify = repository.identifyStatus()
         }.onFailure { error = it.message }
         loading = false
@@ -60,11 +61,13 @@ fun DevicesScreen(repository: BockMediaRepository) {
             onDismiss = { showNewGroup = false; editGroup = null },
             onSave = { name, serials ->
                 scope.launch {
-                    if (editGroup != null) {
-                        repository.updateDeviceGroup(editGroup!!.id, name, serials)
-                    } else {
-                        repository.createDeviceGroup(name, serials)
-                    }
+                    runCatching {
+                        if (editGroup != null) {
+                            repository.updateDeviceGroup(editGroup!!.id, name, serials)
+                        } else {
+                            repository.createDeviceGroup(name, serials)
+                        }
+                    }.onFailure { error = it.message ?: "Group save failed" }
                     showNewGroup = false
                     editGroup = null
                     load()
@@ -82,10 +85,18 @@ fun DevicesScreen(repository: BockMediaRepository) {
                 items(candidates) { c ->
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         TextButton(onClick = {
-                            scope.launch { repository.mergeDevices(c.sourceId, c.targetId); load() }
+                            scope.launch {
+                                runCatching { repository.mergeDevices(c.sourceId, c.targetId) }
+                                    .onFailure { error = it.message ?: "Merge failed" }
+                                load()
+                            }
                         }) { Text("Merge") }
                         TextButton(onClick = {
-                            scope.launch { repository.dismissMergeCandidate(c.sourceId); load() }
+                            scope.launch {
+                                runCatching { repository.dismissMergeCandidate(c.sourceId) }
+                                    .onFailure { error = it.message ?: "Dismiss failed" }
+                                load()
+                            }
                         }) { Text("Not duplicate") }
                         Text("${c.sourceName ?: c.sourceId} → ${c.targetName ?: c.targetId}", style = MaterialTheme.typography.bodySmall)
                     }
@@ -95,7 +106,14 @@ fun DevicesScreen(repository: BockMediaRepository) {
                 Row {
                     Text("Device groups", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
                     TextButton(onClick = { showNewGroup = true }) { Text("New group") }
-                    TextButton(onClick = { scope.launch { repository.identifyDevices(); identify = repository.identifyStatus() } }) {
+                    TextButton(onClick = {
+                        scope.launch {
+                            runCatching {
+                                repository.identifyDevices()
+                                identify = repository.identifyStatus()
+                            }.onFailure { error = it.message ?: "Identify failed" }
+                        }
+                    }) {
                         Text(if (identify?.running == true) "Identifying…" else "Identify all")
                     }
                 }
@@ -107,7 +125,13 @@ fun DevicesScreen(repository: BockMediaRepository) {
                     trailingContent = {
                         Row {
                             TextButton(onClick = { editGroup = g }) { Text("Edit") }
-                            TextButton(onClick = { scope.launch { repository.deleteDeviceGroup(g.id); load() } }) { Text("Delete") }
+                            TextButton(onClick = {
+                                scope.launch {
+                                    runCatching { repository.deleteDeviceGroup(g.id) }
+                                        .onFailure { error = it.message ?: "Delete failed" }
+                                    load()
+                                }
+                            }) { Text("Delete") }
                         }
                     },
                 )
@@ -118,7 +142,14 @@ fun DevicesScreen(repository: BockMediaRepository) {
                     headlineContent = { Text(d.name ?: d.serial ?: "?") },
                     trailingContent = {
                         TextButton(onClick = {
-                            d.serial?.let { scope.launch { repository.testDevice(it); delay(11000); load() } }
+                            d.serial?.let {
+                                scope.launch {
+                                    runCatching { repository.testDevice(it) }
+                                        .onFailure { e -> error = e.message ?: "Test failed" }
+                                    delay(11000)
+                                    load()
+                                }
+                            }
                         }) { Text("Test") }
                     },
                 )
@@ -130,10 +161,18 @@ fun DevicesScreen(repository: BockMediaRepository) {
                     OutlinedTextField(editName, { editName = it }, label = { Text("Name") }, modifier = Modifier.fillMaxWidth())
                     Row {
                         TextButton(onClick = {
-                            scope.launch { repository.renameDevice(dev.deviceId, editName); load() }
+                            scope.launch {
+                                runCatching { repository.renameDevice(dev.deviceId, editName) }
+                                    .onFailure { error = it.message ?: "Rename failed" }
+                                load()
+                            }
                         }) { Text("Save") }
                         TextButton(onClick = {
-                            scope.launch { repository.deleteDevice(dev.deviceId); load() }
+                            scope.launch {
+                                runCatching { repository.deleteDevice(dev.deviceId) }
+                                    .onFailure { error = it.message ?: "Delete failed" }
+                                load()
+                            }
                         }) { Text("Delete") }
                     }
                 }

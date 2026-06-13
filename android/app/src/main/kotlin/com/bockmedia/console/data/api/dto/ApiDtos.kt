@@ -22,6 +22,8 @@ data class HealthResponse(
     val status: String? = null,
     val uptime: String? = null,
     val uptimeSeconds: Double? = null,
+    val watchdogFresh: Boolean? = null,
+    val watchdogAgeSeconds: Int? = null,
     val services: JsonObject? = null,
     val tunnel: JsonElement? = null,
     val backend: JsonElement? = null,
@@ -54,10 +56,22 @@ data class DashboardQuickResponse(
     val favorites: List<FavoriteItem> = emptyList(),
 )
 
+/** Single round-trip dashboard payload (`GET /api/dashboard/bootstrap`). */
+@Serializable
+data class DashboardBootstrapResponse(
+    val summary: SummaryResponse,
+    val recent: RecentResponse = RecentResponse(),
+    val quick: DashboardQuickResponse = DashboardQuickResponse(),
+    @SerialName("plexSync") val plexSync: PlexSyncStatusResponse? = null,
+    val health: HealthResponse = HealthResponse(),
+    @SerialName("alexaRemote") val alexaRemote: AlexaRemoteStatus = AlexaRemoteStatus(),
+    val playback: PlaybackStatusResponse? = null,
+)
+
 @Serializable
 data class FavoriteItem(
     val path: String = "",
-    val track: String? = null,
+    @SerialName("title") val track: String? = null,
     val artist: String? = null,
     val album: String? = null,
     val count: Int = 0,
@@ -67,10 +81,18 @@ data class FavoriteItem(
 data class PlexSyncStatusResponse(
     val lastRun: String? = null,
     val lastSuccess: String? = null,
-    val playlistCount: Int? = null,
-    val logTail: List<String> = emptyList(),
+    @SerialName("stateUpdatedAt") val lastRunAlt: Double? = null,
+    @SerialName("logUpdatedAt") val lastSuccessAlt: Double? = null,
+    @SerialName("playlistCount") val playlistCount: Int? = null,
+    @SerialName("logTail") val logTail: List<String> = emptyList(),
     val running: Boolean = false,
-)
+    val cronHint: String? = null,
+) {
+    val displayLastRun: String?
+        get() = lastRun ?: lastRunAlt?.let { java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US).format(java.util.Date((it * 1000).toLong())) }
+    val displayLastSuccess: String?
+        get() = lastSuccess ?: lastSuccessAlt?.let { java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US).format(java.util.Date((it * 1000).toLong())) }
+}
 
 @Serializable
 data class PlaybackStatusResponse(
@@ -104,10 +126,13 @@ data class NowPlayingDeviceItem(
     val artist: String? = null,
     val album: String? = null,
     val filepath: String? = null,
+    val artworkUrl: String? = null,
     val timestamp: Double? = null,
     val duration_ms: Long = 0,
     val offset_ms: Long = 0,
     val paused: Boolean = false,
+    val stopped: Boolean = false,
+    val shuffle: Boolean = false,
     val playlist: String? = null,
     val playlistId: String? = null,
     val sourceLabel: String? = null,
@@ -219,7 +244,7 @@ data class PlaylistTrack(
     val artist: String? = null,
     val album: String? = null,
     val path: String? = null,
-    val duration: Int? = null,
+    @SerialName("duration_seconds") val duration: Int? = null,
 )
 
 @Serializable
@@ -230,8 +255,8 @@ data class SmartPlaylist(
     val id: String = "",
     val name: String = "",
     val enabled: Boolean = true,
-    val playlistId: String? = null,
-    val rules: JsonObject? = null,
+    @SerialName("linkedPlaylistId") val playlistId: String? = null,
+    val rules: JsonElement? = null,
 )
 
 @Serializable
@@ -264,7 +289,7 @@ data class SongItem(
     val artist: String? = null,
     val album: String? = null,
     val path: String? = null,
-    val duration: Int? = null,
+    @SerialName("duration_seconds") val duration: Int? = null,
     val genre: String? = null,
     val year: Int? = null,
 )
@@ -372,27 +397,35 @@ data class AnalyticsResponse(
     val topTracks: List<CountRow> = emptyList(),
     val topDevices: List<CountRow> = emptyList(),
     val topGenres: List<CountRow> = emptyList(),
-    val byHour: List<CountRow> = emptyList(),
-    val byDayOfWeek: List<CountRow> = emptyList(),
+    @SerialName("hourOfDay") val byHour: List<CountRow> = emptyList(),
+    @SerialName("dayOfWeek") val byDayOfWeek: List<CountRow> = emptyList(),
     val byDate: List<CountRow> = emptyList(),
     val heatmap: JsonElement? = null,
-    val decades: List<CountRow> = emptyList(),
+    @SerialName("topDecades") val decades: List<CountRow> = emptyList(),
 )
 
 @Serializable
-data class CountRow(val label: String? = null, val name: String? = null, val count: Int = 0)
+data class CountRow(
+    val label: String? = null,
+    val name: String? = null,
+    val day: String? = null,
+    val decade: String? = null,
+    val hour: Int? = null,
+    val count: Int = 0,
+)
 
 @Serializable
 data class IgnoredResponse(val items: List<IgnoredTrack> = emptyList())
 
 @Serializable
-data class IgnoredTrack(val path: String = "", val track: String? = null, val artist: String? = null)
+data class IgnoredTrack(
+    val path: String = "",
+    @SerialName("title") val track: String? = null,
+    val artist: String? = null,
+)
 
 @Serializable
-data class SettingsResponse(val settings: JsonObject? = null)
-
-@Serializable
-data class ConfigResponse(val config: JsonObject? = null)
+data class ArtworkUrlResponse(val url: String? = null)
 
 @Serializable
 data class LocalIpResponse(val ip: String? = null)
@@ -412,6 +445,9 @@ data class PlayResponse(
 @Serializable
 data class AiPlaylistResponse(
     val preview: List<PlaylistTrack> = emptyList(),
+    val tracks: List<PlaylistTrack> = emptyList(),
     val name: String? = null,
     val id: String? = null,
-)
+) {
+    fun resultTracks(): List<PlaylistTrack> = tracks.ifEmpty { preview }
+}

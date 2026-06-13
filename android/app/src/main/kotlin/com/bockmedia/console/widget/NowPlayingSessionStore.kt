@@ -27,7 +27,7 @@ object NowPlayingSessionStore {
         focusedDeviceId?.let { id ->
             snap.items.find { it.deviceId == id }?.let { return it }
         }
-        return snap.items.firstOrNull { !it.paused } ?: snap.items.firstOrNull()
+        return snap.items.firstOrNull { !it.paused && !it.stopped } ?: snap.items.firstOrNull()
     }
 
     fun cycleFocus(forward: Boolean = true) {

@@ -1,9 +1,13 @@
 package com.bockmedia.console.data.repository
 
 import com.bockmedia.console.data.api.BockMediaApi
+import com.bockmedia.console.data.api.bockJson
 import com.bockmedia.console.data.api.dto.*
+import com.bockmedia.console.data.local.ApiResponseCache
 import com.bockmedia.console.data.local.AppPreferences
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
@@ -14,8 +18,34 @@ class BockMediaRepository(
     private val apiProvider: suspend () -> BockMediaApi,
     private val baseUrlProvider: suspend () -> String,
     private val preferences: AppPreferences,
+    private val cache: ApiResponseCache,
 ) {
     private suspend fun api() = apiProvider()
+
+    private suspend inline fun <reified T> cached(
+        key: String,
+        ttlMs: Long,
+        forceRefresh: Boolean = false,
+        fetch: suspend () -> T,
+    ): T {
+        if (!forceRefresh) {
+            cache.read(key, ttlMs)?.let { runCatching { return bockJson.decodeFromString<T>(it) }.getOrNull() }
+        }
+        val fresh = fetch()
+        runCatching { cache.write(key, bockJson.encodeToString(fresh)) }
+        return fresh
+    }
+
+    /** Stale-while-revalidate: returns cached body immediately if present. */
+    fun readStaleDashboard(): DashboardBootstrapResponse? =
+        cache.readStale("dashboard_bootstrap")?.let {
+            runCatching { bockJson.decodeFromString<DashboardBootstrapResponse>(it) }.getOrNull()
+        }
+
+    suspend fun dashboardBootstrap(forceRefresh: Boolean = false): DashboardBootstrapResponse =
+        cached("dashboard_bootstrap", ApiResponseCache.TTL_DASHBOARD_MS, forceRefresh) {
+            api().dashboardBootstrap(probe = 0)
+        }
 
     suspend fun testConnection(): Result<HealthResponse> = runCatching { api().health() }
 
@@ -25,17 +55,24 @@ class BockMediaRepository(
     suspend fun dashboardQuick() = api().dashboardQuick()
     suspend fun playbackStatus() = api().playbackStatus()
     suspend fun recent(page: Int, limit: Int) = api().recent(page, limit)
-    suspend fun nowPlayingDevices() = api().nowPlayingDevices()
+    suspend fun nowPlayingDevices(forceRefresh: Boolean = false) =
+        cached("nowplaying_devices", ApiResponseCache.TTL_NOW_PLAYING_MS, forceRefresh) {
+            api().nowPlayingDevices()
+        }
     suspend fun streamHistory(page: Int, limit: Int) = api().streamHistory(page, limit)
     suspend fun rooms() = api().rooms()
     suspend fun search(q: String) = api().search(q)
-    suspend fun playlists(search: String = "", page: Int = 1, limit: Int = 500) =
-        api().playlists(page = page, limit = limit, search = search)
+    suspend fun playlists(search: String = "", page: Int = 1, limit: Int = 100) =
+        cached("playlists_${search}_${page}_$limit", ApiResponseCache.TTL_PLAYLISTS_MS) {
+            api().playlists(page = page, limit = limit, search = search)
+        }
+
+    suspend fun smartPlaylists() =
+        cached("smart_playlists", ApiResponseCache.TTL_PLAYLISTS_MS) { api().smartPlaylists() }
 
     suspend fun playlistDetail(id: String, page: Int = 1, q: String? = null, sortBy: String? = null, order: String? = null) =
         api().playlistDetail(id, page = page, q = q, sortBy = sortBy, order = order)
 
-    suspend fun smartPlaylists() = api().smartPlaylists()
     suspend fun artists(page: Int, search: String) = api().artists(page = page, search = search)
     suspend fun albums(page: Int, search: String, artist: String? = null) =
         api().albums(page = page, search = search, artist = artist)
@@ -47,19 +84,21 @@ class BockMediaRepository(
     suspend fun devices() = api().devices()
     suspend fun mergeCandidates() = api().mergeCandidates()
     suspend fun deviceGroups() = api().deviceGroups()
-    suspend fun alexaRemoteDevices() = api().alexaRemoteDevices()
-    suspend fun alexaRemoteStatus() = api().alexaRemoteStatus()
+    suspend fun alexaRemoteDevices(probe: Boolean = false) = api().alexaRemoteDevices(if (probe) 1 else 0)
+    suspend fun alexaRemoteStatus() =
+        cached("alexa_remote_status", 60_000L) { api().alexaRemoteStatus() }
     suspend fun automations() = api().automations()
     suspend fun analytics(from: String? = null, to: String? = null) = api().analytics(from, to)
     suspend fun ignored() = api().ignored()
-    suspend fun settings() = api().settings()
-    suspend fun config() = api().config()
+    suspend fun settings(): JsonObject = api().settings()
+    suspend fun config(): JsonObject = api().config()
     suspend fun localIp() = api().localIp()
     suspend fun identifyStatus() = api().identifyStatus()
 
     suspend fun artworkUrl(filepath: String?): String? {
-        val base = runCatching { baseUrlProvider() }.getOrNull() ?: return null
-        return AppPreferences.artworkUrl(base, filepath)
+        if (filepath.isNullOrBlank()) return null
+        return runCatching { api().artworkUrl(filepath).url }.getOrNull()
+            ?: AppPreferences.artworkUrl(baseUrlProvider(), filepath)
     }
 
     suspend fun playOnDevice(
@@ -172,9 +211,16 @@ class BockMediaRepository(
     suspend fun createSmartPlaylist(name: String, genre: String?, artist: String?, maxTracks: Int) {
         api().createSmartPlaylist(buildJsonObject {
             put("name", name)
-            genre?.let { put("genre", it) }
-            artist?.let { put("artist", it) }
-            put("maxTracks", maxTracks)
+            put("refresh", true)
+            putJsonArray("rules") {
+                genre?.takeIf { it.isNotBlank() }?.let {
+                    add(buildJsonObject { put("type", "genre"); put("value", it) })
+                }
+                artist?.takeIf { it.isNotBlank() }?.let {
+                    add(buildJsonObject { put("type", "artist"); put("value", it) })
+                }
+                add(buildJsonObject { put("type", "limit"); put("value", maxTracks) })
+            }
         })
     }
 
@@ -197,14 +243,14 @@ class BockMediaRepository(
     suspend fun createDeviceGroup(name: String, devices: List<String>) {
         api().createDeviceGroup(buildJsonObject {
             put("name", name)
-            putJsonArray("devices") { devices.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) } }
+            putJsonArray("members") { devices.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) } }
         })
     }
 
     suspend fun updateDeviceGroup(id: String, name: String, devices: List<String>) {
         api().updateDeviceGroup(id, buildJsonObject {
             put("name", name)
-            putJsonArray("devices") { devices.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) } }
+            putJsonArray("members") { devices.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) } }
         })
     }
 
@@ -215,8 +261,8 @@ class BockMediaRepository(
     suspend fun deleteAutomation(id: String) = api().deleteAutomation(id)
     suspend fun runAutomation(id: String) = api().runAutomation(id)
 
-    suspend fun saveSettings(body: JsonObject) = api().saveSettings(body)
-    suspend fun saveConfig(body: JsonObject) = api().saveConfig(body)
+    suspend fun saveSettings(body: JsonObject): OkResponse = api().saveSettings(body)
+    suspend fun saveConfig(body: JsonObject): OkResponse = api().saveConfig(body)
     suspend fun clearCache() = api().clearCache()
     suspend fun alexaLoginStart() = api().alexaLoginStart()
     suspend fun alexaLoginStop() = api().alexaLoginStop()

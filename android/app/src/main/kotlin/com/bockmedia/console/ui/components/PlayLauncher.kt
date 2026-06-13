@@ -46,6 +46,13 @@ fun PlayTargetLauncher(
     snackbarHostState: SnackbarHostState,
     onClear: () -> Unit,
 ) {
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(target, remoteConfigured) {
+        if (target != null && !remoteConfigured) {
+            snackbarHostState.showSnackbar("Configure Alexa in Settings to play on a device")
+            onClear()
+        }
+    }
     if (target == null || !remoteConfigured) return
     var showPicker by remember(target) { mutableStateOf(true) }
     if (showPicker) {

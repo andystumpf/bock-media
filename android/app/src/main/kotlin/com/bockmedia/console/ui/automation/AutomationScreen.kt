@@ -36,6 +36,9 @@ fun AutomationScreen(repository: BockMediaRepository) {
     var shuffle by remember { mutableStateOf(false) }
     var enabled by remember { mutableStateOf(true) }
     var playlistHits by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    var message by remember { mutableStateOf<String?>(null) }
+    var messageError by remember { mutableStateOf(false) }
+    var selectedDays by remember { mutableStateOf((0..6).toSet()) }
 
     suspend fun load() {
         loading = true
@@ -44,7 +47,7 @@ fun AutomationScreen(repository: BockMediaRepository) {
             val st = repository.alexaRemoteStatus()
             remoteOk = st.configured && st.authenticated == true
             if (remoteOk) {
-                val devs = repository.alexaRemoteDevices().devices
+                val devs = repository.alexaRemoteDevices(probe = true).devices
                 val groups = repository.deviceGroups().items
                 deviceOptions = buildDeviceOptions(groups, devs)
             }
@@ -76,12 +79,22 @@ fun AutomationScreen(repository: BockMediaRepository) {
         volume = ""
         shuffle = false
         enabled = true
+        selectedDays = (0..6).toSet()
     }
 
     BockLazyColumn(
         modifier = Modifier.fillMaxSize().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        message?.let {
+            item {
+                Text(
+                    it,
+                    color = if (messageError) MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.primary,
+                )
+            }
+        }
         if (!remoteOk) {
             item {
                 Text("Configure Alexa remote in Settings first.", color = MaterialTheme.colorScheme.error)
@@ -126,6 +139,18 @@ fun AutomationScreen(repository: BockMediaRepository) {
                         placeholder = "Select device…",
                     )
                     BockTimeField(time, { time = it })
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        listOf("Mon" to 0, "Tue" to 1, "Wed" to 2, "Thu" to 3, "Fri" to 4, "Sat" to 5, "Sun" to 6).forEach { (label, day) ->
+                            val on = day in selectedDays
+                            FilterChip(
+                                selected = on,
+                                onClick = {
+                                    selectedDays = if (on) selectedDays - day else selectedDays + day
+                                },
+                                label = { Text(label) },
+                            )
+                        }
+                    }
                     BockTextField(volume, { volume = it }, "Volume (optional)")
                     Row {
                         Checkbox(shuffle, { shuffle = it })
@@ -137,6 +162,23 @@ fun AutomationScreen(repository: BockMediaRepository) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(onClick = {
                             scope.launch {
+                                message = null
+                                messageError = false
+                                if (deviceValue.isBlank()) {
+                                    message = "Select a device"
+                                    messageError = true
+                                    return@launch
+                                }
+                                if (playlistPick.first == null && playlistPick.second == null) {
+                                    message = "Select a playlist"
+                                    messageError = true
+                                    return@launch
+                                }
+                                if (selectedDays.isEmpty()) {
+                                    message = "Select at least one day"
+                                    messageError = true
+                                    return@launch
+                                }
                                 val body = buildJsonObject {
                                     put("name", label)
                                     playlistPick.first?.let { put("playlistId", it) }
@@ -144,15 +186,25 @@ fun AutomationScreen(repository: BockMediaRepository) {
                                     put("device", deviceValue)
                                     put("deviceName", deviceName)
                                     put("time", time)
-                                    putJsonArray("days") { (0..6).forEach { add(JsonPrimitive(it)) } }
+                                    putJsonArray("days") { selectedDays.sorted().forEach { add(JsonPrimitive(it)) } }
                                     volume.toIntOrNull()?.let { put("volume", it) }
                                     put("shuffle", shuffle)
                                     put("enabled", enabled)
                                 }
-                                if (editId != null) repository.updateAutomation(editId!!, body)
-                                else repository.createAutomation(body)
-                                resetForm()
-                                load()
+                                runCatching {
+                                    val resp = if (editId != null) {
+                                        repository.updateAutomation(editId!!, body)
+                                    } else {
+                                        repository.createAutomation(body)
+                                    }
+                                    if (!resp.ok) error(resp.error ?: "Save failed")
+                                    message = if (editId != null) "Automation updated" else "Automation added"
+                                    resetForm()
+                                    load()
+                                }.onFailure {
+                                    message = it.message ?: "Save failed"
+                                    messageError = true
+                                }
                             }
                         }) { Text(if (editId != null) "Update" else "Add automation") }
                         if (editId != null) {
@@ -176,7 +228,20 @@ fun AutomationScreen(repository: BockMediaRepository) {
                     },
                     trailingContent = {
                         Row {
-                            TextButton(onClick = { scope.launch { repository.runAutomation(auto.id) } }) {
+                            TextButton(onClick = {
+                                scope.launch {
+                                    message = null
+                                    messageError = false
+                                    runCatching {
+                                        val resp = repository.runAutomation(auto.id)
+                                        if (!resp.ok) error(resp.error ?: "Run failed")
+                                        message = "Ran ${auto.name.ifBlank { auto.label }}"
+                                    }.onFailure {
+                                        message = it.message ?: "Run failed"
+                                        messageError = true
+                                    }
+                                }
+                            }) {
                                 Text("Run")
                             }
                             TextButton(onClick = {
@@ -194,9 +259,17 @@ fun AutomationScreen(repository: BockMediaRepository) {
                                 volume = auto.volume?.toString() ?: ""
                                 shuffle = auto.shuffle
                                 enabled = auto.enabled
+                                selectedDays = auto.days.toSet().ifEmpty { (0..6).toSet() }
                             }) { Text("Edit") }
                             TextButton(onClick = {
-                                scope.launch { repository.deleteAutomation(auto.id); load() }
+                                scope.launch {
+                                    runCatching { repository.deleteAutomation(auto.id) }
+                                        .onFailure {
+                                            message = it.message ?: "Delete failed"
+                                            messageError = true
+                                        }
+                                    load()
+                                }
                             }) { Text("Delete") }
                         }
                     },

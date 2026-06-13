@@ -17,6 +17,13 @@ interface BockMediaApi {
     @GET("api/dashboard/quick")
     suspend fun dashboardQuick(): DashboardQuickResponse
 
+    @GET("api/dashboard/bootstrap")
+    suspend fun dashboardBootstrap(
+        @Query("probe") probe: Int = 0,
+        @Query("page") page: Int = 1,
+        @Query("limit") limit: Int = 10,
+    ): DashboardBootstrapResponse
+
     @GET("api/playback/status")
     suspend fun playbackStatus(): PlaybackStatusResponse
 
@@ -211,16 +218,19 @@ interface BockMediaApi {
     suspend fun removeFavorite(@Body body: JsonObject): OkResponse
 
     @GET("api/settings")
-    suspend fun settings(): SettingsResponse
+    suspend fun settings(): JsonObject
 
     @POST("api/settings")
     suspend fun saveSettings(@Body body: JsonObject): OkResponse
 
     @GET("api/config")
-    suspend fun config(): ConfigResponse
+    suspend fun config(): JsonObject
 
     @POST("api/config")
     suspend fun saveConfig(@Body body: JsonObject): OkResponse
+
+    @GET("api/artwork_url")
+    suspend fun artworkUrl(@Query("path") path: String): ArtworkUrlResponse
 
     @GET("api/localip")
     suspend fun localIp(): LocalIpResponse
@@ -232,7 +242,7 @@ interface BockMediaApi {
     suspend fun alexaRemoteStatus(): AlexaRemoteStatus
 
     @GET("api/alexa_remote/devices")
-    suspend fun alexaRemoteDevices(): AlexaDevicesResponse
+    suspend fun alexaRemoteDevices(@Query("probe") probe: Int = 0): AlexaDevicesResponse
 
     @POST("api/alexa_remote/play")
     suspend fun alexaRemotePlay(@Body body: JsonObject): PlayResponse

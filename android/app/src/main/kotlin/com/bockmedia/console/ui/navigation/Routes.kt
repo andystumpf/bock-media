@@ -47,7 +47,10 @@ const val ROUTE_ALBUMS_ARTIST = "albums/{artist}"
 const val ROUTE_SONGS_ARTIST = "songs/artist/{artist}"
 const val ROUTE_SONGS_ALBUM = "songs/album/{album}"
 
-fun playlistDetailRoute(id: String) = "playlists/detail/$id"
+fun playlistDetailRoute(id: String) = "playlists/detail/${java.net.URLEncoder.encode(id, "UTF-8")}"
 fun albumsArtistRoute(artist: String) = "albums/${java.net.URLEncoder.encode(artist, "UTF-8")}"
 fun songsArtistRoute(artist: String) = "songs/artist/${java.net.URLEncoder.encode(artist, "UTF-8")}"
-fun songsAlbumRoute(album: String) = "songs/album/${java.net.URLEncoder.encode(album, "UTF-8")}"
+fun songsAlbumRoute(album: String, artist: String? = null): String {
+    val key = if (!artist.isNullOrBlank()) "$album~$artist" else album
+    return "songs/album/${java.net.URLEncoder.encode(key, "UTF-8")}"
+}

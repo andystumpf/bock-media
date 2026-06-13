@@ -18,9 +18,11 @@ import com.bockmedia.console.data.api.dto.NowPlayingDeviceItem
 import com.bockmedia.console.data.local.AppPreferences
 import com.bockmedia.console.domain.model.computeNowPlayingProgress
 import com.bockmedia.console.domain.model.formatPlaybackTime
+import com.bockmedia.console.BockMediaApp
 import com.bockmedia.console.widget.NowPlayingSessionStore
 import com.bockmedia.console.widget.NowPlayingWidget
-import java.net.URL
+import kotlinx.coroutines.runBlocking
+import okhttp3.Request
 import kotlin.math.max
 import kotlin.math.min
 
@@ -28,6 +30,8 @@ object NowPlayingNotificationManager {
 
     const val CHANNEL_ID = "now_playing"
     const val NOTIFICATION_ID = 1001
+
+    private val syncExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
 
     fun ensureChannel(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -52,8 +56,37 @@ object NowPlayingNotificationManager {
             stop(appContext)
             return
         }
-        val notification = build(appContext, item, snap.items.size, snap.controlsAvailable)
-        NowPlayingMonitorService.start(appContext, notification)
+        if (!NotificationManagerCompat.from(appContext).areNotificationsEnabled()) return
+        val deviceCount = snap.items.size
+        val controlsAvailable = snap.controlsAvailable
+        syncExecutor.execute {
+            runCatching {
+                val notification = build(appContext, item, deviceCount, controlsAvailable)
+                try {
+                    NowPlayingMonitorService.start(appContext, notification)
+                } catch (e: IllegalStateException) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                        e is android.app.ForegroundServiceStartNotAllowedException
+                    ) {
+                        android.util.Log.w(
+                            "NowPlayingNotif",
+                            "Foreground service start not allowed; posting notification directly",
+                            e,
+                        )
+                        NotificationManagerCompat.from(appContext).notify(NOTIFICATION_ID, notification)
+                    } else {
+                        throw e
+                    }
+                }
+            }
+        }
+    }
+
+    fun buildCurrent(context: Context): Notification? {
+        val item = NowPlayingSessionStore.focusedItem() ?: return null
+        val snap = NowPlayingSessionStore.snapshot ?: return null
+        ensureChannel(context)
+        return build(context, item, snap.items.size, snap.controlsAvailable)
     }
 
     fun stop(context: Context) {
@@ -75,7 +108,8 @@ object NowPlayingNotificationManager {
         )
 
         val artistLine = listOfNotNull(item.artist, item.deviceName).joinToString(" · ")
-        val prog = computeNowPlayingProgress(item.timestamp, item.duration_ms, item.offset_ms, item.paused)
+        val notPlaying = item.paused || item.stopped
+        val prog = computeNowPlayingProgress(item.timestamp, item.duration_ms, item.offset_ms, notPlaying)
         val elapsedSec = prog.elapsedMs / 1000
         val durationSec = prog.durationMs / 1000
         val positionText = if (durationSec > 0) {
@@ -92,7 +126,11 @@ object NowPlayingNotificationManager {
             }
             append(" · ")
             append(positionText)
-            if (item.paused) append(" · ${context.getString(R.string.widget_paused)}")
+            if (item.paused) {
+                append(" · ${context.getString(R.string.widget_paused)}")
+            } else if (item.stopped) {
+                append(" · ${context.getString(R.string.widget_stopped)}")
+            }
         }
 
         val builder = NotificationCompat.Builder(context, CHANNEL_ID)
@@ -103,9 +141,9 @@ object NowPlayingNotificationManager {
             .setContentIntent(openPi)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setOnlyAlertOnce(true)
-            .setOngoing(!item.paused)
+            .setOngoing(!notPlaying)
             .setShowWhen(false)
-            .setLargeIcon(loadArtwork(context, item.filepath))
+            .setLargeIcon(loadArtwork(context, item))
 
         val enabled = NowPlayingSessionStore.canControl(item)
         if (enabled) {
@@ -114,12 +152,12 @@ object NowPlayingNotificationManager {
                 context.getString(R.string.notification_previous),
                 NowPlayingWidget.pendingAction(
                     context, NowPlayingWidget.ACTION_PREVIOUS,
-                    item.deviceId, item.deviceName!!, 9001,
+                    item.deviceId, item.deviceName ?: item.deviceId, 9001,
                 ),
             )
-            val toggleAction = if (item.paused) NowPlayingWidget.ACTION_PLAY else NowPlayingWidget.ACTION_PAUSE
-            val toggleIcon = if (item.paused) android.R.drawable.ic_media_play else android.R.drawable.ic_media_pause
-            val toggleLabel = if (item.paused) {
+            val toggleAction = if (notPlaying) NowPlayingWidget.ACTION_PLAY else NowPlayingWidget.ACTION_PAUSE
+            val toggleIcon = if (notPlaying) android.R.drawable.ic_media_play else android.R.drawable.ic_media_pause
+            val toggleLabel = if (notPlaying) {
                 context.getString(R.string.notification_play)
             } else {
                 context.getString(R.string.notification_pause)
@@ -129,7 +167,7 @@ object NowPlayingNotificationManager {
                 toggleLabel,
                 NowPlayingWidget.pendingAction(
                     context, toggleAction,
-                    item.deviceId, item.deviceName, 9002,
+                    item.deviceId, item.deviceName ?: item.deviceId, 9002,
                 ),
             )
             builder.addAction(
@@ -137,7 +175,7 @@ object NowPlayingNotificationManager {
                 context.getString(R.string.notification_next),
                 NowPlayingWidget.pendingAction(
                     context, NowPlayingWidget.ACTION_NEXT,
-                    item.deviceId, item.deviceName, 9003,
+                    item.deviceId, item.deviceName ?: item.deviceId, 9003,
                 ),
             )
         }
@@ -157,32 +195,35 @@ object NowPlayingNotificationManager {
         )
 
         if (durationSec > 0) {
-            builder.setProgress(durationSec.toInt(), elapsedSec.toInt(), item.paused)
+            builder.setProgress(durationSec.toInt(), elapsedSec.toInt(), false)
         }
 
         return builder.build()
     }
 
-    private fun loadArtwork(context: Context, filepath: String?): Bitmap? {
-        val base = NowPlayingSessionStore.snapshot?.baseUrl ?: return null
-        val url = AppPreferences.artworkUrl(base, filepath) ?: return null
-        return try {
-            val conn = URL(url).openConnection()
-            conn.connectTimeout = 4000
-            conn.readTimeout = 4000
-            conn.getInputStream().use { stream ->
-                val bmp = BitmapFactory.decodeStream(stream) ?: return null
-                val size = 256
-                val scale = min(size.toFloat() / bmp.width, size.toFloat() / bmp.height)
-                Bitmap.createScaledBitmap(
-                    bmp,
-                    max(1, (bmp.width * scale).toInt()),
-                    max(1, (bmp.height * scale).toInt()),
-                    true,
-                )
-            }
-        } catch (_: Exception) {
-            null
+    private fun loadArtwork(context: Context, item: NowPlayingDeviceItem): Bitmap? {
+        val url = item.artworkUrl ?: run {
+            val base = NowPlayingSessionStore.snapshot?.baseUrl ?: return null
+            AppPreferences.artworkUrl(base, item.filepath) ?: return null
+        }
+        return runBlocking {
+            runCatching {
+                val client = BockMediaApp.get(context.applicationContext).buildAuthenticatedHttpClient()
+                client.newCall(Request.Builder().url(url).get().build()).execute().use { resp ->
+                    if (!resp.isSuccessful) return@runCatching null
+                    resp.body?.byteStream()?.use { stream ->
+                        val bmp = BitmapFactory.decodeStream(stream) ?: return@runCatching null
+                        val size = 256
+                        val scale = min(size.toFloat() / bmp.width, size.toFloat() / bmp.height)
+                        Bitmap.createScaledBitmap(
+                            bmp,
+                            max(1, (bmp.width * scale).toInt()),
+                            max(1, (bmp.height * scale).toInt()),
+                            true,
+                        )
+                    }
+                }
+            }.getOrNull()
         }
     }
 }

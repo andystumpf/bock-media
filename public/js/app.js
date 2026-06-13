@@ -42,15 +42,44 @@ function authHeaders() {
   return { Authorization: 'Basic ' + btoa(unescape(encodeURIComponent(a.user + ':' + a.pass))) };
 }
 
+const API_TIMEOUT_MS = 8000;
+
 function authFetch(input, init = {}) {
   const headers = { ...authHeaders(), ...(init.headers || {}) };
-  return fetch(input, { ...init, headers });
+  const timeoutMs = init.timeoutMs != null ? init.timeoutMs : API_TIMEOUT_MS;
+  const { timeoutMs: _drop, ...rest } = init;
+  let signal = rest.signal;
+  let timer;
+  if (!signal && typeof AbortController !== 'undefined') {
+    const ctrl = new AbortController();
+    signal = ctrl.signal;
+    timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    rest.signal = signal;
+  }
+  return fetch(input, { ...rest, headers }).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
 }
 
-const API = (path) => authFetch(path).then(r => {
-  if (r.status === 401 && authRequired()) { showLoginModal(); return null; }
+const API = (path) => authFetch(path).then(async r => {
+  if (r.status === 401 && authRequired()) { showLoginModal(); return { __error: 'auth' }; }
+  if (!r.ok) return { __error: true, status: r.status };
   return r.json();
-}).catch(() => null);
+}).catch(() => ({ __error: true }));
+
+function isApiError(data) {
+  return data == null || data.__error;
+}
+
+function apiDevicesList(data) {
+  if (isApiError(data)) return [];
+  if (Array.isArray(data)) return data;
+  return data.devices || [];
+}
+
+function apiErrorHtml(msg) {
+  return `<div class="empty-state"><i class="fa fa-triangle-exclamation"></i><p>${escHtml(msg || 'Request failed. Check connection and try again.')}</p></div>`;
+}
 
 const POST = (path, body) => authFetch(path, {
   method: 'POST',
@@ -74,7 +103,7 @@ function showLoginModal() {
         <input type="text" id="login-user" class="settings-input" placeholder="Username" autocomplete="username">
         <input type="password" id="login-pass" class="settings-input" placeholder="Password" autocomplete="current-password">
         <label style="font-size:13px;display:flex;align-items:center;gap:8px;cursor:pointer">
-          <input type="checkbox" id="login-remember" checked> Remember me
+          <input type="checkbox" id="login-remember"> Remember me
         </label>
       </div>
       <p id="login-error" class="hint" style="color:#c0392b;display:none;margin:8px 0 0"></p>
@@ -90,7 +119,8 @@ function showLoginModal() {
   const saved = getStoredAuth();
   if (saved) {
     document.getElementById('login-user').value = saved.user;
-    document.getElementById('login-pass').value = saved.pass;
+    const remember = document.getElementById('login-remember');
+    if (remember) remember.checked = true;
   }
   document.getElementById('login-submit').onclick = () => submitLogin();
   document.getElementById('login-pass').onkeydown = (e) => { if (e.key === 'Enter') submitLogin(); };
@@ -109,6 +139,8 @@ async function submitLogin() {
   const r = await authFetch('/api/health');
   if (r.ok) {
     document.getElementById('login-overlay')?.remove();
+    resetBannerDismiss();
+    invalidateAlexaRemoteStatus();
     const hash = window.location.hash.replace('#', '') || 'dashboard';
     navigate(hash);
     refreshCurrentTrack();
@@ -120,11 +152,16 @@ async function submitLogin() {
 
 async function ensureAuth() {
   await refreshAuthInfo();
-  document.getElementById('login-overlay')?.remove();
-  if (!authRequired()) return;
+  if (!authRequired()) {
+    document.getElementById('login-overlay')?.remove();
+    return;
+  }
   if (getStoredAuth()) {
     const r = await authFetch('/api/health');
-    if (r.ok) return;
+    if (r.ok) {
+      document.getElementById('login-overlay')?.remove();
+      return;
+    }
     clearStoredAuth();
   }
   showLoginModal();
@@ -153,8 +190,18 @@ function artworkUrl(filepath) {
   return `/artwork/${encoded}`;
 }
 
-function npArtworkHtml(filepath) {
-  const url = artworkUrl(filepath);
+function clientArtworkUrl(filepath, signedUrl) {
+  if (signedUrl) {
+    try {
+      const u = new URL(signedUrl, location.origin);
+      return u.pathname + u.search;
+    } catch (_) { /* use fallback */ }
+  }
+  return artworkUrl(filepath);
+}
+
+function npArtworkHtml(filepath, signedUrl) {
+  const url = clientArtworkUrl(filepath, signedUrl);
   if (!url) {
     return '<div class="np-artwork np-artwork-fallback" aria-hidden="true"><i class="fa fa-compact-disc"></i></div>';
   }
@@ -231,10 +278,55 @@ function escHtml(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+/** Escape for single-quoted JS string literals inside HTML onclick attributes. */
+function escJsStr(s) {
+  return String(s || '')
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/"/g, '&quot;');
+}
+
+function songsAlbumHash(album, artist) {
+  const a = encodeURIComponent(album || '');
+  if (!artist) return `songs/album/${a}`;
+  return `songs/album/${a}/by/${encodeURIComponent(artist)}`;
+}
+
+function parseSongsRoute(params) {
+  _soArtist = '';
+  _soAlbum = '';
+  if (!params) return;
+  if (params.startsWith('artist/')) {
+    _soArtist = decodeURIComponent(params.slice(7));
+  } else if (params.startsWith('album/')) {
+    const rest = params.slice(6);
+    const byIdx = rest.indexOf('/by/');
+    if (byIdx >= 0) {
+      _soAlbum = decodeURIComponent(rest.slice(0, byIdx));
+      _soArtist = decodeURIComponent(rest.slice(byIdx + 4));
+    } else {
+      const tilde = rest.indexOf('~');
+      if (tilde >= 0) {
+        _soAlbum = decodeURIComponent(rest.slice(0, tilde));
+        _soArtist = decodeURIComponent(rest.slice(tilde + 1));
+      } else {
+        _soAlbum = decodeURIComponent(rest);
+      }
+    }
+  }
+}
+
+/** Escape only double quotes for double-quoted HTML attribute values.
+ * Deliberately leaves & alone: many call sites pass escJsStr() output that
+ * already contains &quot; entities, which a full HTML-escape would mangle. */
+function escAttr(s) {
+  return String(s || '').replace(/"/g, '&quot;');
+}
+
 /** Row action button — icon only; kind: play | run | edit | merge | delete | muted */
 function actionBtn({ kind, onclick, title, icon, extraClass, dataAttrs }) {
   const cls = ['action-btn', `action-${kind}`, extraClass].filter(Boolean).join(' ');
-  return `<button type="button" class="${cls}" onclick="${onclick}"${dataAttrs || ''} title="${escHtml(title)}" aria-label="${escHtml(title)}"><i class="fa fa-${icon}"></i></button>`;
+  return `<button type="button" class="${cls}" onclick="${escAttr(onclick)}"${dataAttrs || ''} title="${escHtml(title)}" aria-label="${escHtml(title)}"><i class="fa fa-${icon}"></i></button>`;
 }
 
 function rowActions(...buttons) {
@@ -245,16 +337,31 @@ function rowActions(...buttons) {
 // Router
 const routes = {};
 let currentRoute = '';
+let _routeGen = 0;
+
+function routeAlive(gen) {
+  return gen === undefined || gen === _routeGen;
+}
 
 function register(name, fn) { routes[name] = fn; }
 
 function navigate(hash) {
-  const [route, ...rest] = (hash || 'dashboard').split('/');
+  _routeGen++;
+  [_searchTimer, _rtPlTimer, _roomPlTimer, _autoPlTimer, _healthTimer,
+   window._pldq, window._soSd, window._plSd, window._arSd, window._alSd, window._searchDebounce].forEach(t => { if (t) clearTimeout(t); });
+  _searchTimer = _rtPlTimer = _roomPlTimer = _autoPlTimer = _healthTimer = null;
+  window._pldq = window._soSd = window._plSd = window._arSd = window._alSd = window._searchDebounce = null;
+  Object.values(_npVolumeTimers).forEach(t => clearTimeout(t));
+  _npVolumeTimers = {};
+  const pathOnly = (hash || 'dashboard').split('?')[0];
+  const [route, ...rest] = pathOnly.split('/');
   const params = rest.join('/');
   currentRoute = route;
 
   document.querySelectorAll('.nav-link').forEach(a => {
-    a.classList.toggle('active', a.getAttribute('href') === `#${route}`);
+    const href = a.getAttribute('href') || '';
+    const base = href.replace(/^#/, '');
+    a.classList.toggle('active', `#${route}` === href || (base && route.startsWith(base + '/')));
   });
 
   const fn = routes[route];
@@ -309,13 +416,13 @@ function searchInput(placeholder, id) {
 // Voice commands routed through the custom skill ("ask Bock Media to ..."). Each
 // maps to a real intent in skill/interaction_model.json. [bracketed] = fill-in.
 const VOICE_SUGGESTIONS = [
-  'Alexa, ask Bock Media to play my [playlist] playlist',
-  'Alexa, ask Bock Media to mix my [playlist] playlist',
-  'Alexa, ask Bock Media to play music by [artist]',
-  'Alexa, ask Bock Media to play the album [album]',
-  'Alexa, ask Bock Media to play the song [song] by [artist]',
-  'Alexa, ask Bock Media to play [genre] music',
-  "Alexa, ask Bock Media what's playing",
+  'Alexa, ask bock media to play my [playlist] playlist',
+  'Alexa, ask bock media to mix my [playlist] playlist',
+  'Alexa, ask bock media to play music by [artist]',
+  'Alexa, ask bock media to play the album [album]',
+  'Alexa, ask bock media to play the song [song] by [artist]',
+  'Alexa, ask bock media to play [genre] music',
+  "Alexa, ask bock media what's playing",
 ];
 
 // Spoken without "ask" once Bock Media is the active audio player (in-playback
@@ -353,14 +460,11 @@ function buildRoutinePhrase(playlist, shuffle) {
 
 register('routines', async () => {
   loading();
-  const data = await API('/api/playlists?page=1&limit=500&search=');
-  window._routinePlaylists = (data && data.items) || [];
+  window._routinePlaylists = [];
   renderRoutinesBuilder();
 });
 
 function renderRoutinesBuilder() {
-  const pls = window._routinePlaylists || [];
-  const options = pls.map(p => `<option value="${escHtml(p.name)}">${escHtml(p.name)}</option>`).join('');
   renderPage('Routines', `
     <div class="page-desc">
       Amazon doesn't let apps create Routines, so this builds the exact wording for you.
@@ -371,12 +475,15 @@ function renderRoutinesBuilder() {
     <div class="card" style="max-width:640px">
       <div class="card-header"><h3><i class="fa fa-bolt"></i> Routine Builder</h3></div>
       <div class="card-body">
-        ${pls.length ? `
         <label style="display:block;margin:4px 0 4px;font-size:13px;color:#888">Trigger phrase (what you say)</label>
         <input id="rt-trigger" class="settings-input" style="width:100%" placeholder="play my morning music" value="play my morning music">
 
         <label style="display:block;margin:14px 0 4px;font-size:13px;color:#888">Playlist</label>
-        <select id="rt-playlist" class="settings-input" style="width:100%">${options}</select>
+        <input id="rt-pl-search" class="settings-input" style="width:100%" placeholder="Search playlists…"
+          oninput="routineSearchPlaylists(this.value)">
+        <div id="rt-pl-results" class="auto-pl-results" style="margin-top:6px"></div>
+        <input type="hidden" id="rt-pl-id" value="">
+        <p id="rt-pl-picked" class="hint" style="margin:8px 0 0"></p>
 
         <label style="display:block;margin:14px 0 4px;font-size:13px;color:#888">
           <input type="checkbox" id="rt-shuffle"> Shuffle (uses "mix")
@@ -387,18 +494,55 @@ function renderRoutinesBuilder() {
         </div>
 
         <div id="rt-output" style="margin-top:18px"></div>
-        ` : `<p class="hint">No playlists found yet.</p>`}
       </div>
     </div>`);
-  if (pls.length) updateRoutineOutput();
 }
 
-function updateRoutineOutput() {
+let _rtPlTimer = null;
+function routineSearchPlaylists(q) {
+  clearTimeout(_rtPlTimer);
+  const box = document.getElementById('rt-pl-results');
+  if (!box) return;
+  _rtPlTimer = setTimeout(async () => {
+    const query = (q || '').trim();
+    if (query.length < 1) { box.innerHTML = ''; window._routinePlaylists = []; return; }
+    const data = await API(`/api/playlists?search=${encodeURIComponent(query)}&limit=25&page=1`);
+    const items = isApiError(data) ? [] : (data.items || []);
+    window._routinePlaylists = items;
+    box.innerHTML = items.map((p, idx) => `
+      <div class="auto-pl-item" onclick="routinePickPlaylist(${idx})">
+        ${escHtml(p.name)}<small>${fmtNum(p.trackCount)} tracks</small>
+      </div>`).join('') || `<div class="auto-pl-item" style="color:#889;cursor:default">No playlists found</div>`;
+  }, 250);
+}
+
+function routinePickPlaylist(i) {
+  const p = (window._routinePlaylists || [])[i];
+  if (!p) return;
+  document.getElementById('rt-pl-id').value = p.id || '';
+  const picked = document.getElementById('rt-pl-picked');
+  if (picked) picked.textContent = `Selected: ${p.name}`;
+  const box = document.getElementById('rt-pl-results');
+  if (box) box.innerHTML = '';
+}
+
+async function updateRoutineOutput() {
   const trigger = (document.getElementById('rt-trigger').value || '').trim() || 'play my music';
-  const playlist = document.getElementById('rt-playlist').value;
+  const pid = (document.getElementById('rt-pl-id') || {}).value || '';
+  const picked = document.getElementById('rt-pl-picked');
+  const playlist = (picked && picked.textContent || '').replace(/^Selected:\s*/, '') || '';
   const shuffle = document.getElementById('rt-shuffle').checked;
-  const phrase = buildRoutinePhrase(playlist, shuffle);
   const out = document.getElementById('rt-output');
+  if (!out) return;
+  out.innerHTML = '<p class="hint"><i class="fa fa-spinner fa-spin"></i> Generating phrase…</p>';
+  let phrase = buildRoutinePhrase(playlist, shuffle);
+  if (pid) {
+    const data = await API(
+      `/api/playlists/${encodeURIComponent(pid)}/alexa_phrase?shuffle=${shuffle ? 1 : 0}`,
+    );
+    if (!document.getElementById('rt-output')) return;
+    if (data && data.text) phrase = data.text;
+  }
   out.innerHTML = `
     <div class="rt-steps">
       <ol style="margin:0;padding-left:20px;line-height:1.8">
@@ -443,7 +587,8 @@ async function dashPlayFavorite(i) {
 async function dashRemoveFavorite(i) {
   const r = (window._dashQuickFavs || [])[i];
   if (!r || !r.path) return;
-  await fetch('/api/favorites', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: r.path }) });
+  const res = await authFetch('/api/favorites', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: r.path }) });
+  if (!res.ok) { showToast('Failed to remove favorite', true); return; }
   showToast('Removed from favorites');
   loadDashboard();
 }
@@ -455,15 +600,24 @@ register('dashboard', async () => {
 });
 
 async function loadDashboard() {
-  const [summary, recentData, quick, plexSync] = await Promise.all([
-    API('/api/summary'),
-    API(`/api/recent?page=${_dashPage}&limit=10`),
-    API('/api/dashboard/quick').catch(() => ({ recent: [], favorites: [] })),
-    API('/api/plex_sync/status').catch(() => null),
-  ]);
-
-  const s = summary || {};
-  const { items: recentItems = [], total: recentTotal = 0 } = recentData || {};
+  const gen = _routeGen;
+  const boot = await API(`/api/dashboard/bootstrap?page=${_dashPage}&limit=10`);
+  if (!routeAlive(gen)) return;
+  if (isApiError(boot)) {
+    document.getElementById('page-title').textContent = 'Dashboard';
+    document.getElementById('main-content').innerHTML = apiErrorHtml('Could not load dashboard.');
+    return;
+  }
+  if (boot.alexaRemote) {
+    window._alexaRemote = boot.alexaRemote;
+    _alexaRemoteAt = Date.now();
+  }
+  const s = boot.summary || {};
+  const recentData = boot.recent || {};
+  const quick = boot.quick || {};
+  const plexSync = boot.plexSync || null;
+  const recentItems = recentData.items || [];
+  const recentTotal = recentData.total || 0;
 
   const recentRows = recentItems.map(r => `
     <tr>
@@ -488,9 +642,6 @@ async function loadDashboard() {
   ).join('');
 
   const recentPager = buildPagination(recentTotal, _dashPage, 10, (p) => { _dashPage = p; loadDashboard(); });
-
-  loadHealth();
-  loadPlaybackCard();
 
   const quickRecent = (quick && quick.recent) || [];
   const quickFavs = (quick && quick.favorites) || [];
@@ -534,34 +685,35 @@ async function loadDashboard() {
       </div>
     </div>` : '';
 
+  if (!routeAlive(gen)) return;
   document.getElementById('page-title').textContent = 'Dashboard';
   document.getElementById('main-content').innerHTML = `
     <div class="stats-grid">
       <div class="stat-card">
         <div class="stat-icon blue"><i class="fa fa-music"></i></div>
         <div>
-          <div class="stat-value">${fmtNum(s.songs)}</div>
+          <div class="stat-value">${fmtNum(s?.songs)}</div>
           <div class="stat-label">Songs</div>
         </div>
       </div>
       <div class="stat-card">
         <div class="stat-icon teal"><i class="fa fa-folder-open"></i></div>
         <div>
-          <div class="stat-value">${fmtNum(s.watchFolders)}</div>
+          <div class="stat-value">${fmtNum(s?.watchFolders)}</div>
           <div class="stat-label">Watch Folders</div>
         </div>
       </div>
       <div class="stat-card">
         <div class="stat-icon purple"><i class="fa fa-compact-disc"></i></div>
         <div>
-          <div class="stat-value">${fmtNum(s.albums)}</div>
+          <div class="stat-value">${fmtNum(s?.albums)}</div>
           <div class="stat-label">Albums</div>
         </div>
       </div>
       <div class="stat-card">
         <div class="stat-icon orange"><i class="fa fa-microphone"></i></div>
         <div>
-          <div class="stat-value">${fmtNum(s.artists)}</div>
+          <div class="stat-value">${fmtNum(s?.artists)}</div>
           <div class="stat-label">Artists</div>
         </div>
       </div>
@@ -581,7 +733,7 @@ async function loadDashboard() {
       </div>
     </div>
 
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
+    <div class="dash-voice-grid">
       <div class="card">
         <div class="card-header">
           <h3><i class="fa fa-microphone"></i> Voice Commands</h3>
@@ -618,6 +770,14 @@ async function loadDashboard() {
       </table>
       ${recentPager}` : `<div class="empty-state"><i class="fa fa-history"></i><p>No recent play requests.</p></div>`}
     </div>`;
+  const hw = document.getElementById('health-card-wrap');
+  const pw = document.getElementById('playback-card-wrap');
+  if (hw) hw.innerHTML = buildHealthCard(boot.health, boot.alexaRemote);
+  if (pw) pw.innerHTML = buildPlaybackCard(boot.playback, boot.alexaRemote);
+  clearTimeout(_healthTimer);
+  _healthTimer = setTimeout(() => {
+    if (document.getElementById('health-card-wrap')) loadHealth();
+  }, 30000);
 }
 
 // ── Service health card ──────────────────────────────────────────────────────
@@ -672,16 +832,14 @@ function buildHealthCard(h, remote) {
     </div>`;
 }
 
-async function loadHealth() {
+async function loadHealth(gen) {
   const wrap = document.getElementById('health-card-wrap');
   if (!wrap) return;
-  const [h, remote] = await Promise.all([
-    API('/api/health'),
-    ensureAlexaRemoteStatus().catch(() => ({})),
-  ]);
-  wrap.innerHTML = buildHealthCard(h, remote);
+  const h = await API('/api/health');
+  const remote = window._alexaRemote || {};
+  if (gen !== undefined && !routeAlive(gen)) return;
+  wrap.innerHTML = buildHealthCard(isApiError(h) ? null : h, remote);
   clearTimeout(_healthTimer);
-  // Re-poll only while the dashboard is mounted.
   _healthTimer = setTimeout(() => {
     if (document.getElementById('health-card-wrap')) loadHealth();
   }, 30000);
@@ -712,38 +870,50 @@ function buildPlaybackCard(pb, remote) {
     </div>`;
 }
 
-async function loadPlaybackCard() {
+async function loadPlaybackCard(gen) {
   const wrap = document.getElementById('playback-card-wrap');
   if (!wrap) return;
-  const [pb, remote] = await Promise.all([
-    API('/api/playback/status').catch(() => null),
-    ensureAlexaRemoteStatus().catch(() => ({})),
-  ]);
-  wrap.innerHTML = buildPlaybackCard(pb, remote);
+  const pb = await API('/api/playback/status').catch(() => null);
+  const remote = window._alexaRemote || {};
+  if (gen !== undefined && !routeAlive(gen)) return;
+  wrap.innerHTML = buildPlaybackCard(isApiError(pb) ? null : pb, remote);
 }
 
 // ── Now Playing ──────────────────────────────────────────────────────────────
 let _npPage = 1;
 let _npPollTimer = null;
 let _npTickTimer = null;
+let _roomsPoll = null;
+
+function stopRoomsPoll() {
+  if (_roomsPoll) {
+    clearInterval(_roomsPoll);
+    _roomsPoll = null;
+  }
+}
 
 register('rooms', async () => {
   loading();
   await loadRooms();
-  if (!window._roomsPoll) {
-    window._roomsPoll = setInterval(() => {
-      if (currentRoute === 'rooms') loadRooms(true);
-    }, 8000);
-  }
+  stopRoomsPoll();
+  _roomsPoll = setInterval(() => {
+    if (currentRoute === 'rooms') loadRooms(true);
+  }, 8000);
 });
 
 async function loadRooms(quiet) {
+  const gen = _routeGen;
   const [data, remote] = await Promise.all([
     API('/api/rooms'),
-    ensureAlexaRemoteStatus(),
+    ensureAlexaRemoteConfigured(),
   ]);
-  const rooms = (data && data.rooms) || [];
-  const canPlay = !!(data && data.controlsAvailable) && !!(remote && remote.configured);
+  const rooms = isApiError(data) ? [] : ((data && data.rooms) || []);
+  const canPlay = !isApiError(data) && !!(data && data.controlsAvailable) && !!(remote && remote.configured);
+  if (!quiet && isApiError(data)) {
+    document.getElementById('page-title').textContent = 'Rooms';
+    document.getElementById('main-content').innerHTML = apiErrorHtml('Could not load rooms.');
+    return;
+  }
   if (!quiet) document.getElementById('page-title').textContent = 'Rooms';
   const cards = rooms.map(r => {
     const np = r.nowPlaying;
@@ -757,7 +927,7 @@ async function loadRooms(quiet) {
       `<div class="room-auto">${escHtml(a.time || '')} · ${escHtml(a.playlistName || '')}${a.enabled === false ? ' (off)' : ''}</div>`
     ).join('') || '<div class="room-auto text-muted">No automations</div>';
     const playBtn = canPlay && r.serial && !r.pseudo
-      ? `<button class="btn-sm btn-default" onclick="roomQuickPlay('${escHtml(r.serial)}','${escHtml(r.name)}')"><i class="fa fa-play"></i> Play…</button>`
+      ? `<button type="button" class="btn-sm btn-default room-quick-play" data-serial="${escHtml(r.serial)}" data-room="${escHtml(r.name)}"><i class="fa fa-play"></i> Play…</button>`
       : '';
     return `
       <div class="room-card${r.pseudo ? ' room-pseudo' : ''}">
@@ -778,6 +948,7 @@ async function loadRooms(quiet) {
       </div>`;
   }).join('');
   const inner = cards || '<div class="empty-state"><p>No Echo devices found — configure alexaRemote and run alexa_login.py.</p></div>';
+  if (!routeAlive(gen)) return;
   if (quiet) {
     const grid = document.querySelector('.rooms-grid');
     if (grid) grid.outerHTML = `<div class="rooms-grid">${inner}</div>`;
@@ -788,27 +959,93 @@ async function loadRooms(quiet) {
   }
 }
 
-async function roomQuickPlay(serial, name) {
-  const pl = prompt(`Playlist to start on ${name}:`, '');
-  if (!pl || !pl.trim()) return;
-  try {
-    const res = await fetch('/api/playlists/play', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ device: serial, name: pl.trim(), kind: 'playlist' }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      const msg = /not_authenticated/.test(data.error || '')
-        ? 'Alexa session expired — re-run scripts/alexa_login.py'
-        : (data.error || 'Play failed');
-      return showToast(msg, true);
+let _roomPlTimer = null;
+
+async function roomQuickPlay(serial, roomName) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = `
+    <div class="modal-box" style="max-width:440px">
+      <h3 style="margin-top:0"><i class="fa fa-play"></i> Play on ${escHtml(roomName)}</h3>
+      <label style="display:block;margin:8px 0 4px;font-size:13px;color:#888">Playlist</label>
+      <input type="text" id="room-pl-search" class="settings-input" style="width:100%" placeholder="Search playlists…" autocomplete="off">
+      <div id="room-pl-results" class="auto-pl-results"></div>
+      <input type="hidden" id="room-pl-id">
+      <input type="hidden" id="room-pl-name">
+      <label style="display:flex;align-items:center;gap:8px;margin:14px 0">
+        <input type="checkbox" id="room-pl-shuffle"> Shuffle
+      </label>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
+        <button class="cancel-btn" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+        <button class="save-btn" id="room-pl-go">Play</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const searchEl = overlay.querySelector('#room-pl-search');
+  searchEl.oninput = () => roomSearchPlaylists(searchEl.value);
+  roomSearchPlaylists('');
+  overlay.querySelector('#room-pl-go').onclick = async () => {
+    const pid = overlay.querySelector('#room-pl-id').value;
+    const pname = overlay.querySelector('#room-pl-name').value || searchEl.value.trim();
+    const shuffle = overlay.querySelector('#room-pl-shuffle').checked;
+    if (!pname) return showToast('Select a playlist', true);
+    const btn = overlay.querySelector('#room-pl-go');
+    btn.disabled = true;
+    btn.textContent = 'Sending…';
+    try {
+      const res = await fetch('/api/alexa_remote/play', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          device: serial, kind: 'playlist', id: pid, name: pname, shuffle,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      overlay.remove();
+      if (!res.ok) {
+        const msg = /not_authenticated/.test(data.error || '')
+          ? 'Alexa session expired — re-run scripts/alexa_login.py'
+          : (data.error || 'Play failed');
+        return showToast(msg, true);
+      }
+      showToast(`Playing on ${data.device || roomName}`);
+      loadRooms(true);
+    } catch (e) {
+      showToast(e.message || 'Play failed', true);
     }
-    showToast(`Playing on ${data.device || name}`);
-    loadRooms(true);
-  } catch (e) {
-    showToast(e.message || 'Play failed', true);
-  }
+  };
+}
+
+async function roomSearchPlaylists(q) {
+  clearTimeout(_roomPlTimer);
+  const box = document.getElementById('room-pl-results');
+  if (!box) return;
+  _roomPlTimer = setTimeout(async () => {
+    const query = (q || '').trim();
+    const data = await API(
+      `/api/playlists?search=${encodeURIComponent(query)}&limit=25&page=1`,
+    );
+    const items = isApiError(data) ? [] : (data.items || []);
+    box.innerHTML = items.map((p, idx) => `
+      <div class="auto-pl-item" onclick="roomPickPlaylist(${idx})">
+        ${escHtml(p.name)}<small>${fmtNum(p.trackCount)} tracks</small>
+      </div>`).join('') || `<div class="auto-pl-item" style="color:#889;cursor:default">No playlists found</div>`;
+    window._roomPlResults = items;
+  }, 250);
+}
+
+function roomPickPlaylist(i) {
+  const p = (window._roomPlResults || [])[i];
+  if (!p) return;
+  const search = document.getElementById('room-pl-search');
+  const idEl = document.getElementById('room-pl-id');
+  const nameEl = document.getElementById('room-pl-name');
+  const box = document.getElementById('room-pl-results');
+  if (search) search.value = p.name;
+  if (idEl) idEl.value = p.id || '';
+  if (nameEl) nameEl.value = p.name;
+  if (box) box.innerHTML = '';
 }
 
 register('nowplaying', async () => {
@@ -819,6 +1056,7 @@ register('nowplaying', async () => {
   await loadNowPlaying();
   _npPollTimer = setInterval(async () => {
     const data = await API('/api/nowplaying_devices');
+    if (isApiError(data)) return;
     window._npItems = (data && data.items) || [];
     window._npControlsAvailable = !!(data && data.controlsAvailable);
     const card = document.getElementById('np-current-card');
@@ -860,7 +1098,7 @@ function npFmtSec(sec) {
 // it last wrote `timestamp`, so we extrapolate in real time while playing.
 function npElapsedSec(d) {
   const base = (d.offset_ms || 0) / 1000;
-  const since = d.paused ? 0 : Math.max(0, Date.now() / 1000 - (d.timestamp || 0));
+  const since = (d.paused || d.stopped) ? 0 : Math.max(0, Date.now() / 1000 - (d.timestamp || 0));
   let elapsed = base + (d.timestamp ? since : 0);
   const dur = (d.duration_ms || 0) / 1000;
   if (dur) elapsed = Math.min(elapsed, dur);
@@ -913,36 +1151,40 @@ function npTickTimes() {
 function buildDeviceRow(d, controlsAvailable = false) {
   const devAttr = ` data-device-id="${escHtml(d.deviceId)}"`;
   const shuffleCls = npDeviceIdClass(d.deviceId);
+  window._npShuffle = window._npShuffle || {};
+  if (d.shuffle != null) window._npShuffle[d.deviceId] = !!d.shuffle;
+  const shuffleOn = window._npShuffle[d.deviceId];
   const controls = npCanControl(d, controlsAvailable) ? `
     <div class="np-controls row-actions">
       ${actionBtn({ kind: 'muted', onclick: "npControlEl(this,'previous')", title: 'Previous', icon: 'backward-step', dataAttrs: devAttr })}
       ${actionBtn({ kind: 'play', onclick: "npControlEl(this,'play')", title: 'Play', icon: 'play', dataAttrs: devAttr })}
       ${actionBtn({ kind: 'muted', onclick: "npControlEl(this,'pause')", title: 'Pause', icon: 'pause', dataAttrs: devAttr })}
       ${actionBtn({ kind: 'muted', onclick: "npControlEl(this,'next')", title: 'Next', icon: 'forward-step', dataAttrs: devAttr })}
-      ${actionBtn({ kind: 'muted', onclick: 'npToggleShuffleEl(this)', title: 'Shuffle', icon: 'shuffle', extraClass: `np-shuffle-btn np-shuffle-${shuffleCls}`, dataAttrs: devAttr })}
+      ${actionBtn({ kind: 'muted', onclick: 'npToggleShuffleEl(this)', title: 'Shuffle', icon: 'shuffle', extraClass: `np-shuffle-btn np-shuffle-${shuffleCls}${shuffleOn ? ' shuffle-on' : ''}`, dataAttrs: devAttr })}
       ${actionBtn({ kind: 'muted', onclick: 'npOpenSleepEl(this)', title: 'Sleep timer', icon: 'moon', dataAttrs: devAttr })}
       ${d.filepath ? actionBtn({ kind: 'muted', onclick: 'npFavoriteEl(this)', title: 'Add to favorites', icon: 'star', dataAttrs: devAttr }) : ''}
       ${d.filepath ? actionBtn({ kind: 'muted', onclick: 'npNeverAgainEl(this)', title: 'Never play this song again', icon: 'ban', dataAttrs: devAttr }) : ''}
       ${actionBtn({ kind: 'delete', onclick: "npControlEl(this,'stop')", title: 'Stop', icon: 'stop', dataAttrs: devAttr })}
     </div>` : '';
-  const pausedBadge = d.paused ? '<span class="np-paused-badge">Paused</span>' : '';
+  const pausedBadge = d.paused ? '<span class="np-paused-badge">Paused</span>'
+    : (d.stopped ? '<span class="np-paused-badge">Stopped</span>' : '');
   const sleepBadge = d.sleep ? `<span class="np-sleep-badge" title="Sleep timer armed"><i class="fa fa-moon"></i> ${
     d.sleep.type === 'time' ? `${d.sleep.remainingMin}m` : `${d.sleep.remaining} left`}</span>` : '';
   const canControl = npCanControl(d, controlsAvailable);
   window._npVolume = window._npVolume || {};
   const knownVol = window._npVolume[d.deviceId];
-  const vol = (knownVol == null) ? 50 : knownVol;
+  const vol = (knownVol == null) ? 0 : knownVol;
   const volume = canControl ? `
     <div class="np-volume">
       <i class="fa fa-volume-low np-volume-icon"></i>
       <input type="range" class="np-volume-slider" min="0" max="100" value="${vol}"
-        oninput="npVolumeEl(this)" onchange="npVolumeEl(this)" ${devAttr}>
+        oninput="npVolumeEl(this)" onchange="npVolumeEl(this)" ${knownVol == null ? 'disabled' : ''} ${devAttr}>
       <span class="np-volume-val">${knownVol == null ? '—' : knownVol}</span>
     </div>` : '';
   return `
-    <div class="np-device-row${d.paused ? ' np-device-paused' : ''}">
+    <div class="np-device-row${(d.paused || d.stopped) ? ' np-device-paused' : ''}">
       <div class="np-device-main">
-        ${npArtworkHtml(d.filepath)}
+        ${npArtworkHtml(d.filepath, d.artworkUrl)}
         <div class="np-device-meta">
           <div class="np-track">${escHtml(d.track || '—')} ${pausedBadge} ${sleepBadge}</div>
           ${d.artist ? `<div class="np-artist">${escHtml(d.artist)}</div>` : ''}
@@ -1023,6 +1265,7 @@ async function npLoadVolumes() {
       const cls = npDeviceIdClass(d.deviceId);
       document.querySelectorAll(`.np-volume-slider[data-device-id="${cssEsc(d.deviceId)}"]`).forEach(sl => {
         sl.value = v;
+        sl.disabled = false;
         const valEl = sl.parentElement && sl.parentElement.querySelector('.np-volume-val');
         if (valEl) valEl.textContent = v;
       });
@@ -1042,10 +1285,11 @@ async function npControlEl(btn, action) {
 
 async function npControl(deviceId, action) {
   const d = (window._npItems || []).find(x => x.deviceId === deviceId);
-  if (!d || !d.deviceName) return;
+  if (!d || !d.deviceName) return false;
   const serial = npResolveSerial(d);
   if (!serial) {
-    return showToast(`Can't control "${d.deviceName}" — rename it on the Devices tab to match the Echo's Alexa name.`, true);
+    showToast(`Can't control "${d.deviceName}" — rename it on the Devices tab to match the Echo's Alexa name.`, true);
+    return false;
   }
   try {
     const res = await fetch('/api/alexa_remote/control', {
@@ -1063,15 +1307,18 @@ async function npControl(deviceId, action) {
       const msg = /not_authenticated/.test(data.error || '')
         ? 'Alexa session expired — re-run scripts/alexa_login.py'
         : (data.error || 'Control failed');
-      return showToast(msg, true);
+      showToast(msg, true);
+      return false;
     }
     const fresh = await API('/api/nowplaying_devices');
     window._npItems = (fresh && fresh.items) || window._npItems;
     const card = document.getElementById('np-current-card');
     if (card) card.outerHTML = buildCurrentCard(window._npItems, window._npControlsAvailable);
     npLoadVolumes();
+    return true;
   } catch (e) {
     showToast(e.message || 'Control failed', true);
+    return false;
   }
 }
 
@@ -1155,9 +1402,11 @@ async function npToggleShuffleEl(btn) {
   if (!d || !d.deviceName) return;
   window._npShuffle = window._npShuffle || {};
   const on = !window._npShuffle[deviceId];
-  window._npShuffle[deviceId] = on;
-  await npControl(deviceId, on ? 'shuffle_on' : 'shuffle_off');
-  btn.classList.toggle('shuffle-on', on);
+  const ok = await npControl(deviceId, on ? 'shuffle_on' : 'shuffle_off');
+  if (ok) {
+    window._npShuffle[deviceId] = on;
+    btn.classList.toggle('shuffle-on', on);
+  }
 }
 
 // Map a now-playing row to the device group it belongs to (by serial), so
@@ -1196,7 +1445,7 @@ function groupNowPlaying(list) {
 
 function buildGroupRow(g, controlsAvailable) {
   const sub = g.members.map(d => buildDeviceRow(d, controlsAvailable)).join('');
-  const groupArt = g.members[0] ? npArtworkHtml(g.members[0].filepath) : '';
+  const groupArt = g.members[0] ? npArtworkHtml(g.members[0].filepath, g.members[0].artworkUrl) : '';
   return `
     <div class="np-group">
       <div class="np-group-header">
@@ -1244,20 +1493,34 @@ function buildCurrentCard(items, controlsAvailable = false) {
 }
 
 async function loadNowPlaying() {
+  const gen = _routeGen;
   const [npDevices, histData, remote] = await Promise.all([
     API('/api/nowplaying_devices'),
     API(`/api/nowplaying?page=${_npPage}&limit=25`),
-    ensureAlexaRemoteStatus(),
+    ensureAlexaRemoteConfigured(),
   ]);
-  const { items = [], total = 0 } = histData || {};
-  window._npItems = (npDevices && npDevices.items) || [];
-  window._npControlsAvailable = !!(npDevices && npDevices.controlsAvailable) && !!(remote && remote.configured);
+  if (isApiError(npDevices) && isApiError(histData)) {
+    if (!routeAlive(gen)) return;
+    document.getElementById('page-title').textContent = 'Now Playing';
+    document.getElementById('main-content').innerHTML = apiErrorHtml('Could not load now playing.');
+    return;
+  }
+  const { items = [], total = 0 } = isApiError(histData) ? {} : (histData || {});
+  window._npItems = isApiError(npDevices) ? [] : ((npDevices && npDevices.items) || []);
+  window._npControlsAvailable = !isApiError(npDevices) && !!(npDevices && npDevices.controlsAvailable) && !!(remote && remote.configured);
+  window._npItems.forEach((d) => {
+    if (d.shuffle != null) {
+      window._npShuffle = window._npShuffle || {};
+      window._npShuffle[d.deviceId] = !!d.shuffle;
+    }
+  });
   if (window._npControlsAvailable) {
     await ensureAlexaDevices().catch(() => []);
     // Device groups drive group-aware Now Playing (collapse multi-room playback).
-    if (!window._deviceGroups) {
+    if (!window._deviceGroups || window._deviceGroupsStale) {
       const g = await API('/api/device_groups').catch(() => null);
-      window._deviceGroups = (g && g.items) || [];
+      window._deviceGroups = isApiError(g) ? [] : ((g && g.items) || []);
+      window._deviceGroupsStale = false;
     }
   }
 
@@ -1272,6 +1535,7 @@ async function loadNowPlaying() {
       <td class="text-muted" style="font-size:11px">${fmtDateTime(e.date)}</td>
     </tr>`).join('');
 
+  if (!routeAlive(gen)) return;
   document.getElementById('page-title').textContent = 'Now Playing';
   document.getElementById('main-content').innerHTML = `
     ${currentCard}
@@ -1298,7 +1562,7 @@ async function refreshCurrentTrack() {
   const bar = document.getElementById('now-playing-bar');
   const txt = document.getElementById('np-track-text');
   if (!bar || !txt) return;
-  const items = (data && data.items) || [];
+  const items = (isApiError(data) ? [] : ((data && data.items) || [])).filter(c => !c.stopped);
   if (items.length) {
     const labels = items.map(c => {
       const base = c.artist ? `${c.track} — ${c.artist}` : c.track;
@@ -1323,8 +1587,7 @@ let _plDetailQ = '';
 const _plDetailPageSize = 100;
 let _plListSort = { by: 'name', order: 'asc' };
 const _plPageSize = 100;
-let _plAllCache = null;
-let _plAllCacheSearch = null;
+let _plTotal = 0;
 
 function plSortPlaylistsInMemory(list, by, order) {
   const desc = order === 'desc';
@@ -1358,7 +1621,7 @@ function plListSort(by) {
   const label = by === 'trackCount' ? 'Tracks' : 'Name';
   const arrow = _plListSort.order === 'desc' ? 'Z→A' : 'A→Z';
   showToast(`Sorted by ${label} (${arrow})`);
-  renderPlaylistsPage();
+  loadPlaylists(true);
 }
 window.plListSort = plListSort;
 
@@ -1431,7 +1694,8 @@ function setupPlaylistSortDelegation() {
 
 register('playlists', async (params) => {
   if (params && params.startsWith('detail/')) {
-    _plDetailId = params.slice(7);
+    const rawId = params.slice(7);
+    try { _plDetailId = decodeURIComponent(rawId); } catch { _plDetailId = rawId; }
     _plDetailPage = 1;
     _plDetailQ = '';
     _plDetailSort = { by: 'title', order: 'asc' };
@@ -1446,9 +1710,14 @@ register('playlists', async (params) => {
   await loadPlaylists();
 });
 
-function plToggleMerge(id, checked) {
-  if (checked) _plMergeSel.add(id);
-  else _plMergeSel.delete(id);
+const _plMergeNames = {};
+function plToggleMerge(id, checked, name) {
+  if (checked) {
+    _plMergeSel.add(id);
+    if (name) _plMergeNames[id] = name;
+  } else {
+    _plMergeSel.delete(id);
+  }
 }
 
 function openNewPlaylistModal() {
@@ -1522,7 +1791,6 @@ function openSmartPlaylistModal() {
     overlay.remove();
     if (!res.ok) return showToast(data.error || 'Failed', true);
     showToast(`Smart playlist "${data.name}" — ${fmtNum(data.trackCount)} tracks`);
-    _plAllCache = null;
     loadPlaylists();
   };
 }
@@ -1532,7 +1800,6 @@ async function refreshSmartPlaylist(id) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) return showToast(data.error || 'Refresh failed', true);
   showToast(`Refreshed — ${fmtNum(data.trackCount)} tracks`);
-  _plAllCache = null;
   loadPlaylists();
 }
 
@@ -1546,7 +1813,7 @@ async function deleteSmartPlaylist(id) {
 function openMergePlaylistsModal() {
   const ids = [..._plMergeSel];
   if (ids.length < 2) return showToast('Select at least 2 playlists (checkboxes)', true);
-  const names = ids.map(id => (window._playlists || []).find(p => p.id === id)?.name || id);
+  const names = ids.map(id => (window._playlists || []).find(p => p.id === id)?.name || _plMergeNames[id] || id);
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
@@ -1649,12 +1916,13 @@ function openAiPlaylistModal() {
 
 async function loadPlaylistDetail(id) {
   _plDetailId = id;
-  const remote = await ensureAlexaRemoteStatus();
+  const remote = await ensureAlexaRemoteConfigured();
   window._plRemote = remote || {};
   await loadPlaylistDetailPage(false);
 }
 
 async function loadPlaylistDetailPage(quiet) {
+  const gen = _routeGen;
   const id = _plDetailId;
   if (!id) return;
   if (!quiet) {
@@ -1662,12 +1930,31 @@ async function loadPlaylistDetailPage(quiet) {
     if (mc) mc.style.opacity = '0.6';
   }
   const q = `page=${_plDetailPage}&limit=${_plDetailPageSize}&sortBy=${encodeURIComponent(_plDetailSort.by)}&order=${encodeURIComponent(_plDetailSort.order)}${_plDetailQ ? '&q=' + encodeURIComponent(_plDetailQ) : ''}`;
-  const data = await fetch(`/api/playlists/${encodeURIComponent(id)}?${q}`).then(r => r.json()).catch(() => null);
+  const res = await authFetch(`/api/playlists/${encodeURIComponent(id)}?${q}`);
+  if (!routeAlive(gen)) {
+    const mc = document.getElementById('main-content');
+    if (mc) mc.style.opacity = '1';
+    return;
+  }
+  if (res.status === 401 && authRequired()) {
+    const mc = document.getElementById('main-content');
+    if (mc) mc.style.opacity = '1';
+    showLoginModal();
+    return;
+  }
+  const data = res.ok ? await res.json().catch(() => null) : null;
   if (!data || data.error) {
-    renderPage('Playlist', '<div class="empty-state"><p>Playlist not found.</p></div>');
+    const mc = document.getElementById('main-content');
+    if (mc) mc.style.opacity = '1';
+    renderPage('Playlist', apiErrorHtml(data && data.error ? data.error : 'Playlist not found.'));
     return;
   }
   window._plDetail = data;
+  if (!routeAlive(gen)) {
+    const mc = document.getElementById('main-content');
+    if (mc) mc.style.opacity = '1';
+    return;
+  }
   renderPlaylistDetailBody();
   const mc = document.getElementById('main-content');
   if (mc) mc.style.opacity = '1';
@@ -1683,6 +1970,11 @@ function renderPlaylistDetailBody() {
   const pageSize = data.limit || _plDetailPageSize;
   const page = data.page || _plDetailPage;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  if (page > totalPages) {
+    _plDetailPage = totalPages;
+    loadPlaylistDetailPage(true);
+    return;
+  }
   if (_plDetailPage > totalPages) _plDetailPage = totalPages;
   const start = (page - 1) * pageSize;
   const pageTracks = tracks;
@@ -1774,9 +2066,9 @@ function plPlayPlaylist() {
 }
 
 function plPlayTrackAt(path) {
+  if (!path) return;
   const t = (window._plDetail && window._plDetail.tracks || []).find(x => x.path === path);
-  if (!t) return;
-  const opts = songPlayOpts(t);
+  const opts = songPlayOpts(t || { path });
   if (opts) playOnDevice(opts);
 }
 
@@ -1816,18 +2108,48 @@ async function plDeleteDetail() {
   window.location.hash = 'playlists';
 }
 
-async function ensureAlexaRemoteStatus() {
-  if (window._alexaRemote) return window._alexaRemote;
+let _alexaRemoteAt = 0;
+
+function alexaPlayConfigured() {
+  return !!(window._alexaRemote && window._alexaRemote.configured);
+}
+
+async function ensureAlexaRemoteConfigured(force) {
+  const now = Date.now();
+  if (!force && window._alexaRemote && now - _alexaRemoteAt < 300000) {
+    return window._alexaRemote;
+  }
   try {
-    window._alexaRemote = await API('/api/alexa_remote/status') || { available: false };
+    const st = await API('/api/alexa_remote/status?probe=0');
+    window._alexaRemote = isApiError(st) ? { available: false } : (st || { available: false });
+    _alexaRemoteAt = now;
   } catch (e) {
     window._alexaRemote = { available: false, configured: false };
+    _alexaRemoteAt = now;
+  }
+  return window._alexaRemote;
+}
+
+async function ensureAlexaRemoteStatus(force) {
+  const now = Date.now();
+  if (!force && window._alexaRemote && window._alexaRemote.authenticated != null && now - _alexaRemoteAt < 60000) {
+    return window._alexaRemote;
+  }
+  try {
+    const st = await API('/api/alexa_remote/status?probe=1');
+    window._alexaRemote = isApiError(st) ? { available: false } : (st || { available: false });
+    _alexaRemoteAt = now;
+  } catch (e) {
+    window._alexaRemote = { available: false, configured: false };
+    _alexaRemoteAt = now;
   }
   return window._alexaRemote;
 }
 
 function invalidateAlexaRemoteStatus() {
   window._alexaRemote = null;
+  window._alexaDevices = null;
+  _alexaRemoteAt = 0;
 }
 
 let _alexaLoginPoll = null;
@@ -1870,6 +2192,10 @@ function updateAlexaLoginPanel(st) {
 async function pollAlexaLogin() {
   clearInterval(_alexaLoginPoll);
   _alexaLoginPoll = setInterval(async () => {
+    if (currentRoute !== 'settings') {
+      clearInterval(_alexaLoginPoll);
+      return;
+    }
     const st = await API('/api/alexa_remote/login').catch(() => null);
     if (!st) return;
     updateAlexaLoginPanel(st);
@@ -1878,7 +2204,7 @@ async function pollAlexaLogin() {
       invalidateAlexaRemoteStatus();
       showToast('Alexa login successful');
       if (document.getElementById('alexa-login-panel')) {
-        const remote = await ensureAlexaRemoteStatus();
+        const remote = await ensureAlexaRemoteStatus(true);
         updateAlexaLoginPanel({ ...remote, ...st, authenticated: true });
       }
       loadHealth();
@@ -1945,60 +2271,65 @@ function buildAlexaRemoteSettingsSection(remote, localIp) {
 }
 
 async function loadPlaylists(showSpinner) {
+  const gen = _routeGen;
   if (showSpinner && document.querySelector('.playlists-table')) {
     document.querySelector('.playlists-table').style.opacity = '0.55';
   }
-  const searchKey = (_plSearch || '').trim().toLowerCase();
-  const needFetch = !_plAllCache || _plAllCacheSearch !== searchKey;
+  const sortBy = _plListSort.by === 'trackCount' ? 'trackCount' : 'name';
+  const order = _plListSort.order;
   const [listData, remoteStatus, smartData] = await Promise.all([
-    needFetch
-      ? API(`/api/playlists?page=1&limit=10000&search=${encodeURIComponent(_plSearch)}`)
-      : Promise.resolve(null),
-    ensureAlexaRemoteStatus(),
+    API(`/api/playlists?page=${_plPage}&limit=${_plPageSize}&search=${encodeURIComponent(_plSearch)}&sortBy=${sortBy}&order=${order}`),
+    ensureAlexaRemoteConfigured(),
     API('/api/smart_playlists').catch(() => ({ items: [] })),
   ]);
-  window._smartPlaylists = (smartData && smartData.items) || [];
-  if (needFetch) {
-    _plAllCache = (listData && listData.items) || [];
-    _plAllCacheSearch = searchKey;
-  }
+  window._smartPlaylists = isApiError(smartData) ? [] : ((smartData && smartData.items) || []);
+  window._playlists = isApiError(listData) ? [] : ((listData && listData.items) || []);
+  _plTotal = isApiError(listData) ? 0 : ((listData && listData.total) || window._playlists.length);
   window._plRemote = remoteStatus || window._plRemote || {};
+  if (!routeAlive(gen)) return;
   renderPlaylistsPage();
 }
 
 function renderPlaylistsPage() {
+  const gen = _routeGen;
   const remote = window._plRemote || {};
   const canPlay = !!(remote.configured);
-  const sorted = plSortPlaylistsInMemory(_plAllCache || [], _plListSort.by, _plListSort.order);
-  const total = sorted.length;
-  const start = (_plPage - 1) * _plPageSize;
-  const items = sorted.slice(start, start + _plPageSize);
-  window._playlists = items;
+  const total = _plTotal;
+  const items = window._playlists || [];
 
   const rows = items.map((p, i) => {
-    const isLibraryPlaylist = !p.source || p.source.includes('MyMedia');
+    const isLibraryPlaylist = !p.source || String(p.source).includes('MyMedia');
     const typeIcon = p.isAudioBook
       ? `<i class="fa fa-book" title="Audiobook" style="color:#7c4dbd"></i>`
       : `<i class="fa fa-music" title="Music" style="color:#e99d1a"></i>`;
     const srcDisplay = p.sourceName === 'bockmedia'
       ? '<span class="badge green">Custom</span>'
-      : (p.source && p.source.includes('plex') ? '<span class="badge">Plex</span>' : (
+      : (p.source && String(p.source).includes('plex') ? '<span class="badge">Plex</span>' : (
         isLibraryPlaylist ? '<span class="badge orange">Bock Media</span>' : '<span class="badge">File</span>'));
     const checked = _plMergeSel.has(p.id) ? 'checked' : '';
     const mergeCb = p.id
-      ? `<input type="checkbox" class="pl-merge-cb" ${checked} onchange="plToggleMerge('${escHtml(p.id)}', this.checked)">`
+      ? `<input type="checkbox" class="pl-merge-cb" ${checked} onchange="plToggleMerge('${escJsStr(p.id)}', this.checked, '${escJsStr(p.name)}')">`
       : '';
     const editBtn = p.id
       ? actionBtn({ kind: 'edit', onclick: `startEditPlaylist(${i})`, title: 'Rename playlist', icon: 'pen' })
       : '';
     const viewBtn = p.id
-      ? actionBtn({ kind: 'muted', onclick: `window.location.hash='playlists/detail/${escHtml(p.id)}'`, title: 'View tracks', icon: 'list' })
+      ? actionBtn({ kind: 'muted', onclick: `window.location.hash='playlists/detail/${encodeURIComponent(p.id)}'`, title: 'View tracks', icon: 'list' })
+      : '';
+    const mergeBtn = p.id
+      ? actionBtn({
+          kind: 'merge',
+          onclick: `plToggleMerge('${escJsStr(p.id)}', ${!_plMergeSel.has(p.id)}, '${escJsStr(p.name)}')`,
+          title: 'Select for merge',
+          icon: 'object-group',
+          extraClass: _plMergeSel.has(p.id) ? 'action-active' : '',
+        })
       : '';
     const playBtn = canPlay
       ? actionBtn({ kind: 'play', onclick: `openPlayMenu(${i})`, title: 'Play on a device', icon: 'play' })
       : '';
     const nameCell = p.id
-      ? `<a href="#playlists/detail/${escHtml(p.id)}" class="pl-name-link">${escHtml(p.name)}</a>`
+      ? `<a href="#playlists/detail/${encodeURIComponent(p.id)}" class="pl-name-link">${escHtml(p.name)}</a>`
       : `<span class="pl-name-text">${escHtml(p.name)}</span>`;
     return `
     <tr id="pl-row-${i}">
@@ -2007,7 +2338,7 @@ function renderPlaylistsPage() {
       <td class="pl-col-name">${nameCell}</td>
       <td class="pl-col-source">${srcDisplay}</td>
       <td class="pl-col-tracks"><span class="badge orange">${fmtNum(p.trackCount)}</span></td>
-      ${rowActions(playBtn, viewBtn, editBtn)}
+      ${rowActions(playBtn, mergeBtn, viewBtn, editBtn)}
     </tr>`;
   }).join('');
 
@@ -2020,16 +2351,17 @@ function renderPlaylistsPage() {
       <td class="text-muted">${fmtNum(s.trackCount || 0)}</td>
       <td class="text-muted" style="font-size:11px">${s.lastRefresh ? fmtDateTime(s.lastRefresh) : '—'}</td>
       <td>${rowActions(
-        s.linkedPlaylistId ? actionBtn({ kind: 'muted', onclick: `window.location.hash='playlists/detail/${escHtml(s.linkedPlaylistId)}'`, title: 'Open', icon: 'list' }) : '',
-        actionBtn({ kind: 'edit', onclick: `refreshSmartPlaylist('${escHtml(s.id)}')`, title: 'Refresh from rules', icon: 'rotate' }),
-        actionBtn({ kind: 'delete', onclick: `deleteSmartPlaylist('${escHtml(s.id)}')`, title: 'Delete', icon: 'trash' })
+        s.linkedPlaylistId ? actionBtn({ kind: 'muted', onclick: `window.location.hash='playlists/detail/${encodeURIComponent(s.linkedPlaylistId)}'`, title: 'Open', icon: 'list' }) : '',
+        actionBtn({ kind: 'edit', onclick: `refreshSmartPlaylist('${escJsStr(s.id)}')`, title: 'Refresh from rules', icon: 'rotate' }),
+        actionBtn({ kind: 'delete', onclick: `deleteSmartPlaylist('${escJsStr(s.id)}')`, title: 'Delete', icon: 'trash' })
       )}</td>
     </tr>`).join('');
 
+  if (!routeAlive(gen)) return;
   document.getElementById('page-title').textContent = 'Playlists';
   document.getElementById('main-content').innerHTML = `
     <div class="page-desc">
-      ${fmtNum(total)} playlists — sorted by <b>${sortLabel}</b> ${sortArrow} (all pages).
+      ${fmtNum(total)} playlists — sorted by <b>${sortLabel}</b> ${sortArrow}.
       Click column headers to re-sort. Page ${_plPage} of ${Math.max(1, Math.ceil(total / _plPageSize))}.
     </div>
     <div class="card" style="margin-bottom:20px">
@@ -2049,7 +2381,7 @@ function renderPlaylistsPage() {
         <div class="pl-toolbar">
           <div class="search-bar" style="margin:0">
             <input type="text" placeholder="Search playlists…" value="${escHtml(_plSearch)}"
-              oninput="clearTimeout(window._sd);window._sd=setTimeout(()=>{_plSearch=this.value;_plPage=1;_plAllCache=null;loadPlaylists()},350)">
+              oninput="clearTimeout(window._plSd);window._plSd=setTimeout(()=>{_plSearch=this.value;_plPage=1;loadPlaylists()},350)">
           </div>
           <button class="btn-sm btn-primary" onclick="openNewPlaylistModal()"><i class="fa fa-plus"></i> New</button>
           <button class="btn-sm btn-default" onclick="openMergePlaylistsModal()"><i class="fa fa-code-merge"></i> Merge</button>
@@ -2067,7 +2399,7 @@ function renderPlaylistsPage() {
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>` : `<div class="empty-state"><i class="fa fa-list"></i><p>No playlists found.</p></div>`}
-      ${buildPagination(total, _plPage, _plPageSize, (p) => { _plPage = p; renderPlaylistsPage(); })}
+      ${buildPagination(total, _plPage, _plPageSize, (p) => { _plPage = p; loadPlaylists(true); })}
     </div>`;
   const tbl = document.querySelector('.playlists-table');
   if (tbl) tbl.style.opacity = '1';
@@ -2077,7 +2409,7 @@ function startEditPlaylist(i) {
   const p = (window._playlists || [])[i];
   const row = document.getElementById(`pl-row-${i}`);
   if (!p || !row) return;
-  const nameCell = row.querySelector('.pl-name-text');
+  const nameCell = row.querySelector('.pl-name-link, .pl-name-text');
   if (!nameCell) return;
   nameCell.outerHTML = `
     <span class="edit-row" style="display:flex;gap:6px;align-items:center">
@@ -2110,7 +2442,8 @@ async function savePlaylistRename(i) {
 
 async function ensureAlexaDevices(force) {
   if (window._alexaDevices && !force) return window._alexaDevices;
-  const res = await fetch('/api/alexa_remote/devices');
+  const probe = force ? '1' : '0';
+  const res = await authFetch(`/api/alexa_remote/devices?probe=${probe}`);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || 'Failed to load devices');
   window._alexaDevices = data.devices || [];
@@ -2120,7 +2453,7 @@ async function ensureAlexaDevices(force) {
 async function ensureDeviceGroups(force) {
   if (window._deviceGroups && !force) return window._deviceGroups;
   const data = await API('/api/device_groups').catch(() => null);
-  window._deviceGroups = (data && data.items) || [];
+  window._deviceGroups = isApiError(data) ? [] : ((data && data.items) || []);
   return window._deviceGroups;
 }
 
@@ -2141,6 +2474,13 @@ function songPlayOpts(s) {
 async function playOnDevice(opts) {
   const { kind, name, id, artist, path } = opts;
   const allowShuffle = opts.shuffle !== false && kind !== 'song';
+  await ensureAlexaRemoteStatus(true);
+  if (!alexaPlayConfigured()) {
+    return showToast('Alexa remote is not configured — see Settings', true);
+  }
+  if (window._alexaRemote.authenticated === false) {
+    return showToast('Alexa session expired — re-login in Settings', true);
+  }
   let devices;
   try {
     [devices] = await Promise.all([ensureAlexaDevices(), ensureDeviceGroups()]);
@@ -2180,15 +2520,20 @@ async function playOnDevice(opts) {
     const shuffle = shuffleEl ? shuffleEl.checked : false;
     const btn = overlay.querySelector('#play-go');
     btn.disabled = true; btn.textContent = 'Sending…';
-    const res = await fetch('/api/alexa_remote/play', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind, id, name, artist: artist || '', path: path || '', device, shuffle }),
-    });
-    const data = await res.json().catch(() => ({}));
-    overlay.remove();
-    if (res.ok) showToast(`Playing "${name}" on ${data.device || 'device'}`);
-    else showToast(data.error || 'Failed to start playback', true);
+    try {
+      const res = await authFetch('/api/alexa_remote/play', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind, id, name, artist: artist || '', path: path || '', device, shuffle }),
+      });
+      const data = await res.json().catch(() => ({}));
+      overlay.remove();
+      if (res.ok) showToast(`Playing "${name}" on ${data.device || 'device'}`);
+      else showToast(data.error || 'Failed to start playback', true);
+    } catch (e) {
+      btn.disabled = false; btn.textContent = 'Play';
+      showToast(e.message || 'Network error', true);
+    }
   };
 }
 
@@ -2214,22 +2559,31 @@ register('artists', async () => {
 });
 
 async function loadArtists() {
+  if (currentRoute !== 'artists') return;
+  const gen = _routeGen;
   const [data, remote] = await Promise.all([
     API(`/api/artists?page=${_arPage}&limit=50&search=${encodeURIComponent(_arSearch)}`),
-    ensureAlexaRemoteStatus(),
+    ensureAlexaRemoteConfigured(),
   ]);
+  if (isApiError(data)) {
+    if (!routeAlive(gen)) return;
+    document.getElementById('page-title').textContent = 'Artists';
+    document.getElementById('main-content').innerHTML = apiErrorHtml('Could not load artists.');
+    return;
+  }
   const { items = [], total = 0 } = data || {};
   window._artists = items;
   const canPlay = !!(remote && remote.configured);
 
   const rows = items.map((a, i) => `
-    <tr class="clickable" onclick="window.location='#songs/artist/${encodeURIComponent(a.artist)}'">
+    <tr class="clickable" onclick="window.location='#albums/${encodeURIComponent(a.artist)}'">
       <td><i class="fa fa-microphone" style="color:#e99d1a;margin-right:8px"></i>${escHtml(a.artist)}</td>
       <td><span class="badge">${fmtNum(a.album_count)}</span></td>
       <td><span class="badge orange">${fmtNum(a.track_count)}</span></td>
       ${rowActions(canPlay ? actionBtn({ kind: 'play', onclick: `event.stopPropagation();playArtistAt(${i})`, title: 'Play on a device', icon: 'play' }) : '')}
     </tr>`).join('');
 
+  if (!routeAlive(gen)) return;
   document.getElementById('page-title').textContent = 'Artists';
   document.getElementById('main-content').innerHTML = `
     <div class="card">
@@ -2239,7 +2593,7 @@ async function loadArtists() {
       <div class="card-body" style="padding-bottom:8px">
         <div class="search-bar">
           <input type="text" placeholder="Search artists…" value="${escHtml(_arSearch)}"
-            oninput="clearTimeout(window._sd);window._sd=setTimeout(()=>{_arSearch=this.value;_arPage=1;loadArtists()},350)">
+            oninput="clearTimeout(window._arSd);window._arSd=setTimeout(()=>{_arSearch=this.value;_arPage=1;loadArtists()},350)">
           <span class="result-count">${fmtNum(total)} artists</span>
         </div>
       </div>
@@ -2263,20 +2617,30 @@ register('albums', async (params) => {
 });
 
 async function loadAlbums() {
-  const data = await API(`/api/albums?page=${_alPage}&limit=50&search=${encodeURIComponent(_alSearch)}&artist=${encodeURIComponent(_alArtist)}`);
+  if (currentRoute !== 'albums') return;
+  const gen = _routeGen;
+  const [data, remote] = await Promise.all([
+    API(`/api/albums?page=${_alPage}&limit=50&search=${encodeURIComponent(_alSearch)}&artist=${encodeURIComponent(_alArtist)}`),
+    ensureAlexaRemoteConfigured().catch(() => ({})),
+  ]);
+  if (isApiError(data)) {
+    if (!routeAlive(gen)) return;
+    document.getElementById('page-title').textContent = 'Albums';
+    document.getElementById('main-content').innerHTML = apiErrorHtml('Could not load albums.');
+    return;
+  }
   if (!data) {
     document.getElementById('page-title').textContent = 'Albums';
     document.getElementById('main-content').innerHTML =
       '<div class="empty-state"><i class="fa fa-compact-disc"></i><p>Could not load albums — the library query timed out. Try again.</p></div>';
     return;
   }
-  const remote = await ensureAlexaRemoteStatus().catch(() => ({}));
   const { items = [], total = 0 } = data;
   window._albums = items;
   const canPlay = !!(remote && remote.configured);
 
   const rows = items.map((a, i) => `
-    <tr class="clickable" onclick="window.location='#songs/album/${encodeURIComponent(a.album)}'">
+    <tr class="clickable" onclick="window.location='#${songsAlbumHash(a.album, a.artist)}'">
       <td><i class="fa fa-compact-disc" style="color:#e99d1a;margin-right:8px"></i>${escHtml(a.album)}</td>
       <td class="text-muted">${escHtml(a.artist || '—')}</td>
       <td><span class="badge orange">${fmtNum(a.track_count)}</span></td>
@@ -2285,6 +2649,7 @@ async function loadAlbums() {
 
   const backLink = _alArtist ? `<span class="back-link" onclick="window.location='#artists'"><i class="fa fa-arrow-left"></i> Back to Artists</span><br>` : '';
 
+  if (!routeAlive(gen)) return;
   document.getElementById('page-title').textContent = _alArtist ? `Albums · ${_alArtist}` : 'Albums';
   document.getElementById('main-content').innerHTML = `
     ${backLink}
@@ -2295,7 +2660,7 @@ async function loadAlbums() {
       <div class="card-body" style="padding-bottom:8px">
         <div class="search-bar">
           <input type="text" placeholder="Search albums…" value="${escHtml(_alSearch)}"
-            oninput="clearTimeout(window._sd);window._sd=setTimeout(()=>{_alSearch=this.value;_alPage=1;loadAlbums()},350)">
+            oninput="clearTimeout(window._alSd);window._alSd=setTimeout(()=>{_alSearch=this.value;_alPage=1;loadAlbums()},350)">
           <span class="result-count">${fmtNum(total)} albums</span>
         </div>
       </div>
@@ -2309,26 +2674,35 @@ async function loadAlbums() {
 }
 
 // ── Songs ────────────────────────────────────────────────────────────────────
-let _soPage = 1, _soSearch = '', _soArtist = '', _soAlbum = '';
+let _soPage = 1, _soSearch = '', _soArtist = '', _soAlbum = '', _soGenre = '';
 register('songs', async (params) => {
-  _soPage = 1; _soSearch = '';
-  _soArtist = ''; _soAlbum = '';
-
-  if (params) {
-    const [type, value] = params.split('/');
-    if (type === 'artist') _soArtist = decodeURIComponent(value || '');
-    if (type === 'album') _soAlbum = decodeURIComponent(value || '');
+  _soPage = 1;
+  _soSearch = '';
+  _soGenre = '';
+  parseSongsRoute(params);
+  const hash = window.location.hash.replace('#', '');
+  const qm = hash.indexOf('?');
+  if (qm >= 0) {
+    const qs = new URLSearchParams(hash.slice(qm + 1));
+    const g = qs.get('genre');
+    if (g) _soGenre = decodeURIComponent(g);
   }
-
   loading();
   await loadSongs();
 });
 
 async function loadSongs() {
+  const gen = _routeGen;
   const [data, remote] = await Promise.all([
-    API(`/api/songs?page=${_soPage}&limit=100&search=${encodeURIComponent(_soSearch)}&artist=${encodeURIComponent(_soArtist)}&album=${encodeURIComponent(_soAlbum)}`),
-    ensureAlexaRemoteStatus(),
+    API(`/api/songs?page=${_soPage}&limit=100&search=${encodeURIComponent(_soSearch)}&artist=${encodeURIComponent(_soArtist)}&album=${encodeURIComponent(_soAlbum)}&genre=${encodeURIComponent(_soGenre)}`),
+    ensureAlexaRemoteConfigured(),
   ]);
+  if (!routeAlive(gen)) return;
+  if (isApiError(data)) {
+    document.getElementById('page-title').textContent = 'Songs';
+    document.getElementById('main-content').innerHTML = apiErrorHtml('Could not load songs.');
+    return;
+  }
   const { items = [], total = 0 } = data || {};
   window._songs = items;
   const canPlay = !!(remote && remote.configured);
@@ -2346,12 +2720,20 @@ async function loadSongs() {
     </tr>`).join('');
 
   let backLink = '';
-  if (_soAlbum) backLink = `<span class="back-link" onclick="window.location='#albums'"><i class="fa fa-arrow-left"></i> Back to Albums</span><br>`;
-  else if (_soArtist) backLink = `<span class="back-link" onclick="window.location='#artists'"><i class="fa fa-arrow-left"></i> Back to Artists</span><br>`;
+  if (_soAlbum && _soArtist) {
+    backLink = `<span class="back-link" onclick="window.location='#albums/${encodeURIComponent(_soArtist)}'"><i class="fa fa-arrow-left"></i> Back to Albums</span><br>`;
+  } else if (_soAlbum) {
+    backLink = `<span class="back-link" onclick="window.location='#albums'"><i class="fa fa-arrow-left"></i> Back to Albums</span><br>`;
+  } else if (_soArtist) {
+    backLink = `<span class="back-link" onclick="window.location='#artists'"><i class="fa fa-arrow-left"></i> Back to Artists</span><br>`;
+  }
 
   let pageTitle = 'Songs';
-  if (_soAlbum) pageTitle = `Songs · ${_soAlbum}`;
+  if (_soAlbum && _soArtist) pageTitle = `Songs · ${_soAlbum} — ${_soArtist}`;
+  else if (_soAlbum) pageTitle = `Songs · ${_soAlbum}`;
   else if (_soArtist) pageTitle = `Songs · ${_soArtist}`;
+  else if (_soGenre) pageTitle = `Songs · ${_soGenre}`;
+  if (!routeAlive(gen)) return;
   document.getElementById('page-title').textContent = pageTitle;
 
   document.getElementById('main-content').innerHTML = `
@@ -2363,7 +2745,7 @@ async function loadSongs() {
       <div class="card-body" style="padding-bottom:8px">
         <div class="search-bar">
           <input type="text" placeholder="Search songs, artists, albums…" value="${escHtml(_soSearch)}"
-            oninput="clearTimeout(window._sd);window._sd=setTimeout(()=>{_soSearch=this.value;_soPage=1;loadSongs()},350)">
+            oninput="clearTimeout(window._soSd);window._soSd=setTimeout(()=>{_soSearch=this.value;_soPage=1;loadSongs()},350)">
           <span class="result-count">${fmtNum(total)} tracks</span>
         </div>
       </div>
@@ -2381,12 +2763,56 @@ function path2name(p) {
   return p.split('/').pop().replace(/\.[^.]+$/, '');
 }
 
+// ── Genres ───────────────────────────────────────────────────────────────────
+let _gePage = 1;
+register('genres', async () => {
+  _gePage = 1;
+  loading();
+  await loadGenres();
+});
+
+async function loadGenres() {
+  const gen = _routeGen;
+  const data = await API(`/api/genres?limit=50&page=${_gePage}`);
+  if (!routeAlive(gen)) return;
+  if (isApiError(data)) {
+    document.getElementById('page-title').textContent = 'Genres';
+    document.getElementById('main-content').innerHTML = apiErrorHtml('Could not load genres.');
+    return;
+  }
+  const items = data.items || [];
+  const total = data.total || items.length;
+  const rows = items.map((g) => `
+    <tr class="clickable" onclick="window.location.hash='songs?genre=${encodeURIComponent(g.name)}'">
+      <td><i class="fa fa-tag" style="color:#e99d1a;margin-right:8px"></i>${escHtml(g.name)}</td>
+      <td><span class="badge orange">${fmtNum(g.track_count)}</span></td>
+    </tr>`).join('');
+  document.getElementById('page-title').textContent = 'Genres';
+  document.getElementById('main-content').innerHTML = `
+    <div class="card">
+      <div class="card-header"><h3><i class="fa fa-tag"></i> Genres (${fmtNum(total)})</h3></div>
+      ${rows ? `
+      <table class="data-table">
+        <thead><tr><th>Genre</th><th>Tracks</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      ${buildPagination(total, _gePage, 50, (p) => { _gePage = p; loadGenres(); })}` : `<div class="empty-state"><i class="fa fa-tag"></i><p>No genres found.</p></div>`}
+    </div>`;
+}
+
 // ── Watch Folders ────────────────────────────────────────────────────────────
 register('watchfolders', async () => {
+  const gen = _routeGen;
   loading();
-  const folders = await API('/api/watchfolders') || [];
+  const folders = await API('/api/watchfolders');
+  if (!routeAlive(gen)) return;
+  if (isApiError(folders)) {
+    renderPage('Watch Folders', apiErrorHtml('Could not load watch folders.'));
+    return;
+  }
+  const items = folders.items || folders;
 
-  const cards = folders.map(f => {
+  const cards = (Array.isArray(items) ? items : []).map(f => {
     const statusClass = (f.status || '').toLowerCase() === 'scanning' ? 'scanning'
       : (f.status || '').toLowerCase() === 'queued' ? 'queued'
       : (f.status || '').toLowerCase() === 'done' ? 'done' : 'gray';
@@ -2422,18 +2848,27 @@ register('watchfolders', async () => {
 
 // ── Devices ──────────────────────────────────────────────────────────────────
 register('devices', async () => {
+  const gen = _routeGen;
   loading();
   const [devices, mc, groups, remote] = await Promise.all([
     API('/api/devices'),
     API('/api/devices/merge_candidates'),
     API('/api/device_groups'),
-    ensureAlexaRemoteStatus(),
+    ensureAlexaRemoteConfigured(),
   ]);
-  window._devices = devices || [];
-  window._mergeCandidates = (mc && mc.candidates) || [];
-  window._deviceGroups = (groups && groups.items) || [];
+  if (!routeAlive(gen)) return;
+  if (isApiError(devices)) {
+    document.getElementById('page-title').textContent = 'Alexa Devices';
+    document.getElementById('main-content').innerHTML = apiErrorHtml('Could not load devices.');
+    return;
+  }
+  window._devices = devices.devices || devices || [];
+  window._mergeCandidates = isApiError(mc) ? [] : ((mc && mc.candidates) || []);
+  window._deviceGroups = isApiError(groups) ? [] : ((groups && groups.items) || []);
+  window._deviceGroupsStale = false;
   window._devicesRemoteConfigured = !!(remote && remote.configured);
   if (window._devicesRemoteConfigured) await ensureAlexaDevices().catch(() => []);
+  if (!routeAlive(gen)) return;
   renderDevices();
 });
 
@@ -2473,8 +2908,8 @@ function renderDevices() {
                   · gap ${c.gapHours}h · score ${c.score}
                 </span>
               </span>
-              <button class="save-btn" onclick="acceptMergeCandidate('${escHtml(c.sourceId)}','${escHtml(c.targetId)}','${escHtml(c.targetName)}')">Merge</button>
-              <button class="cancel-btn" onclick="dismissMergeCandidate('${escHtml(c.sourceId)}')">Not a duplicate</button>
+              <button class="save-btn" onclick="acceptMergeCandidate('${escJsStr(c.sourceId)}','${escJsStr(c.targetId)}','${escJsStr(c.targetName)}')">Merge</button>
+              <button class="cancel-btn" onclick="dismissMergeCandidate('${escJsStr(c.sourceId)}')">Not a duplicate</button>
             </li>`).join('')}
         </ul>
       </div>
@@ -2515,7 +2950,7 @@ function renderSpeakersCard() {
       <span class="device-icon-col"><i class="fa fa-volume-high"></i></span>
       <span class="device-name-text">${escHtml(s.name)}${s.online ? '' : ' <span style="font-size:11px;color:#c66">(offline)</span>'}</span>
       <div class="row-actions">
-        ${actionBtn({ kind: 'play', onclick: `testDevice('${escHtml(s.serial)}', ${JSON.stringify(s.name)})`, title: 'Play a short test clip here', icon: 'play' })}
+        ${actionBtn({ kind: 'play', onclick: `testDevice('${escJsStr(s.serial)}', ${JSON.stringify(s.name)})`, title: 'Play a short test clip here', icon: 'play' })}
       </div>
     </li>`).join('');
   return `
@@ -2593,12 +3028,15 @@ function renderFixStep() {
 }
 
 async function fixPlayClip(s) {
-  // Play under the current room-name guess so correlation can bind immediately.
   const name = (document.getElementById('fix-name') || {}).value || s.name;
-  await fetch('/api/devices/test', {
+  const res = await authFetch('/api/devices/test', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ serial: s.serial, name }),
-  }).catch(() => {});
+  }).catch(() => null);
+  if (!res || !res.ok) {
+    showToast('Test play failed', true);
+    return;
+  }
   showToast(`Playing on ${s.name}…`);
 }
 
@@ -2623,7 +3061,7 @@ async function fixSaveAndNext(overlay, s) {
 }
 
 async function refreshDevicesThenRender() {
-  window._devices = await API('/api/devices') || [];
+  window._devices = apiDevicesList(await API('/api/devices'));
   renderDevices();
 }
 
@@ -2636,7 +3074,7 @@ async function testDevice(serial, name) {
   if (res.ok && d.ok) {
     showToast(`Testing ${d.device || name}…`);
     setTimeout(async () => {
-      window._devices = await API('/api/devices') || [];
+      window._devices = apiDevicesList(await API('/api/devices'));
       renderDevices();
     }, 11000);
   } else {
@@ -2670,8 +3108,8 @@ function renderDeviceGroupsCard() {
         <div class="auto-list-meta">${memberNames || '<span style="color:#c66">no devices</span>'}</div>
       </span>
       <div class="row-actions">
-        ${actionBtn({ kind: 'edit', onclick: `openGroupEditor('${escHtml(g.id)}')`, title: 'Edit group', icon: 'pen' })}
-        ${actionBtn({ kind: 'delete', onclick: `deleteGroup('${escHtml(g.id)}')`, title: 'Delete group', icon: 'trash' })}
+        ${actionBtn({ kind: 'edit', onclick: `openGroupEditor('${escJsStr(g.id)}')`, title: 'Edit group', icon: 'pen' })}
+        ${actionBtn({ kind: 'delete', onclick: `deleteGroup('${escJsStr(g.id)}')`, title: 'Delete group', icon: 'trash' })}
       </div>
     </li>`;
   }).join('');
@@ -2745,7 +3183,8 @@ async function saveGroup(overlay, groupId) {
   overlay.remove();
   showToast(groupId ? 'Group updated' : 'Group created');
   const groups = await API('/api/device_groups');
-  window._deviceGroups = (groups && groups.items) || [];
+  window._deviceGroups = isApiError(groups) ? [] : ((groups && groups.items) || []);
+  window._deviceGroupsStale = false;
   renderDevices();
 }
 
@@ -2754,12 +3193,14 @@ async function deleteGroup(id) {
   const res = await fetch(`/api/device_groups/${encodeURIComponent(id)}`, { method: 'DELETE' });
   if (!res.ok) return showToast('Failed to delete group', true);
   window._deviceGroups = (window._deviceGroups || []).filter(g => g.id !== id);
+  window._deviceGroupsStale = true;
   showToast('Group deleted');
   renderDevices();
 }
 
 // Build <option>s for a device <select>, with a Groups optgroup on top.
 function deviceSelectOptions(devices, { includeGroups = true, selectedValue = '' } = {}) {
+  const list = Array.isArray(devices) ? devices : [];
   const groups = window._deviceGroups || [];
   let html = '';
   if (includeGroups && groups.length) {
@@ -2768,7 +3209,7 @@ function deviceSelectOptions(devices, { includeGroups = true, selectedValue = ''
       return `<option value="${escHtml(val)}" data-name="${escHtml(g.name)}" ${val === selectedValue ? 'selected' : ''}>${escHtml(g.name)} (${(g.members || []).length})</option>`;
     }).join('') + `</optgroup>`;
   }
-  const devOpts = devices.map(d =>
+  const devOpts = list.map(d =>
     `<option value="${escHtml(d.serial)}" data-name="${escHtml(d.name)}" ${d.serial === selectedValue ? 'selected' : ''}>${escHtml(d.name)}${d.online ? '' : ' (offline)'}</option>`
   ).join('');
   html += includeGroups && groups.length ? `<optgroup label="Devices">${devOpts}</optgroup>` : devOpts;
@@ -2793,8 +3234,8 @@ async function acceptMergeCandidate(sourceId, targetId, targetName) {
     API('/api/devices'),
     API('/api/devices/merge_candidates'),
   ]);
-  window._devices = devices || [];
-  window._mergeCandidates = (mc && mc.candidates) || [];
+  window._devices = apiDevicesList(devices);
+  window._mergeCandidates = isApiError(mc) ? [] : ((mc && mc.candidates) || []);
   renderDevices();
 }
 
@@ -2826,7 +3267,7 @@ async function startIdentify() {
 async function pollIdentify() {
   const el = document.getElementById('identify-status');
   const st = await API('/api/devices/identify/status');
-  if (!st) return;
+  if (isApiError(st)) return;
   if (el) {
     el.style.display = '';
     const cur = st.running ? `▶ Playing on <b>${escHtml(st.current || '…')}</b>` : '✓ Done';
@@ -2834,12 +3275,11 @@ async function pollIdentify() {
   }
   if (!st.running) {
     if (_identifyPoll) { clearInterval(_identifyPoll); _identifyPoll = null; }
-    const devices = await API('/api/devices') || [];
-    window._devices = devices;
+    window._devices = apiDevicesList(await API('/api/devices'));
     const mc = await API('/api/devices/merge_candidates');
-    window._mergeCandidates = (mc && mc.candidates) || [];
-    renderDevices();
-    showToast(`Identify complete — ${st.done} devices`);
+    window._mergeCandidates = isApiError(mc) ? [] : ((mc && mc.candidates) || []);
+    if (currentRoute === 'devices') renderDevices();
+    showToast(`Identify complete — ${st.done} devices${st.errors && st.errors.length ? ` (${st.errors.length} skipped)` : ''}`, !!(st.errors && st.errors.length));
   }
 }
 
@@ -2935,8 +3375,7 @@ async function confirmMergeDevice(i) {
   }
   const result = await res.json();
   showToast(`Merged into ${targetName} — ${result.historyRowsRewritten || 0} history rows updated`);
-  const refreshed = await API('/api/devices') || [];
-  window._devices = refreshed;
+  window._devices = apiDevicesList(await API('/api/devices'));
   renderDevices();
 }
 
@@ -2970,18 +3409,35 @@ register('automation', async () => {
 });
 
 async function loadAutomation() {
-  const [data, remote, alexaDevs] = await Promise.all([
+  const gen = _routeGen;
+  const [data, remote] = await Promise.all([
     API('/api/automations'),
-    ensureAlexaRemoteStatus(),
-    ensureAlexaRemoteStatus().then(r => r && r.configured ? ensureAlexaDevices().catch(() => []) : []),
-    ensureDeviceGroups().catch(() => []),
+    ensureAlexaRemoteConfigured(),
+    ensureDeviceGroups(),
   ]);
+  if (!routeAlive(gen)) return;
+  if (isApiError(data)) {
+    document.getElementById('page-title').textContent = 'Automation';
+    document.getElementById('main-content').innerHTML = apiErrorHtml('Could not load automations.');
+    return;
+  }
   window._automations = (data && data.items) || [];
-  window._autoAlexaDevices = alexaDevs || [];
+  window._autoAlexaDevices = (remote && remote.configured)
+    ? await ensureAlexaDevices(false).catch(() => [])
+    : [];
+  if (!routeAlive(gen)) return;
   renderAutomation(remote);
+  if (remote && remote.configured && !window._autoAlexaDevices.length) {
+    ensureAlexaDevices(true).then((devs) => {
+      if (currentRoute !== 'automation' || !devs.length) return;
+      window._autoAlexaDevices = devs;
+      renderAutomation(remote);
+    }).catch(() => {});
+  }
 }
 
 function renderAutomation(remote) {
+  if (currentRoute !== 'automation') return;
   const canPlay = !!(remote && remote.configured);
   const items = window._automations || [];
   const devs = window._autoAlexaDevices || [];
@@ -3093,15 +3549,15 @@ function renderAutomation(remote) {
       <td>${lastRun}</td>
       <td>${status}</td>
       ${rowActions(
-        canPlay ? actionBtn({ kind: 'run', onclick: `runAutomationNow('${escHtml(a.id)}')`, title: 'Run now', icon: 'bolt' }) : '',
+        canPlay ? actionBtn({ kind: 'run', onclick: `runAutomationNow('${escJsStr(a.id)}')`, title: 'Run now', icon: 'bolt' }) : '',
         actionBtn({
           kind: 'muted',
-          onclick: `toggleAutomation('${escHtml(a.id)}', ${a.enabled !== false})`,
+          onclick: `toggleAutomation('${escJsStr(a.id)}', ${a.enabled !== false})`,
           title: a.enabled !== false ? 'Disable' : 'Enable',
           icon: a.enabled !== false ? 'pause' : 'play',
         }),
         actionBtn({ kind: 'edit', onclick: `editAutomation(${i})`, title: 'Edit automation', icon: 'pen' }),
-        actionBtn({ kind: 'delete', onclick: `deleteAutomation('${escHtml(a.id)}')`, title: 'Delete automation', icon: 'trash' }),
+        actionBtn({ kind: 'delete', onclick: `deleteAutomation('${escJsStr(a.id)}')`, title: 'Delete automation', icon: 'trash' }),
       )}
     </tr>`;
   }).join('');
@@ -3135,8 +3591,8 @@ async function autoSearchPlaylists(q) {
   _autoPlTimer = setTimeout(async () => {
     const query = (q || '').trim();
     if (query.length < 1) { box.innerHTML = ''; return; }
-    const data = await API(`/api/playlists?search=${encodeURIComponent(query)}&limit=25&page=1`) || {};
-    const items = data.items || [];
+    const data = await API(`/api/playlists?search=${encodeURIComponent(query)}&limit=25&page=1`);
+    const items = isApiError(data) ? [] : (data.items || []);
     box.innerHTML = items.map((p, idx) => `
       <div class="auto-pl-item" onclick="autoPickPlaylistIdx(${idx})">
         ${escHtml(p.name)}<small>${fmtNum(p.trackCount)} tracks</small>
@@ -3243,6 +3699,19 @@ async function saveAutomation() {
   if (!body.device) return showToast('Select a device', true);
   if (!body.days.length) return showToast('Select at least one day', true);
 
+  if (!body.playlistId && body.playlistName) {
+    const plData = await API(
+      `/api/playlists?search=${encodeURIComponent(body.playlistName)}&limit=10&page=1`,
+    );
+    if (isApiError(plData)) return showToast('Playlist lookup failed — try again', true);
+    const items = (plData && plData.items) || [];
+    const exact = items.find(p => (p.name || '').toLowerCase() === body.playlistName.toLowerCase());
+    if (!exact || !exact.id) {
+      return showToast(`No exact playlist match for "${body.playlistName}"`, true);
+    }
+    body.playlistId = exact.id;
+  }
+
   const url = editing ? `/api/automations/${encodeURIComponent(editing.id)}` : '/api/automations';
   const res = await fetch(url, {
     method: editing ? 'PUT' : 'POST',
@@ -3293,6 +3762,10 @@ async function toggleAutomation(id, currentlyEnabled) {
 }
 
 async function runAutomationNow(id) {
+  await ensureAlexaRemoteStatus(true);
+  if (window._alexaRemote && window._alexaRemote.authenticated === false) {
+    return showToast('Alexa session expired — re-login in Settings', true);
+  }
   const res = await fetch(`/api/automations/${encodeURIComponent(id)}/run`, { method: 'POST' });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) return showToast(data.error || 'Run failed', true);
@@ -3302,24 +3775,30 @@ async function runAutomationNow(id) {
 
 // ── Settings ─────────────────────────────────────────────────────────────────
 register('settings', async () => {
+  const gen = _routeGen;
   loading();
   const [s, cfg, ipData, health, remote] = await Promise.all([
-    API('/api/settings') || {},
+    API('/api/settings'),
     API('/api/config'),
     API('/api/localip'),
     API('/api/health').catch(() => null),
-    ensureAlexaRemoteStatus().catch(() => ({})),
+    ensureAlexaRemoteStatus(true).catch(() => ({})),
   ]);
+  if (!routeAlive(gen)) return;
+  if (isApiError(s)) {
+    renderPage('Settings', apiErrorHtml('Could not load settings.'));
+    return;
+  }
   const settings = s || {};
-  const publicUrl = (cfg || {}).publicUrl || '';
+  const publicUrl = isApiError(cfg) ? '' : ((cfg || {}).publicUrl || '');
   const localIp   = (ipData || {}).ip || '—';
 
   const chk = (val) => val === 'true' || val === true || val === '1' || val === 1;
 
-  const toggle = (id, label, checked, onchange='') => `
+  const toggle = (id, label, checked, onchange='', disabled=false) => `
     <div class="toggle-wrap">
       <label class="toggle">
-        <input type="checkbox" id="${id}" ${checked ? 'checked' : ''} ${onchange ? `onchange="${onchange}"` : ''}>
+        <input type="checkbox" id="${id}" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''} ${onchange ? `onchange="${onchange}"` : ''}>
         <span class="toggle-slider"></span>
       </label>
       <span class="toggle-label">${label}</span>
@@ -3377,11 +3856,11 @@ register('settings', async () => {
         <div class="settings-section" style="opacity:.6">
           <h4>Watch Folder Scanning <span style="font-size:11px;font-weight:600;color:#9a6520;background:#fdf1e3;border:1px solid #e6a14e;border-radius:3px;padding:1px 6px;margin-left:6px">LEGACY</span></h4>
           <p class="hint">Not used by this server. The original My Media scanner is stalled; playlists are now kept current by the Plex sync (<code>scripts/sync_plex_playlists.py</code>, every 5 min). These toggles are kept for reference only and have no effect.</p>
-          ${toggle('s-autoscan', 'Enable Watch Folder Autoscan', !chk(settings.suppressAutoScan))}
-          ${toggle('s-autoimport', 'Automatically Import Playlists', chk(settings.autoImportPlaylists))}
+          ${toggle('s-autoscan', 'Enable Watch Folder Autoscan', !chk(settings.suppressAutoScan), '', true)}
+          ${toggle('s-autoimport', 'Automatically Import Playlists', chk(settings.autoImportPlaylists), '', true)}
           <div class="settings-row" style="margin-top:8px">
             <label style="font-size:12px;color:#667;min-width:180px">Ignore Folders Containing</label>
-            <input type="text" id="s-ignore" class="settings-input" value="${escHtml(settings.scanIgnoreFiles || '.mmaignore')}" placeholder=".mmaignore">
+            <input type="text" id="s-ignore" class="settings-input" value="${escHtml(settings.scanIgnoreFiles || '.mmaignore')}" placeholder=".mmaignore" disabled>
           </div>
           <div class="settings-row" style="margin-top:8px">
             <button class="btn-sm btn-default" onclick="clearImageCache()"><i class="fa fa-image"></i> Clear Artwork Cache</button>
@@ -3586,10 +4065,27 @@ async function clearImageCache() {
 
 // ── Analytics ─────────────────────────────────────────────────────────────
 
+let _chartJsPromise = null;
+function ensureChartJs() {
+  if (window.Chart) return Promise.resolve();
+  if (!_chartJsPromise) {
+    _chartJsPromise = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js';
+      s.async = true;
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error('Chart.js failed to load'));
+      document.head.appendChild(s);
+    });
+  }
+  return _chartJsPromise;
+}
+
 let _anFrom = '', _anTo = '';
 window._anCharts = window._anCharts || {};
 
 async function _loadAnalytics() {
+  const gen = _routeGen;
   Object.values(window._anCharts || {}).forEach(c => { try { c && c.destroy(); } catch {} });
   window._anCharts = {};
   loading();
@@ -3599,11 +4095,18 @@ async function _loadAnalytics() {
   if (_anTo)   params.push(`to=${_anTo}`);
   if (params.length) url += '?' + params.join('&');
   const data = await API(url);
-  if (!data || !data.totalPlays) {
+  if (!routeAlive(gen)) return;
+  if (isApiError(data)) {
+    renderPage('Analytics', apiErrorHtml('Could not load analytics.'));
+    return;
+  }
+  const hasDeviceActivity = (data?.deviceBreakdown || []).some(d =>
+    (d.plays || 0) + (d.downloads || 0) + (d.connects || 0) > 0);
+  if (!data || (!data.totalPlays && !hasDeviceActivity)) {
     renderPage('Analytics', `
       <div class="card" style="margin-bottom:20px">${_anDatePickerHtml(data)}</div>
-      <div class="empty-state"><i class="fa fa-chart-bar"></i><p>No streaming history yet.</p>
-        <p style="font-size:12px;margin-top:8px">Start playing music through Alexa to build analytics.</p></div>`);
+      <div class="empty-state"><i class="fa fa-chart-bar"></i><p>No device activity yet.</p>
+        <p style="font-size:12px;margin-top:8px">Play music on Alexa, Android, or iOS — or download offline on Android — to build analytics.</p></div>`);
     _restoreDateInputs();
     return;
   }
@@ -3615,8 +4118,13 @@ async function _loadAnalytics() {
   }
   renderPage('Analytics', _buildAnalyticsHTML(data));
   _restoreDateInputs();
-  _initAnalyticsCharts(data);
-  if (Object.keys(data.playsPerDay || {}).length >= 7) _initEntityActivityCharts(data);
+  try {
+    await ensureChartJs();
+    _initAnalyticsCharts(data);
+    if (Object.keys(data.playsPerDay || {}).length >= 7) _initEntityActivityCharts(data);
+  } catch (e) {
+    console.warn('Analytics charts unavailable', e);
+  }
   loadIgnoredPanel();
 }
 
@@ -3637,8 +4145,25 @@ function _anDatePickerHtml(data) {
     <input type="date" id="an-date-to" style="padding:4px 8px;border:1px solid #ccd;border-radius:4px;font-size:12px" onchange="_anTo=this.value;_loadAnalytics()">
     ${activeFilter ? `<button class="btn-sm btn-default" onclick="_anFrom='';_anTo='';_loadAnalytics()"><i class="fa fa-times"></i> Clear</button>` : ''}
     ${activeFilter ? `<span style="font-size:11px;color:#e99d1a"><i class="fa fa-filter"></i> Filtered</span>` : ''}
-    <a class="btn-sm btn-default" href="${anExportUrl()}" style="margin-left:auto"><i class="fa fa-download"></i> Export CSV</a>
+    <a class="btn-sm btn-default" href="#" onclick="anExportCsv(); return false;" style="margin-left:auto"><i class="fa fa-download"></i> Export CSV</a>
   </div>`;
+}
+
+async function anExportCsv() {
+  const url = anExportUrl();
+  try {
+    const res = await authFetch(url);
+    if (res.status === 401 && authRequired()) { showLoginModal(); return; }
+    if (!res.ok) { showToast('Export failed', true); return; }
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'streaming_history.csv';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  } catch (e) {
+    showToast(e.message || 'Export failed', true);
+  }
 }
 
 function anExportUrl() {
@@ -3653,19 +4178,22 @@ register('analytics', async () => { _anFrom = ''; _anTo = ''; await _loadAnalyti
 // ── Library search ───────────────────────────────────────────────────────────
 let _searchTimer = null;
 
-register('search', async () => {
+register('search', async (params) => {
   loading();
   document.getElementById('page-title').textContent = 'Search';
+  const prefill = params ? decodeURIComponent(params) : '';
+  if (prefill) window._lastSearchQ = prefill;
   document.getElementById('main-content').innerHTML = `
     <div class="card">
       <div class="card-body">
         <input type="search" id="lib-search-q" class="settings-input" style="width:100%;max-width:480px"
           placeholder="Search songs, artists, albums, playlists…" autofocus
+          value="${escHtml(prefill || window._lastSearchQ || '')}"
           oninput="libSearchDebounced(this.value)">
       </div>
     </div>
     <div id="lib-search-results"></div>`;
-  const q = (window._lastSearchQ || '').trim();
+  const q = (prefill || window._lastSearchQ || '').trim();
   if (q.length >= 2) libSearchDebounced(q);
 });
 
@@ -3734,6 +4262,7 @@ function setupSearchDelegation() {
 }
 
 async function libSearchRun(q) {
+  const gen = _routeGen;
   const el = document.getElementById('lib-search-results');
   if (!el) return;
   q = (q || '').trim();
@@ -3744,12 +4273,17 @@ async function libSearchRun(q) {
   el.innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
   const [data, remote] = await Promise.all([
     API(`/api/search?q=${encodeURIComponent(q)}`),
-    ensureAlexaRemoteStatus(),
+    ensureAlexaRemoteConfigured(),
   ]);
+  if (isApiError(data)) {
+    el.innerHTML = '<p class="hint" style="padding:12px">Search failed — try again.</p>';
+    return;
+  }
   if (!data) {
     el.innerHTML = '<p class="hint" style="padding:12px">Search failed — try again.</p>';
     return;
   }
+  if (!routeAlive(gen)) return;
   const canPlay = !!(remote && remote.configured);
   const sec = (title, rows) => rows.length
     ? `<div class="search-section"><h3 style="font-size:13px;color:#7a8aa8;margin:0 0 8px">${title}</h3>${rows}</div>`
@@ -3764,7 +4298,7 @@ async function libSearchRun(q) {
     return libSearchHit('<i class="fa fa-microphone"></i>', libSearchLink(href, a.name), { kind: 'artist', name: a.name }, '', canPlay);
   }).join('');
   const al = (data.albums || []).map((a) => {
-    const href = `#songs/album/${encodeURIComponent(a.name)}`;
+    const href = `#${songsAlbumHash(a.name, a.artist)}`;
     const label = `${libSearchLink(href, a.name)}${a.artist ? ` <span class="text-muted">— ${escHtml(a.artist)}</span>` : ''}`;
     return libSearchHit('<i class="fa fa-compact-disc"></i>', label, { kind: 'album', name: a.name, artist: a.artist || '' }, '', canPlay);
   }).join('');
@@ -3773,7 +4307,11 @@ async function libSearchRun(q) {
     const star = `<button type="button" class="action-btn action-muted lib-search-star" data-fav-path="${escHtml(s.path || '')}" data-fav-title="${escHtml(s.title || '')}" data-fav-artist="${escHtml(s.artist || '')}" title="Star" aria-label="Star"><i class="fa fa-star"></i></button>`;
     return libSearchHit('<i class="fa fa-music"></i>', label, { kind: 'song', name: s.title, artist: s.artist || '', path: s.path || '' }, star, canPlay);
   }).join('');
-  const body = sec('Playlists', pl) + sec('Artists', ar) + sec('Albums', al) + sec('Songs', sg);
+  const gn = (data.genres || []).map((g) => {
+    const href = `#songs?genre=${encodeURIComponent(g.name)}`;
+    return libSearchHit('<i class="fa fa-tag"></i>', libSearchLink(href, g.name), { kind: 'genre', name: g.name }, '', canPlay);
+  }).join('');
+  const body = sec('Playlists', pl) + sec('Artists', ar) + sec('Albums', al) + sec('Genres', gn) + sec('Songs', sg);
   const noPlayHint = canPlay ? '' : '<p class="hint" style="padding:0 12px 12px">Configure Alexa remote in Settings to play on a device.</p>';
   el.innerHTML = (body || '<p class="hint" style="padding:12px">No matches.</p>') + noPlayHint;
 }
@@ -3788,6 +4326,58 @@ async function libFavorite(path, title, artist) {
   else showToast('Failed', true);
 }
 
+function _platformIcon(platform) {
+  const p = (platform || '').toLowerCase();
+  if (p === 'android') return '<i class="fa-brands fa-android" style="color:#3ddc84"></i>';
+  if (p === 'ios') return '<i class="fa-brands fa-apple" style="color:#555"></i>';
+  if (p === 'alexa') return '<i class="fa fa-volume-high" style="color:#00caff"></i>';
+  return '<i class="fa fa-circle-question" style="color:#aab"></i>';
+}
+
+function _formatLastSeen(ts) {
+  if (!ts) return '—';
+  const sec = Math.max(0, Math.floor(Date.now() / 1000 - ts));
+  if (sec < 60) return 'just now';
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
+  return `${Math.floor(sec / 86400)}d ago`;
+}
+
+function _buildDeviceBreakdownHTML(devices) {
+  const rows = (devices || []).filter(d =>
+    (d.plays || 0) + (d.downloads || 0) + (d.connects || 0) > 0);
+  if (!rows.length) return '';
+  return `
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-header"><h3><i class="fa fa-mobile-screen"></i> Device Activity</h3></div>
+      <div class="card-body" style="padding:0;overflow-x:auto">
+        <table class="data-table" style="width:100%;font-size:13px">
+          <thead>
+            <tr>
+              <th style="text-align:left;padding:10px 14px">Device</th>
+              <th>Platform</th>
+              <th>Connects</th>
+              <th>Plays</th>
+              <th>Downloads</th>
+              <th>Last seen</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map(d => `
+              <tr>
+                <td style="padding:10px 14px;font-weight:600">${escHtml(d.name || d.deviceId || '—')}</td>
+                <td style="text-align:center">${_platformIcon(d.platform)} <span style="font-size:11px;color:#778">${escHtml((d.platform || 'unknown').toUpperCase())}</span></td>
+                <td style="text-align:center">${fmtNum(d.connects || 0)}</td>
+                <td style="text-align:center">${fmtNum(d.plays || 0)}</td>
+                <td style="text-align:center">${fmtNum(d.downloads || 0)}</td>
+                <td style="text-align:center;color:#778;font-size:12px">${_formatLastSeen(d.lastSeen)}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
 function _buildAnalyticsHTML(d) {
   const sk  = d.listeningStreak  || {current: d.currentStreak || 0, longest: d.longestStreak || 0};
   const cov = d.catalogCoverage  || {};
@@ -3799,6 +4389,8 @@ function _buildAnalyticsHTML(d) {
 
   return `
     <div class="card" style="margin-bottom:20px">${_anDatePickerHtml(d)}</div>
+
+    ${_buildDeviceBreakdownHTML(d.deviceBreakdown)}
 
     <div class="stats-grid">
       <div class="stat-card">
@@ -3945,6 +4537,10 @@ async function loadIgnoredPanel() {
   const body = document.getElementById('an-ignored-body');
   if (!body) return;
   const data = await API('/api/ignored');
+  if (isApiError(data)) {
+    body.innerHTML = `<p class="hint" style="margin:0;color:#c0392b">Could not load ignored tracks.</p>`;
+    return;
+  }
   const items = (data && data.items) || [];
   if (!items.length) {
     body.innerHTML = `<p class="hint" style="margin:0">No ignored tracks. Use the <i class="fa fa-ban"></i> button in Now Playing to never play a song again.</p>`;
@@ -3960,7 +4556,7 @@ async function loadIgnoredPanel() {
             ${it.artist ? `<span style="font-size:11px;color:#9aa;margin-left:6px">${escHtml(it.artist)}</span>` : ''}
           </span>
           <div class="row-actions">
-            <button class="btn-sm btn-default" onclick="unignoreTrack('${escHtml(encodeURIComponent(it.path))}')">Allow again</button>
+            <button class="btn-sm btn-default" onclick="unignoreTrack('${escJsStr(encodeURIComponent(it.path))}')">Allow again</button>
           </div>
         </li>`).join('')}
     </ul>`;
@@ -4278,10 +4874,14 @@ let _bannerDismissed = false;
 
 async function refreshGlobalBanner() {
   const el = document.getElementById('global-banner');
-  if (!el || _bannerDismissed) return;
-  const s = await API('/api/alexa_remote/status');
-  // Only warn when remote control is configured but the session has expired.
-  if (s && s.configured && s.authenticated === false) {
+  if (!el) return;
+  const s = await API('/api/alexa_remote/status?probe=0');
+  if (!isApiError(s) && s.configured && s.authenticated === true) {
+    _bannerDismissed = false;
+  }
+  if (_bannerDismissed) return;
+  if (!isApiError(s) && s.configured && s.authenticated === false) {
+    invalidateAlexaRemoteStatus();
     el.innerHTML = `
       <div class="global-alert">
         <i class="fa fa-triangle-exclamation"></i>
@@ -4300,6 +4900,10 @@ function dismissBanner() {
   if (el) el.innerHTML = '';
 }
 
+function resetBannerDismiss() {
+  _bannerDismissed = false;
+}
+
 // ── Init ─────────────────────────────────────────────────────────────────────
 function installAuthFetch() {
   if (window._bockAuthFetchInstalled) return;
@@ -4307,15 +4911,47 @@ function installAuthFetch() {
   const nativeFetch = window.fetch.bind(window);
   window.fetch = (input, init = {}) => {
     const headers = { ...authHeaders(), ...(init.headers || {}) };
-    return nativeFetch(input, { ...init, headers });
+    return nativeFetch(input, { ...init, headers }).then((r) => {
+      if (r.status === 401 && authRequired()) showLoginModal();
+      return r;
+    });
   };
+}
+
+async function refreshConnectionBadge() {
+  const el = document.getElementById('connection-badge');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/health');
+    if (r.ok) {
+      el.innerHTML = '<i class="fa fa-circle" style="color:#2eaa5a;font-size:8px;margin-right:4px"></i>Running';
+      el.title = 'Backend healthy';
+    } else {
+      el.innerHTML = '<i class="fa fa-circle" style="color:#e6a14e;font-size:8px;margin-right:4px"></i>Degraded';
+      el.title = `Health check returned ${r.status}`;
+    }
+  } catch (e) {
+    el.innerHTML = '<i class="fa fa-circle" style="color:#c0392b;font-size:8px;margin-right:4px"></i>Offline';
+    el.title = 'Cannot reach server';
+  }
+}
+
+function setupRoomsDelegation() {
+  if (window._roomsDelegation) return;
+  window._roomsDelegation = true;
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('.room-quick-play');
+    if (!btn) return;
+    e.preventDefault();
+    const serial = btn.getAttribute('data-serial');
+    const room = btn.getAttribute('data-room');
+    if (serial) roomQuickPlay(serial, room || serial);
+  });
 }
 
 async function init() {
   await refreshAuthInfo();
   installAuthFetch();
-  await ensureAuth();
-  // Stop Now Playing poll when navigating away from it
   window.addEventListener('hashchange', () => {
     const hash = window.location.hash.replace('#', '');
     if (!hash.startsWith('nowplaying')) {
@@ -4324,23 +4960,55 @@ async function init() {
       clearInterval(_npTickTimer);
       _npTickTimer = null;
     }
+    if (!hash.startsWith('rooms')) stopRoomsPoll();
+    if (!hash.startsWith('settings')) {
+      clearInterval(_alexaLoginPoll);
+      _alexaLoginPoll = null;
+    }
+    if (!hash.startsWith('devices') && _identifyPoll) {
+      clearInterval(_identifyPoll);
+      _identifyPoll = null;
+    }
     navigate(hash);
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      const overlays = [...document.querySelectorAll('.modal-overlay')].filter(o => o.id !== 'login-overlay');
+      if (overlays.length) overlays[overlays.length - 1].remove();
+    }
   });
 
   setupPlaylistSortDelegation();
   setupSearchDelegation();
+  setupRoomsDelegation();
+
+  if (authRequired()) await ensureAuth();
+
+  ensureAlexaRemoteConfigured().catch(() => {});
 
   // Initial route
   const hash = window.location.hash.replace('#', '') || 'dashboard';
   navigate(hash);
 
-  // Global header poll — update "now playing" bar every 6s regardless of page
-  refreshCurrentTrack();
-  setInterval(refreshCurrentTrack, 6000);
+  // Defer non-critical polls until after first paint
+  setTimeout(() => {
+    refreshCurrentTrack();
+    setInterval(refreshCurrentTrack, 6000);
+    refreshConnectionBadge();
+    setInterval(refreshConnectionBadge, 30000);
+    refreshGlobalBanner();
+    setInterval(refreshGlobalBanner, 120000);
+  }, 2000);
 
-  // Surface alexapy session expiry without blocking the UI
-  refreshGlobalBanner();
-  setInterval(refreshGlobalBanner, 120000);
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  }
+
+  ensureAuth().then(() => {
+    resetBannerDismiss();
+    ensureAlexaRemoteConfigured(true).then(() => refreshGlobalBanner()).catch(() => {});
+  }).catch(() => {});
 }
 
 init();

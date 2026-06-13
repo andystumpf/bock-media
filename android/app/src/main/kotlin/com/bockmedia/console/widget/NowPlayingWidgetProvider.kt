@@ -9,7 +9,9 @@ class NowPlayingWidgetProvider : AppWidgetProvider() {
         val pending = goAsync()
         Thread {
             try {
+                NowPlayingController.fetchAndStore(context)
                 appWidgetIds.forEach { NowPlayingWidget.updateOne(context, appWidgetManager, it) }
+                NowPlayingWidget.publishSession(context)
                 WidgetRefreshScheduler.schedule(context)
             } finally {
                 pending.finish()

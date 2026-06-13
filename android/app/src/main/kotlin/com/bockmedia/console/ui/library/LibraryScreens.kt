@@ -40,13 +40,13 @@ fun AlbumsScreen(
     artistFilter: String?,
     remoteOk: Boolean,
     onPlay: (PlayTarget) -> Unit,
-    onOpenAlbum: (String) -> Unit,
+    onOpenAlbum: (String, String?) -> Unit,
     onBack: (() -> Unit)? = null,
 ) {
     Column(Modifier.fillMaxSize()) {
         if (onBack != null) {
             Row(Modifier.padding(8.dp)) {
-                IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, null) }
+                IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back") }
                 Text(artistFilter ?: "Albums", style = MaterialTheme.typography.titleMedium)
             }
         }
@@ -59,7 +59,7 @@ fun AlbumsScreen(
             sub = { "${it.artist ?: ""} · ${it.tracks} tracks" },
             remoteOk = remoteOk,
             onPlay = { onPlay(PlayTarget.Album(it.name, it.artist)) },
-            onOpen = { onOpenAlbum(it.name) },
+            onOpen = { onOpenAlbum(it.name, it.artist) },
         )
     }
 }
@@ -76,7 +76,7 @@ fun SongsScreen(
     Column(Modifier.fillMaxSize()) {
         if (onBack != null) {
             Row(Modifier.padding(8.dp)) {
-                IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, null) }
+                IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back") }
                 Text(listOfNotNull(artistFilter, albumFilter).joinToString(" · "), style = MaterialTheme.typography.titleMedium)
             }
         }
@@ -89,6 +89,7 @@ fun SongsScreen(
             sub = { "${it.artist ?: ""} · ${it.album ?: ""}" },
             remoteOk = remoteOk,
             onPlay = { it.path?.let { p -> onPlay(PlayTarget.Song(p, it.title ?: "")) } },
+            canPlay = { !it.path.isNullOrBlank() },
             onOpen = null,
         )
     }
@@ -103,28 +104,32 @@ private fun <T> LibraryListScreen(
     remoteOk: Boolean,
     onPlay: (T) -> Unit,
     onOpen: ((T) -> Unit)?,
+    canPlay: (T) -> Boolean = { true },
 ) {
     var search by remember { mutableStateOf("") }
     var page by remember { mutableIntStateOf(1) }
     var items by remember { mutableStateOf<List<T>>(emptyList()) }
     var total by remember { mutableIntStateOf(0) }
     var loading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
     val limit = if (title == "Songs") 100 else 50
 
     LaunchedEffect(page, search) {
         delay(350)
         loading = true
+        error = null
         runCatching {
             val (list, t) = loadPage(page, search)
             items = list
             total = t
-        }
+        }.onFailure { error = it.message ?: "Load failed" }
         loading = false
     }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
         SearchField(search, { search = it; page = 1 }, "Search")
         Spacer(Modifier.height(8.dp))
+        error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         if (loading) LoadingBox(Modifier.weight(1f)) else {
             BockLazyColumn(Modifier.weight(1f)) {
                 items(items) { item ->
@@ -133,7 +138,7 @@ private fun <T> LibraryListScreen(
                         supportingContent = { Text(sub(item)) },
                         modifier = if (onOpen != null) Modifier.clickable { onOpen(item) } else Modifier,
                         trailingContent = {
-                            if (remoteOk) PlayButton(onClick = { onPlay(item) })
+                            if (remoteOk && canPlay(item)) PlayButton(onClick = { onPlay(item) })
                         },
                     )
                 }

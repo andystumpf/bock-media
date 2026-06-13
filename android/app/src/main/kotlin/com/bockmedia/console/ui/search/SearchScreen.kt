@@ -18,18 +18,26 @@ import kotlinx.coroutines.delay
 fun SearchScreen(repository: BockMediaRepository, remoteOk: Boolean, onPlay: (PlayTarget) -> Unit) {
     var query by remember { mutableStateOf("") }
     var results by remember { mutableStateOf<SearchResponse?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(query) {
         delay(280)
         if (query.length < 2) {
             results = null
+            error = null
             return@LaunchedEffect
         }
+        error = null
         runCatching { results = repository.search(query) }
+            .onFailure {
+                error = it.message ?: "Search failed"
+                results = null
+            }
     }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
         SearchField(query, { query = it }, "Search library…")
+        error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         Spacer(Modifier.height(8.dp))
         BockLazyColumn {
             results?.playlists?.let { list ->
@@ -75,9 +83,11 @@ fun SearchScreen(repository: BockMediaRepository, remoteOk: Boolean, onPlay: (Pl
                         headlineContent = { Text(hit.title ?: hit.name ?: "") },
                         supportingContent = { Text(hit.artist ?: "") },
                         trailingContent = {
-                            if (remoteOk) PlayButton(onClick = {
-                                onPlay(PlayTarget.Song(hit.path ?: "", hit.title ?: ""))
-                            })
+                            if (remoteOk && !hit.path.isNullOrBlank()) {
+                                PlayButton(onClick = {
+                                    onPlay(PlayTarget.Song(hit.path!!, hit.title ?: hit.name ?: ""))
+                                })
+                            }
                         },
                     )
                 }

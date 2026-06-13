@@ -13,8 +13,8 @@ android {
         applicationId = "com.bockmedia.console"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "2.0.1"
+        versionCode = 14
+        versionName = "2.1.1"
         // Bock Media server endpoints (override via local.properties if needed)
         val localProps = rootProject.file("local.properties")
         fun prop(name: String) = if (localProps.exists()) {
@@ -27,11 +27,9 @@ android {
         val localServerUrl = prop("bockmedia.localServerUrl")
             .ifBlank { "http://192.168.1.187:3001" }
         val externalServerUrl = prop("bockmedia.externalServerUrl")
-            .ifBlank { "http://142.56.8.193:3001" }
         val mobileApiToken = prop("bockmedia.mobileApiToken")
-            .ifBlank { "LXAddEVrzkaoWBgHXqHYEFr2e2UprVL0" }
-        val adminUser = prop("bockmedia.adminUser").ifBlank { "morejava" }
-        val adminPassword = prop("bockmedia.adminPassword").ifBlank { "TwWnvnNS7qKFJ1JagSk2" }
+        val adminUser = prop("bockmedia.adminUser")
+        val adminPassword = prop("bockmedia.adminPassword")
         buildConfigField("String", "DEFAULT_LOCAL_SERVER_URL", "\"$localServerUrl\"")
         buildConfigField("String", "DEFAULT_EXTERNAL_SERVER_URL", "\"$externalServerUrl\"")
         buildConfigField("String", "DEFAULT_SERVER_URL", "\"$localServerUrl\"")
@@ -75,7 +73,7 @@ android {
             }
         }
         debug {
-            applicationIdSuffix = ".debug"
+            // Same applicationId as release so sideload APK matches shortcuts/deep links.
             versionNameSuffix = "-debug"
         }
     }
@@ -124,6 +122,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 
     implementation("io.coil-kt:coil-compose:2.7.0")
+    implementation("androidx.security:security-crypto:1.0.0")
     implementation("androidx.datastore:datastore-preferences:1.1.1")
     implementation("androidx.browser:browser:1.8.0")
     implementation("androidx.work:work-runtime-ktx:2.10.0")

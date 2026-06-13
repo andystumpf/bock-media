@@ -4,7 +4,9 @@ import android.content.Context
 import com.bockmedia.console.data.api.BockMediaApi
 import com.bockmedia.console.data.api.bockJson
 import com.bockmedia.console.data.auth.BockAuthInterceptor
+import com.bockmedia.console.data.local.ApiResponseCache
 import com.bockmedia.console.data.local.AppPreferences
+import com.bockmedia.console.data.network.NetworkHints
 import com.bockmedia.console.data.network.ServerEndpointResolver
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
@@ -18,6 +20,8 @@ import java.util.concurrent.TimeUnit
 
 class BockMediaApp(context: Context) {
     val preferences = AppPreferences(context.applicationContext)
+    val responseCache = ApiResponseCache(context.applicationContext)
+    private val appContext = context.applicationContext
 
     private var cachedBaseUrl: String? = null
     private var cachedApi: BockMediaApi? = null
@@ -30,6 +34,7 @@ class BockMediaApp(context: Context) {
             apiProvider = { api() },
             baseUrlProvider = { resolveBaseUrl() },
             preferences = preferences,
+            cache = responseCache,
         )
     }
 
@@ -41,8 +46,8 @@ class BockMediaApp(context: Context) {
         val external = preferences.getExternalServerUrlSync()
         return ServerEndpointResolver.resolve(
             preferences = preferences,
-            localProbeClient = buildPlainHttpClient(),
-            externalProbeClient = buildHttpClient(user, pass, token, local, external),
+            authProbeClient = buildHttpClient(user, pass, token, local, external),
+            preferExternal = !NetworkHints.onWifi(appContext),
             forceRefresh = forceRefresh,
         )
     }
@@ -115,13 +120,6 @@ class BockMediaApp(context: Context) {
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .addInterceptor(BockAuthInterceptor({ localHosts }, { user }, { pass }, { token }))
-            .apply {
-                if (BuildConfig.DEBUG) {
-                    addInterceptor(HttpLoggingInterceptor().apply {
-                        level = HttpLoggingInterceptor.Level.BASIC
-                    })
-                }
-            }
             .build()
     }
 

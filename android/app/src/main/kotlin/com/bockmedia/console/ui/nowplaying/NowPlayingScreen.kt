@@ -23,6 +23,8 @@ import com.bockmedia.console.ui.alexaControlsAvailable
 import com.bockmedia.console.ui.components.ErrorText
 import com.bockmedia.console.ui.components.LoadingBox
 import com.bockmedia.console.ui.components.PaginationBar
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import retrofit2.HttpException
@@ -130,20 +132,27 @@ fun NowPlayingScreen(
     val shuffleOn = remember { mutableStateMapOf<String, Boolean>() }
     val volumeTimers = remember { mutableStateMapOf<String, kotlinx.coroutines.Job?>() }
 
-    suspend fun refreshLive() {
-        val np = repository.nowPlayingDevices()
+    suspend fun refreshLive(full: Boolean = false) {
+        val np = repository.nowPlayingDevices(forceRefresh = full)
         items = np.items
         controlsAvailable = np.controlsAvailable
-        remoteOk = alexaControlsAvailable(repository.alexaRemoteStatus())
-        if (controlsAvailable && remoteOk && alexaDevices.isEmpty()) {
-            runCatching { alexaDevices = repository.alexaRemoteDevices().devices }
-            runCatching { deviceGroups = repository.deviceGroups().items }
+        if (full) {
+            remoteOk = alexaControlsAvailable(repository.alexaRemoteStatus())
+            if (controlsAvailable && remoteOk && alexaDevices.isEmpty()) {
+                coroutineScope {
+                    val devs = async {
+                        runCatching { repository.alexaRemoteDevices(probe = true).devices }.getOrDefault(emptyList())
+                    }
+                    val groups = async {
+                        runCatching { repository.deviceGroups().items }.getOrDefault(emptyList())
+                    }
+                    alexaDevices = devs.await()
+                    deviceGroups = groups.await()
+                }
+            }
         }
         for (dev in np.items) {
-            if (!canControlDevice(dev, alexaDevices, controlsAvailable, remoteOk)) continue
-            if (volumes.containsKey(dev.deviceId)) continue
-            val serial = resolveSerial(dev, alexaDevices) ?: continue
-            runCatching { volumes[dev.deviceId] = repository.getVolume(serial).volume }
+            if (!shuffleOn.containsKey(dev.deviceId)) shuffleOn[dev.deviceId] = dev.shuffle
         }
     }
 
@@ -158,26 +167,26 @@ fun NowPlayingScreen(
         error = null
         var liveError: String? = null
         var historyError: String? = null
-        runCatching { refreshLive() }.onFailure { liveError = it.message }
+        runCatching { refreshLive(full = true) }.onFailure { liveError = it.message }
         runCatching { loadHistory() }.onFailure { historyError = it.message }
         error = liveError ?: historyError
         loading = false
     }
 
-    suspend fun runControl(dev: NowPlayingDeviceItem, action: String) {
+    suspend fun runControl(dev: NowPlayingDeviceItem, action: String): Boolean {
         val serial = resolveSerial(dev, alexaDevices)
         if (serial == null) {
             snackbarHostState.showSnackbar(
                 "Can't control \"${dev.deviceName}\" — rename it on Devices to match the Echo's Alexa name.",
             )
-            return
+            return false
         }
-        runCatching {
+        return runCatching {
             repository.deviceControl(dev.deviceId, dev.deviceName ?: "", serial, action)
-            refreshLive()
+            refreshLive(full = true)
         }.onFailure {
             snackbarHostState.showSnackbar(controlErrorMessage(it))
-        }
+        }.isSuccess
     }
 
     LaunchedEffect(Unit) { loadAll() }
@@ -189,7 +198,7 @@ fun NowPlayingScreen(
     LaunchedEffect(Unit) {
         while (true) {
             delay(5_000)
-            runCatching { refreshLive() }
+            runCatching { refreshLive(full = false) }
         }
     }
     LaunchedEffect(Unit) {
@@ -217,7 +226,7 @@ fun NowPlayingScreen(
                                 runCatching {
                                     repository.setSleep(dev.deviceId, minutes = min)
                                     snackbarHostState.showSnackbar("Sleeping in $min min")
-                                    refreshLive()
+                                    refreshLive(full = true)
                                 }.onFailure {
                                     snackbarHostState.showSnackbar(it.message ?: "Failed")
                                 }
@@ -230,7 +239,7 @@ fun NowPlayingScreen(
                             runCatching {
                                 repository.setSleep(dev.deviceId, songs = 1)
                                 snackbarHostState.showSnackbar("Stopping after this song")
-                                refreshLive()
+                                refreshLive(full = true)
                             }.onFailure {
                                 snackbarHostState.showSnackbar(it.message ?: "Failed")
                             }
@@ -242,7 +251,7 @@ fun NowPlayingScreen(
                             runCatching {
                                 repository.setSleep(dev.deviceId, songs = 3)
                                 snackbarHostState.showSnackbar("Stopping after 3 songs")
-                                refreshLive()
+                                refreshLive(full = true)
                             }.onFailure {
                                 snackbarHostState.showSnackbar(it.message ?: "Failed")
                             }
@@ -255,7 +264,7 @@ fun NowPlayingScreen(
                                 runCatching {
                                     repository.setSleep(dev.deviceId)
                                     snackbarHostState.showSnackbar("Sleep timer cancelled")
-                                    refreshLive()
+                                    refreshLive(full = true)
                                 }.onFailure {
                                     snackbarHostState.showSnackbar(it.message ?: "Failed")
                                 }
@@ -288,6 +297,8 @@ fun NowPlayingScreen(
                             }.onFailure {
                                 snackbarHostState.showSnackbar("Failed to ignore track")
                             }
+                        } else {
+                            snackbarHostState.showSnackbar("No file path for this track")
                         }
                         ignoreDevice = null
                     }
@@ -314,7 +325,7 @@ fun NowPlayingScreen(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         TextButton(onClick = { scope.launch { loadAll() } }) {
-                            Icon(Icons.Default.Refresh, null, Modifier.size(18.dp))
+                            Icon(Icons.Default.Refresh, "Refresh", Modifier.size(18.dp))
                             Spacer(Modifier.width(4.dp))
                             Text("Refresh")
                         }
@@ -353,7 +364,7 @@ fun NowPlayingScreen(
                                 Card(Modifier.fillMaxWidth()) {
                                     Column(Modifier.padding(12.dp)) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Icon(Icons.Default.Layers, null, tint = MaterialTheme.colorScheme.primary)
+                                            Icon(Icons.Default.Layers, "Speaker group", tint = MaterialTheme.colorScheme.primary)
                                             Spacer(Modifier.width(8.dp))
                                             Text(entry.name, style = MaterialTheme.typography.titleSmall)
                                             Spacer(Modifier.width(8.dp))
@@ -381,6 +392,7 @@ fun NowPlayingScreen(
                                                 scope = scope,
                                                 snackbarHostState = snackbarHostState,
                                                 onControl = { d, action -> scope.launch { runControl(d, action) } },
+                                                runControlAction = { d, action -> runControl(d, action) },
                                                 onSleep = { sleepDevice = it },
                                                 onIgnore = { ignoreDevice = it },
                                                 onFavorite = { d ->
@@ -415,6 +427,7 @@ fun NowPlayingScreen(
                                     scope = scope,
                                     snackbarHostState = snackbarHostState,
                                     onControl = { d, action -> scope.launch { runControl(d, action) } },
+                                    runControlAction = { d, action -> runControl(d, action) },
                                     onSleep = { sleepDevice = it },
                                     onIgnore = { ignoreDevice = it },
                                     onFavorite = { d ->
@@ -498,13 +511,20 @@ private fun NowPlayingDeviceCard(
     scope: kotlinx.coroutines.CoroutineScope,
     snackbarHostState: SnackbarHostState,
     onControl: (NowPlayingDeviceItem, String) -> Unit,
+    runControlAction: suspend (NowPlayingDeviceItem, String) -> Boolean,
     onSleep: (NowPlayingDeviceItem) -> Unit,
     onIgnore: (NowPlayingDeviceItem) -> Unit,
     onFavorite: (NowPlayingDeviceItem) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     @Suppress("UNUSED_VARIABLE") val _t = tick
-    val prog = computeNowPlayingProgress(dev.timestamp, dev.duration_ms, dev.offset_ms, dev.paused)
+    val serialForVol = resolveSerial(dev, alexaDevices)
+    LaunchedEffect(dev.deviceId, serialForVol, controlsAvailable, remoteOk) {
+        if (serialForVol == null || volumes.containsKey(dev.deviceId)) return@LaunchedEffect
+        if (!canControlDevice(dev, alexaDevices, controlsAvailable, remoteOk)) return@LaunchedEffect
+        runCatching { volumes[dev.deviceId] = repository.getVolume(serialForVol).volume }
+    }
+    val prog = computeNowPlayingProgress(dev.timestamp, dev.duration_ms, dev.offset_ms, dev.paused || dev.stopped)
     val canControl = canControlDevice(dev, alexaDevices, controlsAvailable, remoteOk)
     val elapsedSec = prog.elapsedMs / 1000
     val durationSec = prog.durationMs / 1000
@@ -555,9 +575,9 @@ private fun NowPlayingDeviceCard(
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f, fill = false),
                         )
-                        if (dev.paused) {
+                        if (dev.paused || dev.stopped) {
                             Spacer(Modifier.width(6.dp))
-                            AssistChip(onClick = {}, label = { Text("Paused") }, enabled = false)
+                            AssistChip(onClick = {}, label = { Text(if (dev.paused) "Paused" else "Stopped") }, enabled = false)
                         }
                         dev.sleep?.let { sleep ->
                             Spacer(Modifier.width(6.dp))
@@ -568,7 +588,7 @@ private fun NowPlayingDeviceCard(
                             AssistChip(
                                 onClick = { onSleep(dev) },
                                 label = { Text(sleepLabel) },
-                                leadingIcon = { Icon(Icons.Default.Bedtime, null, Modifier.size(16.dp)) },
+                                leadingIcon = { Icon(Icons.Default.Bedtime, "Sleep timer", Modifier.size(16.dp)) },
                             )
                         }
                     }
@@ -627,9 +647,14 @@ private fun NowPlayingDeviceCard(
                     }
                     val shuffled = shuffleOn[dev.deviceId] == true
                     IconButton(onClick = {
+                        val prev = shuffled
                         val on = !shuffled
                         shuffleOn[dev.deviceId] = on
-                        onControl(dev, if (on) "shuffle_on" else "shuffle_off")
+                        scope.launch {
+                            if (!runControlAction(dev, if (on) "shuffle_on" else "shuffle_off")) {
+                                shuffleOn[dev.deviceId] = prev
+                            }
+                        }
                     }) {
                         Icon(
                             Icons.Default.Shuffle,
@@ -661,27 +686,35 @@ private fun NowPlayingDeviceCard(
                         Modifier.fillMaxWidth().padding(top = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Icon(Icons.Default.VolumeDown, null, Modifier.size(20.dp))
-                        Slider(
-                            value = (vol ?: 50).toFloat(),
-                            onValueChange = { v ->
-                                val intVol = v.toInt().coerceIn(0, 100)
-                                volumes[dev.deviceId] = intVol
-                                volumeTimers[dev.deviceId]?.cancel()
-                                volumeTimers[dev.deviceId] = scope.launch {
-                                    delay(350)
-                                    runCatching {
-                                        repository.setVolume(serial, dev.deviceName ?: "", intVol)
-                                    }.onFailure {
-                                        snackbarHostState.showSnackbar("Volume failed")
+                        Icon(Icons.Default.VolumeDown, "Volume down", Modifier.size(20.dp))
+                        if (vol != null) {
+                            Slider(
+                                value = vol.toFloat(),
+                                onValueChange = { v ->
+                                    val intVol = v.toInt().coerceIn(0, 100)
+                                    volumes[dev.deviceId] = intVol
+                                    volumeTimers[dev.deviceId]?.cancel()
+                                    volumeTimers[dev.deviceId] = scope.launch {
+                                        delay(350)
+                                        runCatching {
+                                            repository.setVolume(serial, dev.deviceName ?: "", intVol)
+                                        }.onFailure {
+                                            snackbarHostState.showSnackbar("Volume failed")
+                                        }
                                     }
-                                }
-                            },
-                            valueRange = 0f..100f,
-                            modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
-                        )
-                        Text(if (vol == null) "—" else vol.toString(), style = MaterialTheme.typography.labelSmall)
-                        Icon(Icons.Default.VolumeUp, null, Modifier.size(20.dp))
+                                },
+                                valueRange = 0f..100f,
+                                modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                            )
+                            Text(vol.toString(), style = MaterialTheme.typography.labelSmall)
+                        } else {
+                            Text(
+                                "Loading volume…",
+                                style = MaterialTheme.typography.labelSmall,
+                                modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                            )
+                        }
+                        Icon(Icons.Default.VolumeUp, "Volume up", Modifier.size(20.dp))
                     }
                 }
             }

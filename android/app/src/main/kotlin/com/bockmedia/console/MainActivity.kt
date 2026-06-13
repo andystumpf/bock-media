@@ -8,21 +8,20 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.*
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import coil.Coil
 import coil.ImageLoader
 import com.bockmedia.console.media.NowPlayingNotificationManager
 import com.bockmedia.console.ui.navigation.BockApp
 import com.bockmedia.console.ui.setup.SetupScreen
 import com.bockmedia.console.ui.theme.BockMediaTheme
-import androidx.lifecycle.lifecycleScope
-import com.bockmedia.console.widget.NowPlayingWidget
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
 
@@ -34,61 +33,63 @@ class MainActivity : ComponentActivity() {
             BockMediaTheme {
                 val app = remember { BockMediaApp.get(this) }
                 var hasServer by remember { mutableStateOf<Boolean?>(null) }
+                var setupError by remember { mutableStateOf<String?>(null) }
                 val scope = rememberCoroutineScope()
                 val notificationPermission = rememberLauncherForActivityResult(
                     ActivityResultContracts.RequestPermission(),
                 ) { }
 
                 LaunchedEffect(Unit) {
-                    NowPlayingNotificationManager.ensureChannel(this@MainActivity)
-                    app.preferences.clearCredentialsIfNotRemembered()
-                    if (app.preferences.isRememberMeSync()) {
-                        app.preferences.applyBuildDefaultsIfEmpty()
-                        if (app.hasServerUrl()) {
-                            runCatching { app.repository.testConnection() }
-                                .onSuccess { hasServer = true; return@LaunchedEffect }
+                    try {
+                        NowPlayingNotificationManager.ensureChannel(this@MainActivity)
+                        app.preferences.clearCredentialsIfNotRemembered()
+                        // Only skip setup when the user previously signed in with Remember me.
+                        if (app.preferences.isRememberMeSync() && app.hasServerUrl()) {
+                            val pass = app.preferences.adminPass.first()
+                            val token = app.preferences.mobileToken.first()
+                            if (!pass.isNullOrBlank() || !token.isNullOrBlank()) {
+                                hasServer = app.repository.testConnection()
+                                    .onFailure { setupError = it.message }
+                                    .isSuccess
+                                return@LaunchedEffect
+                            }
                         }
+                        hasServer = false
+                    } catch (e: Exception) {
+                        setupError = e.message ?: "Startup failed"
+                        hasServer = false
                     }
-                    hasServer = app.hasServerUrl()
                 }
 
                 LaunchedEffect(hasServer) {
-                    if (hasServer == true) {
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    if (hasServer != true) return@LaunchedEffect
+                    kotlinx.coroutines.delay(800)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        runCatching {
                             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
                         }
-                        runCatching {
-                            val client = app.buildAuthenticatedHttpClient()
-                            Coil.setImageLoader(
-                                ImageLoader.Builder(this@MainActivity)
-                                    .okHttpClient(client)
-                                    .build(),
-                            )
-                        }
                     }
-                }
-
-                val lifecycleOwner = LocalLifecycleOwner.current
-                DisposableEffect(lifecycleOwner, app, hasServer) {
-                    val observer = LifecycleEventObserver { _, event ->
-                        if (event == Lifecycle.Event.ON_RESUME && hasServer == true) {
-                            app.invalidateApi()
-                            lifecycleOwner.lifecycleScope.launch {
-                                withContext(Dispatchers.IO) {
-                                    NowPlayingWidget.refreshSession(applicationContext)
-                                }
-                            }
-                        }
+                    runCatching {
+                        val client = app.buildAuthenticatedHttpClient()
+                        Coil.setImageLoader(
+                            ImageLoader.Builder(this@MainActivity)
+                                .okHttpClient(client)
+                                .build(),
+                        )
                     }
-                    lifecycleOwner.lifecycle.addObserver(observer)
-                    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
                 }
 
                 when (hasServer) {
-                    null -> { /* loading */ }
-                    false -> SetupScreen {
-                        hasServer = true
+                    null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator()
                     }
+                    false -> SetupScreen(
+                        onConnected = {
+                            setupError = null
+                            hasServer = true
+                        },
+                        initialError = setupError,
+                    )
                     true -> BockApp(
                         repository = app.repository,
                         onChangeServer = {

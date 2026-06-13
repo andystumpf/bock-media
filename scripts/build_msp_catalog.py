@@ -17,9 +17,14 @@ import datetime
 import json
 import os
 import re
+import sys
 import xml.etree.ElementTree as ET
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+from playlist_xml_lock import playlist_xml_lock
+
 DATA_DIR = os.environ.get('OURMEDIA_DATA_DIR', '/home/plex/.bockmedia')
 PLAYLISTS_XML = os.path.join(DATA_DIR, 'ServerPlaylists.xml')
 
@@ -47,7 +52,8 @@ def _alternate_names(name):
 
 
 def build_catalog():
-    tree = ET.parse(PLAYLISTS_XML)
+    with playlist_xml_lock(DATA_DIR, shared=True):
+        tree = ET.parse(PLAYLISTS_XML)
     now = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.000Z')
     entities = []
     seen = set()

@@ -30,6 +30,7 @@
     <string name="widget_open">Open app</string>
     <string name="widget_control_failed">Control failed — check Alexa login on server</string>
     <string name="widget_paused">Paused</string>
+    <string name="widget_stopped">Stopped</string>
     <string name="widget_playing_count">Now Playing · %1$d speakers</string>
     <string name="notification_channel_name">Now Playing</string>
     <string name="notification_channel_desc">Playback controls for your Alexa devices</string>

@@ -60,13 +60,13 @@ class TestTokenCodec:
         assert len(token) < 100  # well under Alexa 1024 char limit
 
     def test_decode_unknown_qid_returns_empty(self, isolated_paths):
-        """missing/expired qid yields empty dict"""
-        assert server.decode_token('NOSUCHQID:0') == {}
+        """missing/expired qid yields None"""
+        assert server.decode_token('NOSUCHQID:0') is None
 
     def test_decode_garbage(self, isolated_paths):
-        """malformed token yields empty dict"""
-        assert server.decode_token('not-a-real-token') == {}
-        assert server.decode_token('') == {}
+        """malformed token yields None"""
+        assert server.decode_token('not-a-real-token') is None
+        assert server.decode_token('') is None
 
     def test_advance_idx_reuses_qid(self, isolated_paths):
         """passing qid + new idx does not re-store the queue"""
@@ -252,7 +252,8 @@ class TestFileToStreamUrl:
         """builds <publicUrl>/stream/<encoded path>"""
         monkeypatch.setattr(server, 'get_public_url', lambda: 'https://x.example')
         url = server.file_to_stream_url('/mnt/Music/Foo Bar/Track.mp3')
-        assert url == 'https://x.example/stream/mnt/Music/Foo%20Bar/Track.mp3'
+        assert url.startswith('https://x.example/stream/mnt/Music/Foo%20Bar/Track.mp3?exp=')
+        assert '&sig=' in url
 
 
 # ─────────────────────────── streamability check ─────────────────────────────

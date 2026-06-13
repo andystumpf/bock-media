@@ -23,9 +23,10 @@ import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-STATE_PATH = os.path.join(REPO, 'health_state.json')
+DATA_DIR = os.environ.get('OURMEDIA_DATA_DIR', os.path.expanduser('~/.bockmedia'))
+STATE_PATH = os.path.join(DATA_DIR, 'health_state.json')
 LOG_PATH = os.path.join(REPO, 'health.log')
-CONFIG_PATH = os.path.join(REPO, 'config.json')
+CONFIG_PATH = os.path.join(DATA_DIR, 'config.json')
 
 BACKEND_URL = 'http://127.0.0.1:3001/api/summary'
 

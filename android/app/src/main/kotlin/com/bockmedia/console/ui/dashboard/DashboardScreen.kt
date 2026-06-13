@@ -19,10 +19,12 @@ import kotlinx.coroutines.launch
 @Composable
 fun DashboardScreen(
     repository: BockMediaRepository,
+    remoteOk: Boolean,
     onPlay: (PlayTarget) -> Unit,
     onNavigateSettings: () -> Unit,
 ) {
     var loading by remember { mutableStateOf(true) }
+    var refreshing by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var summary by remember { mutableStateOf<SummaryResponse?>(null) }
     var quick by remember { mutableStateOf<DashboardQuickResponse?>(null) }
@@ -32,42 +34,65 @@ fun DashboardScreen(
     var remote by remember { mutableStateOf<AlexaRemoteStatus?>(null) }
     val scope = rememberCoroutineScope()
 
-    suspend fun load() {
-        loading = true
+    fun applyBootstrap(data: DashboardBootstrapResponse) {
+        summary = data.summary
+        quick = data.quick
+        recent = data.recent.items
+        health = data.health
+        plex = data.plexSync
+        remote = data.alexaRemote
+    }
+
+    suspend fun load(forceRefresh: Boolean = false) {
+        if (summary == null) loading = true else refreshing = true
         error = null
+        if (!forceRefresh) {
+            repository.readStaleDashboard()?.let { applyBootstrap(it); loading = false }
+        }
         runCatching {
-            summary = repository.summary()
-            quick = repository.dashboardQuick()
-            recent = repository.recent(1, 10).items
-            health = repository.health()
-            plex = repository.plexSyncStatus()
-            remote = repository.alexaRemoteStatus()
-        }.onFailure { error = it.message }
+            applyBootstrap(repository.dashboardBootstrap(forceRefresh))
+        }.onFailure {
+            if (summary == null) error = it.message
+        }
         loading = false
+        refreshing = false
     }
 
     LaunchedEffect(Unit) { load() }
     LaunchedEffect(Unit) {
         while (true) {
-            delay(30_000)
-            runCatching { health = repository.health(); remote = repository.alexaRemoteStatus() }
+            delay(60_000)
+            runCatching { applyBootstrap(repository.dashboardBootstrap(forceRefresh = true)) }
         }
     }
 
     when {
         loading && summary == null -> LoadingBox()
-        error != null && summary == null -> ErrorText(error!!) { scope.launch { load() } }
+        error != null && summary == null -> ErrorText(error!!) { scope.launch { load(forceRefresh = true) } }
         else -> BockLazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             item {
-                summary?.let {
-                    Text("Songs ${it.songs} · Artists ${it.artists} · Albums ${it.albums} · Playlists ${it.playlists}")
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    summary?.let {
+                        Text("Songs ${it.songs} · Artists ${it.artists} · Albums ${it.albums} · Playlists ${it.playlists}")
+                    }
+                    if (refreshing) {
+                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    }
                 }
             }
             item {
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(12.dp)) {
                         Text("Service Health", style = MaterialTheme.typography.titleSmall)
-                        Text("Status: ${health?.status ?: "—"}")
+                        val h = health
+                        Text("Status: ${h?.status ?: "—"}")
+                        if (h?.status == "degraded" && h.watchdogFresh != true) {
+                            Text(
+                                "Health monitor snapshot is stale — server is up but watchdog data is old.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                         remote?.let {
                             Text("Alexa remote: ${if (it.authenticated == true) "Connected" else "Not authenticated"}")
                             if (it.configured && it.authenticated != true) {
@@ -82,7 +107,7 @@ fun DashboardScreen(
                     Card(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(12.dp)) {
                             Text("Plex sync", style = MaterialTheme.typography.titleSmall)
-                            Text("Playlists: ${p.playlistCount ?: "—"} · Last: ${p.lastSuccess ?: "—"}")
+                            Text("Plex tracked: ${p.playlistCount ?: "—"} · Last: ${p.displayLastSuccess ?: p.displayLastRun ?: "—"}")
                         }
                     }
                 }
@@ -92,7 +117,13 @@ fun DashboardScreen(
                 ListItem(
                     headlineContent = { Text(fav.track ?: fav.path) },
                     supportingContent = { Text(fav.artist ?: "") },
-                    trailingContent = { PlayButton(onClick = { onPlay(PlayTarget.Song(fav.path, fav.track ?: "Track")) }) },
+                    trailingContent = {
+                        if (remoteOk && fav.path.isNotBlank()) {
+                            PlayButton(onClick = {
+                                onPlay(PlayTarget.Song(fav.path, fav.track ?: "Track"))
+                            })
+                        }
+                    },
                 )
             }
             item { Text("Recent play requests", style = MaterialTheme.typography.titleMedium) }

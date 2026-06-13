@@ -18,17 +18,19 @@ import kotlinx.coroutines.launch
 fun AnalyticsScreen(repository: BockMediaRepository) {
     val scope = rememberCoroutineScope()
     var data by remember { mutableStateOf<AnalyticsResponse?>(null) }
-    var ignored by remember { mutableStateOf<List<String>>(emptyList()) }
+    var ignored by remember { mutableStateOf<List<com.bockmedia.console.data.api.dto.IgnoredTrack>>(emptyList()) }
+    var error by remember { mutableStateOf<String?>(null) }
     var from by remember { mutableStateOf("") }
     var to by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(true) }
 
     suspend fun load() {
         loading = true
+        error = null
         runCatching {
             data = repository.analytics(from.ifBlank { null }, to.ifBlank { null })
-            ignored = repository.ignored().items.map { it.path }
-        }
+            ignored = repository.ignored().items
+        }.onFailure { error = it.message ?: "Failed to load analytics" }
         loading = false
     }
 
@@ -40,6 +42,7 @@ fun AnalyticsScreen(repository: BockMediaRepository) {
             BockTextField(to, { to = it }, "To", modifier = Modifier.weight(1f))
             Button(onClick = { scope.launch { load() } }) { Text("Apply") }
         }
+        error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         if (loading) LoadingBox(Modifier.weight(1f)) else {
             BockLazyColumn(Modifier.weight(1f)) {
                 data?.let { a ->
@@ -52,12 +55,17 @@ fun AnalyticsScreen(repository: BockMediaRepository) {
                     item { StatsSection("By day of week", a.byDayOfWeek) }
                 }
                 item { Text("Never play again", style = MaterialTheme.typography.titleMedium) }
-                items(ignored) { path ->
+                items(ignored) { row ->
                     ListItem(
-                        headlineContent = { Text(path.substringAfterLast('/')) },
+                        headlineContent = { Text(row.track ?: row.path.substringAfterLast('/')) },
+                        supportingContent = { row.artist?.let { Text(it) } },
                         trailingContent = {
                             TextButton(onClick = {
-                                scope.launch { repository.removeIgnored(path); load() }
+                                scope.launch {
+                                    runCatching { repository.removeIgnored(row.path) }
+                                        .onSuccess { load() }
+                                        .onFailure { error = it.message ?: "Failed to remove" }
+                                }
                             }) { Text("Allow again") }
                         },
                     )
@@ -73,7 +81,7 @@ private fun StatsSection(title: String, rows: List<CountRow>) {
     Text(title, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 12.dp))
     rows.take(10).forEach { row ->
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(row.label ?: row.name ?: "—")
+            Text(row.label ?: row.name ?: row.day ?: row.decade ?: row.hour?.toString() ?: "—")
             Text("${row.count}")
         }
     }

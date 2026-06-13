@@ -100,7 +100,7 @@ fun SearchField(
         leadingIcon = {
             Icon(
                 Icons.Default.Search,
-                contentDescription = null,
+                contentDescription = "Search",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         },
@@ -252,7 +252,7 @@ fun DevicePickerSheet(
     LaunchedEffect(Unit) {
         loading = true
         runCatching {
-            devices = repository.alexaRemoteDevices().devices
+            devices = repository.alexaRemoteDevices(probe = true).devices
             groups = repository.deviceGroups().items
         }.onFailure { error = it.message }.also { loading = false }
     }
@@ -278,12 +278,12 @@ fun DevicePickerSheet(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .clickable {
-                                            scope.launch {
-                                                runCatching {
-                                                    onPlay("group:${g.id}", shuffle)
-                                                }.onFailure { onPlayError(it) }
-                                                onDismiss()
-                                            }
+                                        scope.launch {
+                                            runCatching {
+                                                onPlay("group:${g.id}", shuffle)
+                                            }.onSuccess { onDismiss() }
+                                                .onFailure { onPlayError(it) }
+                                        }
                                         },
                                 )
                             }
@@ -298,12 +298,12 @@ fun DevicePickerSheet(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
-                                        val serial = d.serial ?: d.name ?: return@clickable
+                                        val serial = d.serial ?: return@clickable
                                         scope.launch {
                                             runCatching {
                                                 onPlay(serial, shuffle)
-                                            }.onFailure { onPlayError(it) }
-                                            onDismiss()
+                                            }.onSuccess { onDismiss() }
+                                                .onFailure { onPlayError(it) }
                                         }
                                     },
                             )

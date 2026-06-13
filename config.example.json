@@ -38,5 +38,10 @@
     "token": "GENERATE_AND_SET_LOCALLY",
     "allowTunnelApi": false,
     "allowExternalAccess": true
+  },
+  "appDownload": {
+    "_comment": "Basic auth for GET /app and /download/bockmedia-console.apk (Android sideload page). Falls back to WebPassword if password omitted.",
+    "username": "morejava",
+    "password": "SET_LOCALLY"
   }
 }

@@ -65,12 +65,14 @@ def isolated_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(server, 'DEVICES_PATH', str(state_dir / 'devices.json'))
     monkeypatch.setattr(server, 'STREAM_HISTORY_PATH', str(state_dir / 'streaming_history.jsonl'))
     monkeypatch.setattr(server, 'CONFIG_PATH', str(state_dir / 'config.json'))
+    monkeypatch.setattr(server, 'FAVORITES_PATH', str(state_dir / 'favorites.json'))
     monkeypatch.setattr(server, 'QUEUES_PATH', str(state_dir / 'queues.json'))
     monkeypatch.setattr(server, 'NP_STATE_PATH', str(state_dir / 'nowplaying_state.json'))
     monkeypatch.setattr(server, 'SELECTED_PATH', str(state_dir / 'selected_state.json'))
     monkeypatch.setattr(server, 'IGNORE_PATH', str(state_dir / 'ignored_tracks.json'))
     monkeypatch.setattr(server, 'DEVICE_GROUPS_PATH', str(state_dir / 'device_groups.json'))
     monkeypatch.setattr(server, 'HEALTH_STATE_PATH', str(state_dir / 'health_state.json'))
+    monkeypatch.setattr(server, 'SMART_PLAYLISTS_PATH', str(state_dir / 'smart_playlists.json'))
     monkeypatch.setattr(server, 'LOG_PATH', str(state_dir / 'server.log'))
     return tmp_path
 

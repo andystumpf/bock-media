@@ -15,6 +15,8 @@ import com.bockmedia.console.data.api.dto.SmartPlaylist
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.PlayTarget
 import com.bockmedia.console.ui.components.*
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -36,55 +38,94 @@ fun PlaylistsScreen(
     var showAi by remember { mutableStateOf(false) }
     var page by remember { mutableIntStateOf(1) }
     val pageSize = 100
+    var total by remember { mutableIntStateOf(0) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var loadGen by remember { mutableIntStateOf(0) }
 
-    suspend fun load() {
+    suspend fun load(expectedGen: Int) {
+        if (expectedGen != loadGen) return
+        error = null
         runCatching {
-            playlists = repository.playlists(search).items
-            smart = repository.smartPlaylists().items
+            coroutineScope {
+                val pl = async { repository.playlists(search, page, pageSize) }
+                val sm = async { repository.smartPlaylists() }
+                val resp = pl.await()
+                if (expectedGen != loadGen) return@coroutineScope
+                playlists = resp.items
+                total = resp.total
+                smart = sm.await().items
+            }
+        }.onFailure {
+            if (expectedGen == loadGen) {
+                error = it.message ?: "Failed to load playlists"
+                playlists = emptyList()
+            }
         }
     }
 
-    LaunchedEffect(Unit) { load() }
+    LaunchedEffect(Unit) { loadGen++; load(loadGen) }
     LaunchedEffect(search) {
         delay(350)
-        load()
         page = 1
+        loadGen++
+        load(loadGen)
+    }
+    LaunchedEffect(page) {
+        loadGen++
+        load(loadGen)
     }
 
-    val paged = playlists.drop((page - 1) * pageSize).take(pageSize)
-    val totalPages = ((playlists.size + pageSize - 1) / pageSize).coerceAtLeast(1)
+    val totalPages = ((total + pageSize - 1) / pageSize).coerceAtLeast(1)
 
     if (showNew) NewPlaylistDialog(
         onDismiss = { showNew = false },
         onCreate = { name ->
-            scope.launch { repository.createPlaylist(name); load(); showNew = false }
+            scope.launch {
+                runCatching {
+                    repository.createPlaylist(name)
+                    loadGen++
+                    load(loadGen)
+                    showNew = false
+                }.onFailure { error = it.message ?: "Create failed" }
+            }
         },
     )
     if (showSmart) SmartPlaylistDialog(
         onDismiss = { showSmart = false },
         onCreate = { name, genre, artist, max ->
-            scope.launch { repository.createSmartPlaylist(name, genre, artist, max); load(); showSmart = false }
+            scope.launch {
+                runCatching {
+                    repository.createSmartPlaylist(name, genre, artist, max)
+                    loadGen++
+                    load(loadGen)
+                    showSmart = false
+                }.onFailure { error = it.message ?: "Create failed" }
+            }
         },
     )
     if (showMerge) MergeDialog(
         onDismiss = { showMerge = false },
         onMerge = { name ->
             scope.launch {
-                repository.mergePlaylists(selectedMerge.toList(), name.ifBlank { null })
-                selectedMerge = emptySet()
-                load()
-                showMerge = false
+                runCatching {
+                    repository.mergePlaylists(selectedMerge.toList(), name.ifBlank { null })
+                    selectedMerge = emptySet()
+                    loadGen++
+                    load(loadGen)
+                    showMerge = false
+                }.onFailure { error = it.message ?: "Merge failed" }
             }
         },
     )
     if (showAi) AiPlaylistDialog(
         repository = repository,
-        onDismiss = { showAi = false; scope.launch { load() } },
+        onDismiss = { showAi = false; scope.launch { loadGen++; load(loadGen) } },
     )
 
     Column(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
             SearchField(search, { search = it }, "Search playlists")
+            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             Spacer(Modifier.height(8.dp))
             SearchActionRow {
                 IconButton(onClick = { showNew = true }) { Icon(Icons.Default.Add, "New") }
@@ -103,15 +144,15 @@ fun PlaylistsScreen(
                     headlineContent = { Text(sp.name) },
                     trailingContent = {
                         Row {
-                            TextButton(onClick = { scope.launch { repository.refreshSmartPlaylist(sp.id); load() } }) { Text("Refresh") }
-                            TextButton(onClick = { scope.launch { repository.deleteSmartPlaylist(sp.id); load() } }) { Text("Delete") }
+                            TextButton(onClick = { scope.launch { runCatching { repository.refreshSmartPlaylist(sp.id); loadGen++; load(loadGen) }.onFailure { error = it.message } } }) { Text("Refresh") }
+                            TextButton(onClick = { scope.launch { runCatching { repository.deleteSmartPlaylist(sp.id); loadGen++; load(loadGen) }.onFailure { error = it.message } } }) { Text("Delete") }
                         }
                     },
                 )
             }
         }
         BockLazyColumn(Modifier.weight(1f)) {
-            items(paged, key = { it.id }) { pl ->
+            items(playlists, key = { it.id }) { pl ->
                 ListItem(
                     headlineContent = { Text(pl.name) },
                     supportingContent = { Text("${pl.tracks} tracks · ${pl.sourceName ?: pl.source ?: ""}") },
@@ -123,7 +164,7 @@ fun PlaylistsScreen(
                     trailingContent = {
                         Row {
                             if (remoteOk) PlayButton(onClick = { onPlay(PlayTarget.Playlist(pl.id, pl.name)) })
-                            IconButton(onClick = { onOpenDetail(pl.id) }) { Icon(Icons.Default.ChevronRight, null) }
+                            IconButton(onClick = { onOpenDetail(pl.id) }) { Icon(Icons.Default.ChevronRight, "Open playlist") }
                         }
                     },
                 )
@@ -142,40 +183,70 @@ fun PlaylistDetailScreen(
     onBack: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    var name by remember { mutableStateOf("") }
-    var tracks by remember { mutableStateOf<List<PlaylistTrack>>(emptyList()) }
+    var name by remember(playlistId) { mutableStateOf("") }
+    var tracks by remember(playlistId) { mutableStateOf<List<PlaylistTrack>>(emptyList()) }
     var filter by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var loadGen by remember { mutableIntStateOf(0) }
 
-    suspend fun load() {
-        loading = true
+    suspend fun load(expectedGen: Int) {
+        if (tracks.isEmpty()) loading = true
+        error = null
         runCatching {
             val d = repository.playlistDetail(playlistId, q = filter.ifBlank { null })
+            if (expectedGen != loadGen) return
             name = d.name
-            tracks = d.tracks
+            val all = d.tracks.toMutableList()
+            var page = 1
+            while (all.size < d.total && page < 50) {
+                page++
+                val next = repository.playlistDetail(playlistId, page = page, q = filter.ifBlank { null })
+                if (expectedGen != loadGen) return
+                if (next.tracks.isEmpty()) break
+                all += next.tracks
+            }
+            tracks = all
+        }.onFailure {
+            if (expectedGen == loadGen) {
+                error = it.message ?: "Failed to load playlist"
+                tracks = emptyList()
+            }
         }
-        loading = false
+        if (expectedGen == loadGen) loading = false
     }
 
-    LaunchedEffect(playlistId) { load() }
+    LaunchedEffect(playlistId) {
+        loadGen++
+        filter = ""
+        name = ""
+        tracks = emptyList()
+        load(loadGen)
+    }
     LaunchedEffect(filter) {
-        delay(400)
-        load()
+        if (filter.isNotEmpty()) delay(400)
+        loadGen++
+        load(loadGen)
     }
 
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.padding(8.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, null) }
+            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back") }
             Text(name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
             if (remoteOk) PlayButton(onClick = { onPlay(PlayTarget.Playlist(playlistId, name)) })
             IconButton(onClick = {
-                scope.launch { repository.deletePlaylist(playlistId); onBack() }
-            }) { Icon(Icons.Default.Delete, null) }
+                scope.launch {
+                    runCatching { repository.deletePlaylist(playlistId) }
+                        .onSuccess { onBack() }
+                        .onFailure { error = it.message ?: "Delete failed" }
+                }
+            }) { Icon(Icons.Default.Delete, "Delete playlist") }
         }
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
             SearchField(filter, { filter = it }, "Filter tracks")
         }
-        if (loading) LoadingBox(Modifier.weight(1f)) else {
+        error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 16.dp)) }
+        if (loading && tracks.isEmpty()) LoadingBox(Modifier.weight(1f)) else {
             BockLazyColumn(Modifier.weight(1f)) {
                 items(tracks) { t ->
                     ListItem(
@@ -188,10 +259,16 @@ fun PlaylistDetailScreen(
                                 }
                                 IconButton(onClick = {
                                     scope.launch {
-                                        t.path?.let { repository.removePlaylistTrack(playlistId, it) }
-                                        load()
+                                        runCatching {
+                                            t.path?.let { repository.removePlaylistTrack(playlistId, it) }
+                                        }.onSuccess {
+                                            loadGen++
+                                            load(loadGen)
+                                        }.onFailure {
+                                            error = it.message ?: "Remove failed"
+                                        }
                                     }
-                                }) { Icon(Icons.Default.Remove, null) }
+                                }) { Icon(Icons.Default.Remove, "Remove track") }
                             }
                         },
                     )
@@ -257,6 +334,7 @@ private fun AiPlaylistDialog(repository: BockMediaRepository, onDismiss: () -> U
     var prompt by remember { mutableStateOf("") }
     var name by remember { mutableStateOf("") }
     var preview by remember { mutableStateOf<List<PlaylistTrack>>(emptyList()) }
+    var error by remember { mutableStateOf<String?>(null) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("AI playlist") },
@@ -265,19 +343,26 @@ private fun AiPlaylistDialog(repository: BockMediaRepository, onDismiss: () -> U
                 OutlinedTextField(prompt, { prompt = it }, label = { Text("Prompt") })
                 OutlinedTextField(name, { name = it }, label = { Text("Playlist name") })
                 if (preview.isNotEmpty()) Text("${preview.size} tracks preview")
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
         },
         confirmButton = {
             Row {
                 TextButton(onClick = {
                     scope.launch {
-                        preview = repository.aiPlaylist(prompt, name.ifBlank { "AI Playlist" }, 30, false).preview
+                        error = null
+                        runCatching {
+                            preview = repository.aiPlaylist(prompt, name.ifBlank { "AI Playlist" }, 30, false).resultTracks()
+                        }.onFailure { error = it.message ?: "Preview failed" }
                     }
                 }) { Text("Preview") }
                 TextButton(onClick = {
                     scope.launch {
-                        repository.aiPlaylist(prompt, name, 30, true)
-                        onDismiss()
+                        error = null
+                        runCatching {
+                            repository.aiPlaylist(prompt, name, 30, true)
+                        }.onSuccess { onDismiss() }
+                            .onFailure { error = it.message ?: "Create failed" }
                     }
                 }) { Text("Create") }
             }

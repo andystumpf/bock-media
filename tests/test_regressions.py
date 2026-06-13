@@ -44,7 +44,10 @@ class TestStuckNowPlaying:
         assert not st.get('paused'), 'PlaybackStopped must not set paused'
 
         items = client.get('/api/nowplaying_devices').get_json()['items']
-        assert all(i['deviceId'] != did for i in items), 'idle row must not appear in UI'
+        # Recently-stopped rows stay visible for resume, flagged stopped.
+        rows = [i for i in items if i['deviceId'] == did]
+        assert all(i['stopped'] and not i['paused'] for i in rows), \
+            'idle row must be flagged stopped, not paused/playing'
 
     def test_playback_stopped_without_prior_state_is_noop(self, client, post_alexa, isolated_paths):
         """Regression: identify/test sweeps created trackless stuck rows."""
@@ -211,7 +214,7 @@ class TestCollisionSafePlayText:
     def test_album_uses_token_not_fuzzy_phrase(self, isolated_paths, monkeypatch):
         monkeypatch.setattr(server, '_alexa_alias', lambda: 'bock media')
         text = server._build_play_text('album', 'Rumours', shuffle=False, artist='Fleetwood Mac')
-        assert 'ask bock media to start token' in text
+        assert 'ask bock media to start album token' in text
         assert 'the album Rumours' not in text
 
 
@@ -446,7 +449,7 @@ class TestAlexaRemoteStatus:
         import alexa_remote
         monkeypatch.setattr(alexa_remote, 'is_configured', lambda: True)
         monkeypatch.setattr(alexa_remote, 'is_authenticated', lambda *a, **k: True)
-        data = client.get('/api/alexa_remote/status').get_json()
+        data = client.get('/api/alexa_remote/status?probe=1').get_json()
         assert data['configured'] is True
         assert data['authenticated'] is True
 
@@ -454,7 +457,7 @@ class TestAlexaRemoteStatus:
         import alexa_remote
         monkeypatch.setattr(alexa_remote, 'is_configured', lambda: True)
         monkeypatch.setattr(alexa_remote, 'is_authenticated', lambda *a, **k: False)
-        data = client.get('/api/alexa_remote/status').get_json()
+        data = client.get('/api/alexa_remote/status?probe=1').get_json()
         assert data['configured'] is True
         assert data['authenticated'] is False
 

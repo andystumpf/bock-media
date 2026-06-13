@@ -200,7 +200,7 @@ ul.sidebar-nav li a .nav-label { overflow: hidden; }
 .card-body { padding: 16px 20px; -webkit-overflow-scrolling: touch; }
 
 /* Stat cards */
-.stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 20px; }
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 20px; }
 .stat-card {
   background: #fff;
   border-radius: 8px;
@@ -524,7 +524,12 @@ ul.sidebar-nav li a .nav-label { overflow: hidden; }
 .pl-name-link:hover { text-decoration: underline; }
 .pl-merge-cb { margin-right: 8px; }
 .dash-quick-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
-@media (max-width: 768px) { .dash-quick-grid { grid-template-columns: 1fr; } }
+.dash-voice-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+@media (max-width: 768px) {
+  .dash-quick-grid,
+  .dash-voice-grid { grid-template-columns: 1fr; gap: 14px; }
+}
+.action-btn.action-active { color: #30426a; background: #e8eef9; }
 .dash-quick-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 0; border-bottom: 1px solid #eef1f6; }
 .dash-quick-item:last-child { border-bottom: none; }
 .search-section { margin-bottom: 20px; }
@@ -649,6 +654,7 @@ ul.sidebar-nav li a .nav-label { overflow: hidden; }
 .status-dot.queued::before { background: #aaa; }
 .status-dot.done::before { background: #2eaa5a; }
 .status-dot.error::before { background: #e44; }
+.status-dot.gray::before { background: #9aa0a6; }
 
 /* Folder card */
 .folder-card {
@@ -756,6 +762,11 @@ ul.sidebar-nav li a .nav-label { overflow: hidden; }
     inset: 0;
     background: rgba(10, 16, 28, 0.45);
     z-index: 99;
+    pointer-events: auto;
+  }
+
+  body.sidebar-open #content-wrapper {
+    pointer-events: none;
   }
 
   .page-header {
@@ -782,7 +793,14 @@ ul.sidebar-nav li a .nav-label { overflow: hidden; }
     font-size: 11px !important;
     padding: 3px 10px !important;
   }
-  .header-badge { display: none; }
+  .header-badge {
+    display: inline-flex;
+    max-width: min(140px, 40vw);
+    font-size: 10px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 
   .page-content {
     padding: 12px;
@@ -918,7 +936,10 @@ ul.sidebar-nav li a .nav-label { overflow: hidden; }
 
 @media (max-width: 480px) {
   .page-header .page-title { max-width: calc(100vw - 96px); }
-  #now-playing-bar { display: none !important; }
+  #now-playing-bar {
+    max-width: min(160px, 45vw) !important;
+    font-size: 10px !important;
+  }
 }
 
 /* Clickable row */

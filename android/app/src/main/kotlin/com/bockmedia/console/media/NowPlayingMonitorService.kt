@@ -25,7 +25,23 @@ class NowPlayingMonitorService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         MediaButtonReceiver.handleIntent(session(this), intent)
-        when (intent?.action) {
+        if (intent == null) {
+            val notification = NowPlayingNotificationManager.buildCurrent(this)
+            return if (notification != null) {
+                ServiceCompat.startForeground(
+                    this,
+                    NowPlayingNotificationManager.NOTIFICATION_ID,
+                    notification,
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK,
+                )
+                updateSession()
+                START_STICKY
+            } else {
+                stopSelf()
+                START_NOT_STICKY
+            }
+        }
+        when (intent.action) {
             ACTION_STOP -> {
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
@@ -75,11 +91,15 @@ class NowPlayingMonitorService : Service() {
                 PlaybackStateCompat.ACTION_SKIP_TO_NEXT or
                 PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS
         }
-        val state = if (item.paused) PlaybackStateCompat.STATE_PAUSED else PlaybackStateCompat.STATE_PLAYING
+        val state = when {
+            item.stopped -> PlaybackStateCompat.STATE_STOPPED
+            item.paused -> PlaybackStateCompat.STATE_PAUSED
+            else -> PlaybackStateCompat.STATE_PLAYING
+        }
         session.setPlaybackState(
             PlaybackStateCompat.Builder()
                 .setActions(actions)
-                .setState(state, item.offset_ms, if (item.paused) 0f else 1f)
+                .setState(state, item.offset_ms, if (item.paused || item.stopped) 0f else 1f)
                 .build(),
         )
     }
@@ -107,7 +127,7 @@ class NowPlayingMonitorService : Service() {
             var error: RuntimeException? = null
             mainHandler.post {
                 try {
-                    created = session(context)
+                    created = createSession(context.applicationContext)
                 } catch (e: RuntimeException) {
                     error = e
                 } finally {

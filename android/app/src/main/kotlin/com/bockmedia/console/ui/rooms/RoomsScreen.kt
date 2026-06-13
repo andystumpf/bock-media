@@ -23,6 +23,8 @@ fun RoomsScreen(repository: BockMediaRepository) {
     var error by remember { mutableStateOf<String?>(null) }
     var playRoom by remember { mutableStateOf<RoomItem?>(null) }
     var playlistName by remember { mutableStateOf("") }
+    var playMessage by remember { mutableStateOf<String?>(null) }
+    var playError by remember { mutableStateOf(false) }
 
     suspend fun load() {
         runCatching {
@@ -43,28 +45,56 @@ fun RoomsScreen(repository: BockMediaRepository) {
 
     playRoom?.let { room ->
         AlertDialog(
-            onDismissRequest = { playRoom = null },
+            onDismissRequest = { playRoom = null; playlistName = "" },
             title = { Text("Play on ${room.name}") },
             text = {
-                OutlinedTextField(
-                    playlistName,
-                    { playlistName = it },
-                    label = { Text("Playlist name") },
-                    singleLine = true,
-                )
+                Column {
+                    OutlinedTextField(
+                        playlistName,
+                        { playlistName = it },
+                        label = { Text("Playlist name") },
+                        singleLine = true,
+                    )
+                    playMessage?.let {
+                        Text(
+                            it,
+                            color = if (playError) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(top = 8.dp),
+                        )
+                    }
+                }
             },
             confirmButton = {
                 TextButton(onClick = {
+                    val name = playlistName.trim()
+                    if (name.isBlank()) {
+                        playMessage = "Enter a playlist name"
+                        playError = true
+                        return@TextButton
+                    }
                     scope.launch {
-                        room.serial?.let { serial ->
-                            repository.playOnDevice(serial, "playlist", name = playlistName.trim())
+                        playMessage = null
+                        playError = false
+                        val serial = room.serial
+                        if (serial.isNullOrBlank()) {
+                            playMessage = "Room has no device serial"
+                            playError = true
+                            return@launch
                         }
-                        playRoom = null
-                        playlistName = ""
+                        runCatching {
+                            val resp = repository.playOnDevice(serial, "playlist", name = name)
+                            if (!resp.ok) error(resp.error ?: "Play failed")
+                            playRoom = null
+                            playlistName = ""
+                        }.onFailure {
+                            playMessage = it.message ?: "Play failed"
+                            playError = true
+                        }
                     }
                 }) { Text("Start") }
             },
-            dismissButton = { TextButton(onClick = { playRoom = null }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { playRoom = null; playlistName = "" }) { Text("Cancel") } },
         )
     }
 
@@ -79,7 +109,9 @@ fun RoomsScreen(repository: BockMediaRepository) {
                         val np = room.nowPlaying
                         Text(np?.track ?: "Idle — ${np?.artist ?: ""}")
                         if (remoteOk && !room.pseudo && room.serial != null) {
-                            TextButton(onClick = { playRoom = room }) { Text("Play…") }
+                            TextButton(onClick = { playRoom = room; playMessage = null; playError = false }) {
+                                Text("Play…")
+                            }
                         }
                         room.automations.forEach { Text("⏰ ${it.name ?: it.label ?: ""} @ ${it.time}", style = MaterialTheme.typography.bodySmall) }
                     }

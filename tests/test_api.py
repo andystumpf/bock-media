@@ -198,12 +198,12 @@ class TestPlaylistsApi:
         if not target:
             pytest.skip('no playlists with id available')
         old_name = target['name']
-        new_name = 'pytest renamed playlist'
+        new_name = f'pytest renamed {target["id"][:8]}'
         rv = client.post('/api/playlists/rename', data=json.dumps({'id': target['id'], 'name': new_name}),
                          content_type='application/json')
         assert rv.status_code == 200
-        # listing reflects new name
-        items2 = client.get('/api/playlists').get_json().get('items') or []
+        # listing reflects new name (search avoids pagination missing renamed row)
+        items2 = client.get(f'/api/playlists?search={new_name}').get_json().get('items') or []
         assert any(p['id'] == target['id'] and p['name'] == new_name for p in items2)
         # Alexa fuzzy lookup hits the new name
         name, src = server.fuzzy_find_playlist(new_name)
@@ -269,6 +269,11 @@ class TestNewFeatures:
         data = client.get('/api/dashboard/quick').get_json()
         assert 'recent' in data and 'favorites' in data
 
+    def test_dashboard_bootstrap(self, client):
+        data = client.get('/api/dashboard/bootstrap').get_json()
+        assert 'summary' in data and 'recent' in data and 'quick' in data
+        assert 'health' in data and 'alexaRemote' in data and 'playback' in data
+
     def test_analytics_export_csv(self, client, isolated_paths):
         rv = client.get('/api/analytics/export')
         assert rv.status_code == 200
@@ -295,3 +300,30 @@ class TestNewFeatures:
                               data=json.dumps({'by': 'title', 'order': 'asc'}),
                               content_type='application/json')
         assert sort_rv.status_code == 200
+
+
+class TestAppDownload:
+    def test_app_download_requires_auth(self, client, isolated_paths):
+        import json
+        cfg = isolated_paths / 'state' / 'config.json'
+        cfg.write_text(json.dumps({
+            'appDownload': {'username': 'morejava', 'password': 'test-dl-pass'},
+        }))
+        assert client.get('/app').status_code == 401
+        assert client.get('/download/bockmedia-console.apk').status_code == 401
+
+    def test_app_download_with_basic_auth(self, client, isolated_paths):
+        import json
+        cfg = isolated_paths / 'state' / 'config.json'
+        cfg.write_text(json.dumps({
+            'appDownload': {'username': 'morejava', 'password': 'test-dl-pass'},
+        }))
+        apk = isolated_paths / 'mma' / 'bockmedia-console.apk'
+        apk.write_bytes(b'PK\x03\x04fake')
+        auth = ('morejava', 'test-dl-pass')
+        rv = client.get('/app', auth=auth)
+        assert rv.status_code == 200
+        assert b'Download APK' in rv.data
+        dl = client.get('/download/bockmedia-console.apk', auth=auth)
+        assert dl.status_code == 200
+        assert dl.headers.get('Content-Type', '').startswith('application/vnd.android')

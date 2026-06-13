@@ -15,15 +15,21 @@ fun AlexaAuthMonitor(
 
     LaunchedEffect(repository) {
         while (true) {
-            runCatching {
-                val st = repository.alexaRemoteStatus()
-                if (st.configured && st.authenticated == false && lastAuth != false) {
+            val st = runCatching { repository.alexaRemoteStatus() }.getOrNull()
+            if (st != null) {
+                if (st.configured && st.authenticated == false && lastAuth == true) {
                     snackbarHostState.showSnackbar(
                         "Alexa session expired — re-login in Settings",
                         withDismissAction = true,
                     )
                 }
                 lastAuth = st.authenticated
+            } else if (lastAuth == true) {
+                snackbarHostState.showSnackbar(
+                    "Cannot reach server — Alexa status unknown",
+                    withDismissAction = true,
+                )
+                lastAuth = null
             }
             delay(120_000)
         }
