@@ -24,7 +24,7 @@ class AppPreferences(private val context: Context) {
     private val keyRememberMe = booleanPreferencesKey("remember_me")
     private val keyDownloadWifiOnly = booleanPreferencesKey("download_wifi_only")
 
-    val rememberMe: Flow<Boolean> = context.dataStore.data.map { it[keyRememberMe] == true }
+    val rememberMe: Flow<Boolean> = context.dataStore.data.map { it[keyRememberMe] != false }
     val downloadWifiOnly: Flow<Boolean> = context.dataStore.data.map { it[keyDownloadWifiOnly] == true }
 
     val localServerUrl: Flow<String?> = context.dataStore.data.map { it[keyLocalUrl] }
@@ -74,7 +74,8 @@ class AppPreferences(private val context: Context) {
         }
     }
 
-    suspend fun isRememberMeSync(): Boolean = rememberMe.first()
+    suspend fun isRememberMeSync(): Boolean =
+        context.dataStore.data.first()[keyRememberMe] != false
 
     suspend fun isDownloadWifiOnlySync(): Boolean = downloadWifiOnly.first()
 

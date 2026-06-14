@@ -28,6 +28,7 @@ import com.bockmedia.console.widget.NowPlayingWidget
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import retrofit2.HttpException
 
 class MainActivity : ComponentActivity() {
 
@@ -43,6 +44,7 @@ class MainActivity : ComponentActivity() {
                     ActivityResultContracts.RequestPermission(),
                 ) { }
 
+                var autoLoginError by remember { mutableStateOf<String?>(null) }
                 LaunchedEffect(Unit) {
                     NowPlayingNotificationManager.ensureChannel(this@MainActivity)
                     app.preferences.applyBuildServerUrls()
@@ -55,6 +57,16 @@ class MainActivity : ComponentActivity() {
                                 com.bockmedia.console.data.analytics.DeviceAnalyticsReporter
                                     .reportConnect(this@MainActivity)
                                 return@LaunchedEffect
+                            }
+                            .onFailure { e ->
+                                autoLoginError = when (e) {
+                                    is HttpException -> when (e.code()) {
+                                        401 -> "Authentication failed — check username, password, and mobile API token"
+                                        403 -> "External API blocked — set mobileApi.allowExternalAccess in config.json"
+                                        else -> "HTTP ${e.code()}"
+                                    }
+                                    else -> e.message ?: "Saved login failed — sign in again"
+                                }
                             }
                     }
                     hasServer = false
@@ -107,9 +119,10 @@ class MainActivity : ComponentActivity() {
 
                 when (hasServer) {
                     null -> SplashScreen()
-                    false -> SetupScreen {
-                        hasServer = true
-                    }
+                    false -> SetupScreen(
+                        initialError = autoLoginError,
+                        onConnected = { hasServer = true },
+                    )
                     true -> BockApp(
                         repository = app.repository,
                         deepLinkRoute = deepRoute,

@@ -16,7 +16,10 @@ import kotlinx.coroutines.launch
 import retrofit2.HttpException
 
 @Composable
-fun SetupScreen(onConnected: () -> Unit) {
+fun SetupScreen(
+    onConnected: () -> Unit,
+    initialError: String? = null,
+) {
     val context = LocalContext.current
     val app = remember { BockMediaApp.get(context) }
     val scope = rememberCoroutineScope()
@@ -24,7 +27,7 @@ fun SetupScreen(onConnected: () -> Unit) {
     var adminPass by remember { mutableStateOf(BuildConfig.DEFAULT_ADMIN_PASSWORD) }
     var mobileToken by remember { mutableStateOf(BuildConfig.DEFAULT_MOBILE_API_TOKEN) }
     var rememberMe by remember { mutableStateOf(true) }
-    var error by remember { mutableStateOf<String?>(null) }
+    var error by remember { mutableStateOf(initialError) }
     var loading by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
@@ -65,6 +68,7 @@ fun SetupScreen(onConnected: () -> Unit) {
                     else -> scope.launch {
                         loading = true
                         error = null
+                        var connected = false
                         app.preferences.applyBuildServerUrls()
                         app.preferences.setRememberMe(rememberMe)
                         app.preferences.setAdminCredentials(
@@ -75,6 +79,7 @@ fun SetupScreen(onConnected: () -> Unit) {
                         app.invalidateApi()
                         app.repository.testConnection()
                             .onSuccess {
+                                connected = true
                                 com.bockmedia.console.data.analytics.DeviceAnalyticsReporter
                                     .reportConnect(context)
                                 onConnected()
@@ -89,7 +94,7 @@ fun SetupScreen(onConnected: () -> Unit) {
                                     else -> e.message ?: "Connection failed"
                                 }
                             }
-                        loading = false
+                        if (!connected) loading = false
                     }
                 }
             },
@@ -108,7 +113,7 @@ fun SetupScreen(onConnected: () -> Unit) {
         Spacer(Modifier.height(16.dp))
         Text(
             "Uses your home Wi‑Fi server when reachable, otherwise your external address.\n" +
-                "Password is only sent when away from home.",
+                "Away from home, sign in with your Mobile API token.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

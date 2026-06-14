@@ -6,12 +6,18 @@ import com.bockmedia.console.local.ClientIdStore
 import com.bockmedia.console.data.api.dto.NowPlayingDeviceItem
 import com.bockmedia.console.domain.model.PlaybackFocus
 import com.bockmedia.console.media.NowPlayingNotificationManager
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 
 object NowPlayingController {
 
     fun fetchAndStore(context: Context) {
         val appContext = context.applicationContext
+        if (!hasAuthCredentials(appContext)) {
+            NowPlayingSessionStore.snapshot = null
+            NowPlayingSessionStore.focusedDeviceId = null
+            return
+        }
         val base = BockMediaApp.activeBaseUrlBlocking(appContext)
         if (base.isNullOrBlank()) {
             NowPlayingSessionStore.snapshot = null
@@ -63,6 +69,14 @@ object NowPlayingController {
                 ?: snap.items.firstOrNull { !it.paused }?.deviceId
                 ?: snap.items.first().deviceId
         }
+    }
+
+    private fun hasAuthCredentials(context: Context): Boolean = runBlocking {
+        val prefs = BockMediaApp.get(context).preferences
+        val token = prefs.mobileToken.first()?.trim().orEmpty()
+        val user = prefs.adminUser.first()?.trim().orEmpty()
+        val pass = prefs.adminPass.first()?.trim().orEmpty()
+        token.isNotEmpty() || (user.isNotEmpty() && pass.isNotEmpty())
     }
 
     fun sendControl(context: Context, deviceId: String, deviceName: String, action: String): Boolean {

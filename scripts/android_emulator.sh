@@ -21,7 +21,8 @@ run_emulator() {
   fi
   echo "Starting $AVD_NAME (KVM required — user must be in group kvm)..."
   # Headless: fine over SSH. Drop -no-window if you have a local display.
-  emulator -avd "$AVD_NAME" -no-window -no-audio -gpu swiftshader_indirect &
+  # sg kvm: shell may lack kvm group until re-login even if gpasswd was run.
+  sg kvm -c "emulator -avd \"$AVD_NAME\" -no-window -no-audio -gpu swiftshader_indirect -no-snapshot-load -no-snapshot-save" &
   echo "Waiting for device..."
   adb wait-for-device
   until adb shell getprop sys.boot_completed 2>/dev/null | rg -q '^1$'; do
