@@ -341,6 +341,10 @@ final class BockMediaAPIClient {
         try await post("api/alexa_remote/login/start", body: body)
     }
 
+    func alexaLoginStop() async throws -> AlexaRemoteStatus {
+        try await post("api/alexa_remote/login/stop", body: [:])
+    }
+
     // MARK: - HTTP
 
     private func get<T: Decodable>(_ path: String, query: [String: String] = [:]) async throws -> T {

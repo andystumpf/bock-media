@@ -30,6 +30,19 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import retrofit2.HttpException
 
+import kotlinx.coroutines.delay
+
+private suspend fun retryTestConnection(app: BockMediaApp, attempts: Int = 3): Boolean {
+    repeat(attempts) { attempt ->
+        if (attempt > 0) {
+            app.invalidateApi()
+            delay(800L * attempt)
+        }
+        if (app.repository.testConnection().isSuccess) return true
+    }
+    return false
+}
+
 class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -49,15 +62,24 @@ class MainActivity : ComponentActivity() {
                     NowPlayingNotificationManager.ensureChannel(this@MainActivity)
                     app.preferences.applyBuildServerUrls()
                     app.preferences.clearCredentialsIfNotRemembered()
-                    if (app.preferences.isRememberMeSync()) {
-                        app.preferences.applyBuildDefaultsIfEmpty()
+                    app.preferences.applyBuildDefaultsIfEmpty()
+
+                    val remember = app.preferences.isRememberMeSync()
+                    val wasConnected = app.preferences.hasConnectedBefore()
+                    if (remember || wasConnected) {
+                        if (retryTestConnection(app)) {
+                            app.preferences.setHasConnected(true)
+                            hasServer = true
+                            com.bockmedia.console.data.analytics.DeviceAnalyticsReporter
+                                .reportConnect(this@MainActivity)
+                            return@LaunchedEffect
+                        }
+                        // Server slow/down — don't force re-login if user already connected once.
+                        if (wasConnected && app.hasServerUrl()) {
+                            hasServer = true
+                            return@LaunchedEffect
+                        }
                         runCatching { app.repository.testConnection() }
-                            .onSuccess {
-                                hasServer = true
-                                com.bockmedia.console.data.analytics.DeviceAnalyticsReporter
-                                    .reportConnect(this@MainActivity)
-                                return@LaunchedEffect
-                            }
                             .onFailure { e ->
                                 autoLoginError = when (e) {
                                     is HttpException -> when (e.code()) {

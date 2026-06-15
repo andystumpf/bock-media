@@ -61,7 +61,7 @@ fun HomeScreen(
         error = null
         runCatching {
             var fresh = HomeFeedLoader.load(repository)
-            if (fresh.sections.isEmpty()) {
+            if (fresh.sections.isEmpty() && !repository.testConnection().isSuccess) {
                 BockMediaApp.get(context).invalidateApi()
                 fresh = HomeFeedLoader.load(repository)
             }
@@ -70,7 +70,13 @@ fun HomeScreen(
                 feed = fresh
                 warmArtwork(fresh)
             } else if (feed == null) {
-                error = "Could not load your library. Pull down to refresh or check server connection in Settings."
+                val reachable = runCatching { repository.testConnection().isSuccess }.getOrDefault(false)
+                error = if (!reachable) {
+                    "Can't reach your Bock Media server (ports 3001 / 3005). " +
+                        "Check the server is running at home and port forwarding is enabled."
+                } else {
+                    "Could not load your library. Pull down to refresh or check server connection in Settings."
+                }
             }
         }.onFailure { error = it.message ?: "Could not load home" }
         loading = false

@@ -698,7 +698,7 @@ def alexa_remote_login_start():
         return jsonify({'error': 'alexapy not installed', 'code': 'not_installed'}), 503
     except Exception as e:
         code = str(e)
-        status = 400 if code in ('not_configured', 'password_required') else 500
+        status = 400 if code.split(' — ')[0] in ('not_configured', 'password_required', 'port_busy') else 500
         return jsonify({'error': code, 'code': code.split(' — ')[0]}), status
 
 

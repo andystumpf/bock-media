@@ -542,6 +542,12 @@ class BockMediaRepository(
     }.getOrDefault("Unknown")
 
     suspend fun alexaLoginStart(): AlexaRemoteStatus {
+        val existing = runCatching { api().alexaLoginState() }.getOrNull()
+        val status = existing?.loginStatus?.takeIf { it.isNotBlank() }
+            ?: existing?.status?.takeIf { it.isNotBlank() }
+        if (status == "waiting" || status == "starting") {
+            runCatching { api().alexaLoginStop() }
+        }
         val body = buildJsonObject {
             val activeHost = runCatching { AppPreferences.hostOf(baseUrl()) }.getOrNull()
             val localHost = preferences.getLocalServerUrlSync()?.let { AppPreferences.hostOf(it) }

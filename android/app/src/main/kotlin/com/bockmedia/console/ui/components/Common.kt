@@ -20,8 +20,8 @@ import androidx.compose.ui.unit.dp
 import com.bockmedia.console.data.api.dto.AlexaDevice
 import com.bockmedia.console.data.api.dto.DeviceGroup
 import com.bockmedia.console.data.repository.BockMediaRepository
+import com.bockmedia.console.ui.alexaControlsAvailable
 import com.bockmedia.console.ui.alexaRemotePlayMessage
-import com.bockmedia.console.ui.refreshAlexaControlsAvailable
 import com.bockmedia.console.ui.util.formatTime12
 import com.bockmedia.console.ui.util.formatTime24
 import com.bockmedia.console.ui.util.parseTime24
@@ -331,13 +331,19 @@ fun DevicePickerSheet(
     LaunchedEffect(Unit) {
         loading = true
         error = null
-        runCatching {
-            remoteReady = refreshAlexaControlsAvailable(repository)
-            alexaStatus = repository.alexaRemoteStatus(probe = true)
-            val devices = repository.alexaRemoteDevices().devices
-            val groups = repository.deviceGroups().items
-            deviceOptions = buildDeviceOptions(groups, devices)
-        }.onFailure { error = it.message }.also { loading = false }
+        deviceOptions = emptyList()
+        alexaStatus = runCatching { repository.alexaRemoteStatus(probe = true) }.getOrNull()
+        remoteReady = alexaControlsAvailable(alexaStatus)
+        if (remoteReady) {
+            runCatching {
+                val devices = repository.alexaRemoteDevices().devices
+                val groups = repository.deviceGroups().items
+                deviceOptions = buildDeviceOptions(groups, devices)
+            }.onFailure {
+                remoteReady = false
+            }
+        }
+        loading = false
     }
 
     LaunchedEffect(deviceOptions, pinned) {

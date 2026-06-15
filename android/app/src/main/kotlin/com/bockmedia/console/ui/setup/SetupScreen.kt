@@ -80,6 +80,7 @@ fun SetupScreen(
                         app.repository.testConnection()
                             .onSuccess {
                                 connected = true
+                                app.preferences.setHasConnected(true)
                                 com.bockmedia.console.data.analytics.DeviceAnalyticsReporter
                                     .reportConnect(context)
                                 onConnected()

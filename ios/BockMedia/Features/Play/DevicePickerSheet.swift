@@ -155,6 +155,7 @@ struct DevicePickerSheet: View {
     }
 
     private func loadDevices() async {
+        guard remoteOk else { return }
         loading = true
         defer { loading = false }
         do {

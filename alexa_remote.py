@@ -328,6 +328,37 @@ _LOGIN_CANCEL = threading.Event()
 _LOGIN_THREAD = None
 
 
+def _port_in_use(port, host='127.0.0.1'):
+    """True when something is accepting TCP connections on port."""
+    try:
+        with socket.create_connection((host, int(port)), timeout=0.3):
+            return True
+    except (ConnectionRefusedError, TimeoutError, OSError):
+        return False
+
+
+def _wait_for_port_free(port, timeout=8.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not _port_in_use(port):
+            return True
+        time.sleep(0.25)
+    return not _port_in_use(port)
+
+
+def _join_login_thread(timeout=8.0):
+    """Wait for the background proxy thread to exit and release its socket."""
+    global _LOGIN_THREAD
+    thread = None
+    with _LOGIN_LOCK:
+        thread = _LOGIN_THREAD
+    if thread and thread.is_alive():
+        thread.join(timeout=timeout)
+    with _LOGIN_LOCK:
+        if thread is _LOGIN_THREAD:
+            _LOGIN_THREAD = None
+
+
 def lan_ip():
     """Best-effort LAN address for the proxy login page."""
     try:
@@ -424,11 +455,20 @@ def start_proxy_login(host=None, port=None):
 
     global _LOGIN_THREAD
     with _LOGIN_LOCK:
-        if _LOGIN_PROXY['status'] == 'waiting' and _LOGIN_THREAD and _LOGIN_THREAD.is_alive():
+        if (_LOGIN_THREAD and _LOGIN_THREAD.is_alive()
+                and _LOGIN_PROXY['status'] in ('waiting', 'starting')):
             return proxy_login_state()
+
+    stop_proxy_login()
 
     host = (host or cfg().get('loginProxyHost') or lan_ip()).strip()
     port = int(port or cfg().get('loginProxyPort') or 3005)
+
+    if _port_in_use(port) and not _wait_for_port_free(port):
+        raise AlexaRemoteError(
+            f'port_busy — port {port} is already in use. '
+            f'Run: sudo fuser -k {port}/tcp  (or change alexaRemote.loginProxyPort in config.json)'
+        )
 
     _LOGIN_CANCEL.clear()
     _set_proxy(status='starting', error=None, url=f'http://{host}:{port}',
@@ -441,13 +481,16 @@ def start_proxy_login(host=None, port=None):
     # Brief pause so the proxy can bind before the UI opens the URL.
     time.sleep(0.6)
     with _LOGIN_LOCK:
-        if _LOGIN_PROXY['status'] == 'starting':
+        if _LOGIN_PROXY['status'] == 'starting' and not _LOGIN_PROXY.get('error'):
             _LOGIN_PROXY['status'] = 'waiting'
     return proxy_login_state()
 
 
 def stop_proxy_login():
     """Cancel an in-progress proxy login."""
+    global _LOGIN_THREAD
     _LOGIN_CANCEL.set()
-    _set_proxy(status='stopped', error=None)
+    with _LOGIN_LOCK:
+        _set_proxy(status='stopped', error=None)
+    _join_login_thread()
     return proxy_login_state()

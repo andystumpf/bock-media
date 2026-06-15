@@ -50,8 +50,7 @@ class BockMediaApp(private val appContext: Context) {
         val external = preferences.getExternalServerUrlSync()
         return ServerEndpointResolver.resolve(
             preferences = preferences,
-            localProbeClient = buildPlainHttpClient(),
-            externalProbeClient = buildHttpClient(user, pass, token, local, external),
+            probeClient = buildHttpClient(user, pass, token, local, external),
             forceRefresh = forceRefresh,
         )
     }

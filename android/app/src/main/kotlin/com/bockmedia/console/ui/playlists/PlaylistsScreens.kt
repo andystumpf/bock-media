@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.SubcomposeAsyncImage
 import coil.compose.SubcomposeAsyncImageContent
+import com.bockmedia.console.data.api.httpErrorMessage
 import com.bockmedia.console.data.api.dto.PlaylistSummary
 import com.bockmedia.console.data.api.dto.PlaylistTrack
 import com.bockmedia.console.data.api.dto.SmartPlaylist
@@ -282,6 +283,7 @@ fun PlaylistDetailScreen(
     var page by remember { mutableIntStateOf(1) }
     var loading by remember { mutableStateOf(true) }
     var refreshing by remember { mutableStateOf(false) }
+    var loadError by remember { mutableStateOf<String?>(null) }
     var showRename by remember { mutableStateOf(false) }
     val pageSize = 50
     val playTarget = remember(name, playlistId) { PlayTarget.Playlist(playlistId, name) }
@@ -294,6 +296,7 @@ fun PlaylistDetailScreen(
 
     suspend fun load() {
         loading = tracks.isEmpty()
+        loadError = null
         runCatching {
             val d = repository.playlistDetail(
                 playlistId,
@@ -307,7 +310,7 @@ fun PlaylistDetailScreen(
             editName = d.name
             tracks = d.tracks
             total = d.total.takeIf { it > 0 } ?: d.tracks.size
-        }
+        }.onFailure { loadError = httpErrorMessage(it, "Could not load playlist") }
         loading = false
         refreshing = false
     }
@@ -338,9 +341,10 @@ fun PlaylistDetailScreen(
     }
 
     Column(Modifier.fillMaxSize()) {
-        if (loading && tracks.isEmpty()) {
-            LoadingBox(Modifier.weight(1f))
-        } else {
+        when {
+            loading && tracks.isEmpty() -> LoadingBox(Modifier.weight(1f))
+            loadError != null && tracks.isEmpty() -> ErrorText(loadError!!) { scope.launch { load() } }
+            else -> {
             BockPullRefresh(
                 isRefreshing = refreshing,
                 onRefresh = { refreshing = true; scope.launch { load() } },
@@ -407,6 +411,7 @@ fun PlaylistDetailScreen(
                 }
             }
             PaginationBar(page, ((total + pageSize - 1) / pageSize).coerceAtLeast(1)) { page = it }
+            }
         }
     }
 }

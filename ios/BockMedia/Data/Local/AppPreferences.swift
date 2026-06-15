@@ -8,6 +8,7 @@ final class AppPreferences: ObservableObject {
         static let adminPass = "admin_pass"
         static let mobileToken = "mobile_token"
         static let rememberMe = "remember_me"
+        static let hasConnected = "has_connected"
         static let downloadWifiOnly = "download_wifi_only"
         static let lastDevice = "last_device"
     }
@@ -19,7 +20,19 @@ final class AppPreferences: ObservableObject {
     }
 
     init() {
-        rememberMe = defaults.bool(forKey: Key.rememberMe)
+        if defaults.object(forKey: Key.rememberMe) == nil {
+            rememberMe = true
+        } else {
+            rememberMe = defaults.bool(forKey: Key.rememberMe)
+        }
+    }
+
+    var hasConnectedBefore: Bool {
+        defaults.bool(forKey: Key.hasConnected)
+    }
+
+    func setHasConnected(_ connected: Bool) {
+        defaults.set(connected, forKey: Key.hasConnected)
     }
 
     var localServerURL: String? {

@@ -26,26 +26,32 @@ final class AppState: ObservableObject {
         preferences.applyBuildServerURLs()
         preferences.clearCredentialsIfNotRemembered()
 
-        guard preferences.rememberMe else {
-            preferences.applyBuildDefaultsIfEmpty()
+        preferences.applyBuildDefaultsIfEmpty()
+        bootstrapMessage = "Checking server…"
+
+        let remember = preferences.rememberMe
+        let wasConnected = preferences.hasConnectedBefore
+        guard remember || wasConnected else {
             isConnected = false
             return
         }
 
-        preferences.applyBuildDefaultsIfEmpty()
-        bootstrapMessage = "Checking server…"
-
-        let result = await withTimeout(seconds: 8) {
+        let result = await withTimeout(seconds: 12) {
             await self.repository.testConnection()
         }
 
         switch result {
         case .success(.success):
+            preferences.setHasConnected(true)
             isConnected = true
             DeviceAnalyticsReporter.reportConnect(repository: repository)
             await refreshRemoteStatus()
         case .success(.failure), .timedOut:
-            isConnected = false
+            if wasConnected && (preferences.localServerURL != nil || preferences.externalServerURL != nil) {
+                isConnected = true
+            } else {
+                isConnected = false
+            }
         }
     }
 
@@ -55,6 +61,7 @@ final class AppState: ObservableObject {
         repository.invalidateAPI()
         switch await repository.testConnection() {
         case .success:
+            preferences.setHasConnected(true)
             isConnected = true
             DeviceAnalyticsReporter.reportConnect(repository: repository)
             await refreshRemoteStatus()

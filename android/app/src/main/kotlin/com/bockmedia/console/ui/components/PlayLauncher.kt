@@ -3,8 +3,9 @@ package com.bockmedia.console.ui.components
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalContext
-import com.bockmedia.console.data.api.bockJson
+import com.bockmedia.console.data.api.httpErrorMessage
 import com.bockmedia.console.data.api.dto.PlayResponse
+import com.bockmedia.console.data.api.bockJson
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.PlayTarget
 import com.bockmedia.console.domain.model.PlaybackFocus
@@ -51,7 +52,7 @@ private fun playErrorMessage(e: Throwable): String {
             runCatching { bockJson.decodeFromString<PlayResponse>(raw) }.getOrNull()?.error?.let { return it }
         }
     }
-    return e.message?.takeIf { it.isNotBlank() } ?: "Play failed"
+    return httpErrorMessage(e, "Play failed")
 }
 
 @Composable

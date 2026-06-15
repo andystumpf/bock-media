@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import com.bockmedia.console.BockMediaApp
+import com.bockmedia.console.data.api.httpErrorMessage
 import com.bockmedia.console.data.local.AppPreferences
 import com.bockmedia.console.domain.model.LocalTrack
 import com.bockmedia.console.domain.model.PlayTarget
@@ -54,7 +55,7 @@ object LocalPlaybackController {
             if (tracks.isEmpty()) error("No playable tracks found")
             playTracks(context, tracks, shuffle = shuffle)
         }.onFailure { e ->
-            update { it.copy(loading = false, error = e.message ?: "Playback failed") }
+            update { it.copy(loading = false, error = httpErrorMessage(e, "Playback failed")) }
         }
     }
 

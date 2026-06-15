@@ -5,11 +5,35 @@ actor ServerEndpointResolver {
 
     private var cachedURL: String?
     private var cachedAt: Date?
-    private let cacheTTL: TimeInterval = 30
+    private let cacheTTL: TimeInterval = 60
+
+    private let lanTimeout: TimeInterval = 8
+    private let externalTimeout: TimeInterval = 10
 
     func invalidate() {
         cachedURL = nil
         cachedAt = nil
+    }
+
+    static func pickEndpoint(
+        local: String?,
+        external: String?,
+        localReachable: Bool,
+        externalReachable: Bool
+    ) -> String? {
+        if let local, !local.isEmpty, localReachable {
+            return ServerURL.normalize(local)
+        }
+        if let external, !external.isEmpty, externalReachable {
+            return ServerURL.normalize(external)
+        }
+        if let local, !local.isEmpty {
+            return ServerURL.normalize(local)
+        }
+        if let external, !external.isEmpty {
+            return ServerURL.normalize(external)
+        }
+        return nil
     }
 
     func resolve(
@@ -27,19 +51,43 @@ actor ServerEndpointResolver {
         let external = preferences.externalServerURL
         let localHosts = preferences.localHosts()
 
-        if let local, !local.isEmpty, await probe(base: local, timeout: 2, localHosts: localHosts, user: authUsername, pass: authPassword, token: authToken) {
-            return cache(ServerURL.normalize(local))
+        async let localOk: Bool = {
+            guard let local, !local.isEmpty else { return false }
+            return await probe(
+                base: local,
+                timeout: lanTimeout,
+                localHosts: localHosts,
+                user: authUsername,
+                pass: authPassword,
+                token: authToken
+            )
+        }()
+        async let externalOk: Bool = {
+            guard let external, !external.isEmpty else { return false }
+            return await probe(
+                base: external,
+                timeout: externalTimeout,
+                localHosts: localHosts,
+                user: authUsername,
+                pass: authPassword,
+                token: authToken
+            )
+        }()
+
+        let localReachable = await localOk
+        let externalReachable = await externalOk
+
+        let chosen = Self.pickEndpoint(
+            local: local,
+            external: external,
+            localReachable: localReachable,
+            externalReachable: externalReachable
+        )
+        guard let chosen else { throw BockAPIError.noServerConfigured }
+        if localReachable || externalReachable {
+            return cache(chosen)
         }
-        if let external, !external.isEmpty, await probe(base: external, timeout: 4, localHosts: localHosts, user: authUsername, pass: authPassword, token: authToken) {
-            return cache(ServerURL.normalize(external))
-        }
-        if let external, !external.isEmpty {
-            return cache(ServerURL.normalize(external))
-        }
-        if let local, !local.isEmpty {
-            return cache(ServerURL.normalize(local))
-        }
-        throw BockAPIError.noServerConfigured
+        return chosen
     }
 
     private func cache(_ url: String) -> String {

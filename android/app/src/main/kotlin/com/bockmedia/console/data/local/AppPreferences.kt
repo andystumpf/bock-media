@@ -22,6 +22,7 @@ class AppPreferences(private val context: Context) {
     private val keyAdminPass = stringPreferencesKey("admin_pass")
     private val keyMobileToken = stringPreferencesKey("mobile_token")
     private val keyRememberMe = booleanPreferencesKey("remember_me")
+    private val keyHasConnected = booleanPreferencesKey("has_connected")
     private val keyDownloadWifiOnly = booleanPreferencesKey("download_wifi_only")
 
     val rememberMe: Flow<Boolean> = context.dataStore.data.map { it[keyRememberMe] != false }
@@ -87,7 +88,16 @@ class AppPreferences(private val context: Context) {
 
     suspend fun setRememberMe(remember: Boolean) {
         context.dataStore.edit { prefs ->
-            if (remember) prefs[keyRememberMe] = true else prefs.remove(keyRememberMe)
+            prefs[keyRememberMe] = remember
+        }
+    }
+
+    suspend fun hasConnectedBefore(): Boolean =
+        context.dataStore.data.first()[keyHasConnected] == true
+
+    suspend fun setHasConnected(connected: Boolean) {
+        context.dataStore.edit { prefs ->
+            if (connected) prefs[keyHasConnected] = true else prefs.remove(keyHasConnected)
         }
     }
 
