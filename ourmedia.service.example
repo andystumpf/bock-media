@@ -1,0 +1,30 @@
+# Example systemd unit for Bock Media backend.
+# Copy to the server: sudo cp ourmedia.service.example /etc/systemd/system/ourmedia.service
+#
+# For router port-forward (142.56.x.x:3001 -> this host), gunicorn MUST bind 0.0.0.0:3001.
+# Binding 127.0.0.1 only works with Cloudflare tunnel, not direct port-forward.
+
+[Unit]
+Description=Bock Media Flask backend
+After=network.target
+
+[Service]
+Type=simple
+User=plex
+Group=plex
+WorkingDirectory=/home/plex/Documents/github/ourMedia
+Environment=PORT=3001
+Environment=OURMEDIA_DB_PATH=/mnt/bock/Music/music_organizer.db
+Environment=OURMEDIA_DATA_DIR=/home/plex/.bockmedia
+Environment=OURMEDIA_MUSIC_ROOT=/mnt/bock/Music
+ExecStart=/usr/bin/python3 -m gunicorn \
+    --bind 0.0.0.0:3001 \
+    --workers 1 \
+    --timeout 120 \
+    --access-logfile - \
+    server:app
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
