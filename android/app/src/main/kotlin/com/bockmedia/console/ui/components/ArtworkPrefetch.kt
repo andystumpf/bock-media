@@ -14,7 +14,7 @@ import kotlinx.coroutines.withContext
 
 /** Prefetch artwork bytes into Coil memory/disk cache so home tiles paint without scrolling. */
 object ArtworkPrefetch {
-    private const val MAX_CONCURRENT = 4
+    private const val MAX_CONCURRENT = 10
 
     suspend fun prefetchUrls(context: Context, urls: Collection<String>) {
         val distinct = urls.map { it.trim() }.filter { it.isNotBlank() }.distinct()
@@ -30,6 +30,16 @@ object ArtworkPrefetch {
                                 val keyStr = stableArtCacheKey(url)
                                 val memKey = MemoryCache.Key(keyStr)
                                 if (loader.memoryCache?.get(memKey) != null) return@withPermit
+                                if (loader.diskCache?.openSnapshot(keyStr) != null) {
+                                    loader.execute(
+                                        ImageRequest.Builder(context)
+                                            .data(url)
+                                            .memoryCacheKey(keyStr)
+                                            .diskCacheKey(keyStr)
+                                            .build(),
+                                    )
+                                    return@withPermit
+                                }
                                 loader.execute(
                                     ImageRequest.Builder(context)
                                         .data(url)

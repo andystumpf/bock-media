@@ -403,11 +403,12 @@ private fun HomeCardArt(
     artworkEpoch: Int,
     modifier: Modifier = Modifier,
 ) {
-    var artUrl by remember(card.id, artworkEpoch) {
-        mutableStateOf(HomeArtworkCache.urlFor(card.id))
+    val baseUrl = remember(repository) { repository.peekBaseUrl() }
+    var artUrl by remember(card.id, artworkEpoch, baseUrl) {
+        mutableStateOf(HomeArtworkResolver.peekUrl(baseUrl, card))
     }
-    LaunchedEffect(card.id, artworkEpoch) {
-        artUrl = HomeArtworkCache.urlFor(card.id)
+    LaunchedEffect(card.id, artworkEpoch, baseUrl) {
+        artUrl = HomeArtworkResolver.peekUrl(baseUrl, card)
             ?: HomeArtworkResolver.resolveUrl(repository, card)
     }
     BockArtwork(
@@ -416,6 +417,7 @@ private fun HomeCardArt(
         modifier = modifier,
         shape = ArtShape,
         fallbackFontSize = 18.sp,
+        crossfadeMs = 0,
     )
 }
 

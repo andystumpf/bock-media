@@ -45,6 +45,7 @@ fun BockArtwork(
     shape: Shape = RoundedCornerShape(6.dp),
     contentScale: ContentScale = ContentScale.Crop,
     fallbackFontSize: TextUnit = 22.sp,
+    crossfadeMs: Int = 80,
 ) {
     val context = LocalContext.current
     val clippedModifier = modifier.clip(shape)
@@ -52,11 +53,11 @@ fun BockArtwork(
         ArtGradientFallback(title, clippedModifier, fallbackFontSize)
         return
     }
-    val request = remember(model) {
+    val request = remember(model, crossfadeMs) {
         val key = stableArtCacheKey(model)
         ImageRequest.Builder(context)
             .data(model)
-            .crossfade(80)
+            .crossfade(crossfadeMs)
             .memoryCacheKey(key)
             .diskCacheKey(key)
             .build()

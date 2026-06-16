@@ -54,24 +54,22 @@ fun HomeScreen(
         val fullyCached = HomeArtworkCache.isFullyWarmed(cards)
         if (fullyCached && !forceNetwork) {
             warmJob = scope.launch {
-                ArtworkPrefetch.prefetchUrls(context, HomeArtworkCache.urlsForCards(cards))
+                val base = repository.peekBaseUrl()
+                val urls = cards.mapNotNull { HomeArtworkResolver.peekUrl(base, it) }
+                ArtworkPrefetch.prefetchUrls(context, urls)
                 artworkEpoch++ 
             }
             return
         }
         artworkEpoch++ 
         warmJob = scope.launch {
-            val urls = if (fullyCached) {
-                HomeArtworkCache.urlsForCards(cards)
-            } else {
-                HomeArtworkResolver.warmAll(repository, cards)
-            }
+            val urls = HomeArtworkResolver.warmAll(repository, cards)
             artworkEpoch++ 
             ArtworkPrefetch.prefetchUrls(context, urls)
             HomeCachePersistence.save(
                 context,
                 nonNullFeed,
-                HomeArtworkCache.snapshotCardUrls(),
+                HomeArtworkCache.snapshotCardPaths(),
                 HomeArtworkCache.snapshotPlaylistPaths(),
             )
             artworkEpoch++ 
@@ -88,7 +86,7 @@ fun HomeScreen(
         HomeCachePersistence.save(
             context,
             feed,
-            HomeArtworkCache.snapshotCardUrls(),
+            HomeArtworkCache.snapshotCardPaths(),
             HomeArtworkCache.snapshotPlaylistPaths(),
         )
     }
@@ -134,6 +132,7 @@ fun HomeScreen(
     }
 
     suspend fun bootstrapHome() {
+        runCatching { repository.primeBaseUrl(BockMediaApp.get(context).resolveBaseUrl()) }
         OfflineDownloadManager.refresh(context)
         val cached = HomeFeedCache.getIfFresh()
         if (cached != null) {
@@ -143,7 +142,7 @@ fun HomeScreen(
             warmArtwork(cached)
         } else {
             HomeCachePersistence.load(context)?.let { snap ->
-                HomeArtworkCache.restore(snap.cardUrls, snap.playlistPaths)
+                HomeArtworkCache.restore(snap.cardMediaPaths, snap.playlistPaths)
                 HomeFeedCache.put(snap.feed)
                 feed = snap.feed
                 loading = false

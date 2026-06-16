@@ -144,7 +144,7 @@ class MainActivity : ComponentActivity() {
                                         HomeCachePersistence.save(
                                             applicationContext,
                                             feed,
-                                            HomeArtworkCache.snapshotCardUrls(),
+                                            HomeArtworkCache.snapshotCardPaths(),
                                             HomeArtworkCache.snapshotPlaylistPaths(),
                                         )
                                     }

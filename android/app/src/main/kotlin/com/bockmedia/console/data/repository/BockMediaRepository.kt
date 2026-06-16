@@ -1,5 +1,6 @@
 package com.bockmedia.console.data.repository
 
+import com.bockmedia.console.BuildConfig
 import com.bockmedia.console.data.api.BockMediaApi
 import com.bockmedia.console.data.api.dto.*
 import com.bockmedia.console.data.local.AppPreferences
@@ -38,6 +39,16 @@ class BockMediaRepository(
 
     private suspend fun baseUrl(): String =
         cachedBaseUrl ?: baseUrlProvider().also { cachedBaseUrl = it }
+
+    /** Best-effort base URL for sync artwork URL building (no network). */
+    fun peekBaseUrl(): String? =
+        cachedBaseUrl
+            ?: BuildConfig.DEFAULT_EXTERNAL_SERVER_URL.takeIf { it.isNotBlank() }
+                ?: BuildConfig.DEFAULT_LOCAL_SERVER_URL.takeIf { it.isNotBlank() }
+
+    fun primeBaseUrl(url: String?) {
+        url?.takeIf { it.isNotBlank() }?.let { cachedBaseUrl = AppPreferences.normalizeUrl(it) }
+    }
 
     /** Fast cover lookup — reads only the first tracks from the playlist file on the server. */
     suspend fun playlistCoverPath(playlistId: String, variantKey: String = playlistId): String? {

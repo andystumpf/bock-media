@@ -54,12 +54,13 @@ object HomeCachePersistence {
         val savedAtMs: Long,
         val sections: List<SectionDto>,
         val cardUrls: Map<String, String> = emptyMap(),
+        val cardMediaPaths: Map<String, String> = emptyMap(),
         val playlistPaths: Map<String, String> = emptyMap(),
     )
 
     data class Snapshot(
         val feed: HomeFeed,
-        val cardUrls: Map<String, String>,
+        val cardMediaPaths: Map<String, String>,
         val playlistPaths: Map<String, String>,
     )
 
@@ -67,7 +68,7 @@ object HomeCachePersistence {
     suspend fun save(
         context: Context,
         feed: HomeFeed,
-        cardUrls: Map<String, String>,
+        cardMediaPaths: Map<String, String>,
         playlistPaths: Map<String, String>,
     ) {
         if (feed.sections.isEmpty()) return
@@ -76,7 +77,7 @@ object HomeCachePersistence {
                 val dto = SnapshotDto(
                     savedAtMs = System.currentTimeMillis(),
                     sections = feed.sections.map { it.toDto() },
-                    cardUrls = cardUrls,
+                    cardMediaPaths = cardMediaPaths,
                     playlistPaths = playlistPaths,
                 )
                 val json = bockJson.encodeToString(dto)
@@ -99,7 +100,12 @@ object HomeCachePersistence {
             if (System.currentTimeMillis() - dto.savedAtMs > MAX_AGE_MS) return@runCatching null
             val sections = dto.sections.mapNotNull { it.toModel() }
             if (sections.isEmpty()) return@runCatching null
-            Snapshot(HomeFeed(sections), dto.cardUrls, dto.playlistPaths)
+            val cardPaths = dto.cardMediaPaths.ifEmpty {
+                dto.cardUrls.mapNotNull { (id, url) ->
+                    ArtworkPaths.extractMediaPath(url)?.let { id to it }
+                }.toMap()
+            }
+            Snapshot(HomeFeed(sections), cardPaths, dto.playlistPaths)
         }.getOrNull()
     }
 
