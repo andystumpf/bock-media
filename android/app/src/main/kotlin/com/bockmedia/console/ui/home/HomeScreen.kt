@@ -18,7 +18,9 @@ import com.bockmedia.console.local.OfflineDownloadManager
 import com.bockmedia.console.local.downloadId
 import com.bockmedia.console.ui.components.*
 import com.bockmedia.console.ui.theme.BockMuted
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 
 @Composable
 fun HomeScreen(
@@ -39,6 +41,7 @@ fun HomeScreen(
     var showAllSection by remember { mutableStateOf<HomeSection?>(null) }
     var actionCard by remember { mutableStateOf<HomeCard?>(null) }
     var artworkEpoch by remember { mutableIntStateOf(0) }
+    var warmJob by remember { mutableStateOf<Job?>(null) }
     val downloadStatuses by OfflineDownloadManager.statuses.collectAsState()
     val alexaStatus by rememberAlexaRemoteStatus(repository)
     val alexaBanner = alexaRemotePlayMessage(alexaStatus).takeIf { !remoteOk }
@@ -47,16 +50,17 @@ fun HomeScreen(
         val nonNullFeed = homeFeed ?: return
         val cards = nonNullFeed.sections.flatMap { it.cards }
         if (cards.isEmpty()) return
+        warmJob?.cancel()
         val fullyCached = HomeArtworkCache.isFullyWarmed(cards)
         if (fullyCached && !forceNetwork) {
-            scope.launch {
+            warmJob = scope.launch {
                 ArtworkPrefetch.prefetchUrls(context, HomeArtworkCache.urlsForCards(cards))
                 artworkEpoch++ 
             }
             return
         }
         artworkEpoch++ 
-        scope.launch {
+        warmJob = scope.launch {
             val urls = if (fullyCached) {
                 HomeArtworkCache.urlsForCards(cards)
             } else {
@@ -72,6 +76,10 @@ fun HomeScreen(
             )
             artworkEpoch++ 
         }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose { warmJob?.cancel() }
     }
 
     suspend fun persistHomeCache(feed: HomeFeed) {
@@ -92,55 +100,69 @@ fun HomeScreen(
     suspend fun load() {
         if (feed == null) loading = true
         error = null
-        runCatching {
-            var fresh = HomeFeedLoader.load(repository)
-            if (fresh.sections.isEmpty() && !repository.testConnection().isSuccess) {
-                BockMediaApp.get(context).invalidateEndpoint()
-                fresh = HomeFeedLoader.load(repository)
-            }
-            if (fresh.sections.isNotEmpty()) {
-                HomeFeedCache.put(fresh)
-                feed = fresh
-                val cards = fresh.sections.flatMap { it.cards }
-                if (!HomeArtworkCache.isFullyWarmed(cards)) {
-                    warmArtwork(fresh)
-                } else {
-                    scope.launch { persistHomeCache(fresh) }
+        try {
+            runCatching {
+                var fresh = withTimeout(60_000) { HomeFeedLoader.load(repository) }
+                if (fresh.sections.isEmpty() && !repository.testConnection().isSuccess) {
+                    BockMediaApp.get(context).invalidateEndpoint()
+                    fresh = withTimeout(60_000) { HomeFeedLoader.load(repository) }
                 }
-            } else if (feed == null) {
-                val reachable = runCatching { repository.testConnection().isSuccess }.getOrDefault(false)
-                error = if (!reachable) {
-                    "Can't reach your Bock Media server (ports 3001 / 3005). " +
-                        "Check the server is running at home and port forwarding is enabled."
-                } else {
-                    "Could not load your library. Pull down to refresh or check server connection in Settings."
+                if (fresh.sections.isNotEmpty()) {
+                    HomeFeedCache.put(fresh)
+                    feed = fresh
+                    HomeLoadCoordinator.markLoaded()
+                    val cards = fresh.sections.flatMap { it.cards }
+                    if (!HomeArtworkCache.isFullyWarmed(cards)) {
+                        warmArtwork(fresh)
+                    } else {
+                        scope.launch { persistHomeCache(fresh) }
+                    }
+                } else if (feed == null) {
+                    val reachable = runCatching { repository.testConnection().isSuccess }.getOrDefault(false)
+                    error = if (!reachable) {
+                        "Can't reach your Bock Media server (ports 3001 / 3005). " +
+                            "Check the server is running at home and port forwarding is enabled."
+                    } else {
+                        "Could not load your library. Pull down to refresh or check server connection in Settings."
+                    }
                 }
-            }
-        }.onFailure { error = it.message ?: "Could not load home" }
-        loading = false
-        refreshing = false
+            }.onFailure { error = it.message ?: "Could not load home" }
+        } finally {
+            loading = false
+            refreshing = false
+        }
     }
 
-    LaunchedEffect(Unit) {
+    suspend fun bootstrapHome() {
         OfflineDownloadManager.refresh(context)
         val cached = HomeFeedCache.getIfFresh()
         if (cached != null) {
             feed = cached
             loading = false
+            HomeLoadCoordinator.markLoaded()
             warmArtwork(cached)
         } else {
-            // Cold start: paint last session's feed from disk immediately, then
-            // refresh in the background. (BockMediaApp.init may have hydrated already.)
             HomeCachePersistence.load(context)?.let { snap ->
                 HomeArtworkCache.restore(snap.cardUrls, snap.playlistPaths)
                 HomeFeedCache.put(snap.feed)
                 feed = snap.feed
                 loading = false
+                HomeLoadCoordinator.markLoaded()
                 warmArtwork(snap.feed)
             }
         }
-        load()
-        loadOffline()
+        if (HomeLoadCoordinator.shouldSkipReload()) {
+            loadOffline()
+            return
+        }
+        HomeLoadCoordinator.withLoadLock {
+            load()
+            loadOffline()
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        bootstrapHome()
     }
 
     LaunchedEffect(filter) {
@@ -190,7 +212,15 @@ fun HomeScreen(
 
     BockPullRefresh(
         isRefreshing = refreshing,
-        onRefresh = { refreshing = true; scope.launch { load(); loadOffline() } },
+        onRefresh = {
+            refreshing = true
+            scope.launch {
+                HomeLoadCoordinator.withLoadLock {
+                    load()
+                    loadOffline()
+                }
+            }
+        },
         modifier = Modifier.fillMaxSize(),
     ) {
         when {

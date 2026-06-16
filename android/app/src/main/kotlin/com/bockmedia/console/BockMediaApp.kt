@@ -27,15 +27,6 @@ class BockMediaApp(private val appContext: Context) {
 
     init {
         HomeTileEngagement.init(appContext.applicationContext)
-        // Hydrate home feed + artwork URL maps before first frame so cold launch paints from cache.
-        runBlocking(Dispatchers.IO) {
-            runCatching {
-                HomeCachePersistence.load(appContext)?.let { snap ->
-                    HomeArtworkCache.restore(snap.cardUrls, snap.playlistPaths)
-                    HomeFeedCache.put(snap.feed)
-                }
-            }
-        }
     }
 
     private var cachedBaseUrl: String? = null
