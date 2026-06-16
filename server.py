@@ -684,8 +684,40 @@ def alexa_remote_login_state():
     return jsonify(st)
 
 
+def _is_private_ip(ip):
+    """True for RFC1918 / loopback (client on home LAN)."""
+    if not ip:
+        return False
+    if ip in ('127.0.0.1', '::1', 'localhost'):
+        return True
+    if ip.startswith('fe80:') or ip.startswith('fd') or ip.startswith('fc'):
+        return True
+    parts = ip.split('.')
+    if len(parts) != 4:
+        return False
+    try:
+        a, b = int(parts[0]), int(parts[1])
+    except ValueError:
+        return False
+    if a == 10:
+        return True
+    if a == 172 and 16 <= b <= 31:
+        return True
+    if a == 192 and b == 168:
+        return True
+    return False
+
+
 def _login_advertise_host(body):
     """Host for the OAuth proxy URL — must match what the user's browser can reach."""
+    try:
+        import alexa_remote
+    except ImportError:
+        alexa_remote = None
+    client = (request.remote_addr or '').split('%')[0].strip()
+    # Phones on home Wi‑Fi cannot load the public IP (router hairpin NAT) — use LAN.
+    if alexa_remote and _is_private_ip(client):
+        return alexa_remote.lan_ip()
     explicit = (body.get('host') or '').strip()
     if explicit:
         return explicit

@@ -549,9 +549,15 @@ class BockMediaRepository(
             runCatching { api().alexaLoginStop() }
         }
         val body = buildJsonObject {
-            runCatching { AppPreferences.hostOf(baseUrl()) }.getOrNull()
-                ?.takeIf { it.isNotBlank() }
-                ?.let { put("host", it) }
+            val active = runCatching { baseUrl() }.getOrNull()
+            val local = preferences.getLocalServerUrlSync()?.let { AppPreferences.normalizeUrl(it) }
+            val host = when {
+                local != null && active != null && active.startsWith(local) ->
+                    AppPreferences.hostOf(local)
+                else ->
+                    active?.let { AppPreferences.hostOf(it) }
+            }
+            host?.takeIf { it.isNotBlank() }?.let { put("host", it) }
         }
         return api().alexaLoginStart(body)
     }

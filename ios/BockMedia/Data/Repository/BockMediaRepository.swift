@@ -451,8 +451,17 @@ final class BockMediaRepository: ObservableObject {
         }
         let active = try await resolveBaseURL()
         var body: [String: Any] = [:]
-        if let activeHost = URL(string: active)?.host, !activeHost.isEmpty {
-            body["host"] = activeHost
+        let trim = { (s: String) -> String in s.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/")) }
+        if let localRaw = preferences.localServerURL {
+            let local = trim(localRaw)
+            let activeTrim = trim(active)
+            if !local.isEmpty, activeTrim.hasPrefix(local), let h = URL(string: localRaw)?.host {
+                body["host"] = h
+            } else if let h = URL(string: active)?.host {
+                body["host"] = h
+            }
+        } else if let h = URL(string: active)?.host {
+            body["host"] = h
         }
         return try await api.alexaLoginStart(body: body)
     }
