@@ -323,7 +323,7 @@ _LOGIN_PROXY = {
     'port': None,
     'started_at': None,
 }
-_LOGIN_LOCK = threading.Lock()
+_LOGIN_LOCK = threading.RLock()
 _LOGIN_CANCEL = threading.Event()
 _LOGIN_THREAD = None
 
