@@ -47,12 +47,12 @@ fun HomeScreen(
         val nonNullFeed = homeFeed ?: return
         val cards = nonNullFeed.sections.flatMap { it.cards }
         if (cards.isEmpty()) return
-        artworkEpoch++
+        artworkEpoch++ 
         scope.launch {
-            HomeArtworkResolver.warmPlaylistCovers(repository, cards)
-            artworkEpoch++
-            // Persist once covers are warmed and the first tiles have resolved, so
-            // the next cold start paints instantly from disk.
+            val urls = HomeArtworkResolver.warmAll(repository, cards)
+            artworkEpoch++ // card URL cache populated
+            ArtworkPrefetch.prefetchUrls(context, urls)
+            artworkEpoch++ // Coil bytes cached for all tiles
             kotlinx.coroutines.delay(1500)
             HomeCachePersistence.save(
                 context,
@@ -100,7 +100,8 @@ fun HomeScreen(
         if (cached != null) {
             feed = cached
             loading = false
-            artworkEpoch++
+            artworkEpoch++ 
+            warmArtwork(cached)
         } else {
             // Cold start: paint last session's feed from disk immediately, then
             // refresh in the background.
@@ -109,7 +110,8 @@ fun HomeScreen(
                 HomeFeedCache.put(snap.feed)
                 feed = snap.feed
                 loading = false
-                artworkEpoch++
+                artworkEpoch++ 
+                warmArtwork(snap.feed)
             }
         }
         load()

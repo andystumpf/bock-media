@@ -405,7 +405,8 @@ private fun HomeCardArt(
 ) {
     var artUrl by remember(card.id) { mutableStateOf<String?>(HomeArtworkCache.urlFor(card.id)) }
     LaunchedEffect(card.id, artworkEpoch) {
-        artUrl = HomeArtworkResolver.resolveUrl(repository, card)
+        artUrl = HomeArtworkCache.urlFor(card.id)
+            ?: HomeArtworkResolver.resolveUrl(repository, card)
     }
     BockArtwork(
         model = artUrl,
