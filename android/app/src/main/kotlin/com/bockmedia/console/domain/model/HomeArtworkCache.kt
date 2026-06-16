@@ -46,6 +46,19 @@ object HomeArtworkCache {
         cardUrls.putAll(urls)
     }
 
+    /** Current resolved artwork lookups, for disk persistence. */
+    fun snapshotCardUrls(): Map<String, String> = HashMap(cardUrls)
+
+    fun snapshotPlaylistPaths(): Map<String, String> = HashMap(playlistPaths)
+
+    /** Seed from a disk snapshot on cold start (does not overwrite fresher data). */
+    fun restore(cardUrls: Map<String, String>, playlistPaths: Map<String, String>) {
+        if (cardUrls.isEmpty() && playlistPaths.isEmpty()) return
+        touch()
+        cardUrls.forEach { (k, v) -> this.cardUrls.putIfAbsent(k, v) }
+        playlistPaths.forEach { (k, v) -> this.playlistPaths.putIfAbsent(k, v) }
+    }
+
     fun invalidate() {
         cardUrls.clear()
         playlistPaths.clear()

@@ -35,7 +35,7 @@ import kotlinx.coroutines.delay
 private suspend fun retryTestConnection(app: BockMediaApp, attempts: Int = 3): Boolean {
     repeat(attempts) { attempt ->
         if (attempt > 0) {
-            app.invalidateApi()
+            app.invalidateEndpoint()
             delay(800L * attempt)
         }
         if (app.repository.testConnection().isSuccess) return true

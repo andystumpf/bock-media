@@ -44,11 +44,22 @@ fun HomeScreen(
     val alexaBanner = alexaRemotePlayMessage(alexaStatus).takeIf { !remoteOk }
 
     fun warmArtwork(homeFeed: HomeFeed?) {
-        val cards = homeFeed?.sections.orEmpty().flatMap { it.cards } ?: return
+        val nonNullFeed = homeFeed ?: return
+        val cards = nonNullFeed.sections.flatMap { it.cards }
+        if (cards.isEmpty()) return
         artworkEpoch++
         scope.launch {
             HomeArtworkResolver.warmPlaylistCovers(repository, cards)
             artworkEpoch++
+            // Persist once covers are warmed and the first tiles have resolved, so
+            // the next cold start paints instantly from disk.
+            kotlinx.coroutines.delay(1500)
+            HomeCachePersistence.save(
+                context,
+                nonNullFeed,
+                HomeArtworkCache.snapshotCardUrls(),
+                HomeArtworkCache.snapshotPlaylistPaths(),
+            )
         }
     }
 
@@ -62,7 +73,7 @@ fun HomeScreen(
         runCatching {
             var fresh = HomeFeedLoader.load(repository)
             if (fresh.sections.isEmpty() && !repository.testConnection().isSuccess) {
-                BockMediaApp.get(context).invalidateApi()
+                BockMediaApp.get(context).invalidateEndpoint()
                 fresh = HomeFeedLoader.load(repository)
             }
             if (fresh.sections.isNotEmpty()) {
@@ -85,10 +96,21 @@ fun HomeScreen(
 
     LaunchedEffect(Unit) {
         OfflineDownloadManager.refresh(context)
-        HomeFeedCache.getIfFresh()?.let { cached ->
+        val cached = HomeFeedCache.getIfFresh()
+        if (cached != null) {
             feed = cached
             loading = false
             artworkEpoch++
+        } else {
+            // Cold start: paint last session's feed from disk immediately, then
+            // refresh in the background.
+            HomeCachePersistence.load(context)?.let { snap ->
+                HomeArtworkCache.restore(snap.cardUrls, snap.playlistPaths)
+                HomeFeedCache.put(snap.feed)
+                feed = snap.feed
+                loading = false
+                artworkEpoch++
+            }
         }
         load()
         loadOffline()

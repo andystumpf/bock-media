@@ -13,19 +13,34 @@ import java.util.concurrent.TimeUnit
 
 /** Picks LAN URL when reachable, otherwise the external static IP. */
 object ServerEndpointResolver {
-    private var cachedUrl: String? = null
-    private var cachedAtMs = 0L
+    @Volatile private var cachedUrl: String? = null
+    @Volatile private var cachedAtMs = 0L
     private const val CACHE_TTL_MS = 60_000L
     private val resolveMutex = Mutex()
 
-    private const val LAN_CONNECT_SEC = 5L
-    private const val LAN_READ_SEC = 8L
-    private const val EXT_CONNECT_SEC = 5L
-    private const val EXT_READ_SEC = 10L
+    // Health checks hit a tiny JSON endpoint; keep probes short so a hung/old
+    // server fails fast and we fall back instead of blocking startup for ~15s.
+    private const val LAN_CONNECT_SEC = 2L
+    private const val LAN_READ_SEC = 3L
+    private const val EXT_CONNECT_SEC = 3L
+    private const val EXT_READ_SEC = 5L
 
     fun invalidate() {
         cachedUrl = null
         cachedAtMs = 0L
+    }
+
+    /**
+     * Seed the in-memory cache with the last-good endpoint from disk so the first
+     * API call after launch returns instantly instead of waiting on probes. The
+     * normal TTL still forces a re-probe shortly after, correcting stale values.
+     */
+    fun prime(url: String?) {
+        if (url.isNullOrBlank()) return
+        if (cachedUrl == null) {
+            cachedUrl = AppPreferences.normalizeUrl(url)
+            cachedAtMs = System.currentTimeMillis()
+        }
     }
 
     /** Testable selection when probes finish. Prefer LAN whenever it answers. */
@@ -91,6 +106,7 @@ object ServerEndpointResolver {
             val chosen = pickEndpoint(local, external, localOk, externalOk)
                 ?: throw IllegalStateException("No server URL configured")
             if (localOk || externalOk) {
+                runCatching { preferences.setLastGoodEndpoint(chosen) }
                 cache(chosen)
             } else {
                 chosen

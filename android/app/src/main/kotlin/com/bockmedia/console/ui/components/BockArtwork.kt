@@ -17,6 +17,26 @@ import coil.compose.SubcomposeAsyncImage
 import coil.compose.SubcomposeAsyncImageContent
 import coil.request.ImageRequest
 
+/**
+ * Host-independent cache key for artwork. The same media served from the LAN IP
+ * and the external IP must share one cache entry, so we key on the path (+query)
+ * only. Without this, switching networks re-downloads every image.
+ */
+fun stableArtCacheKey(model: Any?): String {
+    val raw = model?.toString().orEmpty()
+    return runCatching {
+        val uri = java.net.URI(raw)
+        if (uri.host != null) {
+            buildString {
+                append(uri.rawPath ?: "")
+                uri.rawQuery?.let { append('?').append(it) }
+            }.ifBlank { raw }
+        } else {
+            raw
+        }
+    }.getOrDefault(raw)
+}
+
 @Composable
 fun BockArtwork(
     model: Any?,
@@ -33,11 +53,12 @@ fun BockArtwork(
         return
     }
     val request = remember(model) {
+        val key = stableArtCacheKey(model)
         ImageRequest.Builder(context)
             .data(model)
             .crossfade(80)
-            .memoryCacheKey(model.toString())
-            .diskCacheKey(model.toString())
+            .memoryCacheKey(key)
+            .diskCacheKey(key)
             .build()
     }
     SubcomposeAsyncImage(

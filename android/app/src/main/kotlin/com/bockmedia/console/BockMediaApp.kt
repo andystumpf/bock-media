@@ -9,6 +9,7 @@ import com.bockmedia.console.data.network.ServerEndpointResolver
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.local.ClientIdStore
 import com.bockmedia.console.domain.model.HomeArtworkCache
+import com.bockmedia.console.domain.model.HomeCachePersistence
 import com.bockmedia.console.domain.model.HomeFeedCache
 import com.bockmedia.console.domain.model.HomeTileEngagement
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
@@ -42,7 +43,13 @@ class BockMediaApp(private val appContext: Context) {
         )
     }
 
+    @Volatile private var endpointPrimed = false
+
     suspend fun resolveBaseUrl(forceRefresh: Boolean = false): String {
+        if (!endpointPrimed) {
+            endpointPrimed = true
+            ServerEndpointResolver.prime(preferences.getLastGoodEndpointSync())
+        }
         val user = preferences.adminUser.first()
         val pass = preferences.adminPass.first()
         val token = preferences.mobileToken.first()
@@ -82,13 +89,27 @@ class BockMediaApp(private val appContext: Context) {
         return cachedApi!!
     }
 
+    /**
+     * Full reset — use when credentials or server URLs change (Setup). Wipes the
+     * API client, endpoint cache, and all content/artwork caches.
+     */
     fun invalidateApi() {
-        cachedApi = null
-        cachedBaseUrl = null
-        ServerEndpointResolver.invalidate()
+        invalidateEndpoint()
         repository.clearCaches()
         HomeFeedCache.invalidate()
         HomeArtworkCache.invalidate()
+        HomeCachePersistence.clear(appContext)
+    }
+
+    /**
+     * Lightweight reset — drops the API client and forces endpoint re-resolution
+     * but KEEPS the home feed and artwork caches so transient reconnects still
+     * render instantly from cache.
+     */
+    fun invalidateEndpoint() {
+        cachedApi = null
+        cachedBaseUrl = null
+        ServerEndpointResolver.invalidate()
     }
 
     suspend fun buildAuthenticatedHttpClient(): OkHttpClient {

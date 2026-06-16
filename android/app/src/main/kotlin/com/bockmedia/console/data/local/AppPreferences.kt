@@ -24,6 +24,7 @@ class AppPreferences(private val context: Context) {
     private val keyRememberMe = booleanPreferencesKey("remember_me")
     private val keyHasConnected = booleanPreferencesKey("has_connected")
     private val keyDownloadWifiOnly = booleanPreferencesKey("download_wifi_only")
+    private val keyLastEndpoint = stringPreferencesKey("last_good_endpoint")
 
     val rememberMe: Flow<Boolean> = context.dataStore.data.map { it[keyRememberMe] != false }
     val downloadWifiOnly: Flow<Boolean> = context.dataStore.data.map { it[keyDownloadWifiOnly] == true }
@@ -89,6 +90,16 @@ class AppPreferences(private val context: Context) {
     suspend fun setRememberMe(remember: Boolean) {
         context.dataStore.edit { prefs ->
             prefs[keyRememberMe] = remember
+        }
+    }
+
+    /** Last endpoint that answered a health probe — used to skip slow startup probing. */
+    suspend fun getLastGoodEndpointSync(): String? =
+        context.dataStore.data.first()[keyLastEndpoint]?.takeIf { it.isNotBlank() }
+
+    suspend fun setLastGoodEndpoint(url: String?) {
+        context.dataStore.edit { prefs ->
+            if (url.isNullOrBlank()) prefs.remove(keyLastEndpoint) else prefs[keyLastEndpoint] = url
         }
     }
 
