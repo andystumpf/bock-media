@@ -20,7 +20,6 @@ import androidx.compose.ui.unit.dp
 import com.bockmedia.console.data.api.dto.AlexaDevice
 import com.bockmedia.console.data.api.dto.DeviceGroup
 import com.bockmedia.console.data.repository.BockMediaRepository
-import com.bockmedia.console.ui.alexaControlsAvailable
 import com.bockmedia.console.ui.alexaRemotePlayMessage
 import com.bockmedia.console.ui.util.formatTime12
 import com.bockmedia.console.ui.util.formatTime24
@@ -318,31 +317,23 @@ fun DevicePickerSheet(
     val pinnedStore = remember { PinnedDevicesStore(context) }
     val pinned by pinnedStore.pinnedValues.collectAsState(initial = emptyList())
     val scope = rememberCoroutineScope()
-    var deviceOptions by remember { mutableStateOf<List<DeviceOption>>(emptyList()) }
+    val initialSnapshot = remember { DeviceCatalog.peek() }
+    var deviceOptions by remember { mutableStateOf(initialSnapshot?.options.orEmpty()) }
     var deviceValue by remember { mutableStateOf("") }
     var shuffle by remember(shuffleDefault) { mutableStateOf(shuffleDefault) }
-    var loading by remember { mutableStateOf(true) }
+    var loading by remember { mutableStateOf(initialSnapshot == null) }
     var error by remember { mutableStateOf<String?>(null) }
     var playing by remember { mutableStateOf(false) }
-    var remoteReady by remember(remoteOk) { mutableStateOf(remoteOk) }
-    var alexaStatus by remember { mutableStateOf<com.bockmedia.console.data.api.dto.AlexaRemoteStatus?>(null) }
+    var remoteReady by remember(remoteOk) { mutableStateOf(initialSnapshot?.remoteReady ?: remoteOk) }
+    var alexaStatus by remember { mutableStateOf(initialSnapshot?.status) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     LaunchedEffect(Unit) {
-        loading = true
-        error = null
-        deviceOptions = emptyList()
-        alexaStatus = runCatching { repository.alexaRemoteStatus(probe = true) }.getOrNull()
-        remoteReady = alexaControlsAvailable(alexaStatus)
-        if (remoteReady) {
-            runCatching {
-                val devices = repository.alexaRemoteDevices().devices
-                val groups = repository.deviceGroups().items
-                deviceOptions = buildDeviceOptions(groups, devices)
-            }.onFailure {
-                remoteReady = false
-            }
-        }
+        if (DeviceCatalog.isFresh()) return@LaunchedEffect
+        val snap = DeviceCatalog.refresh(repository, probe = false)
+        deviceOptions = snap.options
+        alexaStatus = snap.status
+        remoteReady = snap.remoteReady
         loading = false
     }
 

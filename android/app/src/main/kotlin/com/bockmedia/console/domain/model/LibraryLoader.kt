@@ -45,23 +45,34 @@ object LibraryLoader {
         val q = search.trim()
         val browsing = q.isEmpty()
         val listLimit = if (browsing) 50 else 200
+        val needPlaylists = filter == LibraryFilter.All || filter == LibraryFilter.Playlists
+        val needArtists = filter == LibraryFilter.All || filter == LibraryFilter.Artists
+        val needAlbums = filter == LibraryFilter.All || filter == LibraryFilter.Albums
+        val needOffline = filter == LibraryFilter.All || filter == LibraryFilter.Downloaded
 
         val playlistsDef = async {
-            runCatching {
+            if (!needPlaylists) return@async emptyList()
+            val items = runCatching {
                 repository.playlists(search = q, limit = if (browsing) 200 else 100).items
             }.getOrDefault(emptyList())
+            // One batch cover lookup so per-tile artwork resolves from cache instead of N calls.
+            runCatching { repository.prefetchPlaylistCoverPaths(items.map { it.id }) }
+            items
         }
         val artistsDef = async {
+            if (!needArtists) return@async emptyList()
             runCatching {
                 repository.artists(page = 1, search = q, limit = listLimit).items
             }.getOrDefault(emptyList())
         }
         val albumsDef = async {
+            if (!needAlbums) return@async emptyList()
             runCatching {
                 repository.albums(page = 1, search = q, limit = listLimit).items
             }.getOrDefault(emptyList())
         }
         val offlineDef = async {
+            if (!needOffline) return@async emptyList<LibraryItem>()
             OfflineDownloadManager.refresh(context)
             val store = OfflineDownloadStore(context)
             store.listManifests()

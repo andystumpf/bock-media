@@ -112,7 +112,6 @@ fun HomePillFilters(
 fun HomeShortcutGrid(
     cards: List<HomeCard>,
     repository: BockMediaRepository,
-    artworkEpoch: Int,
     onPlay: (HomeCard) -> Unit,
     onLongPress: (HomeCard) -> Unit,
     modifier: Modifier = Modifier,
@@ -133,7 +132,6 @@ fun HomeShortcutGrid(
                     HomeShortcutTile(
                         card = card,
                         repository = repository,
-                        artworkEpoch = artworkEpoch,
                         onClick = { onPlay(card) },
                         onLongClick = { onLongPress(card) },
                         modifier = Modifier.weight(1f),
@@ -152,7 +150,6 @@ fun HomeShortcutGrid(
 private fun HomeShortcutTile(
     card: HomeCard,
     repository: BockMediaRepository,
-    artworkEpoch: Int,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     modifier: Modifier = Modifier,
@@ -169,7 +166,6 @@ private fun HomeShortcutTile(
         HomeCardArt(
             card = card,
             repository = repository,
-            artworkEpoch = artworkEpoch,
             modifier = Modifier
                 .size(56.dp)
                 .clip(ArtShape),
@@ -193,7 +189,6 @@ private fun HomeShortcutTile(
 fun SpotifyHomeSection(
     section: HomeSection,
     repository: BockMediaRepository,
-    artworkEpoch: Int,
     onPlay: (HomeCard) -> Unit,
     onLongPress: (HomeCard) -> Unit,
     modifier: Modifier = Modifier,
@@ -243,14 +238,12 @@ fun SpotifyHomeSection(
                         GenreMixTile(
                             card = card,
                             repository = repository,
-                            artworkEpoch = artworkEpoch,
                             onPlay = onPlay,
                             onLongPress = { onLongPress(card) },
                         )
                     else -> PlaylistArtTile(
                         card = card,
                         repository = repository,
-                        artworkEpoch = artworkEpoch,
                         onPlay = onPlay,
                         onLongPress = { onLongPress(card) },
                     )
@@ -400,16 +393,15 @@ fun HomeSectionShowAllSheet(
 private fun HomeCardArt(
     card: HomeCard,
     repository: BockMediaRepository,
-    artworkEpoch: Int,
     modifier: Modifier = Modifier,
 ) {
     val baseUrl = remember(repository) { repository.peekBaseUrl() }
-    var artUrl by remember(card.id, artworkEpoch, baseUrl) {
+    var artUrl by remember(card.id, baseUrl) {
         mutableStateOf(HomeArtworkResolver.peekUrl(baseUrl, card))
     }
-    LaunchedEffect(card.id, artworkEpoch, baseUrl) {
-        artUrl = HomeArtworkResolver.peekUrl(baseUrl, card)
-            ?: HomeArtworkResolver.resolveUrl(repository, card)
+    LaunchedEffect(card.id, baseUrl) {
+        if (artUrl != null) return@LaunchedEffect
+        artUrl = HomeArtworkResolver.resolveUrl(repository, card)
     }
     BockArtwork(
         model = artUrl,
@@ -426,7 +418,6 @@ private fun HomeCardArt(
 private fun PlaylistArtTile(
     card: HomeCard,
     repository: BockMediaRepository,
-    artworkEpoch: Int,
     onPlay: (HomeCard) -> Unit,
     onLongPress: () -> Unit,
 ) {
@@ -441,7 +432,6 @@ private fun PlaylistArtTile(
         HomeCardArt(
             card = card,
             repository = repository,
-            artworkEpoch = artworkEpoch,
             modifier = Modifier
                 .size(TileSize)
                 .clip(ArtShape),
@@ -473,7 +463,6 @@ private fun PlaylistArtTile(
 private fun GenreMixTile(
     card: HomeCard,
     repository: BockMediaRepository,
-    artworkEpoch: Int,
     onPlay: (HomeCard) -> Unit,
     onLongPress: () -> Unit,
 ) {
@@ -490,7 +479,6 @@ private fun GenreMixTile(
         HomeCardArt(
             card = card,
             repository = repository,
-            artworkEpoch = artworkEpoch,
             modifier = Modifier.fillMaxSize(),
         )
         Box(

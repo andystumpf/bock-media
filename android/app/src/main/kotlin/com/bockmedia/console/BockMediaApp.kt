@@ -12,6 +12,7 @@ import com.bockmedia.console.domain.model.HomeArtworkCache
 import com.bockmedia.console.domain.model.HomeCachePersistence
 import com.bockmedia.console.domain.model.HomeFeedCache
 import com.bockmedia.console.domain.model.HomeTileEngagement
+import com.bockmedia.console.ui.components.BockImageLoader
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -100,6 +101,7 @@ class BockMediaApp(private val appContext: Context) {
         HomeFeedCache.invalidate()
         HomeArtworkCache.invalidate()
         HomeCachePersistence.clear(appContext)
+        BockImageLoader.reset()
     }
 
     /**

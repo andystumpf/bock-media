@@ -40,11 +40,17 @@ fun HomeScreen(
     var offlineSection by remember { mutableStateOf<HomeSection?>(null) }
     var showAllSection by remember { mutableStateOf<HomeSection?>(null) }
     var actionCard by remember { mutableStateOf<HomeCard?>(null) }
-    var artworkEpoch by remember { mutableIntStateOf(0) }
     var warmJob by remember { mutableStateOf<Job?>(null) }
     val downloadStatuses by OfflineDownloadManager.statuses.collectAsState()
     val alexaStatus by rememberAlexaRemoteStatus(repository)
     val alexaBanner = alexaRemotePlayMessage(alexaStatus).takeIf { !remoteOk }
+
+    suspend fun prefetchHomeArt(homeFeed: HomeFeed) {
+        val base = repository.peekBaseUrl() ?: return
+        val urls = homeFeed.sections.flatMap { it.cards }
+            .mapNotNull { HomeArtworkResolver.peekUrl(base, it) }
+        if (urls.isNotEmpty()) ArtworkPrefetch.prefetchUrls(context, urls)
+    }
 
     fun warmArtwork(homeFeed: HomeFeed?, forceNetwork: Boolean = false) {
         val nonNullFeed = homeFeed ?: return
@@ -53,18 +59,11 @@ fun HomeScreen(
         warmJob?.cancel()
         val fullyCached = HomeArtworkCache.isFullyWarmed(cards)
         if (fullyCached && !forceNetwork) {
-            warmJob = scope.launch {
-                val base = repository.peekBaseUrl()
-                val urls = cards.mapNotNull { HomeArtworkResolver.peekUrl(base, it) }
-                ArtworkPrefetch.prefetchUrls(context, urls)
-                artworkEpoch++ 
-            }
+            warmJob = scope.launch { prefetchHomeArt(nonNullFeed) }
             return
         }
-        artworkEpoch++ 
         warmJob = scope.launch {
             val urls = HomeArtworkResolver.warmAll(repository, cards)
-            artworkEpoch++ 
             ArtworkPrefetch.prefetchUrls(context, urls)
             HomeCachePersistence.save(
                 context,
@@ -72,7 +71,6 @@ fun HomeScreen(
                 HomeArtworkCache.snapshotCardPaths(),
                 HomeArtworkCache.snapshotPlaylistPaths(),
             )
-            artworkEpoch++ 
         }
     }
 
@@ -133,16 +131,21 @@ fun HomeScreen(
 
     suspend fun bootstrapHome() {
         runCatching { repository.primeBaseUrl(BockMediaApp.get(context).resolveBaseUrl()) }
+        if (!DeviceCatalog.isFresh()) {
+            scope.launch { runCatching { DeviceCatalog.refresh(repository, probe = false) } }
+        }
         OfflineDownloadManager.refresh(context)
         val cached = HomeFeedCache.getIfFresh()
         if (cached != null) {
             feed = cached
             loading = false
             HomeLoadCoordinator.markLoaded()
+            prefetchHomeArt(cached)
             warmArtwork(cached)
         } else {
             HomeCachePersistence.load(context)?.let { snap ->
                 HomeArtworkCache.restore(snap.cardMediaPaths, snap.playlistPaths)
+                prefetchHomeArt(snap.feed)
                 HomeFeedCache.put(snap.feed)
                 feed = snap.feed
                 loading = false
@@ -247,7 +250,6 @@ fun HomeScreen(
                         HomeShortcutGrid(
                             cards = jumpBackIn!!.cards,
                             repository = repository,
-                            artworkEpoch = artworkEpoch,
                             onPlay = { card ->
                                 HomeTileEngagement.recordSelection(card.id)
                                 onPlay(card.playTarget)
@@ -263,7 +265,6 @@ fun HomeScreen(
                         SpotifyHomeSection(
                             section = sections[index],
                             repository = repository,
-                            artworkEpoch = artworkEpoch,
                             onPlay = { card ->
                                 HomeTileEngagement.recordSelection(card.id)
                                 onPlay(card.playTarget)

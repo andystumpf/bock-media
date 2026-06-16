@@ -68,7 +68,8 @@ fun BockArtwork(
         modifier = clippedModifier,
         contentScale = contentScale,
         loading = {
-            ArtGradientFallback(title, Modifier.fillMaxSize(), fallbackFontSize)
+            // Avoid gradient flash on cold start — disk-cached images decode quickly.
+            Box(Modifier.fillMaxSize())
         },
         error = {
             ArtGradientFallback(title, Modifier.fillMaxSize(), fallbackFontSize)

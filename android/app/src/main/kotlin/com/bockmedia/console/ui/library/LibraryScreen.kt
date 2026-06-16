@@ -59,14 +59,34 @@ fun LibraryScreen(
     var search by remember { mutableStateOf("") }
 
     suspend fun load() {
+        LibraryCache.getIfFresh(filter, search)?.let { fresh ->
+            items = fresh
+            loading = false
+            refreshing = false
+            return
+        }
         if (items.isEmpty()) loading = true
-        runCatching { items = LibraryLoader.load(repository, context, filter, search) }
+        runCatching {
+            val fresh = LibraryLoader.load(repository, context, filter, search)
+            items = fresh
+            LibraryCache.put(filter, search, fresh)
+        }
         loading = false
         refreshing = false
     }
 
     LaunchedEffect(filter, search) {
         if (search.isNotBlank()) delay(300)
+        // Paint cached items for this filter/search instantly; otherwise show a spinner
+        // (never leave the previous filter's items on screen while the new set loads).
+        val seeded = LibraryCache.peek(filter, search)
+        if (seeded != null) {
+            items = seeded
+            loading = false
+        } else {
+            items = emptyList()
+            loading = true
+        }
         load()
     }
 
@@ -81,7 +101,7 @@ fun LibraryScreen(
 
     BockPullRefresh(
         isRefreshing = refreshing,
-        onRefresh = { refreshing = true; scope.launch { load() } },
+        onRefresh = { refreshing = true; LibraryCache.invalidate(); scope.launch { load() } },
         modifier = Modifier.fillMaxSize(),
     ) {
         Column(Modifier.fillMaxSize()) {

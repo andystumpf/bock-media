@@ -4,16 +4,13 @@ import java.util.concurrent.ConcurrentHashMap
 
 /** Session cache for home card artwork paths and playlist cover paths. */
 object HomeArtworkCache {
-    private const val TTL_MS = 6 * 60 * 60 * 1000L
-
     private val cardMediaPaths = ConcurrentHashMap<String, String>()
     private val playlistPaths = ConcurrentHashMap<String, String>()
 
     @Volatile
     private var cachedAtMs: Long = 0L
 
-    private fun fresh(): Boolean =
-        cachedAtMs > 0L && System.currentTimeMillis() - cachedAtMs < TTL_MS
+    private fun fresh(): Boolean = cachedAtMs > 0L
 
     /** True when every card has a known media path (no per-card API lookup needed). */
     fun isFullyWarmed(cards: Collection<HomeCard>): Boolean =

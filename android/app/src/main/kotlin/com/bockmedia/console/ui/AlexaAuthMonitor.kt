@@ -76,4 +76,6 @@ fun alexaRemotePlayMessage(status: AlexaRemoteStatus?): String? {
 }
 
 suspend fun refreshAlexaControlsAvailable(repository: BockMediaRepository): Boolean =
-    runCatching { alexaControlsAvailable(repository.alexaRemoteStatus(probe = true)) }.getOrDefault(false)
+    runCatching { alexaControlsAvailable(repository.alexaRemoteStatus(probe = true)) }
+        .getOrDefault(false)
+        .also { com.bockmedia.console.ui.components.DeviceCatalog.invalidate() }
