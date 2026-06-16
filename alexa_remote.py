@@ -346,6 +346,35 @@ def _wait_for_port_free(port, timeout=8.0):
     return not _port_in_use(port)
 
 
+def _wait_for_port_ready(port, timeout=20.0):
+    """True once something is accepting connections on port (proxy bound)."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _port_in_use(port):
+            return True
+        time.sleep(0.15)
+    return False
+
+
+def login_timeout_sec():
+    """How long to wait for the user to finish Amazon sign-in."""
+    try:
+        return max(60, int(cfg().get('loginTimeoutSec') or 1800))
+    except (TypeError, ValueError):
+        return 1800
+
+
+def resolve_proxy_host(host=None):
+    """Host advertised in the login URL (must be reachable from the user's browser)."""
+    explicit = (host or '').strip()
+    if explicit:
+        return explicit
+    configured = (cfg().get('loginProxyHost') or '').strip()
+    if configured:
+        return configured
+    return lan_ip()
+
+
 def _join_login_thread(timeout=8.0):
     """Wait for the background proxy thread to exit and release its socket."""
     global _LOGIN_THREAD
@@ -400,7 +429,8 @@ async def _proxy_login_async(host, port):
     proxy = AlexaProxy(login, base_url)
     try:
         await proxy.start_proxy(host='0.0.0.0')
-        for _ in range(600):
+        deadline = time.time() + login_timeout_sec()
+        while time.time() < deadline:
             if _LOGIN_CANCEL.is_set():
                 _set_proxy(status='stopped', error=None)
                 return
@@ -408,7 +438,8 @@ async def _proxy_login_async(host, port):
                 break
             await asyncio.sleep(1)
         else:
-            _set_proxy(status='error', error='Timed out waiting for login (10 min).')
+            mins = login_timeout_sec() // 60
+            _set_proxy(status='error', error=f'Timed out waiting for login ({mins} min).')
             return
 
         await login.login()
@@ -461,7 +492,7 @@ def start_proxy_login(host=None, port=None):
 
     stop_proxy_login()
 
-    host = (host or cfg().get('loginProxyHost') or lan_ip()).strip()
+    host = resolve_proxy_host(host)
     port = int(port or cfg().get('loginProxyPort') or 3005)
 
     if _port_in_use(port) and not _wait_for_port_free(port):
@@ -478,8 +509,13 @@ def start_proxy_login(host=None, port=None):
         daemon=True, name='alexa-proxy-login',
     )
     _LOGIN_THREAD.start()
-    # Brief pause so the proxy can bind before the UI opens the URL.
-    time.sleep(0.6)
+    if not _wait_for_port_ready(port, timeout=20.0):
+        _LOGIN_CANCEL.set()
+        _join_login_thread(timeout=5.0)
+        raise AlexaRemoteError(
+            f'proxy_start_failed — login page did not start on port {port}. '
+            f'Check firewall and that alexapy is installed.'
+        )
     with _LOGIN_LOCK:
         if _LOGIN_PROXY['status'] == 'starting' and not _LOGIN_PROXY.get('error'):
             _LOGIN_PROXY['status'] = 'waiting'

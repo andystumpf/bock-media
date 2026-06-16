@@ -1898,10 +1898,11 @@ async function pollAlexaLogin() {
 }
 
 async function startAlexaLogin() {
+  const host = window.location.hostname;
   const res = await fetch('/api/alexa_remote/login/start', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({}),
+    body: JSON.stringify(host ? { host } : {}),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {

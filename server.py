@@ -684,13 +684,26 @@ def alexa_remote_login_state():
     return jsonify(st)
 
 
+def _login_advertise_host(body):
+    """Host for the OAuth proxy URL — must match what the user's browser can reach."""
+    explicit = (body.get('host') or '').strip()
+    if explicit:
+        return explicit
+    forwarded = (request.headers.get('X-Forwarded-Host') or '').split(',')[0].strip()
+    raw = forwarded or request.host or ''
+    h = raw.split(':')[0].strip()
+    if h and h not in ('127.0.0.1', 'localhost'):
+        return h
+    return None
+
+
 @app.route('/api/alexa_remote/login/start', methods=['POST'])
 def alexa_remote_login_start():
     body = request.get_json(silent=True) or {}
     try:
         import alexa_remote
         st = alexa_remote.start_proxy_login(
-            host=(body.get('host') or '').strip() or None,
+            host=_login_advertise_host(body),
             port=body.get('port'),
         )
         return jsonify({'ok': True, **st})
@@ -698,7 +711,9 @@ def alexa_remote_login_start():
         return jsonify({'error': 'alexapy not installed', 'code': 'not_installed'}), 503
     except Exception as e:
         code = str(e)
-        status = 400 if code.split(' — ')[0] in ('not_configured', 'password_required', 'port_busy') else 500
+        status = 400 if code.split(' — ')[0] in (
+            'not_configured', 'password_required', 'port_busy', 'proxy_start_failed',
+        ) else 500
         return jsonify({'error': code, 'code': code.split(' — ')[0]}), status
 
 

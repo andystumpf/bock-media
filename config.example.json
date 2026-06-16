@@ -25,13 +25,14 @@
     "model": "claude-sonnet-4-20250514"
   },
   "alexaRemote": {
-    "_comment": "Optional. Enables 'Play on device' in the web UI via the unofficial Alexa API (alexapy). Use Settings → Start browser login, or scripts/alexa_login.py --proxy.",
+    "_comment": "Optional. Enables 'Play on device' in the web UI via the unofficial Alexa API (alexapy). Use Settings → Start browser login, or scripts/alexa_login.py --proxy. For remote login, forward TCP 3005 and set loginProxyHost to your public IP (e.g. 142.56.8.193).",
     "url": "amazon.com",
     "email": "SET_LOCALLY",
     "password": "SET_LOCALLY",
     "otpSecret": "",
     "loginProxyHost": "",
-    "loginProxyPort": 3005
+    "loginProxyPort": 3005,
+    "loginTimeoutSec": 1800
   },
   "mobileApi": {
     "_comment": "Required for Android app over port-forward or Cloudflare tunnel. Generate token: python3 -c \"import secrets; print(secrets.token_urlsafe(32))\"",

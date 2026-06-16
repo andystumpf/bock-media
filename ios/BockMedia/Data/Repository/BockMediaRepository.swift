@@ -451,10 +451,7 @@ final class BockMediaRepository: ObservableObject {
         }
         let active = try await resolveBaseURL()
         var body: [String: Any] = [:]
-        if let activeHost = URL(string: active)?.host,
-           let local = preferences.localServerURL,
-           let localHost = URL(string: local)?.host,
-           activeHost != localHost {
+        if let activeHost = URL(string: active)?.host, !activeHost.isEmpty {
             body["host"] = activeHost
         }
         return try await api.alexaLoginStart(body: body)

@@ -81,7 +81,8 @@ async def main():
         print('Waiting for login to complete… (Ctrl-C to abort)')
         print('=' * 64)
         try:
-            for _ in range(600):
+            deadline = time.time() + alexa_remote.login_timeout_sec()
+            while time.time() < deadline:
                 st = alexa_remote.proxy_login_state()
                 if st.get('status') == 'success':
                     print(f'\nLogin successful. Session saved.')
@@ -94,7 +95,8 @@ async def main():
         except KeyboardInterrupt:
             alexa_remote.stop_proxy_login()
             sys.exit('Aborted.')
-        sys.exit('Timed out waiting for login.')
+        mins = alexa_remote.login_timeout_sec() // 60
+        sys.exit(f'Timed out waiting for login ({mins} min).')
         return
 
     if args.cookies:
