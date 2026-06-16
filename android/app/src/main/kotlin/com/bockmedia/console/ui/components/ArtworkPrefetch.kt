@@ -2,6 +2,7 @@ package com.bockmedia.console.ui.components
 
 import android.content.Context
 import coil.Coil
+import coil.memory.MemoryCache
 import coil.request.ImageRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -15,12 +16,14 @@ object ArtworkPrefetch {
             val loader = Coil.imageLoader(context)
             distinct.forEach { url ->
                 runCatching {
-                    val key = stableArtCacheKey(url)
+                    val keyStr = stableArtCacheKey(url)
+                    val memKey = MemoryCache.Key(keyStr)
+                    if (loader.memoryCache?.get(memKey) != null) return@forEach
                     loader.execute(
                         ImageRequest.Builder(context)
                             .data(url)
-                            .memoryCacheKey(key)
-                            .diskCacheKey(key)
+                            .memoryCacheKey(keyStr)
+                            .diskCacheKey(keyStr)
                             .build(),
                     )
                 }

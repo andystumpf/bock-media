@@ -15,10 +15,12 @@ object HomeArtworkCache {
     private fun fresh(): Boolean =
         cachedAtMs > 0L && System.currentTimeMillis() - cachedAtMs < TTL_MS
 
-    fun urlsFor(cardIds: Collection<String>): Map<String, String> {
-        if (!fresh()) return emptyMap()
-        return cardIds.mapNotNull { id -> cardUrls[id]?.let { id to it } }.toMap()
-    }
+    /** True when every card already has a resolved artwork URL in memory. */
+    fun isFullyWarmed(cards: Collection<HomeCard>): Boolean =
+        cards.isNotEmpty() || cards.all { urlFor(it.id) != null }
+
+    fun urlsForCards(cards: Collection<HomeCard>): List<String> =
+        cards.mapNotNull { urlFor(it.id) }.distinct()
 
     fun playlistPath(id: String): String? = if (fresh()) playlistPaths[id] else null
 

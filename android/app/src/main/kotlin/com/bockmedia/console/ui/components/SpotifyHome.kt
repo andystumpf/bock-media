@@ -403,7 +403,9 @@ private fun HomeCardArt(
     artworkEpoch: Int,
     modifier: Modifier = Modifier,
 ) {
-    var artUrl by remember(card.id) { mutableStateOf<String?>(HomeArtworkCache.urlFor(card.id)) }
+    var artUrl by remember(card.id, artworkEpoch) {
+        mutableStateOf(HomeArtworkCache.urlFor(card.id))
+    }
     LaunchedEffect(card.id, artworkEpoch) {
         artUrl = HomeArtworkCache.urlFor(card.id)
             ?: HomeArtworkResolver.resolveUrl(repository, card)

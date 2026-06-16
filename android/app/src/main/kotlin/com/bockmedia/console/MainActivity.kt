@@ -19,6 +19,9 @@ import coil.memory.MemoryCache
 import com.bockmedia.console.media.NowPlayingNotificationManager
 import com.bockmedia.console.local.OfflineNetworkMonitor
 import com.bockmedia.console.local.OfflineDownloadManager
+import com.bockmedia.console.domain.model.HomeArtworkCache
+import com.bockmedia.console.domain.model.HomeCachePersistence
+import com.bockmedia.console.domain.model.HomeFeedCache
 import com.bockmedia.console.ui.navigation.BockApp
 import com.bockmedia.console.ui.setup.SetupScreen
 import com.bockmedia.console.ui.components.SplashScreen
@@ -131,6 +134,20 @@ class MainActivity : ComponentActivity() {
                             lifecycleOwner.lifecycleScope.launch {
                                 withContext(Dispatchers.IO) {
                                     NowPlayingWidget.refreshSession(applicationContext)
+                                }
+                            }
+                        }
+                        if (event == Lifecycle.Event.ON_STOP && hasServer == true) {
+                            lifecycleOwner.lifecycleScope.launch {
+                                withContext(Dispatchers.IO) {
+                                    HomeFeedCache.getIfFresh()?.let { feed ->
+                                        HomeCachePersistence.save(
+                                            applicationContext,
+                                            feed,
+                                            HomeArtworkCache.snapshotCardUrls(),
+                                            HomeArtworkCache.snapshotPlaylistPaths(),
+                                        )
+                                    }
                                 }
                             }
                         }

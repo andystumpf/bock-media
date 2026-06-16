@@ -43,24 +43,46 @@ fun HomeScreen(
     val alexaStatus by rememberAlexaRemoteStatus(repository)
     val alexaBanner = alexaRemotePlayMessage(alexaStatus).takeIf { !remoteOk }
 
-    fun warmArtwork(homeFeed: HomeFeed?) {
+    fun warmArtwork(homeFeed: HomeFeed?, forceNetwork: Boolean = false) {
         val nonNullFeed = homeFeed ?: return
         val cards = nonNullFeed.sections.flatMap { it.cards }
         if (cards.isEmpty()) return
+        val fullyCached = HomeArtworkCache.isFullyWarmed(cards)
+        if (fullyCached && !forceNetwork) {
+            scope.launch {
+                ArtworkPrefetch.prefetchUrls(context, HomeArtworkCache.urlsForCards(cards))
+                artworkEpoch++ 
+            }
+            return
+        }
         artworkEpoch++ 
         scope.launch {
-            val urls = HomeArtworkResolver.warmAll(repository, cards)
-            artworkEpoch++ // card URL cache populated
+            val urls = if (fullyCached) {
+                HomeArtworkCache.urlsForCards(cards)
+            } else {
+                HomeArtworkResolver.warmAll(repository, cards)
+            }
+            artworkEpoch++ 
             ArtworkPrefetch.prefetchUrls(context, urls)
-            artworkEpoch++ // Coil bytes cached for all tiles
-            kotlinx.coroutines.delay(1500)
             HomeCachePersistence.save(
                 context,
                 nonNullFeed,
                 HomeArtworkCache.snapshotCardUrls(),
                 HomeArtworkCache.snapshotPlaylistPaths(),
             )
+            artworkEpoch++ 
         }
+    }
+
+    suspend fun persistHomeCache(feed: HomeFeed) {
+        val cards = feed.sections.flatMap { it.cards }
+        if (cards.isEmpty()) return
+        HomeCachePersistence.save(
+            context,
+            feed,
+            HomeArtworkCache.snapshotCardUrls(),
+            HomeArtworkCache.snapshotPlaylistPaths(),
+        )
     }
 
     suspend fun loadOffline() {
@@ -79,7 +101,12 @@ fun HomeScreen(
             if (fresh.sections.isNotEmpty()) {
                 HomeFeedCache.put(fresh)
                 feed = fresh
-                warmArtwork(fresh)
+                val cards = fresh.sections.flatMap { it.cards }
+                if (!HomeArtworkCache.isFullyWarmed(cards)) {
+                    warmArtwork(fresh)
+                } else {
+                    scope.launch { persistHomeCache(fresh) }
+                }
             } else if (feed == null) {
                 val reachable = runCatching { repository.testConnection().isSuccess }.getOrDefault(false)
                 error = if (!reachable) {
@@ -100,17 +127,15 @@ fun HomeScreen(
         if (cached != null) {
             feed = cached
             loading = false
-            artworkEpoch++ 
             warmArtwork(cached)
         } else {
             // Cold start: paint last session's feed from disk immediately, then
-            // refresh in the background.
+            // refresh in the background. (BockMediaApp.init may have hydrated already.)
             HomeCachePersistence.load(context)?.let { snap ->
                 HomeArtworkCache.restore(snap.cardUrls, snap.playlistPaths)
                 HomeFeedCache.put(snap.feed)
                 feed = snap.feed
                 loading = false
-                artworkEpoch++ 
                 warmArtwork(snap.feed)
             }
         }
