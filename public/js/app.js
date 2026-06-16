@@ -1910,6 +1910,19 @@ async function startAlexaLogin() {
   }
   updateAlexaLoginPanel(data);
   pollAlexaLogin();
+  // Wait for the OAuth proxy to bind before opening the browser tab.
+  for (let i = 0; i < 20; i++) {
+    if (data.portReady || data.status === 'waiting') break;
+    await new Promise(r => setTimeout(r, 500));
+    const st = await API('/api/alexa_remote/login').catch(() => null);
+    if (!st) break;
+    Object.assign(data, st);
+    updateAlexaLoginPanel(st);
+    if (st.status === 'error' || st.status === 'stopped') {
+      return showToast(st.error || 'Login failed to start', true);
+    }
+    if (st.portReady || st.status === 'waiting') break;
+  }
   if (data.url) window.open(data.url, '_blank', 'noopener');
 }
 

@@ -712,7 +712,7 @@ def alexa_remote_login_start():
     except Exception as e:
         code = str(e)
         status = 400 if code.split(' — ')[0] in (
-            'not_configured', 'password_required', 'port_busy', 'proxy_start_failed',
+            'not_configured', 'password_required', 'port_busy',
         ) else 500
         return jsonify({'error': code, 'code': code.split(' — ')[0]}), status
 

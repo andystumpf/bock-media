@@ -117,6 +117,7 @@ data class AlexaRemoteStatus(
     @SerialName("host") val host: String? = null,
     @SerialName("loginProxyPort") val loginProxyPort: Int? = null,
     @SerialName("port") val port: Int? = null,
+    @SerialName("portReady") val portReady: Boolean? = null,
 )
 
 @Serializable

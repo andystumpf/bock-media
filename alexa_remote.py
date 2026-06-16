@@ -400,17 +400,25 @@ def lan_ip():
         return '127.0.0.1'
 
 
+def _proxy_snapshot_unlocked():
+    return {
+        'status': _LOGIN_PROXY['status'],
+        'error': _LOGIN_PROXY['error'],
+        'url': _LOGIN_PROXY['url'],
+        'host': _LOGIN_PROXY['host'],
+        'port': _LOGIN_PROXY['port'],
+        'startedAt': _LOGIN_PROXY['started_at'],
+    }
+
+
 def proxy_login_state():
     """Snapshot of in-process proxy login (for API polling)."""
     with _LOGIN_LOCK:
-        return {
-            'status': _LOGIN_PROXY['status'],
-            'error': _LOGIN_PROXY['error'],
-            'url': _LOGIN_PROXY['url'],
-            'host': _LOGIN_PROXY['host'],
-            'port': _LOGIN_PROXY['port'],
-            'startedAt': _LOGIN_PROXY['started_at'],
-        }
+        snap = _proxy_snapshot_unlocked()
+    port = snap.get('port')
+    if port and snap.get('status') in ('starting', 'waiting'):
+        snap['portReady'] = _port_in_use(int(port))
+    return snap
 
 
 def _set_proxy(**kwargs):
@@ -421,14 +429,14 @@ def _set_proxy(**kwargs):
 async def _proxy_login_async(host, port):
     from alexapy import AlexaProxy
 
-    _LOGIN_CANCEL.clear()
     base_url = f'http://{host}:{port}'
-    _set_proxy(status='waiting', error=None, url=base_url, host=host, port=port,
+    _set_proxy(status='starting', error=None, url=base_url, host=host, port=port,
                started_at=time.time())
     login = make_login(debug=bool(os.environ.get('ALEXA_DEBUG')))
     proxy = AlexaProxy(login, base_url)
     try:
         await proxy.start_proxy(host='0.0.0.0')
+        _set_proxy(status='waiting', error=None)
         deadline = time.time() + login_timeout_sec()
         while time.time() < deadline:
             if _LOGIN_CANCEL.is_set():
@@ -469,9 +477,9 @@ def _proxy_login_thread(host, port):
         run(_proxy_login_async(host, port))
     finally:
         with _LOGIN_LOCK:
-            if _LOGIN_PROXY['status'] == 'waiting':
+            if _LOGIN_PROXY['status'] in ('starting', 'waiting'):
                 _LOGIN_PROXY['status'] = 'stopped'
-        _LOGIN_THREAD = None
+            _LOGIN_THREAD = None
 
 
 def start_proxy_login(host=None, port=None):
@@ -488,7 +496,7 @@ def start_proxy_login(host=None, port=None):
     with _LOGIN_LOCK:
         if (_LOGIN_THREAD and _LOGIN_THREAD.is_alive()
                 and _LOGIN_PROXY['status'] in ('waiting', 'starting')):
-            return proxy_login_state()
+            return _proxy_snapshot_unlocked()
 
     stop_proxy_login()
 
@@ -509,16 +517,6 @@ def start_proxy_login(host=None, port=None):
         daemon=True, name='alexa-proxy-login',
     )
     _LOGIN_THREAD.start()
-    if not _wait_for_port_ready(port, timeout=20.0):
-        _LOGIN_CANCEL.set()
-        _join_login_thread(timeout=5.0)
-        raise AlexaRemoteError(
-            f'proxy_start_failed — login page did not start on port {port}. '
-            f'Check firewall and that alexapy is installed.'
-        )
-    with _LOGIN_LOCK:
-        if _LOGIN_PROXY['status'] == 'starting' and not _LOGIN_PROXY.get('error'):
-            _LOGIN_PROXY['status'] = 'waiting'
     return proxy_login_state()
 
 
@@ -528,5 +526,5 @@ def stop_proxy_login():
     _LOGIN_CANCEL.set()
     with _LOGIN_LOCK:
         _set_proxy(status='stopped', error=None)
-    _join_login_thread()
+    _join_login_thread(timeout=3.0)
     return proxy_login_state()
