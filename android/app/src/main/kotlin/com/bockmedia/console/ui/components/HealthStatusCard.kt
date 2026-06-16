@@ -116,7 +116,7 @@ fun HealthStatusCard(
                         scope.launch {
                             runCatching {
                                 alexaRemote = repository.alexaLoginStart()
-                                repeat(20) {
+                                for (i in 0 until 20) {
                                     val st = alexaRemote?.effectiveLoginStatus()
                                     if (st == "error" || st == "stopped") break
                                     if (alexaRemote?.portReady == true || st == "waiting") break
