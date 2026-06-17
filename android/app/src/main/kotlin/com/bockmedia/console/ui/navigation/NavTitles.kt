@@ -92,3 +92,11 @@ fun isBottomNavRoute(route: String?): Boolean {
     val top = route.substringBefore("/")
     return BockRoute.bottomNavRoutes.any { it.route == top }
 }
+
+/** True on Home / Search / Library / Automations tabs — no nested stack route. */
+fun isBottomNavRoot(route: String?): Boolean {
+    if (route.isNullOrBlank()) return true
+    if (route.contains('/')) return false
+    val top = route.substringBefore('?')
+    return BockRoute.bottomNavRoutes.any { it.route == top }
+}

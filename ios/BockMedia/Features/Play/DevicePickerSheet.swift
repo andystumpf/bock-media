@@ -11,10 +11,10 @@ struct DevicePickerSheet: View {
     let onPlayOnPhone: (Bool) async -> Void
     let onPlayError: (Error) -> Void
 
-    @State private var devices: [AlexaDevice] = []
+    @State private var options: [DeviceOption] = []
     @State private var loading = true
     @State private var shuffle: Bool
-    @State private var selectedSerial: String?
+    @State private var selectedValue: String?
     @State private var playing = false
     @State private var pinned: [String] = []
 
@@ -41,6 +41,13 @@ struct DevicePickerSheet: View {
         _shuffle = State(initialValue: shuffleDefault)
     }
 
+    private var orderedOptions: [DeviceOption] {
+        let pinnedSet = Set(pinned)
+        let pinnedOpts = pinned.compactMap { value in options.first { $0.value == value } }
+        let rest = options.filter { !pinnedSet.contains($0.value) }
+        return pinnedOpts + rest
+    }
+
     var body: some View {
         NavigationStack {
             List {
@@ -59,22 +66,19 @@ struct DevicePickerSheet: View {
                             Label("Shuffle", icon: .shuffle)
                         }
                     }
-                    if !pinnedDevices.isEmpty {
-                        Section("Pinned") {
-                            ForEach(pinnedDevices) { device in
-                                speakerRow(device)
-                            }
-                        }
-                    }
-                    Section("Speakers") {
-                        if loading {
+                    if loading {
+                        Section {
                             ProgressView()
-                        } else if devices.isEmpty {
+                        }
+                    } else if options.isEmpty {
+                        Section {
                             Text("No Alexa devices found")
                                 .foregroundStyle(BockColors.muted)
-                        } else {
-                            ForEach(otherDevices) { device in
-                                speakerRow(device)
+                        }
+                    } else {
+                        Section("Speakers & groups") {
+                            ForEach(orderedOptions) { option in
+                                optionRow(option)
                             }
                         }
                     }
@@ -99,7 +103,7 @@ struct DevicePickerSheet: View {
                         Button(playing ? "…" : "Play") {
                             Task { await playSelected() }
                         }
-                        .disabled(playing || selectedSerial == nil)
+                        .disabled(playing || selectedValue == nil)
                     }
                 }
             }
@@ -111,42 +115,25 @@ struct DevicePickerSheet: View {
         .presentationDetents([.medium, .large])
     }
 
-    private var pinnedDevices: [AlexaDevice] {
-        pinned.compactMap { serial in devices.first { $0.serial == serial } }
-    }
-
-    private var otherDevices: [AlexaDevice] {
-        devices.filter { dev in
-            guard let serial = dev.serial else { return true }
-            return !pinned.contains(serial)
-        }
-    }
-
     @ViewBuilder
-    private func speakerRow(_ device: AlexaDevice) -> some View {
+    private func optionRow(_ option: DeviceOption) -> some View {
+        let isGroup = option.value.hasPrefix("group:")
         Button {
-            selectedSerial = device.serial
+            selectedValue = option.value
         } label: {
             HStack {
-                BockIcon(icon: .speaker, size: 22)
-                VStack(alignment: .leading) {
-                    Text(device.name ?? "Speaker")
-                    if !device.online {
-                        Text("Offline").font(.caption).foregroundStyle(BockColors.muted)
-                    }
-                }
+                BockIcon(icon: isGroup ? .speakerGroup : .speaker, size: 22)
+                Text(option.label)
                 Spacer()
-                if let serial = device.serial {
-                    Button {
-                        PinnedDevicesStore.toggle(serial)
-                        pinned = PinnedDevicesStore.pinned()
-                    } label: {
-                        BockIcon(icon: .pushPin, size: 18)
-                            .foregroundStyle(PinnedDevicesStore.isPinned(serial) ? BockColors.green : BockColors.muted)
-                    }
-                    .buttonStyle(.plain)
+                Button {
+                    PinnedDevicesStore.toggle(option.value)
+                    pinned = PinnedDevicesStore.pinned()
+                } label: {
+                    BockIcon(icon: .pushPin, size: 18)
+                        .foregroundStyle(PinnedDevicesStore.isPinned(option.value) ? BockColors.green : BockColors.muted)
                 }
-                if selectedSerial == device.serial {
+                .buttonStyle(.plain)
+                if selectedValue == option.value {
                     BockIcon(icon: .check, size: 18).foregroundStyle(BockColors.green)
                 }
             }
@@ -156,31 +143,41 @@ struct DevicePickerSheet: View {
 
     private func loadDevices() async {
         guard remoteOk else { return }
-        loading = true
-        defer { loading = false }
-        do {
-            devices = try await repository.alexaRemoteDevices()
-            if selectedSerial == nil {
-                if let last = repository.preferences.lastDevice,
-                   devices.contains(where: { $0.serial == last }) {
-                    selectedSerial = last
-                } else {
-                    selectedSerial = devices.first(where: \.online)?.serial ?? devices.first?.serial
-                }
+        if let snapshot = DeviceCatalog.peek(), DeviceCatalog.isFresh() {
+            applyOptions(snapshot.options)
+            loading = false
+        } else {
+            loading = true
+        }
+        let snapshot = await DeviceCatalog.refresh(repository: repository, probe: false)
+        applyOptions(snapshot.options)
+        loading = false
+    }
+
+    private func applyOptions(_ deviceOptions: [DeviceOption]) {
+        options = deviceOptions
+        if selectedValue == nil {
+            let online = { (value: String) in
+                deviceOptions.contains { $0.value == value && !$0.label.localizedCaseInsensitiveContains("offline") }
             }
-        } catch {
-            onPlayError(error)
+            if let last = repository.preferences.lastDevice, online(last) {
+                selectedValue = last
+            } else if let pinnedFirst = pinned.first(where: online) {
+                selectedValue = pinnedFirst
+            } else {
+                selectedValue = deviceOptions.first(where: { !$0.label.localizedCaseInsensitiveContains("offline") })?.value
+                    ?? deviceOptions.first?.value
+            }
         }
     }
 
     private func playSelected() async {
-        guard let serial = selectedSerial,
-              let device = devices.first(where: { $0.serial == serial }),
-              let name = device.name else { return }
+        guard let value = selectedValue,
+              let option = options.first(where: { $0.value == value }) else { return }
         playing = true
         defer { playing = false }
-        await onPlay(serial, shuffle, name)
-        repository.preferences.lastDevice = serial
+        await onPlay(value, shuffle, option.label)
+        repository.preferences.lastDevice = value
         onDismiss()
     }
 

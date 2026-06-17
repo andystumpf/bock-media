@@ -30,6 +30,7 @@ final class ModelsTests: XCTestCase {
             smartPlaylists: [],
             favorites: [],
             dashboard: nil,
+            libraryGenres: [],
             shuffleSeed: 42
         )
         let feed = HomeFeedComposer.compose(input)
@@ -55,11 +56,85 @@ final class ModelsTests: XCTestCase {
             smartPlaylists: [],
             favorites: [],
             dashboard: nil,
+            libraryGenres: [],
             shuffleSeed: 7
         )
         let feed = HomeFeedComposer.compose(input)
         let playlistIds = feed.sections.flatMap(\.cards).compactMap(\.playlistId)
         XCTAssertEqual(Set(playlistIds).count, playlistIds.count)
+    }
+
+    func testHomeFeedComposerIncludesExploreThemes() {
+        let playlists = [
+            PlaylistSummary(id: "fr-1", name: "French Favorites", trackCount: 42),
+            PlaylistSummary(id: "it-1", name: "Italian Classics", trackCount: 30),
+        ]
+        let input = HomeFeedInput(
+            history: [],
+            analytics: nil,
+            allPlaylists: playlists,
+            smartPlaylists: [],
+            favorites: [],
+            dashboard: nil,
+            libraryGenres: [],
+            shuffleSeed: 1
+        )
+        let feed = HomeFeedComposer.compose(input)
+        let explore = feed.sections.first { $0.kind == .exploreThemes }
+        XCTAssertNotNil(explore)
+        let titles = explore?.cards.map(\.title) ?? []
+        XCTAssertTrue(titles.contains { $0.localizedCaseInsensitiveContains("French") })
+        XCTAssertTrue(titles.contains { $0.localizedCaseInsensitiveContains("Italian") })
+    }
+
+    func testSearchSongFilterDropsSoundtrackSuffix() {
+        let hits = [
+            SearchHit(title: "Main Theme - from The Matrix", album: "Main Theme", path: "/a.mp3"),
+            SearchHit(title: "Main Theme", album: "Soundtracks", path: "/b.mp3"),
+        ]
+        let filtered = SearchSongFilter.filter(query: "main theme", songs: hits)
+        XCTAssertEqual(filtered.count, 1)
+        XCTAssertEqual(filtered.first?.path, "/b.mp3")
+    }
+
+    func testMoodSectionCollectsFrenchPlaylists() {
+        let playlists = [
+            PlaylistSummary(id: "f1", name: "French Pop Hits", trackCount: 10),
+            PlaylistSummary(id: "f2", name: "My French Mix", trackCount: 8),
+            PlaylistSummary(id: "rock", name: "Rock Classics", trackCount: 20),
+        ]
+        let input = HomeFeedInput(
+            history: [],
+            analytics: nil,
+            allPlaylists: playlists,
+            smartPlaylists: [],
+            favorites: [],
+            dashboard: nil,
+            libraryGenres: [],
+            shuffleSeed: 9
+        )
+        let feed = HomeFeedComposer.compose(input)
+        let french = feed.sections.first { $0.title == "French music" }
+        XCTAssertNotNil(french)
+        XCTAssertEqual(french?.cards.count, 2)
+    }
+
+    func testHomeFeedHasCurrentLayout() {
+        let playlists = (1...20).map { i in
+            PlaylistSummary(id: "pl-\(i)", name: "Playlist \(i)", trackCount: i)
+        }
+        let input = HomeFeedInput(
+            history: [],
+            analytics: nil,
+            allPlaylists: playlists,
+            smartPlaylists: [],
+            favorites: [],
+            dashboard: nil,
+            libraryGenres: [],
+            shuffleSeed: 2
+        )
+        let feed = HomeFeedComposer.compose(input)
+        XCTAssertTrue(feed.hasCurrentHomeLayout())
     }
 
     func testHomeTileRotationReplacesStaleTile() {
@@ -86,6 +161,7 @@ final class ModelsTests: XCTestCase {
             smartPlaylists: [],
             favorites: [],
             dashboard: nil,
+            libraryGenres: [],
             shuffleSeed: 99
         )
         let nowMs = Int64(Date().timeIntervalSince1970 * 1000)

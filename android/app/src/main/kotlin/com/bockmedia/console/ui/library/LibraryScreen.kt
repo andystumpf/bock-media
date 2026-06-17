@@ -47,6 +47,7 @@ fun LibraryScreen(
     onOpenAlbum: (String) -> Unit,
     onOpenFavorites: () -> Unit,
     onOpenPlaylists: () -> Unit = {},
+    onAccountNavigate: (String) -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -68,32 +69,39 @@ fun LibraryScreen(
         LibraryArtPrefetch.warm(context, repository, items)
     }
 
+    fun libraryNeedsNetworkRefresh(data: LibraryData?): Boolean {
+        if (data == null) return true
+        if (data.artists.isEmpty() && data.albums.isEmpty() && data.playlists.isNotEmpty()) return true
+        return LibrarySessionCache.getIfFresh() == null
+    }
+
     suspend fun refreshFromNetwork() {
         runCatching {
             val fresh = LibraryLoader.loadBuckets(repository, context)
             libraryData = fresh
             LibrarySessionCache.put(fresh)
             LibraryCachePersistence.save(context, fresh)
-            prefetchArt(fresh.forFilter(filter))
         }
         loading = false
         refreshing = false
+        libraryData?.let { prefetchArt(it.forFilter(filter)) }
     }
 
     suspend fun bootstrapLibrary() {
         LibrarySessionCache.peek()?.let { cached ->
             libraryData = cached
             loading = false
-            prefetchArt(cached.forFilter(filter))
         } ?: LibraryCachePersistence.load(context)?.let { disk ->
             libraryData = disk
             LibrarySessionCache.put(disk)
             loading = false
-            prefetchArt(disk.forFilter(filter))
         }
-        if (LibrarySessionCache.getIfFresh() == null) {
+        if (libraryNeedsNetworkRefresh(libraryData)) {
             if (libraryData == null) loading = true
             refreshFromNetwork()
+        } else {
+            libraryData?.let { prefetchArt(it.forFilter(filter)) }
+            scope.launch { refreshFromNetwork() }
         }
     }
 
@@ -102,7 +110,9 @@ fun LibraryScreen(
     }
 
     LaunchedEffect(filter) {
-        libraryData?.let { prefetchArt(it.forFilter(filter)) }
+        libraryData?.let { data ->
+            scope.launch { prefetchArt(data.forFilter(filter)) }
+        }
     }
 
     LaunchedEffect(filter, search) {
@@ -127,16 +137,7 @@ fun LibraryScreen(
         }
     }
 
-    BockPullRefresh(
-        isRefreshing = refreshing,
-        onRefresh = {
-            refreshing = true
-            LibrarySessionCache.invalidate()
-            scope.launch { refreshFromNetwork() }
-        },
-        modifier = Modifier.fillMaxSize(),
-    ) {
-        Column(Modifier.fillMaxSize()) {
+    Column(Modifier.fillMaxSize()) {
             LibraryHeader(
                 viewMode = viewMode,
                 onToggleView = {
@@ -145,25 +146,35 @@ fun LibraryScreen(
                 sort = sort,
                 onSortChange = { sort = it },
                 onOpenFavorites = onOpenFavorites,
+                onAccountNavigate = onAccountNavigate,
             )
-            SearchField(search, { search = it }, "Search in Your Library", modifier = Modifier.padding(horizontal = 16.dp))
-            LibraryFilterRow(
-                selected = filter,
-                onSelect = { filter = it },
-                modifier = Modifier.padding(top = 8.dp, bottom = 4.dp),
-            )
-            if (filter == LibraryFilter.All || filter == LibraryFilter.Playlists) {
-                TextButton(
-                    onClick = onOpenPlaylists,
-                    modifier = Modifier.padding(horizontal = 12.dp),
-                ) {
-                    Text("Manage playlists")
-                }
+        SearchField(search, { search = it }, "Search in Your Library", modifier = Modifier.padding(horizontal = 16.dp))
+        LibraryFilterRow(
+            selected = filter,
+            onSelect = { filter = it },
+            modifier = Modifier.padding(top = 4.dp, bottom = 2.dp),
+        )
+        if (filter == LibraryFilter.All || filter == LibraryFilter.Playlists) {
+            TextButton(
+                onClick = onOpenPlaylists,
+                modifier = Modifier.padding(horizontal = 12.dp),
+            ) {
+                Text("Manage playlists")
             }
+        }
+        BockPullRefresh(
+            isRefreshing = refreshing,
+            onRefresh = {
+                refreshing = true
+                LibrarySessionCache.invalidate()
+                scope.launch { refreshFromNetwork() }
+            },
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+        ) {
             when {
-                loading && displayItems.isEmpty() -> LoadingBox(Modifier.weight(1f))
+                loading && displayItems.isEmpty() -> LoadingBox(Modifier.fillMaxSize())
                 sorted.isEmpty() -> Box(
-                    Modifier.weight(1f).fillMaxWidth().padding(24.dp),
+                    Modifier.fillMaxSize().padding(24.dp),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
@@ -182,7 +193,7 @@ fun LibraryScreen(
                     items = sorted,
                     repository = repository,
                     remoteOk = remoteOk,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.fillMaxSize(),
                     onClick = { item -> handleLibraryClick(item, onPlay, onOpenPlaylist, onOpenArtist, onOpenAlbum) },
                     onPlay = onPlay,
                 )
@@ -190,7 +201,7 @@ fun LibraryScreen(
                     items = sorted,
                     repository = repository,
                     remoteOk = remoteOk,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.fillMaxSize(),
                     onClick = { item -> handleLibraryClick(item, onPlay, onOpenPlaylist, onOpenArtist, onOpenAlbum) },
                     onPlay = onPlay,
                 )
@@ -221,16 +232,18 @@ private fun LibraryHeader(
     sort: LibrarySort,
     onSortChange: (LibrarySort) -> Unit,
     onOpenFavorites: () -> Unit,
+    onAccountNavigate: (String) -> Unit,
 ) {
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .statusBarsPadding()
+            .padding(start = 16.dp, end = 4.dp, bottom = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             "Your Library",
-            style = MaterialTheme.typography.headlineSmall,
+            style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.weight(1f),
         )
@@ -257,6 +270,7 @@ private fun LibraryHeader(
                 contentDescription = "Toggle view",
             )
         }
+        AccountMenuButton(onAccountNavigate)
     }
 }
 
@@ -303,7 +317,7 @@ private fun LibraryList(
     onClick: (LibraryItem) -> Unit,
     onPlay: (PlayTarget) -> Unit,
 ) {
-    BockLazyColumn(modifier.padding(horizontal = 8.dp)) {
+    BockLazyColumn(modifier.fillMaxSize().padding(horizontal = 8.dp)) {
         items(items, key = { it.id }) { item ->
             LibraryItemRow(
                 item = item,
@@ -333,7 +347,7 @@ private fun LibraryGrid(
 ) {
     LazyVerticalGrid(
         columns = GridCells.Fixed(2),
-        modifier = modifier.padding(horizontal = 16.dp),
+        modifier = modifier.fillMaxSize().padding(horizontal = 16.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
         contentPadding = PaddingValues(bottom = 16.dp),

@@ -13,7 +13,7 @@ enum HomeFilter: String, CaseIterable, Identifiable {
 }
 
 enum HomeSectionKind {
-    case jumpBackIn, favorites, topMixes, dailyMixes, recentPlaylists, radio, discover, offline
+    case jumpBackIn, favorites, topMixes, exploreThemes, mood, dailyMixes, recentPlaylists, radio, discover, offline
 }
 
 struct HomeCard: Identifiable {
@@ -49,6 +49,7 @@ enum HomeFeedLoader {
         async let smartTask = try? await repository.smartPlaylists()
         async let favoritesTask = try? await repository.favorites()
         async let dashboardTask = try? await repository.dashboardQuick()
+        async let genresTask = try? await repository.genres(limit: 40)
 
         let history = await historyTask?.items ?? []
         let analytics = await analyticsTask
@@ -57,6 +58,7 @@ enum HomeFeedLoader {
         let dashboard = await dashboardTask
         let favoritesFallback = await favoritesTask ?? []
         let favorites = dashboard?.favorites.nilIfEmpty ?? favoritesFallback
+        let libraryGenres = await genresTask ?? []
 
         let shuffleSeed = UInt64(Calendar.current.ordinality(of: .day, in: .year, for: Date()) ?? 1)
         let input = HomeFeedInput(
@@ -66,6 +68,7 @@ enum HomeFeedLoader {
             smartPlaylists: smartPlaylists,
             favorites: favorites,
             dashboard: dashboard,
+            libraryGenres: libraryGenres,
             shuffleSeed: shuffleSeed
         )
         let composed = HomeFeedComposer.compose(input)

@@ -2017,8 +2017,22 @@ def test_device():
 
 # ── Automations (scheduled playlist playback) ────────────────────────────────
 
-AUTOMATIONS_PATH = os.path.join(HERE, 'automations.json')
+AUTOMATIONS_PATH = os.path.join(DATA_DIR, 'automations.json')
+_LEGACY_AUTOMATIONS_PATH = os.path.join(HERE, 'automations.json')
 _AUTOMATIONS_LOCK = threading.Lock()
+
+
+def _ensure_automations_file():
+    """Use DATA_DIR so automations survive git clean / repo path changes."""
+    if os.path.exists(AUTOMATIONS_PATH):
+        return
+    os.makedirs(DATA_DIR, exist_ok=True)
+    if os.path.exists(_LEGACY_AUTOMATIONS_PATH):
+        shutil.copy2(_LEGACY_AUTOMATIONS_PATH, AUTOMATIONS_PATH)
+        return
+    legacy_mma = os.path.expanduser('~/.MyMediaForAlexa/automations.json')
+    if os.path.exists(legacy_mma):
+        shutil.copy2(legacy_mma, AUTOMATIONS_PATH)
 _TIME_RE = re.compile(r'^([01]\d|2[0-3]):([0-5]\d)$')
 _DAY_PRESETS = {
     'daily':    [0, 1, 2, 3, 4, 5, 6],
@@ -2029,6 +2043,7 @@ _DAY_PRESETS = {
 
 def _load_automations():
     with _AUTOMATIONS_LOCK:
+        _ensure_automations_file()
         if not os.path.exists(AUTOMATIONS_PATH):
             return []
         try:
@@ -2282,7 +2297,8 @@ def artists():
         params.append(f'%{search}%')
 
     rows = db_query(
-        f'SELECT artist, COUNT(*) as track_count, COUNT(DISTINCT album) as album_count '
+        f'SELECT artist, COUNT(*) as track_count, COUNT(DISTINCT album) as album_count, '
+        f'MIN(CASE WHEN path IS NOT NULL AND path != "" THEN path END) as art_path '
         f'FROM songs_cache WHERE {where} GROUP BY artist ORDER BY artist LIMIT ? OFFSET ?',
         params + [limit, offset]
     )

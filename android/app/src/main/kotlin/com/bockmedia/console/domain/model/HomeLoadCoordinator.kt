@@ -16,9 +16,11 @@ object HomeLoadCoordinator {
         lastSuccessfulLoadMs = System.currentTimeMillis()
     }
 
-    fun shouldSkipReload(): Boolean =
-        HomeFeedCache.getIfFresh() != null &&
-            System.currentTimeMillis() - lastSuccessfulLoadMs < MIN_RELOAD_MS
+    fun shouldSkipReload(): Boolean {
+        val cached = HomeFeedCache.getIfFresh() ?: return false
+        if (!cached.hasCurrentHomeLayout()) return false
+        return System.currentTimeMillis() - lastSuccessfulLoadMs < MIN_RELOAD_MS
+    }
 
     suspend fun <T> withLoadLock(block: suspend () -> T): T = loadMutex.withLock { block() }
 }

@@ -12,6 +12,8 @@ import java.io.File
 object LibraryCachePersistence {
     private const val FILE_NAME = "library_cache.json"
     private const val MAX_AGE_MS = 24 * 60 * 60 * 1000L
+    /** Bump when bucket shape changes so stale playlist-only snapshots are discarded. */
+    private const val CACHE_VERSION = 2
 
     @Serializable
     private data class PlayTargetDto(
@@ -41,6 +43,7 @@ object LibraryCachePersistence {
 
     @Serializable
     private data class SnapshotDto(
+        val cacheVersion: Int = CACHE_VERSION,
         val savedAtMs: Long,
         val playlists: List<ItemDto> = emptyList(),
         val artists: List<ItemDto> = emptyList(),
@@ -53,6 +56,7 @@ object LibraryCachePersistence {
         withContext(Dispatchers.IO) {
             runCatching {
                 val dto = SnapshotDto(
+                    cacheVersion = CACHE_VERSION,
                     savedAtMs = System.currentTimeMillis(),
                     playlists = data.playlists.map { it.toDto() },
                     artists = data.artists.map { it.toDto() },
@@ -76,13 +80,22 @@ object LibraryCachePersistence {
             val f = file(context)
             if (!f.exists()) return@runCatching null
             val dto = bockJson.decodeFromString<SnapshotDto>(f.readText())
+            if (dto.cacheVersion < CACHE_VERSION) return@runCatching null
             if (System.currentTimeMillis() - dto.savedAtMs > MAX_AGE_MS) return@runCatching null
-            LibraryData(
+            val library = LibraryData(
                 playlists = dto.playlists.mapNotNull { it.toModel() },
                 artists = dto.artists.mapNotNull { it.toModel() },
                 albums = dto.albums.mapNotNull { it.toModel() },
                 offline = dto.offline.mapNotNull { it.toModel() },
-            ).takeIf { it.playlists.isNotEmpty() || it.artists.isNotEmpty() || it.albums.isNotEmpty() }
+            )
+            if (library.playlists.isEmpty() && library.artists.isEmpty() && library.albums.isEmpty()) {
+                return@runCatching null
+            }
+            // Drop playlist-only snapshots saved before artists/albums were cached.
+            if (library.artists.isEmpty() && library.albums.isEmpty() && library.playlists.isNotEmpty()) {
+                return@runCatching null
+            }
+            library
         }.getOrNull()
     }
 

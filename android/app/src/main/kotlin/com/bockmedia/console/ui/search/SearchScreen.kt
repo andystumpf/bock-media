@@ -35,6 +35,7 @@ fun SearchScreen(
     onOpenArtist: (String) -> Unit,
     onOpenAlbum: (String, String?) -> Unit,
     onOpenGenre: (String) -> Unit = {},
+    onAccountNavigate: (String) -> Unit = {},
     snackbarHostState: SnackbarHostState? = null,
 ) {
     val context = LocalContext.current
@@ -90,8 +91,10 @@ fun SearchScreen(
     val showSuggestions = !showResults && query.isNotBlank()
     val showRecents = !showResults && !showSuggestions && searchFocused
 
-    Column(Modifier.fillMaxSize().padding(top = 8.dp)) {
-        TabScreenHeader("Search")
+    Column(Modifier.fillMaxSize()) {
+        TabScreenHeader("Search") {
+            AccountMenuButton(onAccountNavigate)
+        }
         SearchField(
             query,
             { query = it },
@@ -99,7 +102,6 @@ fun SearchScreen(
             modifier = Modifier.padding(horizontal = 16.dp),
             onFocusChanged = { searchFocused = it },
         )
-        Spacer(Modifier.height(8.dp))
 
         when {
             showResults -> SearchResultsList(

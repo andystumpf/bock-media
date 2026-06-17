@@ -18,6 +18,8 @@
 		0C94BCCE152F51D186C01518 /* BockTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = A87D8297AB66C44EDDE32C1F /* BockTheme.swift */; };
 		0E45D31910C9A2A1FCF47473 /* SplashView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A46810579B885E5CE81C9693 /* SplashView.swift */; };
 		110C751390770A0A8BA4909F /* HomeFeedComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1BB23134EA00E9114374375 /* HomeFeedComposer.swift */; };
+		D8E7F6A5B4C39281706FEED /* HomeThemeCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7D8E9F0A1B2C3D4E5F67890 /* HomeThemeCatalog.swift */; };
+		A1B2C3D4E5F60718293A4B5D /* HomeMoodSections.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E5F60718293A4B5D6E /* HomeMoodSections.swift */; };
 		12F5D1B79FBEFDEE6193A173 /* AccountMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC0D237A112655DA070EA5DF /* AccountMenu.swift */; };
 		14615F2F75316751BBE3373F /* SearchHistoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C51FFAC3FD71ACC30A5AF4C8 /* SearchHistoryStore.swift */; };
 		195A31D4093FB99E55238FAB /* AddToPlaylistSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AD2FF87B597A96823A1B63F /* AddToPlaylistSheet.swift */; };
@@ -81,6 +83,7 @@
 		CC2D3F63B537E17EB6D1DBCA /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A2024D5EB14C7F7C8636146F /* Assets.xcassets */; };
 		D0E967759BE5F9E5C6F977EF /* WidgetSessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11992C881D72D93D66A31C26 /* WidgetSessionStore.swift */; };
 		D169809799D32294B01E0EFA /* HomeComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E18E4C61681676CEEB48FB /* HomeComponents.swift */; };
+		E1A2B3C4D5E6F708192A3B4C /* BockLoadingLogo.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1E2D3C4B5A6978877665543 /* BockLoadingLogo.swift */; };
 		D464FBF2CEED780B47AF67B9 /* DevicesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3594BDD9011BA65CFB21A3CF /* DevicesView.swift */; };
 		D4F4F24075A2A8A54B5B51A5 /* BockMediaRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F4F856B628D25E4022B84DF /* BockMediaRepository.swift */; };
 		D533A66FC6E6A47AD4433495 /* TabScreenHeader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C3BF21B33CDE06F1BC9809F /* TabScreenHeader.swift */; };
@@ -101,6 +104,15 @@
 		F4835AC320DE3376DB24EBC6 /* BockMediaAPIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82202651825B73007E32E231 /* BockMediaAPIClient.swift */; };
 		FA552904329B9A2EC80172CD /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D4E7E75FA02E42DBFAD55FD /* KeychainStore.swift */; };
 		FC6420F566B87044822F6C0F /* LocalPlaybackQueueResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = C445AA50230748329B8B2B00 /* LocalPlaybackQueueResolver.swift */; };
+		A1A1A1A1B1B1C1C1D1D1E1E1 /* LibraryLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1F1F1F1E1E1D1D1C1C1B1B1 /* LibraryLoader.swift */; };
+		A2A2A2A2B2B2C2C2D2D2E2E2 /* LibrarySessionCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2F2F2F2E2E2D2D2C2C2B2B2 /* LibrarySessionCache.swift */; };
+		A3A3A3A3B3B3C3C3D3D3E3E3 /* LibraryCachePersistence.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3F3F3F3E3E3D3D3C3C3B3B3 /* LibraryCachePersistence.swift */; };
+		A4A4A4A4B4B4C4C4D4D4E4E4 /* HomeFeedCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4F4F4F4E4E4D4D4C4C4B4B4 /* HomeFeedCache.swift */; };
+		A5A5A5A5B5B5C5C5D5D5E5E5 /* HomeLoadCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5F5F5F5E5E5D5D5C5C5B5B5 /* HomeLoadCoordinator.swift */; };
+		A6A6A6A6B6B6C6C6D6D6E6E6 /* HomeCachePersistence.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6F6F6F6E6E6D6D6C6C6B6B6 /* HomeCachePersistence.swift */; };
+		A7A7A7A7B7B7C7C7D7D7E7E7 /* SearchSongFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7F7F7F7E7E7D7D7C7C7B7B7 /* SearchSongFilter.swift */; };
+		A8A8A8A8B8B8C8C8D8D8E8E8 /* DeviceCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8F8F8F8E8E8D8D8C8C8B8B8 /* DeviceCatalog.swift */; };
+		A9A9A9A9B9B9C9C9D9D9E9E9 /* PhonePlayback.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9F9F9F9E9E9D9D9C9C9B9B9 /* PhonePlayback.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -206,10 +218,13 @@
 		A57FDCB7F6BDBECBB7AFCCFA /* HomeFeed.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeFeed.swift; sourceTree = "<group>"; };
 		A710AD21896747BE31EE7B2F /* HomeArtwork.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeArtwork.swift; sourceTree = "<group>"; };
 		A7E18E4C61681676CEEB48FB /* HomeComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeComponents.swift; sourceTree = "<group>"; };
+		F1E2D3C4B5A6978877665543 /* BockLoadingLogo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BockLoadingLogo.swift; sourceTree = "<group>"; };
 		A87D8297AB66C44EDDE32C1F /* BockTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BockTheme.swift; sourceTree = "<group>"; };
 		A9C1E147FD04D856340161E8 /* BockMediaTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = BockMediaTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		AED4F166716568AA33D9A26C /* PlaylistAdminSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaylistAdminSheets.swift; sourceTree = "<group>"; };
 		B1BB23134EA00E9114374375 /* HomeFeedComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeFeedComposer.swift; sourceTree = "<group>"; };
+		C7D8E9F0A1B2C3D4E5F67890 /* HomeThemeCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeThemeCatalog.swift; sourceTree = "<group>"; };
+		B2C3D4E5F60718293A4B5D6E /* HomeMoodSections.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeMoodSections.swift; sourceTree = "<group>"; };
 		B350117AF72C140B8A579E96 /* PinnedDevicesStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PinnedDevicesStore.swift; sourceTree = "<group>"; };
 		B4472AE1220E8E2D3D4902EF /* AutomationsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationsView.swift; sourceTree = "<group>"; };
 		C26412D32A0C089B5876DD34 /* DownloadsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadsView.swift; sourceTree = "<group>"; };
@@ -229,6 +244,15 @@
 		F67D39DB21B98C2A81872EC6 /* MiniNowPlayingBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MiniNowPlayingBar.swift; sourceTree = "<group>"; };
 		F80B7AF5FF5042D2B666FD49 /* BockMediaWidget.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = BockMediaWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		F9F3EB64BBFDF50AB66DD520 /* FavoritesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FavoritesView.swift; sourceTree = "<group>"; };
+		F1F1F1F1E1E1D1D1C1C1B1B1 /* LibraryLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryLoader.swift; sourceTree = "<group>"; };
+		F2F2F2F2E2E2D2D2C2C2B2B2 /* LibrarySessionCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibrarySessionCache.swift; sourceTree = "<group>"; };
+		F3F3F3F3E3E3D3D3C3C3B3B3 /* LibraryCachePersistence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryCachePersistence.swift; sourceTree = "<group>"; };
+		F4F4F4F4E4E4D4D4C4C4B4B4 /* HomeFeedCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeFeedCache.swift; sourceTree = "<group>"; };
+		F5F5F5F5E5E5D5D5C5C5B5B5 /* HomeLoadCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeLoadCoordinator.swift; sourceTree = "<group>"; };
+		F6F6F6F6E6E6D6D6C6C6B6B6 /* HomeCachePersistence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeCachePersistence.swift; sourceTree = "<group>"; };
+		F7F7F7F7E7E7D7D7C7C7B7B7 /* SearchSongFilter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchSongFilter.swift; sourceTree = "<group>"; };
+		F8F8F8F8E8E8D8D8C8C8B8B8 /* DeviceCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceCatalog.swift; sourceTree = "<group>"; };
+		F9F9F9F9E9E9D9D9C9C9B9B9 /* PhonePlayback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhonePlayback.swift; sourceTree = "<group>"; };
 		FFCDF62A3F48ABAEDE57003F /* WidgetSnapshotLogic.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetSnapshotLogic.swift; sourceTree = "<group>"; };
 		"TEMP_ED7F9EF7-F6D4-4331-8C02-4AFC9B1355DF" /* Config.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -336,6 +360,7 @@
 				8E07940951ACE9B4ED9A431B /* BockArtwork.swift */,
 				440B43D367F0EAA81B7D41F2 /* HomeCardRow.swift */,
 				A7E18E4C61681676CEEB48FB /* HomeComponents.swift */,
+				F1E2D3C4B5A6978877665543 /* BockLoadingLogo.swift */,
 				F67D39DB21B98C2A81872EC6 /* MiniNowPlayingBar.swift */,
 				6759BB866471EE17B09ABE90 /* PlayDownloadActions.swift */,
 				A46810579B885E5CE81C9693 /* SplashView.swift */,
@@ -572,18 +597,29 @@
 		E132208B8CCF7C3EFBFE6795 /* Domain */ = {
 			isa = PBXGroup;
 			children = (
+				F8F8F8F8E8E8D8D8C8C8B8B8 /* DeviceCatalog.swift */,
 				A710AD21896747BE31EE7B2F /* HomeArtwork.swift */,
 				35F13A78C89F4EA3BA153996 /* HomeArtworkCache.swift */,
+				F6F6F6F6E6E6D6D6C6C6B6B6 /* HomeCachePersistence.swift */,
 				A57FDCB7F6BDBECBB7AFCCFA /* HomeFeed.swift */,
+				F4F4F4F4E4E4D4D4C4C4B4B4 /* HomeFeedCache.swift */,
 				B1BB23134EA00E9114374375 /* HomeFeedComposer.swift */,
 				C521D7CA6741A9BDC79827C1 /* HomeFeedRules.swift */,
+				F5F5F5F5E5E5D5D5C5C5B5B5 /* HomeLoadCoordinator.swift */,
+				C7D8E9F0A1B2C3D4E5F67890 /* HomeThemeCatalog.swift */,
+				B2C3D4E5F60718293A4B5D6E /* HomeMoodSections.swift */,
 				3EF100E42DE56D32E6E1FF9F /* HomeTileEngagement.swift */,
+				F3F3F3F3E3E3D3D3C3C3B3B3 /* LibraryCachePersistence.swift */,
+				F1F1F1F1E1E1D1D1C1C1B1B1 /* LibraryLoader.swift */,
+				F2F2F2F2E2E2D2D2C2C2B2B2 /* LibrarySessionCache.swift */,
 				E344D558F3E0FA5C1ED8229E /* Models.swift */,
 				77BAC2CC9D3D1CB08D3A8DAA /* NowPlayingHelpers.swift */,
 				0D0B49F3C20B8CDBFB80CBC1 /* NowPlayingMerge.swift */,
 				41BBBF967EA3C54B1424D808 /* PlaybackFocus.swift */,
+				F9F9F9F9E9E9D9D9C9C9B9B9 /* PhonePlayback.swift */,
 				17978E04E09A761DA9E24540 /* PlayTarget.swift */,
 				78577EDBE2D82E9ABC1F35D9 /* SearchBrowse.swift */,
+				F7F7F7F7E7E7D7D7C7C7B7B7 /* SearchSongFilter.swift */,
 			);
 			path = Domain;
 			sourceTree = "<group>";
@@ -820,22 +856,32 @@
 				9178AB99693D3238E97F6711 /* DeepLink.swift in Sources */,
 				A4F81A6C81D93A2CF3E80244 /* DeviceAnalyticsReporter.swift in Sources */,
 				8D300B311B2097C7A2EB68F6 /* DevicePickerSheet.swift in Sources */,
+				A8A8A8A8B8B8C8C8D8D8E8E8 /* DeviceCatalog.swift in Sources */,
 				D464FBF2CEED780B47AF67B9 /* DevicesView.swift in Sources */,
 				5C71F4B173C3842353B23163 /* DownloadsView.swift in Sources */,
 				30C44F98B388EAD20F32685C /* FavoritesView.swift in Sources */,
 				C27F81088F1300D8F92CF36C /* GenreDetailView.swift in Sources */,
 				6B206DA4D24BA79EECE918D7 /* HomeArtwork.swift in Sources */,
 				BD4B50A9EED76297963DF66B /* HomeArtworkCache.swift in Sources */,
+				A6A6A6A6B6B6C6C6D6D6E6E6 /* HomeCachePersistence.swift in Sources */,
 				30EFB4E27A1F7BB0C6864B3F /* HomeCardRow.swift in Sources */,
 				D169809799D32294B01E0EFA /* HomeComponents.swift in Sources */,
+				E1A2B3C4D5E6F708192A3B4C /* BockLoadingLogo.swift in Sources */,
 				0753CE4DFBCCAC4D86121026 /* HomeFeed.swift in Sources */,
+				A4A4A4A4B4B4C4C4D4D4E4E4 /* HomeFeedCache.swift in Sources */,
 				110C751390770A0A8BA4909F /* HomeFeedComposer.swift in Sources */,
 				32BD66058B28455DBB71FFF8 /* HomeFeedRules.swift in Sources */,
+				A5A5A5A5B5B5C5C5D5D5E5E5 /* HomeLoadCoordinator.swift in Sources */,
+				D8E7F6A5B4C39281706FEED /* HomeThemeCatalog.swift in Sources */,
+				A1B2C3D4E5F60718293A4B5D /* HomeMoodSections.swift in Sources */,
 				96EE3F53446C4D85C142006B /* HomeTileEngagement.swift in Sources */,
 				1D52816D3E2398F3D4BF97B7 /* HomeView.swift in Sources */,
 				2A2EE5BF986BF015CA37ADDF /* JSONCoding.swift in Sources */,
 				FA552904329B9A2EC80172CD /* KeychainStore.swift in Sources */,
 				B7E9D9F389185C6CBE2CAB19 /* LibraryRoute.swift in Sources */,
+				A3A3A3A3B3B3C3C3D3D3E3E3 /* LibraryCachePersistence.swift in Sources */,
+				A1A1A1A1B1B1C1C1D1D1E1E1 /* LibraryLoader.swift in Sources */,
+				A2A2A2A2B2B2C2C2D2D2E2E2 /* LibrarySessionCache.swift in Sources */,
 				0950F9128B9C285957FDB02A /* LibraryView.swift in Sources */,
 				5594D548B6DEF1F8E011CE18 /* LocalPlaybackController.swift in Sources */,
 				FC6420F566B87044822F6C0F /* LocalPlaybackQueueResolver.swift in Sources */,
@@ -858,6 +904,7 @@
 				E4E6F8B71D28ED5B2151720D /* PlayLauncher.swift in Sources */,
 				2AD9ACF1988B63266B1EB2FA /* PlayTarget.swift in Sources */,
 				DF4CBB67E9D7D3E056B3989A /* PlaybackFocus.swift in Sources */,
+				A9A9A9A9B9B9C9C9D9D9E9E9 /* PhonePlayback.swift in Sources */,
 				311F48FCA1A3E22BD123D939 /* PlaylistAdminSheets.swift in Sources */,
 				DC68BBFB0A58350D67612077 /* PlaylistsView.swift in Sources */,
 				C3E51BA9B27B43DD346B74AE /* RecentRequestsView.swift in Sources */,
@@ -865,6 +912,7 @@
 				C86EEE4BD90C58ABFEBD4646 /* RootView.swift in Sources */,
 				28FBB6BF1A9B7CA790D37322 /* RoutinesView.swift in Sources */,
 				72F52CB3392C1C44C4981657 /* SearchBrowse.swift in Sources */,
+				A7A7A7A7B7B7C7C7D7D7E7E7 /* SearchSongFilter.swift in Sources */,
 				14615F2F75316751BBE3373F /* SearchHistoryStore.swift in Sources */,
 				EB128AA662F22CCF85EDFBAB /* SearchRoute.swift in Sources */,
 				357123209A57508C0A886DAC /* SearchView.swift in Sources */,

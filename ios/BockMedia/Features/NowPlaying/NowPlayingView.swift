@@ -162,7 +162,7 @@ struct NowPlayingView: View {
             Color.black.ignoresSafeArea()
 
             if viewModel.loading && viewModel.devices.isEmpty {
-                ProgressView().tint(BockColors.green)
+                LoadingBox()
             } else if viewModel.devices.isEmpty {
                 emptyState
             } else {

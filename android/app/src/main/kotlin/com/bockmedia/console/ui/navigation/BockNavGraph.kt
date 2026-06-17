@@ -1,9 +1,11 @@
 package com.bockmedia.console.ui.navigation
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
@@ -30,7 +32,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import com.bockmedia.console.ui.analytics.AnalyticsScreen
 import com.bockmedia.console.ui.automation.AutomationScreen
-import com.bockmedia.console.ui.components.AccountMenuButton
 import com.bockmedia.console.ui.components.MiniNowPlayingBar
 import com.bockmedia.console.ui.components.PlayTargetLauncher
 import com.bockmedia.console.ui.downloads.DownloadsScreen
@@ -69,9 +70,8 @@ fun BockApp(repository: BockMediaRepository, deepLinkRoute: String? = null) {
     val header = resolveScreenHeader(navBackStackEntry)
     val showBottomNav = isBottomNavRoute(fullRoute)
     val showMiniBar = showBottomNav
-    val isHome = fullRoute?.substringBefore("/") == BockRoute.Home.route
+    val isBottomNavRoot = isBottomNavRoot(fullRoute)
     val isNowPlaying = fullRoute?.substringBefore("/") == BockRoute.NowPlaying.route
-    val showAccount = showBottomNav && !isHome
 
     val lifecycleOwner = LocalLifecycleOwner.current
     LaunchedEffect(repository) {
@@ -121,9 +121,11 @@ fun BockApp(repository: BockMediaRepository, deepLinkRoute: String? = null) {
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         containerColor = MaterialTheme.colorScheme.background,
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
-            if (!isHome && !isNowPlaying) {
+            if (!isNowPlaying && !isBottomNavRoot) {
                 TopAppBar(
+                    modifier = Modifier.statusBarsPadding(),
                     title = { Text(header.title) },
                     colors = TopAppBarDefaults.topAppBarColors(
                         containerColor = MaterialTheme.colorScheme.background,
@@ -133,13 +135,6 @@ fun BockApp(repository: BockMediaRepository, deepLinkRoute: String? = null) {
                         if (header.showBack) {
                             IconButton(onClick = { navController.popBackStack() }) {
                                 Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
-                            }
-                        }
-                    },
-                    actions = {
-                        if (showAccount) {
-                            AccountMenuButton { route ->
-                                navController.navigate(route) { launchSingleTop = true }
                             }
                         }
                     },
@@ -171,10 +166,14 @@ fun BockApp(repository: BockMediaRepository, deepLinkRoute: String? = null) {
         },
     ) { padding ->
         Box(
-            modifier = if (isNowPlaying) {
-                Modifier.fillMaxSize()
-            } else {
-                Modifier.padding(padding)
+            modifier = when {
+                isNowPlaying -> Modifier.fillMaxSize()
+                isBottomNavRoot -> Modifier
+                    .fillMaxSize()
+                    .padding(bottom = padding.calculateBottomPadding())
+                else -> Modifier
+                    .padding(padding)
+                    .fillMaxSize()
             },
         ) {
             BockNavHost(
@@ -249,10 +248,13 @@ private fun BockNavHost(
                 remoteOk = remoteOk,
                 onPlay = onPlay,
                 onOpenPlaylist = { id -> navController.navigate(playlistDetailRoute(id)) },
-                onOpenArtist = { name -> navController.navigate("songs/artist/${android.net.Uri.encode(name)}") },
+                onOpenArtist = { name -> navController.navigate(albumsArtistRoute(name)) },
                 onOpenAlbum = { name -> navController.navigate("songs/album/${android.net.Uri.encode(name)}") },
                 onOpenFavorites = { navController.navigate(BockRoute.Favorites.route) },
                 onOpenPlaylists = { navController.navigate(BockRoute.Playlists.route) },
+                onAccountNavigate = { route ->
+                    navController.navigate(route) { launchSingleTop = true }
+                },
             )
         }
         composable(BockRoute.Favorites.route) {
@@ -285,6 +287,9 @@ private fun BockNavHost(
                 onOpenArtist = { navController.navigate(albumsArtistRoute(it)) },
                 onOpenAlbum = { album, _ -> navController.navigate(songsAlbumRoute(album)) },
                 onOpenGenre = { name -> navController.navigate(genreRoute(name)) },
+                onAccountNavigate = { route ->
+                    navController.navigate(route) { launchSingleTop = true }
+                },
                 snackbarHostState = snackbarHostState,
             )
         }
@@ -302,7 +307,14 @@ private fun BockNavHost(
                 onOpenAlbum = { album, artist -> navController.navigate(songsAlbumRoute(album)) },
             )
         }
-        composable(BockRoute.Automations.route) { AutomationScreen(repository) }
+        composable(BockRoute.Automations.route) {
+            AutomationScreen(
+                repository = repository,
+                onAccountNavigate = { route ->
+                    navController.navigate(route) { launchSingleTop = true }
+                },
+            )
+        }
         composable(BockRoute.Playlists.route) {
             PlaylistsScreen(repository, remoteOk, onPlay) { id ->
                 navController.navigate(playlistDetailRoute(id))

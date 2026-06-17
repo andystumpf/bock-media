@@ -95,7 +95,7 @@ struct SettingsView: View {
                             .foregroundStyle(BockColors.muted)
                         Button("Load server settings") { configConfirmed = true }
                     } else if configLoading {
-                        ProgressView().tint(BockColors.green)
+                        BockLoadingLogo(size: 32)
                     } else {
                         TextField("Default playlist name", text: $defaultPlaylist)
                         TextField("Public URL", text: $publicUrl)

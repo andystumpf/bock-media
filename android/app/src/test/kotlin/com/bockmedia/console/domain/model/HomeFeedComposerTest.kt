@@ -24,6 +24,10 @@ class HomeFeedComposerTest {
         )
         val feed = HomeFeedComposer.compose(input)
         assertFalse(feed.sections.isEmpty())
+        assertTrue(
+            "expected mood rows on home",
+            feed.sections.count { it.kind == HomeSectionKind.Mood } >= 8,
+        )
         val playlistCards = feed.sections.flatMap { it.cards }.mapNotNull { it.playlistId }
         assertTrue(playlistCards.size >= 20)
     }
@@ -70,9 +74,37 @@ class HomeFeedComposerTest {
         val feed = HomeFeedComposer.compose(input)
         val moodSections = feed.sections.filter { it.kind == HomeSectionKind.Mood }
         assertEquals(8, moodSections.size)
-        assertTrue(moodSections.any { it.title == "French music" })
-        assertTrue(moodSections.any { it.title == "Road trip" })
         assertTrue(moodSections.all { it.cards.isNotEmpty() })
+        val french = moodSections.first { it.title == "French music" }
+        assertEquals(1, french.cards.size)
+        val italian = moodSections.first { it.title == "Italian music" }
+        assertEquals(1, italian.cards.size)
+    }
+
+    @Test
+    fun compose_moodSectionCollectsAllKeywordPlaylists() {
+        val playlists = listOf(
+            PlaylistSummary(id = "f1", name = "French Pop Hits", tracks = 10),
+            PlaylistSummary(id = "f2", name = "My French Mix", tracks = 8),
+            PlaylistSummary(id = "f3", name = "Best of FRANCE", tracks = 6),
+            PlaylistSummary(id = "rock", name = "Rock Classics", tracks = 20),
+        )
+        val input = HomeFeedInput(
+            history = emptyList(),
+            analytics = null,
+            allPlaylists = playlists,
+            smartPlaylists = emptyList(),
+            favorites = emptyList(),
+            dashboard = null,
+            shuffleSeed = 9,
+        )
+        val feed = HomeFeedComposer.compose(input)
+        val french = feed.sections.first { it.title == "French music" }
+        assertEquals(3, french.cards.size)
+        assertTrue(french.cards.all {
+            it.title.contains("french", ignoreCase = true) ||
+                it.title.contains("france", ignoreCase = true)
+        })
     }
 
     @Test
@@ -96,7 +128,10 @@ class HomeFeedComposerTest {
             shuffleSeed = 7,
         )
         val feed = HomeFeedComposer.compose(input)
-        val playlistIds = feed.sections.flatMap { it.cards }.mapNotNull { it.playlistId }
+        val playlistIds = feed.sections
+            .filter { it.kind != HomeSectionKind.Mood }
+            .flatMap { it.cards }
+            .mapNotNull { it.playlistId }
         assertEquals(playlistIds.toSet().size, playlistIds.size)
     }
 }

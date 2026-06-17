@@ -1,6 +1,7 @@
 package com.bockmedia.console.ui.components
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
@@ -22,6 +23,6 @@ fun BockPullRefresh(
         state = state,
         modifier = modifier,
     ) {
-        Box { content() }
+        Box(Modifier.fillMaxSize()) { content() }
     }
 }

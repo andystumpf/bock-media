@@ -1,6 +1,8 @@
 package com.bockmedia.console.ui.navigation
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class NavTitlesTest {
@@ -41,6 +43,13 @@ class NavTitlesTest {
         assertEquals("", resolveScreenHeader(route = BockRoute.Search.route).title)
         assertEquals("", resolveScreenHeader(route = BockRoute.Library.route).title)
         assertEquals("", resolveScreenHeader(route = BockRoute.Automations.route).title)
+    }
+
+    @Test
+    fun isBottomNavRoot_trueForTabRoutes() {
+        assertTrue(isBottomNavRoot(BockRoute.Home.route))
+        assertTrue(isBottomNavRoot(BockRoute.Search.route))
+        assertFalse(isBottomNavRoot("albums/artist/Beatles"))
     }
 
     @Test

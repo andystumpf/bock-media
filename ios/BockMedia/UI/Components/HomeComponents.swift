@@ -178,7 +178,7 @@ struct HomeSectionView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 16) {
                     ForEach(section.cards) { card in
-                        if section.kind == .topMixes || section.kind == .dailyMixes {
+                        if section.kind == .topMixes || section.kind == .exploreThemes || section.kind == .mood || section.kind == .dailyMixes {
                             HomeGenreMixTile(
                                 appState: appState,
                                 card: card,

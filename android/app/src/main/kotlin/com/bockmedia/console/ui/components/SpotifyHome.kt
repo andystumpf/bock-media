@@ -59,8 +59,8 @@ fun HomeHeader(
                 .fillMaxWidth()
                 .statusBarsPadding()
                 .padding(horizontal = 16.dp)
-                .padding(top = 8.dp, bottom = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+                .padding(bottom = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Row(
                 Modifier.fillMaxWidth(),
@@ -98,7 +98,7 @@ fun HomePillFilters(
             ) {
                 Text(
                     filter.label,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = if (isActive) FontWeight.Bold else FontWeight.Medium,
                     color = if (isActive) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
@@ -531,7 +531,7 @@ fun HomeGreeting(modifier: Modifier = Modifier) {
     }
     Text(
         greeting,
-        style = MaterialTheme.typography.titleLarge,
+        style = MaterialTheme.typography.titleMedium,
         fontWeight = FontWeight.Bold,
         color = MaterialTheme.colorScheme.onSurface,
         modifier = modifier,

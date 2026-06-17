@@ -223,10 +223,13 @@ struct ArtistItem: Codable, Identifiable {
     var artist: String = ""
     var track_count: Int = 0
     var album_count: Int = 0
+    var art_path: String?
 
     var id: String { artist }
     var name: String { artist }
     var tracks: Int { track_count }
+    var albums: Int { album_count }
+    var artPath: String? { art_path }
 }
 
 struct AlbumsResponse: Codable {
@@ -243,6 +246,7 @@ struct AlbumItem: Codable, Identifiable {
 
     var id: String { "\(album)-\(artist ?? "")" }
     var name: String { album }
+    var artPath: String? { art_path }
 }
 
 struct WatchFolder: Codable, Identifiable {

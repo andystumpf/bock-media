@@ -147,7 +147,7 @@ enum HomeTileRotation {
     private static func subtitle(for kind: HomeSectionKind, playlist: PlaylistSummary) -> String {
         switch kind {
         case .jumpBackIn: return "\(playlist.tracks) tracks · Suggested for you"
-        case .topMixes, .dailyMixes: return "Suggested mix"
+        case .topMixes, .exploreThemes, .mood, .dailyMixes: return "Suggested mix"
         case .radio: return "From your library"
         case .discover: return "\(playlist.tracks) tracks · Discover"
         case .recentPlaylists: return "\(playlist.tracks) tracks · Suggested for you"

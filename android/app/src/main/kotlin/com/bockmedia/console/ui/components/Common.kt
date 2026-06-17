@@ -48,13 +48,26 @@ private val SpotifyRowSelected = Color(0xFF3E3E3E)
 private val SpotifyMuted = Color(0xFFB3B3B3)
 
 @Composable
-fun TabScreenHeader(title: String, modifier: Modifier = Modifier) {
-    Text(
-        title,
-        style = MaterialTheme.typography.headlineSmall,
-        fontWeight = FontWeight.Bold,
-        modifier = modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 4.dp),
-    )
+fun TabScreenHeader(
+    title: String,
+    modifier: Modifier = Modifier,
+    trailing: @Composable (RowScope.() -> Unit)? = null,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .statusBarsPadding()
+            .padding(start = 16.dp, end = 8.dp, bottom = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            title,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.weight(1f),
+        )
+        trailing?.invoke(this)
+    }
 }
 
 /** Matches iOS `ProgressView().tint(BockColors.green)` — thin Spotify-green spinner. */

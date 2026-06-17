@@ -41,7 +41,10 @@ private fun formatAutomationDays(days: List<Int>): String {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AutomationScreen(repository: BockMediaRepository) {
+fun AutomationScreen(
+    repository: BockMediaRepository,
+    onAccountNavigate: (String) -> Unit = {},
+) {
     val scope = rememberCoroutineScope()
     var items by remember { mutableStateOf<List<AutomationItem>>(emptyList()) }
     var remoteOk by remember { mutableStateOf(false) }
@@ -66,6 +69,7 @@ fun AutomationScreen(repository: BockMediaRepository) {
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         floatingActionButton = {
             if (remoteOk) {
                 FloatingActionButton(onClick = { editItem = null; showSheet = true }) {
@@ -80,12 +84,14 @@ fun AutomationScreen(repository: BockMediaRepository) {
             modifier = Modifier.fillMaxSize().padding(padding),
         ) {
         Column(Modifier.fillMaxSize()) {
-            TabScreenHeader("Automations")
+            TabScreenHeader("Automations") {
+                AccountMenuButton(onAccountNavigate)
+            }
             if (!remoteOk) {
                 Text(
                     "Configure Alexa remote in Settings first.",
                     color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                 )
             }
             if (loading) {

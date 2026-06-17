@@ -6,16 +6,46 @@ final class HomeViewModel: ObservableObject {
     @Published var loading = false
     @Published var error: String?
     @Published var filter: HomeFilter = .all
+    @Published var offlineSection: HomeSection?
+
+    func bootstrap(repository: BockMediaRepository) async {
+        if let cached = HomeFeedCache.getIfFresh() {
+            feed = cached
+            loading = false
+            HomeLoadCoordinator.markLoaded()
+        } else if let snap = HomeCachePersistence.load() {
+            HomeFeedCache.put(snap.feed)
+            feed = snap.feed
+            loading = false
+            HomeLoadCoordinator.markLoaded()
+        }
+        if !HomeLoadCoordinator.shouldSkipReload() {
+            await load(repository: repository)
+        }
+        await loadOffline()
+    }
 
     func load(repository: BockMediaRepository) async {
-        loading = true
+        if feed == nil { loading = true }
         error = nil
         defer { loading = false }
-        do {
-            feed = await HomeFeedLoader.load(repository: repository)
-        } catch {
-            self.error = error.localizedDescription
+        let fresh = await HomeFeedLoader.load(repository: repository)
+        if !fresh.sections.isEmpty {
+            HomeFeedCache.put(fresh)
+            feed = fresh
+            HomeLoadCoordinator.markLoaded()
+            HomeCachePersistence.save(fresh)
+        } else if feed == nil {
+            let reachable: Bool
+            if case .success = await repository.testConnection() { reachable = true } else { reachable = false }
+            error = reachable
+                ? "Could not load your library. Pull down to refresh."
+                : "Can't reach your Bock Media server. Check connection in Settings."
         }
+    }
+
+    func loadOffline() async {
+        offlineSection = HomeFeedLoader.offlineSection(store: OfflineDownloadStore())
     }
 
     var jumpBackInSection: HomeSection? {
@@ -27,13 +57,10 @@ final class HomeViewModel: ObservableObject {
     }
 
     var filteredSections: [HomeSection] {
-        guard let feed else { return [] }
         if filter == .offline {
-            if let offline = HomeFeedLoader.offlineSection(store: OfflineDownloadStore()) {
-                return [offline]
-            }
-            return []
+            return offlineSection.map { [$0] } ?? []
         }
+        guard let feed else { return [] }
         return feed.sections.filter { section in
             switch filter {
             case .all:
@@ -42,7 +69,7 @@ final class HomeViewModel: ObservableObject {
             case .playlists:
                 return section.kind == .jumpBackIn || section.kind == .recentPlaylists || section.kind == .favorites
             case .mixes:
-                return section.kind == .topMixes || section.kind == .dailyMixes
+                return section.kind == .topMixes || section.kind == .exploreThemes || section.kind == .mood || section.kind == .dailyMixes
             case .radio:
                 return section.kind == .radio
             case .discover:
@@ -67,14 +94,26 @@ struct HomeView: View {
             VStack(alignment: .leading, spacing: 0) {
                 HomeHeaderView(filter: $viewModel.filter, accountRoute: $accountRoute)
 
-                if viewModel.loading && viewModel.feed == nil {
-                    ProgressView()
-                        .frame(maxWidth: .infinity)
-                        .padding(32)
-                } else if let error = viewModel.error {
-                    Text(error)
+                if !appState.remoteOk {
+                    Text("Alexa remote unavailable — playing locally when possible.")
+                        .font(.caption)
                         .foregroundStyle(.red)
                         .padding(.horizontal, 16)
+                        .padding(.bottom, 4)
+                }
+
+                if viewModel.loading && viewModel.feed == nil {
+                    LoadingBox()
+                        .padding(32)
+                } else if let error = viewModel.error, viewModel.feed == nil {
+                    VStack(spacing: 8) {
+                        Text(error)
+                            .foregroundStyle(.red)
+                        Button("Retry") {
+                            Task { await viewModel.load(repository: appState.repository) }
+                        }
+                    }
+                    .padding(.horizontal, 16)
                 } else if viewModel.filteredSections.isEmpty && !viewModel.showShortcuts {
                     emptyState
                 } else {
@@ -100,12 +139,23 @@ struct HomeView: View {
             .padding(.bottom, 24)
         }
         .refreshable {
-            await viewModel.load(repository: appState.repository)
+            await HomeLoadCoordinator.withLoadLock {
+                await viewModel.load(repository: appState.repository)
+                await viewModel.loadOffline()
+            }
             warmArtwork()
         }
         .task {
-            await viewModel.load(repository: appState.repository)
+            await viewModel.bootstrap(repository: appState.repository)
             warmArtwork()
+            if !DeviceCatalog.isFresh() {
+                Task { _ = await DeviceCatalog.refresh(repository: appState.repository, probe: false) }
+            }
+        }
+        .onChange(of: viewModel.filter) { _, newValue in
+            if newValue == .offline {
+                Task { await viewModel.loadOffline() }
+            }
         }
         .sheet(item: $actionCard) { card in
             HomeCardActionSheet(appState: appState, card: card) {

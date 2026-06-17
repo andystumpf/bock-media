@@ -71,6 +71,23 @@ final class AppState: ObservableObject {
     }
 
     func play(_ target: PlayTarget) {
+        if PhonePlayback.canPlayLocally(target: target, remoteOk: remoteOk) {
+            Task {
+                await LocalPlaybackController.shared.playTarget(
+                    repository: repository,
+                    target: target,
+                    shuffle: target.shuffleDefault
+                )
+                if LocalPlaybackController.shared.state.error == nil {
+                    PlaybackFocus.notePlayStarted(LocalPlaybackIds.localPhoneDeviceId, label: "This iPhone")
+                    playbackFocusGeneration = PlaybackFocus.generation
+                    toast = "Playing \"\(target.label)\" on this iPhone"
+                } else if let err = LocalPlaybackController.shared.state.error {
+                    toast = err
+                }
+            }
+            return
+        }
         pendingPlayTarget = target
     }
 

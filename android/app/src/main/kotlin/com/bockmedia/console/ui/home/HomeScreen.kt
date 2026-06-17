@@ -157,13 +157,15 @@ fun HomeScreen(
             warmArtwork(cached)
         } else {
             HomeCachePersistence.load(context)?.let { snap ->
-                HomeArtworkCache.restore(snap.cardMediaPaths, snap.playlistPaths)
-                prefetchHomeArt(snap.feed)
-                HomeFeedCache.put(snap.feed)
-                feed = snap.feed
-                loading = false
-                HomeLoadCoordinator.markLoaded()
-                warmArtwork(snap.feed)
+                if (snap.feed.hasCurrentHomeLayout()) {
+                    HomeArtworkCache.restore(snap.cardMediaPaths, snap.playlistPaths)
+                    prefetchHomeArt(snap.feed)
+                    HomeFeedCache.put(snap.feed)
+                    feed = snap.feed
+                    loading = false
+                    HomeLoadCoordinator.markLoaded()
+                    warmArtwork(snap.feed)
+                }
             }
         }
         if (HomeLoadCoordinator.shouldSkipReload()) {

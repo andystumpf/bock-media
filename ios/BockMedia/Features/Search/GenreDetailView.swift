@@ -96,7 +96,9 @@ struct GenreDetailView: View {
         .scrollContentBackground(.hidden)
         .navigationTitle(genreName)
         .overlay {
-            if loading { ProgressView() }
+            if loading {
+                LoadingBox(logoSize: 48)
+            }
         }
         .task(id: genreName) { await load() }
     }

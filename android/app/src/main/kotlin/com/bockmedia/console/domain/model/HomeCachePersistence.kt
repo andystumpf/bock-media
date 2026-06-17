@@ -17,6 +17,7 @@ import java.io.File
 object HomeCachePersistence {
     private const val FILE_NAME = "home_cache.json"
     private const val MAX_AGE_MS = 24 * 60 * 60 * 1000L
+    const val FEED_LAYOUT_VERSION = 2
 
     @Serializable
     private data class PlayTargetDto(
@@ -52,6 +53,7 @@ object HomeCachePersistence {
     @Serializable
     private data class SnapshotDto(
         val savedAtMs: Long,
+        val feedVersion: Int = 0,
         val sections: List<SectionDto>,
         val cardUrls: Map<String, String> = emptyMap(),
         val cardMediaPaths: Map<String, String> = emptyMap(),
@@ -76,6 +78,7 @@ object HomeCachePersistence {
             runCatching {
                 val dto = SnapshotDto(
                     savedAtMs = System.currentTimeMillis(),
+                    feedVersion = FEED_LAYOUT_VERSION,
                     sections = feed.sections.map { it.toDto() },
                     cardMediaPaths = cardMediaPaths,
                     playlistPaths = playlistPaths,
@@ -98,14 +101,17 @@ object HomeCachePersistence {
             if (!f.exists()) return@runCatching null
             val dto = bockJson.decodeFromString<SnapshotDto>(f.readText())
             if (System.currentTimeMillis() - dto.savedAtMs > MAX_AGE_MS) return@runCatching null
+            if (dto.feedVersion < FEED_LAYOUT_VERSION) return@runCatching null
             val sections = dto.sections.mapNotNull { it.toModel() }
             if (sections.isEmpty()) return@runCatching null
+            val feed = HomeFeed(sections)
+            if (!feed.hasCurrentHomeLayout()) return@runCatching null
             val cardPaths = dto.cardMediaPaths.ifEmpty {
                 dto.cardUrls.mapNotNull { (id, url) ->
                     ArtworkPaths.extractMediaPath(url)?.let { id to it }
                 }.toMap()
             }
-            Snapshot(HomeFeed(sections), cardPaths, dto.playlistPaths)
+            Snapshot(feed, cardPaths, dto.playlistPaths)
         }.getOrNull()
     }
 

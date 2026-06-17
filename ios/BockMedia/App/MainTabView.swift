@@ -189,10 +189,10 @@ struct MainTabView: View {
                         PlaylistDetailView(appState: appState, playlistId: id)
                     case .artists:
                         ArtistsView(appState: appState)
-                    case .albums:
-                        AlbumsView(appState: appState)
-                    case .songs:
-                        SongsView(appState: appState)
+                    case .albums(let artist):
+                        AlbumsView(appState: appState, artist: artist)
+                    case .songs(let artist, let album):
+                        SongsView(appState: appState, artist: artist, album: album)
                     }
                 }
                 .navigationDestination(for: SearchRoute.self) { route in

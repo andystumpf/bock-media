@@ -19,16 +19,22 @@ fun peekLibraryArtUrl(baseUrl: String?, item: LibraryItem): String? {
 }
 
 object LibraryArtPrefetch {
+    private const val MAX_PLAYLIST_PREFETCH = 32
+    private const val MAX_ART_URL_PREFETCH = 24
+
     suspend fun warm(context: Context, repository: BockMediaRepository, items: List<LibraryItem>) {
         if (items.isEmpty()) return
         val playlistIds = items.filter { it.kind == LibraryItemKind.Playlist }
             .mapNotNull { it.playlistId }
             .distinct()
-        runCatching { repository.prefetchPlaylistCoverPaths(playlistIds) }
+            .take(MAX_PLAYLIST_PREFETCH)
+        if (playlistIds.isNotEmpty()) {
+            runCatching { repository.prefetchPlaylistCoverPaths(playlistIds) }
+        }
         val base = repository.peekBaseUrl()
             ?: runCatching { repository.testConnection(); repository.peekBaseUrl() }.getOrNull()
             ?: return
-        val urls = items.mapNotNull { peekLibraryArtUrl(base, it) }.distinct()
+        val urls = items.mapNotNull { peekLibraryArtUrl(base, it) }.distinct().take(MAX_ART_URL_PREFETCH)
         if (urls.isNotEmpty()) ArtworkPrefetch.prefetchUrls(context, urls)
     }
 }

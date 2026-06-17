@@ -15,6 +15,7 @@ struct SearchView: View {
     @State private var browseArtworkEpoch = 0
     @State private var addToPlaylist: AddToPlaylistContext?
     @State private var searchTask: Task<Void, Never>?
+    @State private var favoritePaths: Set<String> = []
 
     private var trimmedQuery: String { query.trimmingCharacters(in: .whitespaces) }
     private var showResults: Bool { trimmedQuery.count >= 2 && results != nil }
@@ -28,7 +29,8 @@ struct SearchView: View {
                 .padding(.horizontal, 16)
 
             if loading && showResults {
-                ProgressView().padding()
+                LoadingBox(logoSize: 40)
+                    .padding()
             } else if showResults, let results {
                 searchResultsList(results)
             } else if showSuggestions {
@@ -38,13 +40,17 @@ struct SearchView: View {
             } else if showNewReleases {
                 newReleasesList
             } else if browseLoading && browseFeed == nil {
-                ProgressView().frame(maxWidth: .infinity).padding()
+                LoadingBox()
+                    .padding()
             } else {
                 browseScroll
             }
         }
         .task {
             recentQueries = SearchHistoryStore.queries()
+            if let favs = try? await appState.repository.favorites() {
+                favoritePaths = Set(favs.map(\.path))
+            }
             await loadBrowseFeed()
         }
         .sheet(item: $addToPlaylist) { ctx in
@@ -220,19 +226,42 @@ struct SearchView: View {
 
     private var suggestionsList: some View {
         List(suggestions) { suggestion in
-            Button {
-                handleSuggestionTap(suggestion)
-            } label: {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(suggestion.title).foregroundStyle(BockColors.onSurface)
-                    if let sub = suggestion.subtitle {
-                        Text(sub).font(.caption).foregroundStyle(BockColors.muted)
-                    }
+            if let route = suggestionRoute(suggestion) {
+                NavigationLink(value: route) {
+                    suggestionLabel(suggestion)
+                }
+                .simultaneousGesture(TapGesture().onEnded {
+                    SearchHistoryStore.add(suggestion.title)
+                    recentQueries = SearchHistoryStore.queries()
+                })
+            } else {
+                Button {
+                    handleSuggestionTap(suggestion)
+                } label: {
+                    suggestionLabel(suggestion)
                 }
             }
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
+    }
+
+    private func suggestionLabel(_ suggestion: SearchSuggestion) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(suggestion.title).foregroundStyle(BockColors.onSurface)
+            if let sub = suggestion.subtitle {
+                Text(sub).font(.caption).foregroundStyle(BockColors.muted)
+            }
+        }
+    }
+
+    private func suggestionRoute(_ suggestion: SearchSuggestion) -> SearchRoute? {
+        guard let target = SearchBrowseLoader.playTarget(for: suggestion) else { return nil }
+        switch target {
+        case .artist(let name): return .artist(name)
+        case .album(let name, let artist): return .album(name: name, artist: artist)
+        default: return nil
+        }
     }
 
     private var recentQueriesList: some View {
@@ -350,6 +379,8 @@ struct SearchView: View {
     }
 
     private func songRow(_ hit: SearchHit) -> some View {
+        let path = hit.path ?? ""
+        let starred = favoritePaths.contains(path)
         HStack {
             Button {
                 if let path = hit.path {
@@ -373,12 +404,35 @@ struct SearchView: View {
                 }
                 .buttonStyle(.plain)
                 Button {
+                    Task { await toggleFavorite(path: path, hit: hit, starred: starred) }
+                } label: {
+                    BockIcon(icon: .star, size: 22)
+                        .foregroundStyle(starred ? BockColors.green : BockColors.muted)
+                }
+                .buttonStyle(.plain)
+                Button {
                     appState.play(.song(path: path, title: hit.title ?? hit.name ?? path))
                 } label: {
                     BockIcon(icon: .playArrow, size: 22).foregroundStyle(BockColors.green)
                 }
                 .buttonStyle(.plain)
             }
+        }
+    }
+
+    private func toggleFavorite(path: String, hit: SearchHit, starred: Bool) async {
+        if starred {
+            try? await appState.repository.removeFavorite(path: path)
+        } else {
+            try? await appState.repository.addFavorite(
+                path: path,
+                title: hit.title ?? hit.name,
+                artist: hit.artist,
+                album: hit.album
+            )
+        }
+        if let favs = try? await appState.repository.favorites() {
+            favoritePaths = Set(favs.map(\.path))
         }
     }
 
@@ -431,14 +485,7 @@ struct SearchView: View {
 
     private func handleSuggestionTap(_ suggestion: SearchSuggestion) {
         if let target = SearchBrowseLoader.playTarget(for: suggestion) {
-            switch target {
-            case .artist(let name):
-                query = name
-            case .album(let name, _):
-                query = name
-            default:
-                appState.play(target)
-            }
+            appState.play(target)
         } else {
             query = suggestion.title
         }

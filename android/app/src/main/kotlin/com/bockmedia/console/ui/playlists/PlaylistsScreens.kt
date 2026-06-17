@@ -5,6 +5,8 @@ import com.bockmedia.console.ui.theme.BockGreen
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -280,12 +282,13 @@ fun PlaylistDetailScreen(
     var filter by remember { mutableStateOf("") }
     var sortBy by remember { mutableStateOf("title") }
     var sortOrder by remember { mutableStateOf("asc") }
-    var page by remember { mutableIntStateOf(1) }
     var loading by remember { mutableStateOf(true) }
+    var loadingMore by remember { mutableStateOf(false) }
     var refreshing by remember { mutableStateOf(false) }
     var loadError by remember { mutableStateOf<String?>(null) }
     var showRename by remember { mutableStateOf(false) }
-    val pageSize = 50
+    val listState = rememberLazyListState()
+    val pageSize = 100
     val playTarget = remember(name, playlistId) { PlayTarget.Playlist(playlistId, name) }
     val downloadStatus by OfflineDownloadManager.statuses.collectAsState()
     val collectionStatus = downloadStatus[playTarget.downloadId()]
@@ -294,9 +297,14 @@ fun PlaylistDetailScreen(
     val downloadFailed = collectionStatus?.state == DownloadState.Failed
     val downloadProgress = collectionStatus?.progress ?: 0f
 
-    suspend fun load() {
-        loading = tracks.isEmpty()
-        loadError = null
+    suspend fun loadPage(page: Int, append: Boolean) {
+        if (append) {
+            if (loadingMore) return
+            loadingMore = true
+        } else {
+            loading = tracks.isEmpty()
+            loadError = null
+        }
         runCatching {
             val d = repository.playlistDetail(
                 playlistId,
@@ -308,18 +316,43 @@ fun PlaylistDetailScreen(
             )
             name = d.name
             editName = d.name
-            tracks = d.tracks
             total = d.total.takeIf { it > 0 } ?: d.tracks.size
-        }.onFailure { loadError = httpErrorMessage(it, "Could not load playlist") }
+            tracks = if (append) {
+                val seen = tracks.mapNotNull { it.path }.toMutableSet()
+                tracks + d.tracks.filter { track ->
+                    val path = track.path
+                    path == null || seen.add(path)
+                }
+            } else {
+                d.tracks
+            }
+        }.onFailure {
+            if (!append) loadError = httpErrorMessage(it, "Could not load playlist")
+        }
         loading = false
+        loadingMore = false
         refreshing = false
     }
 
-    LaunchedEffect(playlistId, page, sortBy, sortOrder) { load() }
-    LaunchedEffect(filter) {
-        delay(400)
-        page = 1
-        load()
+    val reloadKey = remember(playlistId, sortBy, sortOrder, filter) {
+        listOf(playlistId, sortBy, sortOrder, filter)
+    }
+    LaunchedEffect(reloadKey) {
+        if (filter.isNotEmpty()) delay(400)
+        loadPage(page = 1, append = false)
+    }
+
+    LaunchedEffect(listState, tracks.size, total, loading, loadingMore, reloadKey) {
+        snapshotFlow {
+            val info = listState.layoutInfo
+            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
+            lastVisible to info.totalItemsCount
+        }.collect { (lastVisible, itemCount) ->
+            val hasMore = tracks.isNotEmpty() && tracks.size < total
+            if (!loading && !loadingMore && hasMore && itemCount > 0 && lastVisible >= itemCount - 5) {
+                loadPage(page = (tracks.size / pageSize) + 1, append = true)
+            }
+        }
     }
 
     if (showRename) {
@@ -332,7 +365,7 @@ fun PlaylistDetailScreen(
                     scope.launch {
                         repository.renamePlaylist(playlistId, editName.trim())
                         showRename = false
-                        load()
+                        loadPage(page = 1, append = false)
                     }
                 }) { Text("Save") }
             },
@@ -343,14 +376,14 @@ fun PlaylistDetailScreen(
     Column(Modifier.fillMaxSize()) {
         when {
             loading && tracks.isEmpty() -> LoadingBox(Modifier.weight(1f))
-            loadError != null && tracks.isEmpty() -> ErrorText(loadError!!) { scope.launch { load() } }
+            loadError != null && tracks.isEmpty() -> ErrorText(loadError!!) { scope.launch { loadPage(1, append = false) } }
             else -> {
             BockPullRefresh(
                 isRefreshing = refreshing,
-                onRefresh = { refreshing = true; scope.launch { load() } },
+                onRefresh = { refreshing = true; scope.launch { loadPage(1, append = false) } },
                 modifier = Modifier.weight(1f),
             ) {
-                BockLazyColumn(Modifier.fillMaxSize()) {
+                BockLazyColumn(Modifier.fillMaxSize(), state = listState) {
                     item {
                         SpotifyPlaylistHeader(
                             repository = repository,
@@ -381,17 +414,17 @@ fun PlaylistDetailScreen(
                             SearchField(filter, { filter = it }, "Filter tracks")
                             Spacer(Modifier.height(8.dp))
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                SortChip("Title", sortBy == "title") { sortBy = "title"; page = 1 }
-                                SortChip("Artist", sortBy == "artist") { sortBy = "artist"; page = 1 }
-                                SortChip("Album", sortBy == "album") { sortBy = "album"; page = 1 }
-                                SortChip("↑", sortOrder == "asc") { sortOrder = "asc"; page = 1 }
-                                SortChip("↓", sortOrder == "desc") { sortOrder = "desc"; page = 1 }
+                                SortChip("Title", sortBy == "title") { sortBy = "title" }
+                                SortChip("Artist", sortBy == "artist") { sortBy = "artist" }
+                                SortChip("Album", sortBy == "album") { sortBy = "album" }
+                                SortChip("↑", sortOrder == "asc") { sortOrder = "asc" }
+                                SortChip("↓", sortOrder == "desc") { sortOrder = "desc" }
                             }
                         }
                     }
                     items(tracks.size, key = { tracks[it].path ?: "t-$it-${tracks[it].title}" }) { idx ->
                         val t = tracks[idx]
-                        val trackNum = (page - 1) * pageSize + idx + 1
+                        val trackNum = idx + 1
                         SpotifyTrackRow(
                             trackNum = trackNum,
                             track = t,
@@ -403,14 +436,23 @@ fun PlaylistDetailScreen(
                             onRemove = {
                                 scope.launch {
                                     t.path?.let { repository.removePlaylistTrack(playlistId, it) }
-                                    load()
+                                    loadPage(page = 1, append = false)
                                 }
                             },
                         )
                     }
+                    if (loadingMore) {
+                        item(key = "loading-more") {
+                            Box(
+                                Modifier.fillMaxWidth().padding(16.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                CircularProgressIndicator(Modifier.size(24.dp))
+                            }
+                        }
+                    }
                 }
             }
-            PaginationBar(page, ((total + pageSize - 1) / pageSize).coerceAtLeast(1)) { page = it }
             }
         }
     }

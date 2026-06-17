@@ -5,7 +5,7 @@ enum LibraryRoute: Hashable {
     case playlists
     case playlistDetail(String)
     case artists
-    case albums
-    case songs
+    case albums(artist: String?)
+    case songs(artist: String?, album: String?)
     case managePlaylists
 }

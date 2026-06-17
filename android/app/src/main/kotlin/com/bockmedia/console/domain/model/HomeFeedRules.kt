@@ -89,6 +89,12 @@ object HomeFeedRules {
     fun matchesKeywords(text: String, keywords: List<String>): Boolean =
         keywords.any { keyword -> text.contains(keyword, ignoreCase = true) }
 
+    fun playlistSearchText(playlist: PlaylistSummary): String =
+        listOfNotNull(playlist.name, playlist.sourceName, playlist.source).joinToString(" ")
+
+    fun playlistMatchesTheme(playlist: PlaylistSummary, theme: HomeTheme): Boolean =
+        playlistThemeScore(playlist, theme) > 0
+
     fun playlistMatchesTheme(name: String, theme: HomeTheme): Boolean =
         matchesKeywords(name, theme.playlistKeywords)
 
@@ -113,6 +119,9 @@ object HomeFeedRules {
     fun matchingLibraryGenre(theme: HomeTheme, libraryGenres: List<GenreItem>): String? =
         libraryGenres.firstOrNull { genreMatchesTheme(it.name, theme) }?.name
 
+    fun playlistThemeScore(playlist: PlaylistSummary, theme: HomeTheme): Int =
+        playlistThemeScore(playlistSearchText(playlist), theme)
+
     fun playlistThemeScore(name: String, theme: HomeTheme): Int {
         val haystack = name.lowercase()
         var score = 0
@@ -125,11 +134,30 @@ object HomeFeedRules {
         return score
     }
 
+    fun playlistMatchesMoodSection(playlist: PlaylistSummary, theme: HomeTheme): Boolean =
+        matchesKeywords(playlistSearchText(playlist), theme.playlistKeywords)
+
+    fun playlistMatchesMoodSection(name: String, theme: HomeTheme): Boolean =
+        matchesKeywords(name, theme.playlistKeywords)
+
+    fun playlistsForMoodSection(all: List<PlaylistSummary>, theme: HomeTheme): List<PlaylistSummary> =
+        all
+            .filter { it.tracks > 0 && playlistMatchesMoodSection(it, theme) }
+            .sortedWith(
+                compareByDescending<PlaylistSummary> { playlistKeywordScore(it, theme) }
+                    .thenBy { it.name.lowercase() },
+            )
+
+    private fun playlistKeywordScore(playlist: PlaylistSummary, theme: HomeTheme): Int {
+        val haystack = playlistSearchText(playlist).lowercase()
+        return theme.playlistKeywords.count { haystack.contains(it.lowercase()) }
+    }
+
     fun playlistsForTheme(all: List<PlaylistSummary>, theme: HomeTheme): List<PlaylistSummary> =
         all
-            .filter { it.tracks > 0 && playlistThemeScore(it.name, theme) > 0 }
+            .filter { it.tracks > 0 && playlistThemeScore(it, theme) > 0 }
             .sortedWith(
-                compareByDescending<PlaylistSummary> { playlistThemeScore(it.name, theme) }
+                compareByDescending<PlaylistSummary> { playlistThemeScore(it, theme) }
                     .thenByDescending { it.tracks },
             )
 

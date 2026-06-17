@@ -53,6 +53,9 @@ data class HomeFeed(
     val sections: List<HomeSection>,
 )
 
+fun HomeFeed.hasCurrentHomeLayout(): Boolean =
+    sections.count { it.kind == HomeSectionKind.Mood } >= HomeMoodSections.all().size
+
 object HomeFeedLoader {
     private const val HISTORY_LIMIT = 150
     private const val PLAYLIST_LIMIT = 500

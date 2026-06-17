@@ -12,7 +12,9 @@ object HomeFeedLimits {
     const val JUMP_BACK_IN = 24
     const val FAVORITES = 16
     const val TOP_MIXES = 16
-    const val MOOD_SECTION_CARDS = 12
+    const val MOOD_SECTION_MIN = 8
+    /** Mood rows include every keyword-matching playlist; cap only guards runaway libraries. */
+    const val MOOD_SECTION_CARDS = 500
     const val EXPLORE_THEMES = 18
     const val LIBRARY_GENRE_EXTRAS = 6
     const val DAILY_MIXES = 12
@@ -51,6 +53,17 @@ private class HomeFeedRegistry {
         usedCardIds.add(card.id)
         card.playlistId?.let { usedPlaylistIds.add(it) }
         if (card.playlistId != null) usedPlaylistNameKeys.add(card.title.lowercase())
+    }
+
+    fun registerMoodCard(card: HomeCard) {
+        usedCardIds.add(card.id)
+    }
+
+    fun reserveMoodPlaylists(cards: List<HomeCard>) {
+        for (card in cards) {
+            card.playlistId?.let { usedPlaylistIds.add(it) }
+            if (card.playlistId != null) usedPlaylistNameKeys.add(card.title.lowercase())
+        }
     }
 
     fun hasCard(id: String) = id in usedCardIds
@@ -129,6 +142,19 @@ object HomeFeedComposer {
             }
             return registry.claimArtPath(HomeFeedRules.nextDistinctArtPath(input.history, registry.usedArtPaths))
         }
+
+        val moodSections = HomeMoodSections.all().mapNotNull { mood ->
+            val cards = buildMoodSectionCards(
+                mood = mood,
+                input = input,
+                registry = registry,
+                playlistById = playlistById,
+                topArtists = topArtists,
+                resolveMixArt = ::resolveMixArt,
+            )
+            section("mood-${mood.id}", mood.title, HomeSectionKind.Mood, cards)
+        }
+        registry.reserveMoodPlaylists(moodSections.flatMap { it.cards })
 
         val jumpBackIn = buildList {
             for (card in dashboardJumpCards(input.dashboard, playlistByName, artByPlaylist)) {
@@ -279,20 +305,6 @@ object HomeFeedComposer {
             resolveMixArt = ::resolveMixArt,
             playlistCard = ::playlistCard,
         )
-
-        val moodSections = HomeMoodSections.all().mapNotNull { mood ->
-            val cards = buildMoodSectionCards(
-                mood = mood,
-                input = input,
-                registry = registry,
-                playlistById = playlistById,
-                topArtists = topArtists,
-                shuffledGeneric = shuffledGeneric,
-                resolveMixArt = ::resolveMixArt,
-                playlistCard = ::playlistCard,
-            )
-            section("mood-${mood.id}", mood.title, HomeSectionKind.Mood, cards)
-        }
 
         val recentPlaylists = buildList {
             for (name in recentPlaylistNames) {
@@ -638,15 +650,7 @@ object HomeFeedComposer {
         registry: HomeFeedRegistry,
         playlistById: Map<String, PlaylistSummary>,
         topArtists: List<CountRow>,
-        shuffledGeneric: List<PlaylistSummary>,
         resolveMixArt: (genre: String, artist: String?, index: Int) -> String?,
-        playlistCard: (
-            pl: PlaylistSummary,
-            artPath: String?,
-            kind: HomeSectionKind,
-            subtitle: String?,
-            claim: Boolean,
-        ) -> HomeCard?,
     ): List<HomeCard> {
         val theme = mood.theme
         val kind = HomeSectionKind.Mood
@@ -656,53 +660,34 @@ object HomeFeedComposer {
         fun addCard(card: HomeCard?) {
             if (card == null || registry.hasCard(card.id)) return
             if (cards.any { it.id == card.id }) return
-            registry.registerCard(card)
+            registry.registerMoodCard(card)
             cards.add(card)
         }
 
-        for (pl in HomeFeedRules.playlistsForTheme(input.allPlaylists, theme)) {
-            if (cards.size >= limit) break
-            addCard(playlistCard(pl, null, kind, mood.theme.subtitle, true))
+        fun moodPlaylistCard(pl: PlaylistSummary, subtitle: String): HomeCard? {
+            if (pl.tracks <= 0) return null
+            val cardId = "mood-${mood.id}-pl-${pl.id}"
+            if (registry.hasCard(cardId)) return null
+            return HomeCard(
+                id = cardId,
+                title = pl.name,
+                subtitle = subtitle,
+                artPath = null,
+                playlistId = pl.id,
+                playTarget = PlayTarget.Playlist(pl.id, pl.name),
+                kind = kind,
+            )
         }
 
-        for (sp in input.smartPlaylists.filter { it.enabled && HomeFeedRules.playlistMatchesTheme(it.name, theme) }) {
+        for (pl in HomeFeedRules.playlistsForMoodSection(input.allPlaylists, theme)) {
+            if (cards.size >= limit) break
+            addCard(moodPlaylistCard(pl, mood.theme.subtitle))
+        }
+
+        for (sp in input.smartPlaylists.filter { it.enabled && HomeFeedRules.playlistMatchesMoodSection(it.name, theme) }) {
             if (cards.size >= limit) break
             val pl = sp.playlistId?.let { playlistById[it] } ?: continue
-            addCard(playlistCard(pl, null, kind, mood.theme.subtitle, true))
-        }
-
-        if (cards.size < 4) {
-            val seedArtist = HomeFeedRules.topArtistForTheme(input.history, theme)
-                ?: topArtists.firstOrNull()?.name
-            if (seedArtist != null) {
-                addCard(
-                    HomeCard(
-                        id = "mood-${mood.id}-artist",
-                        title = mood.theme.title,
-                        subtitle = mood.theme.subtitle,
-                        artPath = resolveMixArt(mood.title, seedArtist, mood.id.hashCode()),
-                        playTarget = PlayTarget.Artist(seedArtist),
-                        kind = kind,
-                    ),
-                )
-            }
-        }
-
-        val moodSeed = input.shuffleSeed + mood.id.hashCode()
-        val scoredPool = HomeFeedRules.shuffledBrowsablePlaylists(input.allPlaylists, moodSeed)
-            .sortedWith(
-                compareByDescending<PlaylistSummary> { HomeFeedRules.playlistThemeScore(it.name, theme) }
-                    .thenByDescending { it.tracks },
-            )
-        for (pl in scoredPool + shuffledGeneric) {
-            if (cards.size >= limit) break
-            if (pl.tracks <= 0 || !registry.canUsePlaylist(pl)) continue
-            val subtitle = if (HomeFeedRules.playlistThemeScore(pl.name, theme) > 0) {
-                mood.theme.subtitle
-            } else {
-                "${pl.tracks} tracks · ${mood.title}"
-            }
-            addCard(playlistCard(pl, null, kind, subtitle, true))
+            addCard(moodPlaylistCard(pl, mood.theme.subtitle))
         }
 
         if (cards.isEmpty()) {

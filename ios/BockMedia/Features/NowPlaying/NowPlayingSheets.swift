@@ -129,24 +129,36 @@ struct StreamHistorySheet: View {
     let onDismiss: () -> Void
 
     @State private var items: [StreamHistoryItem] = []
+    @State private var page = 1
+    @State private var total = 0
     @State private var loading = true
+    @State private var loadingMore = false
+    private let pageSize = 25
 
     var body: some View {
         NavigationStack {
             Group {
-                if loading {
+                if loading && items.isEmpty {
                     ProgressView().tint(BockColors.green)
                 } else if items.isEmpty {
                     ContentUnavailableView {
                         Label("No history", icon: .history, size: 40)
                     }
                 } else {
-                    List(Array(items.enumerated()), id: \.offset) { _, item in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(item.track ?? "Track").foregroundStyle(BockColors.onSurface)
-                            Text([item.artist, item.device].compactMap { $0 }.joined(separator: " · "))
-                                .font(.caption)
-                                .foregroundStyle(BockColors.muted)
+                    List {
+                        ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(item.track ?? "Track").foregroundStyle(BockColors.onSurface)
+                                Text([item.artist, item.device].compactMap { $0 }.joined(separator: " · "))
+                                    .font(.caption)
+                                    .foregroundStyle(BockColors.muted)
+                            }
+                        }
+                        if loadingMore {
+                            HStack { Spacer(); ProgressView(); Spacer() }
+                        } else if items.count < total {
+                            Color.clear.frame(height: 1)
+                                .onAppear { Task { await loadMore() } }
                         }
                     }
                 }
@@ -156,12 +168,33 @@ struct StreamHistorySheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Close", action: onDismiss) }
             }
-            .task {
-                loading = true
-                defer { loading = false }
-                items = (try? await appState.repository.streamHistory(limit: 50))?.items ?? []
-            }
+            .task { await reload() }
         }
         .presentationDetents([.medium, .large])
+    }
+
+    private func reload() async {
+        page = 1
+        loading = true
+        defer { loading = false }
+        if let response = try? await appState.repository.streamHistory(page: 1, limit: pageSize) {
+            items = response.items
+            total = response.total
+        } else {
+            items = []
+            total = 0
+        }
+    }
+
+    private func loadMore() async {
+        guard !loadingMore, items.count < total else { return }
+        loadingMore = true
+        defer { loadingMore = false }
+        let next = page + 1
+        if let response = try? await appState.repository.streamHistory(page: next, limit: pageSize) {
+            items.append(contentsOf: response.items)
+            page = next
+            total = response.total
+        }
     }
 }

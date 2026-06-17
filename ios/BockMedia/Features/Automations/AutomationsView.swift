@@ -20,7 +20,8 @@ struct AutomationsView: View {
                         .padding(.bottom, 8)
                 }
                 if loading {
-                    ProgressView().padding()
+                    LoadingBox(logoSize: 48)
+                        .padding()
                 } else if items.isEmpty {
                     ContentUnavailableView {
                         Label("No automations", icon: .schedule, size: 40)

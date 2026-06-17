@@ -96,7 +96,9 @@ final class BockMediaRepository: ObservableObject {
 
     func search(q: String) async throws -> SearchResponse {
         try await ensureAPI()
-        return try await api.search(q: q)
+        var response = try await api.search(q: q)
+        response.songs = SearchSongFilter.filter(query: q, songs: response.songs)
+        return response
     }
 
     func favorites() async throws -> [FavoriteItem] {
@@ -528,6 +530,33 @@ final class BockMediaRepository: ObservableObject {
     func devices() async throws -> [DeviceItem] {
         try await ensureAPI()
         return try await api.devices()
+    }
+
+    func resolveLibraryArtUrl(for item: LibraryItem) async -> URL? {
+        if let path = item.artPath, let str = await artworkURL(for: path), let url = URL(string: str) {
+            return url
+        }
+        if let playlistId = item.playlistId,
+           let path = HomeArtworkCache.playlistPath(id: playlistId),
+           let str = await artworkURL(for: path),
+           let url = URL(string: str) {
+            return url
+        }
+        switch item.playTarget {
+        case .artist(let name):
+            if let path = try? await songs(page: 1, limit: 8, search: name, artist: name).items.first?.path,
+               let str = await artworkURL(for: path) {
+                return URL(string: str)
+            }
+        case .album(let name, let artist):
+            if let path = try? await songs(page: 1, limit: 1, search: name, artist: artist, album: name).items.first?.path,
+               let str = await artworkURL(for: path) {
+                return URL(string: str)
+            }
+        default:
+            break
+        }
+        return nil
     }
 }
 

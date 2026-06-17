@@ -66,6 +66,97 @@ enum HomeFeedRules {
         return history.first { $0.artist?.caseInsensitiveCompare(top) == .orderedSame }?.artist
     }
 
+    static func matchesKeywords(_ text: String, keywords: [String]) -> Bool {
+        keywords.contains { text.localizedCaseInsensitiveContains($0) }
+    }
+
+    static func playlistSearchText(_ playlist: PlaylistSummary) -> String {
+        [playlist.name, playlist.sourceName, playlist.source].compactMap { $0 }.joined(separator: " ")
+    }
+
+    static func playlistMatchesTheme(_ playlist: PlaylistSummary, theme: HomeTheme) -> Bool {
+        playlistThemeScore(playlist, theme: theme) > 0
+    }
+
+    static func playlistMatchesTheme(_ name: String, theme: HomeTheme) -> Bool {
+        matchesKeywords(name, keywords: theme.playlistKeywords)
+    }
+
+    static func genreMatchesTheme(_ name: String, theme: HomeTheme) -> Bool {
+        matchesKeywords(name, keywords: theme.genreKeywords)
+    }
+
+    static func historyMatchesTheme(_ row: StreamHistoryItem, theme: HomeTheme) -> Bool {
+        let haystack = [row.sourceLabel, row.playlist, row.album, row.artist].compactMap { $0 }
+        let keywords = theme.playlistKeywords + theme.genreKeywords
+        return haystack.contains { matchesKeywords($0, keywords: keywords) }
+    }
+
+    static func topArtistForTheme(_ history: [StreamHistoryItem], theme: HomeTheme) -> String? {
+        var counts: [String: Int] = [:]
+        for row in history {
+            guard let artist = row.artist, historyMatchesTheme(row, theme: theme) else { continue }
+            counts[artist.lowercased(), default: 0] += 1
+        }
+        guard let top = counts.max(by: { $0.value < $1.value })?.key else { return nil }
+        return history.first { $0.artist?.caseInsensitiveCompare(top) == .orderedSame }?.artist
+    }
+
+    static func matchingLibraryGenre(_ theme: HomeTheme, libraryGenres: [GenreItem]) -> String? {
+        libraryGenres.first { genreMatchesTheme($0.name, theme: theme) }?.name
+    }
+
+    static func playlistThemeScore(_ playlist: PlaylistSummary, theme: HomeTheme) -> Int {
+        playlistThemeScore(playlistSearchText(playlist), theme: theme)
+    }
+
+    static func playlistThemeScore(_ name: String, theme: HomeTheme) -> Int {
+        let haystack = name.lowercased()
+        var score = 0
+        for keyword in theme.playlistKeywords where haystack.contains(keyword.lowercased()) {
+            score += 10
+        }
+        for keyword in theme.genreKeywords where haystack.contains(keyword.lowercased()) {
+            score += 4
+        }
+        return score
+    }
+
+    static func playlistMatchesMoodSection(_ playlist: PlaylistSummary, theme: HomeTheme) -> Bool {
+        matchesKeywords(playlistSearchText(playlist), keywords: theme.playlistKeywords)
+    }
+
+    static func playlistMatchesMoodSection(_ name: String, theme: HomeTheme) -> Bool {
+        matchesKeywords(name, keywords: theme.playlistKeywords)
+    }
+
+    static func playlistsForMoodSection(_ all: [PlaylistSummary], theme: HomeTheme) -> [PlaylistSummary] {
+        all
+            .filter { $0.tracks > 0 && playlistMatchesMoodSection($0, theme: theme) }
+            .sorted {
+                let ls = playlistKeywordScore($0, theme: theme)
+                let rs = playlistKeywordScore($1, theme: theme)
+                if ls != rs { return ls > rs }
+                return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+            }
+    }
+
+    private static func playlistKeywordScore(_ playlist: PlaylistSummary, theme: HomeTheme) -> Int {
+        let haystack = playlistSearchText(playlist).lowercased()
+        return theme.playlistKeywords.filter { haystack.contains($0.lowercased()) }.count
+    }
+
+    static func playlistsForTheme(_ all: [PlaylistSummary], theme: HomeTheme) -> [PlaylistSummary] {
+        all
+            .filter { $0.tracks > 0 && playlistThemeScore($0, theme: theme) > 0 }
+            .sorted {
+                let ls = playlistThemeScore($0, theme: theme)
+                let rs = playlistThemeScore($1, theme: theme)
+                if ls != rs { return ls > rs }
+                return $0.tracks > $1.tracks
+            }
+    }
+
     static func isSpecialHomePlaylistName(_ name: String) -> Bool {
         isDailyMixName(name) || isDiscoverName(name) || isGenreMixPlaylistName(name) || isExplicitRadioPlaylistName(name)
     }

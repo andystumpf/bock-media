@@ -36,9 +36,9 @@ data class LibraryItem(
 )
 
 object LibraryLoader {
-    private const val BROWSE_PLAYLIST_LIMIT = 80
-    private const val BROWSE_ARTIST_LIMIT = 60
-    private const val BROWSE_ALBUM_LIMIT = 60
+    private const val BROWSE_PLAYLIST_LIMIT = 500
+    private const val BROWSE_ARTIST_LIMIT = 100
+    private const val BROWSE_ALBUM_LIMIT = 100
     private const val SEARCH_LIMIT = 100
 
     /** Load all library buckets in parallel — filter client-side for instant tab switches. */
@@ -47,11 +47,9 @@ object LibraryLoader {
         context: Context,
     ): LibraryData = coroutineScope {
         val playlistsDef = async {
-            val items = runCatching {
+            runCatching {
                 repository.playlists(search = "", limit = BROWSE_PLAYLIST_LIMIT).items
-            }.getOrDefault(emptyList())
-            runCatching { repository.prefetchPlaylistCoverPaths(items.map { it.id }) }
-            items.map { pl ->
+            }.getOrDefault(emptyList()).map { pl ->
                 LibraryItem(
                     id = "pl-${pl.id}",
                     title = pl.name,
@@ -69,7 +67,7 @@ object LibraryLoader {
             }.getOrDefault(emptyList()).map { artist ->
                 artist.artPath?.let { repository.cacheArtistArtPath(artist.name, it) }
                 LibraryItem(
-                    id = "ar-${artist.name.hashCode()}",
+                    id = "ar-${artist.name}",
                     title = artist.name,
                     subtitle = "${artist.albums} albums · ${artist.tracks} songs",
                     kind = LibraryItemKind.Artist,
@@ -85,7 +83,7 @@ object LibraryLoader {
             }.getOrDefault(emptyList()).map { album ->
                 album.artPath?.let { repository.cacheArtPath(album.name, album.artist, it) }
                 LibraryItem(
-                    id = "al-${album.name.hashCode()}-${album.artist.orEmpty().hashCode()}",
+                    id = "al-${album.name}\u0000${album.artist.orEmpty()}",
                     title = album.name,
                     subtitle = listOfNotNull(album.artist, album.year?.toString()).joinToString(" · "),
                     kind = LibraryItemKind.Album,
@@ -154,7 +152,7 @@ object LibraryLoader {
                     repository.artists(page = 1, search = q, limit = SEARCH_LIMIT).items
                 }.getOrDefault(emptyList()).map { artist ->
                     LibraryItem(
-                        id = "ar-${artist.name.hashCode()}",
+                        id = "ar-${artist.name}",
                         title = artist.name,
                         subtitle = "${artist.albums} albums · ${artist.tracks} songs",
                         kind = LibraryItemKind.Artist,
@@ -169,7 +167,7 @@ object LibraryLoader {
                     repository.albums(page = 1, search = q, limit = SEARCH_LIMIT).items
                 }.getOrDefault(emptyList()).map { album ->
                     LibraryItem(
-                        id = "al-${album.name.hashCode()}-${album.artist.orEmpty().hashCode()}",
+                        id = "al-${album.name}\u0000${album.artist.orEmpty()}",
                         title = album.name,
                         subtitle = listOfNotNull(album.artist, album.year?.toString()).joinToString(" · "),
                         kind = LibraryItemKind.Album,
