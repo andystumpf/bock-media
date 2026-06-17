@@ -23,6 +23,8 @@ enum class HomeSectionKind {
     JumpBackIn,
     Favorites,
     TopMixes,
+    ExploreThemes,
+    Mood,
     DailyMixes,
     RecentPlaylists,
     Radio,
@@ -67,6 +69,7 @@ object HomeFeedLoader {
         val smartDef = async { runCatching { repository.smartPlaylists() }.getOrNull() }
         val favoritesDef = async { runCatching { repository.favorites() }.getOrNull().orEmpty() }
         val dashboardDef = async { runCatching { repository.dashboardQuick() }.getOrNull() }
+        val genresDef = async { runCatching { repository.genres(limit = 40) }.getOrNull() }
 
         val history = historyDef.await()?.items.orEmpty()
         val analytics = analyticsDef.await()
@@ -74,6 +77,7 @@ object HomeFeedLoader {
         val smartPlaylists = smartDef.await()?.items.orEmpty()
         val dashboard = dashboardDef.await()
         val favorites = dashboard?.favorites?.takeIf { it.isNotEmpty() } ?: favoritesDef.await()
+        val libraryGenres = genresDef.await()?.items.orEmpty()
 
         val shuffleSeed = LocalDate.now().dayOfYear.toLong()
         val input = HomeFeedInput(
@@ -83,6 +87,7 @@ object HomeFeedLoader {
             smartPlaylists = smartPlaylists,
             favorites = favorites,
             dashboard = dashboard,
+            libraryGenres = libraryGenres,
             shuffleSeed = shuffleSeed,
         )
         val composed = HomeFeedComposer.compose(input)
@@ -94,7 +99,10 @@ fun HomeFilter.matches(kind: HomeSectionKind): Boolean = when (this) {
     HomeFilter.All -> kind != HomeSectionKind.Offline
     HomeFilter.Offline -> false
     HomeFilter.Playlists -> kind == HomeSectionKind.JumpBackIn || kind == HomeSectionKind.RecentPlaylists || kind == HomeSectionKind.Favorites
-    HomeFilter.Mixes -> kind == HomeSectionKind.TopMixes || kind == HomeSectionKind.DailyMixes
+    HomeFilter.Mixes -> kind == HomeSectionKind.TopMixes ||
+        kind == HomeSectionKind.ExploreThemes ||
+        kind == HomeSectionKind.Mood ||
+        kind == HomeSectionKind.DailyMixes
     HomeFilter.Radio -> kind == HomeSectionKind.Radio
     HomeFilter.Discover -> kind == HomeSectionKind.Discover
 }

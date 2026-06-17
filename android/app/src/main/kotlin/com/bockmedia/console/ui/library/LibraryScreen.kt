@@ -50,7 +50,8 @@ fun LibraryScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var items by remember { mutableStateOf<List<LibraryItem>>(emptyList()) }
+    var libraryData by remember { mutableStateOf<LibraryData?>(null) }
+    var searchItems by remember { mutableStateOf<List<LibraryItem>?>(null) }
     var loading by remember { mutableStateOf(true) }
     var refreshing by remember { mutableStateOf(false) }
     var filter by rememberSaveable { mutableStateOf(LibraryFilter.All) }
@@ -58,42 +59,69 @@ fun LibraryScreen(
     var sort by rememberSaveable { mutableStateOf(LibrarySort.Recents) }
     var search by remember { mutableStateOf("") }
 
-    suspend fun load() {
-        LibraryCache.getIfFresh(filter, search)?.let { fresh ->
-            items = fresh
-            loading = false
-            refreshing = false
-            return
-        }
-        if (items.isEmpty()) loading = true
+    val displayItems = remember(libraryData, searchItems, filter, search) {
+        if (search.isNotBlank()) searchItems.orEmpty()
+        else libraryData?.forFilter(filter).orEmpty()
+    }
+
+    suspend fun prefetchArt(items: List<LibraryItem>) {
+        LibraryArtPrefetch.warm(context, repository, items)
+    }
+
+    suspend fun refreshFromNetwork() {
         runCatching {
-            val fresh = LibraryLoader.load(repository, context, filter, search)
-            items = fresh
-            LibraryCache.put(filter, search, fresh)
+            val fresh = LibraryLoader.loadBuckets(repository, context)
+            libraryData = fresh
+            LibrarySessionCache.put(fresh)
+            LibraryCachePersistence.save(context, fresh)
+            prefetchArt(fresh.forFilter(filter))
         }
         loading = false
         refreshing = false
     }
 
-    LaunchedEffect(filter, search) {
-        if (search.isNotBlank()) delay(300)
-        // Paint cached items for this filter/search instantly; otherwise show a spinner
-        // (never leave the previous filter's items on screen while the new set loads).
-        val seeded = LibraryCache.peek(filter, search)
-        if (seeded != null) {
-            items = seeded
+    suspend fun bootstrapLibrary() {
+        LibrarySessionCache.peek()?.let { cached ->
+            libraryData = cached
             loading = false
-        } else {
-            items = emptyList()
-            loading = true
+            prefetchArt(cached.forFilter(filter))
+        } ?: LibraryCachePersistence.load(context)?.let { disk ->
+            libraryData = disk
+            LibrarySessionCache.put(disk)
+            loading = false
+            prefetchArt(disk.forFilter(filter))
         }
-        load()
+        if (LibrarySessionCache.getIfFresh() == null) {
+            if (libraryData == null) loading = true
+            refreshFromNetwork()
+        }
     }
 
-    val sorted = remember(items, sort) {
+    LaunchedEffect(Unit) {
+        bootstrapLibrary()
+    }
+
+    LaunchedEffect(filter) {
+        libraryData?.let { prefetchArt(it.forFilter(filter)) }
+    }
+
+    LaunchedEffect(filter, search) {
+        if (search.isBlank()) {
+            searchItems = null
+            return@LaunchedEffect
+        }
+        delay(300)
+        searchItems = null
+        runCatching {
+            searchItems = LibraryLoader.search(repository, context, filter, search)
+            prefetchArt(searchItems.orEmpty())
+        }
+    }
+
+    val sorted = remember(displayItems, sort) {
         when (sort) {
-            LibrarySort.Name -> items.sortedBy { it.title.lowercase() }
-            LibrarySort.Recents -> items.sortedWith(
+            LibrarySort.Name -> displayItems.sortedBy { it.title.lowercase() }
+            LibrarySort.Recents -> displayItems.sortedWith(
                 compareByDescending<LibraryItem> { it.sortDate }.thenBy { it.title.lowercase() },
             )
         }
@@ -101,7 +129,11 @@ fun LibraryScreen(
 
     BockPullRefresh(
         isRefreshing = refreshing,
-        onRefresh = { refreshing = true; LibraryCache.invalidate(); scope.launch { load() } },
+        onRefresh = {
+            refreshing = true
+            LibrarySessionCache.invalidate()
+            scope.launch { refreshFromNetwork() }
+        },
         modifier = Modifier.fillMaxSize(),
     ) {
         Column(Modifier.fillMaxSize()) {
@@ -129,7 +161,7 @@ fun LibraryScreen(
                 }
             }
             when {
-                loading && items.isEmpty() -> LoadingBox(Modifier.weight(1f))
+                loading && displayItems.isEmpty() -> LoadingBox(Modifier.weight(1f))
                 sorted.isEmpty() -> Box(
                     Modifier.weight(1f).fillMaxWidth().padding(24.dp),
                     contentAlignment = Alignment.Center,
@@ -392,20 +424,30 @@ private fun LibraryItemArt(
     shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(6.dp),
     fallbackFontSize: androidx.compose.ui.unit.TextUnit = 20.sp,
 ) {
-    val artUrl by produceState<String?>(initialValue = null, item.id) {
-        value = when (item.kind) {
-            LibraryItemKind.Playlist -> item.playlistId?.let { repository.artworkUrlForPlaylist(it, item.id) }
-            LibraryItemKind.Artist -> item.artistName?.let { repository.resolveArtistArtUrl(it) }
-            LibraryItemKind.Album -> repository.resolveAlbumArtUrl(item.albumName ?: item.title, item.artistName)
-            LibraryItemKind.Downloaded -> repository.resolveOfflineManifestArtUrl(
-                com.bockmedia.console.local.OfflineCollectionManifest(
-                    id = item.id.removePrefix("dl-"),
-                    title = item.title,
-                    coverArtPath = item.artPath,
-                    sourcePlaylistId = item.playlistId,
-                ),
-            )
-        } ?: item.artPath?.let { repository.artworkUrl(it) }
+    val baseUrl = remember(repository) { repository.peekBaseUrl() }
+    var artUrl by remember(item.id, baseUrl, item.artPath, item.playlistId) {
+        mutableStateOf(peekLibraryArtUrl(baseUrl, item))
+    }
+    LaunchedEffect(item.id, baseUrl, item.artPath, item.playlistId) {
+        artUrl = peekLibraryArtUrl(baseUrl, item)
+            ?: when (item.kind) {
+                LibraryItemKind.Playlist -> item.playlistId?.let {
+                    repository.artworkUrlForPlaylist(it, item.id)
+                }
+                LibraryItemKind.Artist -> item.artistName?.let { repository.resolveArtistArtUrl(it) }
+                LibraryItemKind.Album -> repository.resolveAlbumArtUrl(
+                    item.albumName ?: item.title,
+                    item.artistName,
+                )
+                LibraryItemKind.Downloaded -> repository.resolveOfflineManifestArtUrl(
+                    com.bockmedia.console.local.OfflineCollectionManifest(
+                        id = item.id.removePrefix("dl-"),
+                        title = item.title,
+                        coverArtPath = item.artPath,
+                        sourcePlaylistId = item.playlistId,
+                    ),
+                )
+            } ?: item.artPath?.let { repository.artworkUrl(it) }
     }
     BockArtwork(
         model = artUrl,
@@ -413,5 +455,6 @@ private fun LibraryItemArt(
         modifier = modifier,
         shape = shape,
         fallbackFontSize = fallbackFontSize,
+        crossfadeMs = 0,
     )
 }

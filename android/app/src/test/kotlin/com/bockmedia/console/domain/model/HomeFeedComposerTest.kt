@@ -29,6 +29,53 @@ class HomeFeedComposerTest {
     }
 
     @Test
+    fun compose_includesExploreThemeForMatchingPlaylist() {
+        val playlists = listOf(
+            PlaylistSummary(id = "fr-1", name = "French Favorites", tracks = 42),
+            PlaylistSummary(id = "it-1", name = "Italian Classics", tracks = 30),
+        )
+        val input = HomeFeedInput(
+            history = emptyList(),
+            analytics = null,
+            allPlaylists = playlists,
+            smartPlaylists = emptyList(),
+            favorites = emptyList(),
+            dashboard = null,
+            shuffleSeed = 1,
+        )
+        val feed = HomeFeedComposer.compose(input)
+        val explore = feed.sections.firstOrNull { it.kind == HomeSectionKind.ExploreThemes }
+        assertTrue(explore != null)
+        assertTrue(explore!!.cards.isNotEmpty())
+    }
+
+    @Test
+    fun compose_includesMoodSections() {
+        val playlists = listOf(
+            PlaylistSummary(id = "dinner-1", name = "Sunday Dinner Jazz", tracks = 40),
+            PlaylistSummary(id = "fr-1", name = "French Favorites", tracks = 42),
+            PlaylistSummary(id = "road-1", name = "Road Trip Hits", tracks = 55),
+        ) + (1..20).map { i ->
+            PlaylistSummary(id = "pl-$i", name = "Playlist $i", tracks = i * 2)
+        }
+        val input = HomeFeedInput(
+            history = emptyList(),
+            analytics = null,
+            allPlaylists = playlists,
+            smartPlaylists = emptyList(),
+            favorites = emptyList(),
+            dashboard = null,
+            shuffleSeed = 3,
+        )
+        val feed = HomeFeedComposer.compose(input)
+        val moodSections = feed.sections.filter { it.kind == HomeSectionKind.Mood }
+        assertEquals(8, moodSections.size)
+        assertTrue(moodSections.any { it.title == "French music" })
+        assertTrue(moodSections.any { it.title == "Road trip" })
+        assertTrue(moodSections.all { it.cards.isNotEmpty() })
+    }
+
+    @Test
     fun compose_dedupesPlaylistsAcrossSections() {
         val playlists = listOf(
             PlaylistSummary(id = "a", name = "Alpha", tracks = 10),

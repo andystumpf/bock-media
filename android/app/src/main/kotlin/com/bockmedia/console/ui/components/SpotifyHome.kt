@@ -234,7 +234,7 @@ fun SpotifyHomeSection(
         ) {
             items(section.cards, key = { it.id }) { card ->
                 when (section.kind) {
-                    HomeSectionKind.TopMixes, HomeSectionKind.DailyMixes ->
+                    HomeSectionKind.TopMixes, HomeSectionKind.ExploreThemes, HomeSectionKind.Mood, HomeSectionKind.DailyMixes ->
                         GenreMixTile(
                             card = card,
                             repository = repository,

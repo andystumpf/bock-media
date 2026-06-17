@@ -73,9 +73,9 @@ fun BockProgressIndicator(
 }
 
 @Composable
-fun LoadingBox(modifier: Modifier = Modifier) {
+fun LoadingBox(modifier: Modifier = Modifier, logoSize: androidx.compose.ui.unit.Dp = 64.dp) {
     Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        BockProgressIndicator()
+        BockLoadingLogo(size = logoSize)
     }
 }
 

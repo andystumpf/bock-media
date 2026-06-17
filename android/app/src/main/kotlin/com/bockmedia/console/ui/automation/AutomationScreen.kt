@@ -46,17 +46,20 @@ fun AutomationScreen(repository: BockMediaRepository) {
     var items by remember { mutableStateOf<List<AutomationItem>>(emptyList()) }
     var remoteOk by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(true) }
+    var refreshing by remember { mutableStateOf(false) }
     var showSheet by remember { mutableStateOf(false) }
     var editItem by remember { mutableStateOf<AutomationItem?>(null) }
 
-    suspend fun load() {
-        loading = true
+    suspend fun load(fromPull: Boolean = false) {
+        if (!fromPull && items.isEmpty()) loading = true
+        if (fromPull) refreshing = true
         runCatching {
             items = repository.automations().items
             val st = repository.alexaRemoteStatus()
             remoteOk = st.configured && st.authenticated == true
         }
         loading = false
+        refreshing = false
     }
 
     LaunchedEffect(Unit) { load() }
@@ -71,7 +74,12 @@ fun AutomationScreen(repository: BockMediaRepository) {
             }
         },
     ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding)) {
+        BockPullRefresh(
+            isRefreshing = refreshing,
+            onRefresh = { scope.launch { load(fromPull = true) } },
+            modifier = Modifier.fillMaxSize().padding(padding),
+        ) {
+        Column(Modifier.fillMaxSize()) {
             TabScreenHeader("Automations")
             if (!remoteOk) {
                 Text(
@@ -113,6 +121,7 @@ fun AutomationScreen(repository: BockMediaRepository) {
                     }
                 }
             }
+        }
         }
     }
 

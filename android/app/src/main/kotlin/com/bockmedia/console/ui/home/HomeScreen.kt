@@ -17,6 +17,7 @@ import com.bockmedia.console.domain.model.*
 import com.bockmedia.console.local.OfflineDownloadManager
 import com.bockmedia.console.local.downloadId
 import com.bockmedia.console.ui.components.*
+import com.bockmedia.console.ui.library.LibraryArtPrefetch
 import com.bockmedia.console.ui.theme.BockMuted
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -129,6 +130,18 @@ fun HomeScreen(
         }
     }
 
+    fun warmLibraryInBackground() {
+        if (LibrarySessionCache.getIfFresh() != null) return
+        scope.launch {
+            runCatching {
+                val data = LibraryLoader.loadBuckets(repository, context)
+                LibrarySessionCache.put(data)
+                LibraryCachePersistence.save(context, data)
+                LibraryArtPrefetch.warm(context, repository, data.forFilter(LibraryFilter.All))
+            }
+        }
+    }
+
     suspend fun bootstrapHome() {
         runCatching { repository.primeBaseUrl(BockMediaApp.get(context).resolveBaseUrl()) }
         if (!DeviceCatalog.isFresh()) {
@@ -155,12 +168,14 @@ fun HomeScreen(
         }
         if (HomeLoadCoordinator.shouldSkipReload()) {
             loadOffline()
+            warmLibraryInBackground()
             return
         }
         HomeLoadCoordinator.withLoadLock {
             load()
             loadOffline()
         }
+        warmLibraryInBackground()
     }
 
     LaunchedEffect(Unit) {

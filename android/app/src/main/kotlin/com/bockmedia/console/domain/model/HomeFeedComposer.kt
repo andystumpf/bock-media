@@ -4,13 +4,17 @@ import com.bockmedia.console.data.api.dto.AnalyticsResponse
 import com.bockmedia.console.data.api.dto.CountRow
 import com.bockmedia.console.data.api.dto.DashboardQuickResponse
 import com.bockmedia.console.data.api.dto.FavoriteItem
+import com.bockmedia.console.data.api.dto.GenreItem
 import com.bockmedia.console.data.api.dto.PlaylistSummary
 import com.bockmedia.console.data.api.dto.SmartPlaylist
 import com.bockmedia.console.data.api.dto.StreamHistoryItem
 object HomeFeedLimits {
     const val JUMP_BACK_IN = 24
     const val FAVORITES = 16
-    const val TOP_MIXES = 14
+    const val TOP_MIXES = 16
+    const val MOOD_SECTION_CARDS = 12
+    const val EXPLORE_THEMES = 18
+    const val LIBRARY_GENRE_EXTRAS = 6
     const val DAILY_MIXES = 12
     const val RECENT_PLAYLISTS = 24
     const val RADIO = 16
@@ -25,6 +29,7 @@ data class HomeFeedInput(
     val smartPlaylists: List<SmartPlaylist>,
     val favorites: List<FavoriteItem>,
     val dashboard: DashboardQuickResponse?,
+    val libraryGenres: List<GenreItem> = emptyList(),
     val shuffleSeed: Long,
 )
 
@@ -65,7 +70,7 @@ object HomeFeedComposer {
         val registry = HomeFeedRegistry()
         val playlistByName = input.allPlaylists.associateBy { it.name.lowercase() }
         val playlistById = input.allPlaylists.associateBy { it.id }
-        val topGenres = input.analytics?.topGenres.orEmpty().take(8)
+        val topGenres = input.analytics?.topGenres.orEmpty().take(12)
         val topArtists = input.analytics?.topArtists.orEmpty()
         val shuffledGeneric = HomeFeedRules.shuffledBrowsablePlaylists(input.allPlaylists, input.shuffleSeed)
 
@@ -265,6 +270,30 @@ object HomeFeedComposer {
             )
         }.distinctBy { it.id }.take(HomeFeedLimits.DAILY_MIXES)
 
+        val exploreThemes = buildExploreThemeCards(
+            input = input,
+            registry = registry,
+            playlistById = playlistById,
+            topArtists = topArtists,
+            topGenres = topGenres,
+            resolveMixArt = ::resolveMixArt,
+            playlistCard = ::playlistCard,
+        )
+
+        val moodSections = HomeMoodSections.all().mapNotNull { mood ->
+            val cards = buildMoodSectionCards(
+                mood = mood,
+                input = input,
+                registry = registry,
+                playlistById = playlistById,
+                topArtists = topArtists,
+                shuffledGeneric = shuffledGeneric,
+                resolveMixArt = ::resolveMixArt,
+                playlistCard = ::playlistCard,
+            )
+            section("mood-${mood.id}", mood.title, HomeSectionKind.Mood, cards)
+        }
+
         val recentPlaylists = buildList {
             for (name in recentPlaylistNames) {
                 if (size >= HomeFeedLimits.RECENT_PLAYLISTS) break
@@ -311,6 +340,8 @@ object HomeFeedComposer {
             section("jump-back-in", "Jump back in", HomeSectionKind.JumpBackIn, jumpBackIn),
             section("favorites", "Your favorites", HomeSectionKind.Favorites, favoriteCards),
             section("top-mixes", "Your top mixes", HomeSectionKind.TopMixes, genreMixes),
+        ) + moodSections + listOfNotNull(
+            section("explore-themes", "Explore genres & worlds", HomeSectionKind.ExploreThemes, exploreThemes),
             section("daily-mixes", "Daily mixes", HomeSectionKind.DailyMixes, dailyMixes),
             section("recent-playlists", "Recent playlists", HomeSectionKind.RecentPlaylists, recentPlaylists),
             section("radio", "Radio", HomeSectionKind.Radio, radioCards),
@@ -453,4 +484,247 @@ object HomeFeedComposer {
             add(card)
         }
     }.distinctBy { it.id }.take(limit)
+
+    private fun buildExploreThemeCards(
+        input: HomeFeedInput,
+        registry: HomeFeedRegistry,
+        playlistById: Map<String, PlaylistSummary>,
+        topArtists: List<CountRow>,
+        topGenres: List<CountRow>,
+        resolveMixArt: (genre: String, artist: String?, index: Int) -> String?,
+        playlistCard: (
+            pl: PlaylistSummary,
+            artPath: String?,
+            kind: HomeSectionKind,
+            subtitle: String?,
+            claim: Boolean,
+        ) -> HomeCard?,
+    ): List<HomeCard> = buildList {
+        val coveredGenreKeys = mutableSetOf<String>()
+        val themes = HomeThemeCatalog.themesForDay(input.shuffleSeed)
+
+        val addedIds = mutableSetOf<String>()
+
+        fun registerThemeCard(card: HomeCard) {
+            if (card.id in addedIds) return
+            if (!registry.hasCard(card.id)) registry.registerCard(card)
+            addedIds.add(card.id)
+            add(card)
+        }
+
+        for ((index, theme) in themes.withIndex()) {
+            if (size >= HomeFeedLimits.EXPLORE_THEMES) break
+
+            val playlistMatch = input.allPlaylists
+                .filter { HomeFeedRules.playlistMatchesTheme(it.name, theme) && it.tracks > 0 }
+                .maxByOrNull { it.tracks }
+            if (playlistMatch != null) {
+                playlistCard(
+                    playlistMatch,
+                    null,
+                    HomeSectionKind.ExploreThemes,
+                    theme.subtitle,
+                    true,
+                )?.let { registerThemeCard(it) }
+                continue
+            }
+
+            val smart = input.smartPlaylists.firstOrNull { sp ->
+                sp.enabled && HomeFeedRules.playlistMatchesTheme(sp.name, theme)
+            }
+            val smartPlaylist = smart?.playlistId?.let { playlistById[it] }
+            if (smartPlaylist != null) {
+                playlistCard(
+                    smartPlaylist,
+                    null,
+                    HomeSectionKind.ExploreThemes,
+                    theme.subtitle,
+                    true,
+                )?.let { registerThemeCard(it) }
+                continue
+            }
+
+            val libraryGenre = HomeFeedRules.matchingLibraryGenre(theme, input.libraryGenres)
+            val analyticsGenre = topGenres.firstOrNull { row ->
+                val name = row.name ?: row.label ?: return@firstOrNull false
+                HomeFeedRules.genreMatchesTheme(name, theme)
+            }?.let { it.name ?: it.label }
+            val genreLabel = libraryGenre ?: analyticsGenre
+
+            if (genreLabel != null) {
+                coveredGenreKeys.add(genreLabel.lowercase())
+                val libraryItem = input.libraryGenres.firstOrNull { it.name.equals(genreLabel, ignoreCase = true) }
+                val seedArtist = HomeFeedRules.topArtistForGenre(input.history, genreLabel)
+                    ?: HomeFeedRules.topArtistForTheme(input.history, theme)
+                    ?: topArtists.getOrNull(index)?.name
+                    ?: topArtists.firstOrNull()?.name
+                    ?: genreLabel
+                val card = HomeCard(
+                    id = "theme-${theme.id}",
+                    title = theme.title,
+                    subtitle = theme.subtitle,
+                    artPath = libraryItem?.artPath ?: resolveMixArt(genreLabel, seedArtist, index),
+                    playTarget = PlayTarget.Artist(seedArtist),
+                    kind = HomeSectionKind.ExploreThemes,
+                )
+                registerThemeCard(card)
+                continue
+            }
+
+            val seedArtist = HomeFeedRules.topArtistForTheme(input.history, theme)
+                ?: topArtists.getOrNull(index)?.name
+            if (seedArtist != null) {
+                val card = HomeCard(
+                    id = "theme-${theme.id}",
+                    title = theme.title,
+                    subtitle = theme.subtitle,
+                    artPath = resolveMixArt(theme.title, seedArtist, index),
+                    playTarget = PlayTarget.Artist(seedArtist),
+                    kind = HomeSectionKind.ExploreThemes,
+                )
+                registerThemeCard(card)
+                continue
+            }
+
+            val fallbackSeed = topArtists.firstOrNull()?.name
+                ?: input.libraryGenres.firstOrNull()?.name
+                ?: "Library"
+            val card = HomeCard(
+                id = "theme-${theme.id}",
+                title = theme.title,
+                subtitle = theme.subtitle,
+                artPath = resolveMixArt(theme.title, fallbackSeed, index),
+                playTarget = PlayTarget.Radio(
+                    "${theme.title} Radio",
+                    PlayTarget.RadioSeedKind.Genre,
+                    fallbackSeed,
+                ),
+                kind = HomeSectionKind.ExploreThemes,
+            )
+            registerThemeCard(card)
+        }
+
+        for (genre in input.libraryGenres) {
+            if (size >= HomeFeedLimits.EXPLORE_THEMES + HomeFeedLimits.LIBRARY_GENRE_EXTRAS) break
+            if (genre.tracks < 8) continue
+            val key = genre.name.lowercase()
+            if (key in coveredGenreKeys) continue
+            if (themes.any { HomeFeedRules.genreMatchesTheme(genre.name, it) }) continue
+            val cardId = "library-genre-${genre.name}"
+            if (registry.hasCard(cardId)) continue
+            val seedArtist = HomeFeedRules.topArtistForGenre(input.history, genre.name)
+                ?: topArtists.firstOrNull()?.name
+                ?: genre.name
+            val card = HomeCard(
+                id = cardId,
+                title = genre.name,
+                subtitle = "${genre.tracks} tracks · From your library",
+                artPath = registry.claimArtPath(genre.artPath),
+                playTarget = PlayTarget.Radio(
+                    "${genre.name} Radio",
+                    PlayTarget.RadioSeedKind.Genre,
+                    seedArtist,
+                ),
+                kind = HomeSectionKind.ExploreThemes,
+            )
+            coveredGenreKeys.add(key)
+            registerThemeCard(card)
+        }
+    }.distinctBy { it.id }
+
+    private fun buildMoodSectionCards(
+        mood: HomeMoodSection,
+        input: HomeFeedInput,
+        registry: HomeFeedRegistry,
+        playlistById: Map<String, PlaylistSummary>,
+        topArtists: List<CountRow>,
+        shuffledGeneric: List<PlaylistSummary>,
+        resolveMixArt: (genre: String, artist: String?, index: Int) -> String?,
+        playlistCard: (
+            pl: PlaylistSummary,
+            artPath: String?,
+            kind: HomeSectionKind,
+            subtitle: String?,
+            claim: Boolean,
+        ) -> HomeCard?,
+    ): List<HomeCard> {
+        val theme = mood.theme
+        val kind = HomeSectionKind.Mood
+        val limit = HomeFeedLimits.MOOD_SECTION_CARDS
+        val cards = mutableListOf<HomeCard>()
+
+        fun addCard(card: HomeCard?) {
+            if (card == null || registry.hasCard(card.id)) return
+            if (cards.any { it.id == card.id }) return
+            registry.registerCard(card)
+            cards.add(card)
+        }
+
+        for (pl in HomeFeedRules.playlistsForTheme(input.allPlaylists, theme)) {
+            if (cards.size >= limit) break
+            addCard(playlistCard(pl, null, kind, mood.theme.subtitle, true))
+        }
+
+        for (sp in input.smartPlaylists.filter { it.enabled && HomeFeedRules.playlistMatchesTheme(it.name, theme) }) {
+            if (cards.size >= limit) break
+            val pl = sp.playlistId?.let { playlistById[it] } ?: continue
+            addCard(playlistCard(pl, null, kind, mood.theme.subtitle, true))
+        }
+
+        if (cards.size < 4) {
+            val seedArtist = HomeFeedRules.topArtistForTheme(input.history, theme)
+                ?: topArtists.firstOrNull()?.name
+            if (seedArtist != null) {
+                addCard(
+                    HomeCard(
+                        id = "mood-${mood.id}-artist",
+                        title = mood.theme.title,
+                        subtitle = mood.theme.subtitle,
+                        artPath = resolveMixArt(mood.title, seedArtist, mood.id.hashCode()),
+                        playTarget = PlayTarget.Artist(seedArtist),
+                        kind = kind,
+                    ),
+                )
+            }
+        }
+
+        val moodSeed = input.shuffleSeed + mood.id.hashCode()
+        val scoredPool = HomeFeedRules.shuffledBrowsablePlaylists(input.allPlaylists, moodSeed)
+            .sortedWith(
+                compareByDescending<PlaylistSummary> { HomeFeedRules.playlistThemeScore(it.name, theme) }
+                    .thenByDescending { it.tracks },
+            )
+        for (pl in scoredPool + shuffledGeneric) {
+            if (cards.size >= limit) break
+            if (pl.tracks <= 0 || !registry.canUsePlaylist(pl)) continue
+            val subtitle = if (HomeFeedRules.playlistThemeScore(pl.name, theme) > 0) {
+                mood.theme.subtitle
+            } else {
+                "${pl.tracks} tracks · ${mood.title}"
+            }
+            addCard(playlistCard(pl, null, kind, subtitle, true))
+        }
+
+        if (cards.isEmpty()) {
+            val seedArtist = HomeFeedRules.topArtistForTheme(input.history, theme)
+                ?: topArtists.firstOrNull()?.name
+                ?: mood.title
+            addCard(
+                HomeCard(
+                    id = "mood-${mood.id}-fallback",
+                    title = mood.theme.title,
+                    subtitle = mood.theme.subtitle,
+                    artPath = resolveMixArt(mood.title, seedArtist, mood.id.hashCode()),
+                    playTarget = PlayTarget.Radio(
+                        "${mood.title} Radio",
+                        PlayTarget.RadioSeedKind.Genre,
+                        seedArtist,
+                    ),
+                    kind = kind,
+                ),
+            )
+        }
+
+        return cards.distinctBy { it.id }.take(limit)
+    }
 }

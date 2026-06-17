@@ -1,5 +1,6 @@
 package com.bockmedia.console.domain.model
 
+import com.bockmedia.console.data.api.dto.GenreItem
 import com.bockmedia.console.data.api.dto.PlaylistSummary
 import com.bockmedia.console.data.api.dto.StreamHistoryItem
 import kotlin.random.Random
@@ -84,6 +85,53 @@ object HomeFeedRules {
             .maxByOrNull { it.value }
             ?.key
             ?.let { key -> history.firstOrNull { it.artist.equals(key, true) }?.artist }
+
+    fun matchesKeywords(text: String, keywords: List<String>): Boolean =
+        keywords.any { keyword -> text.contains(keyword, ignoreCase = true) }
+
+    fun playlistMatchesTheme(name: String, theme: HomeTheme): Boolean =
+        matchesKeywords(name, theme.playlistKeywords)
+
+    fun genreMatchesTheme(name: String, theme: HomeTheme): Boolean =
+        matchesKeywords(name, theme.genreKeywords)
+
+    fun historyMatchesTheme(row: StreamHistoryItem, theme: HomeTheme): Boolean {
+        val haystack = listOfNotNull(row.sourceLabel, row.playlist, row.album, row.artist)
+        val keywords = theme.playlistKeywords + theme.genreKeywords
+        return haystack.any { matchesKeywords(it, keywords) }
+    }
+
+    fun topArtistForTheme(history: List<StreamHistoryItem>, theme: HomeTheme): String? =
+        history
+            .filter { row -> row.artist != null && historyMatchesTheme(row, theme) }
+            .groupingBy { it.artist!!.lowercase() }
+            .eachCount()
+            .maxByOrNull { it.value }
+            ?.key
+            ?.let { key -> history.firstOrNull { it.artist.equals(key, true) }?.artist }
+
+    fun matchingLibraryGenre(theme: HomeTheme, libraryGenres: List<GenreItem>): String? =
+        libraryGenres.firstOrNull { genreMatchesTheme(it.name, theme) }?.name
+
+    fun playlistThemeScore(name: String, theme: HomeTheme): Int {
+        val haystack = name.lowercase()
+        var score = 0
+        for (keyword in theme.playlistKeywords) {
+            if (haystack.contains(keyword.lowercase())) score += 10
+        }
+        for (keyword in theme.genreKeywords) {
+            if (haystack.contains(keyword.lowercase())) score += 4
+        }
+        return score
+    }
+
+    fun playlistsForTheme(all: List<PlaylistSummary>, theme: HomeTheme): List<PlaylistSummary> =
+        all
+            .filter { it.tracks > 0 && playlistThemeScore(it.name, theme) > 0 }
+            .sortedWith(
+                compareByDescending<PlaylistSummary> { playlistThemeScore(it.name, theme) }
+                    .thenByDescending { it.tracks },
+            )
 
     fun isSpecialHomePlaylistName(name: String): Boolean =
         isDailyMixName(name) || isDiscoverName(name) || isGenreMixPlaylistName(name) || isExplicitRadioPlaylistName(name)

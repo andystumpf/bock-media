@@ -275,6 +275,7 @@ data class ArtistItem(
     @SerialName("artist") val name: String = "",
     @SerialName("track_count") val tracks: Int = 0,
     @SerialName("album_count") val albums: Int = 0,
+    @SerialName("art_path") val artPath: String? = null,
 )
 
 @Serializable

@@ -11,6 +11,8 @@ import com.bockmedia.console.local.ClientIdStore
 import com.bockmedia.console.domain.model.HomeArtworkCache
 import com.bockmedia.console.domain.model.HomeCachePersistence
 import com.bockmedia.console.domain.model.HomeFeedCache
+import com.bockmedia.console.domain.model.LibraryCachePersistence
+import com.bockmedia.console.domain.model.LibrarySessionCache
 import com.bockmedia.console.domain.model.HomeTileEngagement
 import com.bockmedia.console.ui.components.BockImageLoader
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
@@ -101,6 +103,8 @@ class BockMediaApp(private val appContext: Context) {
         HomeFeedCache.invalidate()
         HomeArtworkCache.invalidate()
         HomeCachePersistence.clear(appContext)
+        LibrarySessionCache.invalidate()
+        LibraryCachePersistence.clear(appContext)
         BockImageLoader.reset()
     }
 

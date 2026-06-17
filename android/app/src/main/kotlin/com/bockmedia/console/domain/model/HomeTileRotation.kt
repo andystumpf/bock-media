@@ -80,7 +80,7 @@ object HomeTileRotation {
 
     private fun subtitleFor(kind: HomeSectionKind, playlist: PlaylistSummary): String = when (kind) {
         HomeSectionKind.JumpBackIn -> "${playlist.tracks} tracks · Suggested for you"
-        HomeSectionKind.TopMixes, HomeSectionKind.DailyMixes -> "Suggested mix"
+        HomeSectionKind.TopMixes, HomeSectionKind.ExploreThemes, HomeSectionKind.Mood, HomeSectionKind.DailyMixes -> "Suggested mix"
         HomeSectionKind.Radio -> "From your library"
         HomeSectionKind.Discover -> "${playlist.tracks} tracks · Discover"
         HomeSectionKind.RecentPlaylists -> "${playlist.tracks} tracks · Suggested for you"

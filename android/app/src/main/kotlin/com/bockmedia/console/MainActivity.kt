@@ -18,6 +18,8 @@ import com.bockmedia.console.local.OfflineDownloadManager
 import com.bockmedia.console.domain.model.HomeArtworkCache
 import com.bockmedia.console.domain.model.HomeCachePersistence
 import com.bockmedia.console.domain.model.HomeFeedCache
+import com.bockmedia.console.domain.model.LibraryCachePersistence
+import com.bockmedia.console.domain.model.LibrarySessionCache
 import com.bockmedia.console.ui.navigation.BockApp
 import com.bockmedia.console.ui.setup.SetupScreen
 import com.bockmedia.console.ui.components.SplashScreen
@@ -126,6 +128,9 @@ class MainActivity : ComponentActivity() {
                                             HomeArtworkCache.snapshotCardPaths(),
                                             HomeArtworkCache.snapshotPlaylistPaths(),
                                         )
+                                    }
+                                    LibrarySessionCache.peek()?.let { lib ->
+                                        LibraryCachePersistence.save(applicationContext, lib)
                                     }
                                 }
                             }
