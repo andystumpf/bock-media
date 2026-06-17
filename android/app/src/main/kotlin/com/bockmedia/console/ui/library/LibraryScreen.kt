@@ -51,9 +51,9 @@ fun LibraryScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var libraryData by remember { mutableStateOf<LibraryData?>(null) }
+    var libraryData by remember { mutableStateOf(LibrarySessionCache.peek()) }
     var searchItems by remember { mutableStateOf<List<LibraryItem>?>(null) }
-    var loading by remember { mutableStateOf(true) }
+    var loading by remember { mutableStateOf(LibrarySessionCache.peek() == null) }
     var refreshing by remember { mutableStateOf(false) }
     var filter by rememberSaveable { mutableStateOf(LibraryFilter.All) }
     var viewMode by rememberSaveable { mutableStateOf(LibraryViewMode.List) }
@@ -101,7 +101,9 @@ fun LibraryScreen(
             refreshFromNetwork()
         } else {
             libraryData?.let { prefetchArt(it.forFilter(filter)) }
-            scope.launch { refreshFromNetwork() }
+            if (LibrarySessionCache.getIfFresh() == null && libraryData != null) {
+                scope.launch { refreshFromNetwork() }
+            }
         }
     }
 

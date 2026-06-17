@@ -8,11 +8,13 @@ import com.bockmedia.console.data.local.AppPreferences
 import com.bockmedia.console.data.network.ServerEndpointResolver
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.local.ClientIdStore
+import com.bockmedia.console.domain.model.AutomationSessionCache
 import com.bockmedia.console.domain.model.HomeArtworkCache
 import com.bockmedia.console.domain.model.HomeCachePersistence
 import com.bockmedia.console.domain.model.HomeFeedCache
 import com.bockmedia.console.domain.model.LibraryCachePersistence
 import com.bockmedia.console.domain.model.LibrarySessionCache
+import com.bockmedia.console.domain.model.SearchBrowseSessionCache
 import com.bockmedia.console.domain.model.HomeTileEngagement
 import com.bockmedia.console.ui.components.BockImageLoader
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
@@ -105,6 +107,8 @@ class BockMediaApp(private val appContext: Context) {
         HomeCachePersistence.clear(appContext)
         LibrarySessionCache.invalidate()
         LibraryCachePersistence.clear(appContext)
+        AutomationSessionCache.invalidate()
+        SearchBrowseSessionCache.invalidate()
         BockImageLoader.reset()
     }
 
@@ -165,6 +169,12 @@ class BockMediaApp(private val appContext: Context) {
     }
 
     suspend fun hasServerUrl(): Boolean = preferences.hasAnyServerUrl()
+
+    /** Last-known or configured server URL — no network probes (for instant cold-start paint). */
+    suspend fun configuredEndpointUrl(): String? =
+        preferences.getLastGoodEndpointSync()
+            ?: preferences.getLocalServerUrlSync()
+            ?: preferences.getExternalServerUrlSync()
 
     companion object {
         @Volatile

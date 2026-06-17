@@ -45,18 +45,35 @@ fun SearchScreen(
     var query by remember { mutableStateOf("") }
     var searchFocused by remember { mutableStateOf(false) }
     var results by remember { mutableStateOf<SearchResponse?>(null) }
+    var searchLoading by remember { mutableStateOf(false) }
     var suggestions by remember { mutableStateOf<List<SearchSuggestion>>(emptyList()) }
-    var browseFeed by remember { mutableStateOf<SearchBrowseFeed?>(null) }
-    var browseLoading by remember { mutableStateOf(true) }
+    var browseFeed by remember { mutableStateOf(SearchBrowseSessionCache.peek()) }
+    var browseLoading by remember { mutableStateOf(SearchBrowseSessionCache.peek() == null) }
     var recentQueries by remember { mutableStateOf<List<String>>(emptyList()) }
     var favoritePaths by remember { mutableStateOf<Set<String>>(emptySet()) }
     var browseView by remember { mutableStateOf(SearchView.Browse) }
 
     LaunchedEffect(Unit) {
         runCatching { favoritePaths = repository.favorites().map { it.path }.toSet() }
-        browseLoading = true
-        runCatching { browseFeed = SearchBrowseLoader.load(repository) }
-        browseLoading = false
+        if (SearchBrowseSessionCache.getIfFresh() != null) {
+            browseFeed = SearchBrowseSessionCache.peek()
+            browseLoading = false
+            scope.launch {
+                runCatching {
+                    val fresh = SearchBrowseLoader.load(repository)
+                    SearchBrowseSessionCache.put(fresh)
+                    browseFeed = fresh
+                }
+            }
+        } else {
+            browseLoading = browseFeed == null
+            runCatching {
+                val fresh = SearchBrowseLoader.load(repository)
+                SearchBrowseSessionCache.put(fresh)
+                browseFeed = fresh
+            }
+            browseLoading = false
+        }
     }
 
     LaunchedEffect(historyStore) {
@@ -69,27 +86,38 @@ fun SearchScreen(
         if (trimmed.isEmpty()) {
             suggestions = emptyList()
             results = null
+            searchLoading = false
             return@LaunchedEffect
         }
         if (trimmed.length < 2) {
             results = null
+            searchLoading = false
             suggestions = SearchBrowseLoader.suggestOneChar(repository, trimmed)
             return@LaunchedEffect
         }
+        searchLoading = true
+        results = null
+        val searchFor = trimmed
         runCatching {
-            val response = repository.search(trimmed, limit = 20)
-            results = response
-            suggestions = SearchBrowseLoader.suggestionsFromResponse(response)
-            historyStore.add(trimmed)
+            val response = repository.search(searchFor, limit = 20)
+            if (query.trim() == searchFor) {
+                results = response
+                suggestions = SearchBrowseLoader.suggestionsFromResponse(response)
+                historyStore.add(searchFor)
+            }
         }.onFailure {
-            results = null
-            suggestions = emptyList()
+            if (query.trim() == searchFor) {
+                results = SearchResponse()
+                suggestions = emptyList()
+            }
         }
+        if (query.trim() == searchFor) searchLoading = false
     }
 
-    val showResults = query.trim().length >= 2 && results != null
-    val showSuggestions = !showResults && query.isNotBlank()
-    val showRecents = !showResults && !showSuggestions && searchFocused
+    val trimmedQuery = query.trim()
+    val showResults = trimmedQuery.length >= 2
+    val showSuggestions = trimmedQuery.length == 1
+    val showRecents = trimmedQuery.isEmpty() && searchFocused
 
     Column(Modifier.fillMaxSize()) {
         TabScreenHeader("Search") {
@@ -104,10 +132,12 @@ fun SearchScreen(
         )
 
         when {
-            showResults -> SearchResultsList(
-                repository = repository,
-                results = results!!,
-                query = query.trim(),
+            showResults -> when {
+                searchLoading && results == null -> LoadingBox(Modifier.weight(1f))
+                else -> SearchResultsList(
+                    repository = repository,
+                    results = results ?: SearchResponse(),
+                    query = trimmedQuery,
                 remoteOk = remoteOk,
                 favoritePaths = favoritePaths,
                 onPlay = onPlay,
@@ -121,23 +151,30 @@ fun SearchScreen(
                         favoritePaths = repository.favorites().map { it.path }.toSet()
                     }
                 },
-            )
-            showSuggestions -> SearchSuggestionsList(
-                suggestions = suggestions,
-                repository = repository,
-                onSuggestionClick = { suggestion ->
-                    SearchBrowseLoader.playTargetFor(suggestion)?.let { target ->
-                        when (target) {
-                            is PlayTarget.Artist -> onOpenArtist(target.name)
-                            is PlayTarget.Album -> onOpenAlbum(target.name, target.artist)
-                            else -> onPlay(target)
-                        }
-                    } ?: run {
-                        query = suggestion.title
-                    }
-                    scope.launch { historyStore.add(suggestion.title) }
-                },
-            )
+                )
+            }
+            showSuggestions -> {
+                if (suggestions.isEmpty()) {
+                    LoadingBox(Modifier.weight(1f))
+                } else {
+                    SearchSuggestionsList(
+                        suggestions = suggestions,
+                        repository = repository,
+                        onSuggestionClick = { suggestion ->
+                            SearchBrowseLoader.playTargetFor(suggestion)?.let { target ->
+                                when (target) {
+                                    is PlayTarget.Artist -> onOpenArtist(target.name)
+                                    is PlayTarget.Album -> onOpenAlbum(target.name, target.artist)
+                                    else -> onPlay(target)
+                                }
+                            } ?: run {
+                                query = suggestion.title
+                            }
+                            scope.launch { historyStore.add(suggestion.title) }
+                        },
+                    )
+                }
+            }
             showRecents -> SearchRecentQueriesSection(
                 queries = recentQueries,
                 onQueryClick = { query = it },

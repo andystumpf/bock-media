@@ -33,8 +33,8 @@ fun HomeScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var feed by remember { mutableStateOf<HomeFeed?>(null) }
-    var loading by remember { mutableStateOf(true) }
+    var feed by remember { mutableStateOf(HomeFeedCache.peek()) }
+    var loading by remember { mutableStateOf(HomeFeedCache.peek() == null) }
     var refreshing by remember { mutableStateOf(false) }
     var filter by remember { mutableStateOf(HomeFilter.All) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -142,35 +142,70 @@ fun HomeScreen(
         }
     }
 
-    suspend fun bootstrapHome() {
-        runCatching { repository.primeBaseUrl(BockMediaApp.get(context).resolveBaseUrl()) }
-        if (!DeviceCatalog.isFresh()) {
-            scope.launch { runCatching { DeviceCatalog.refresh(repository, probe = false) } }
+    fun warmOtherTabsInBackground() {
+        if (AutomationSessionCache.getIfFresh() == null) {
+            scope.launch {
+                runCatching {
+                    val loaded = repository.automations().items
+                    val st = repository.alexaRemoteStatus()
+                    AutomationSessionCache.put(loaded, st.configured && st.authenticated == true)
+                }
+            }
         }
-        OfflineDownloadManager.refresh(context)
-        val cached = HomeFeedCache.getIfFresh()
-        if (cached != null) {
+        if (SearchBrowseSessionCache.getIfFresh() == null) {
+            scope.launch {
+                runCatching {
+                    SearchBrowseSessionCache.put(SearchBrowseLoader.load(repository))
+                }
+            }
+        }
+    }
+
+    suspend fun bootstrapHome() {
+        if (feed == null) {
+            HomeCachePersistence.load(context)?.let { snap ->
+                if (snap.feed.hasCurrentHomeLayout()) {
+                    HomeArtworkCache.restore(snap.cardMediaPaths, snap.playlistPaths)
+                    HomeFeedCache.put(snap.feed)
+                    feed = snap.feed
+                    loading = false
+                    HomeLoadCoordinator.markLoaded()
+                }
+            }
+        }
+        HomeFeedCache.peek()?.let { cached ->
             feed = cached
             loading = false
             HomeLoadCoordinator.markLoaded()
             prefetchHomeArt(cached)
             warmArtwork(cached)
-        } else {
-            HomeCachePersistence.load(context)?.let { snap ->
-                if (snap.feed.hasCurrentHomeLayout()) {
-                    HomeArtworkCache.restore(snap.cardMediaPaths, snap.playlistPaths)
-                    prefetchHomeArt(snap.feed)
-                    HomeFeedCache.put(snap.feed)
-                    feed = snap.feed
-                    loading = false
-                    HomeLoadCoordinator.markLoaded()
-                    warmArtwork(snap.feed)
-                }
-            }
         }
+        runCatching {
+            repository.primeBaseUrl(BockMediaApp.get(context).configuredEndpointUrl())
+        }
+        scope.launch {
+            runCatching { repository.primeBaseUrl(BockMediaApp.get(context).resolveBaseUrl()) }
+        }
+        if (!DeviceCatalog.isFresh()) {
+            scope.launch { runCatching { DeviceCatalog.refresh(repository, probe = false) } }
+        }
+        scope.launch { OfflineDownloadManager.refresh(context) }
         if (HomeLoadCoordinator.shouldSkipReload()) {
             loadOffline()
             warmLibraryInBackground()
+            warmOtherTabsInBackground()
+            return
+        }
+        if (feed != null) {
+            loadOffline()
+            warmLibraryInBackground()
+            warmOtherTabsInBackground()
+            scope.launch {
+                HomeLoadCoordinator.withLoadLock {
+                    load()
+                    loadOffline()
+                }
+            }
             return
         }
         HomeLoadCoordinator.withLoadLock {
@@ -178,6 +213,7 @@ fun HomeScreen(
             loadOffline()
         }
         warmLibraryInBackground()
+        warmOtherTabsInBackground()
     }
 
     LaunchedEffect(Unit) {

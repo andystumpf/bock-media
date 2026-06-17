@@ -2,7 +2,7 @@ package com.bockmedia.console.domain.model
 
 /** In-memory library buckets — filter switches are instant; refreshed in background. */
 object LibrarySessionCache {
-    private const val TTL_MS = 90_000L
+    private const val TTL_MS = 600_000L
 
     @Volatile
     var data: LibraryData? = null

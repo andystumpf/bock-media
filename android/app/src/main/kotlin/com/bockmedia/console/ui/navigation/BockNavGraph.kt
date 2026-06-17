@@ -1,5 +1,7 @@
 package com.bockmedia.console.ui.navigation
 
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -220,7 +222,15 @@ private fun BockNavHost(
     playbackFocusGeneration: Int = 0,
     modifier: Modifier = Modifier,
 ) {
-    NavHost(navController, startDestination = BockRoute.Home.route, modifier = modifier) {
+    NavHost(
+        navController,
+        startDestination = BockRoute.Home.route,
+        modifier = modifier,
+        enterTransition = { EnterTransition.None },
+        exitTransition = { ExitTransition.None },
+        popEnterTransition = { EnterTransition.None },
+        popExitTransition = { ExitTransition.None },
+    ) {
         composable(BockRoute.Home.route) {
             HomeScreen(
                 repository = repository,

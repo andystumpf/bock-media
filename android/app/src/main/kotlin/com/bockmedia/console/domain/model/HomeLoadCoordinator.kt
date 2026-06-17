@@ -6,7 +6,7 @@ import kotlinx.coroutines.sync.withLock
 /** Prevents stacked home feed / artwork warm jobs from wedging the server or UI. */
 object HomeLoadCoordinator {
     private val loadMutex = Mutex()
-    private const val MIN_RELOAD_MS = 45_000L
+    private const val MIN_RELOAD_MS = 600_000L // 10 min between full reloads
 
     @Volatile
     var lastSuccessfulLoadMs: Long = 0L
@@ -17,7 +17,7 @@ object HomeLoadCoordinator {
     }
 
     fun shouldSkipReload(): Boolean {
-        val cached = HomeFeedCache.getIfFresh() ?: return false
+        val cached = HomeFeedCache.peek() ?: return false
         if (!cached.hasCurrentHomeLayout()) return false
         return System.currentTimeMillis() - lastSuccessfulLoadMs < MIN_RELOAD_MS
     }

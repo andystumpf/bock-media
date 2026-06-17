@@ -10,6 +10,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.bockmedia.console.data.api.dto.AutomationItem
 import com.bockmedia.console.data.repository.BockMediaRepository
+import com.bockmedia.console.domain.model.AutomationSessionCache
 import com.bockmedia.console.ui.components.*
 import com.bockmedia.console.ui.util.formatTime12
 import kotlinx.coroutines.delay
@@ -46,26 +47,36 @@ fun AutomationScreen(
     onAccountNavigate: (String) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
-    var items by remember { mutableStateOf<List<AutomationItem>>(emptyList()) }
-    var remoteOk by remember { mutableStateOf(false) }
-    var loading by remember { mutableStateOf(true) }
+    val cachedAutomation = AutomationSessionCache.peek()
+    var automations by remember { mutableStateOf(cachedAutomation?.items.orEmpty()) }
+    var remoteOk by remember { mutableStateOf(cachedAutomation?.remoteOk ?: false) }
+    var loading by remember { mutableStateOf(cachedAutomation == null) }
     var refreshing by remember { mutableStateOf(false) }
     var showSheet by remember { mutableStateOf(false) }
     var editItem by remember { mutableStateOf<AutomationItem?>(null) }
 
     suspend fun load(fromPull: Boolean = false) {
-        if (!fromPull && items.isEmpty()) loading = true
+        if (!fromPull && automations.isEmpty()) loading = true
         if (fromPull) refreshing = true
         runCatching {
-            items = repository.automations().items
+            val loaded = repository.automations().items
             val st = repository.alexaRemoteStatus()
-            remoteOk = st.configured && st.authenticated == true
+            val ok = st.configured && st.authenticated == true
+            automations = loaded
+            remoteOk = ok
+            AutomationSessionCache.put(loaded, ok)
         }
         loading = false
         refreshing = false
     }
 
-    LaunchedEffect(Unit) { load() }
+    LaunchedEffect(Unit) {
+        if (AutomationSessionCache.getIfFresh() != null) {
+            scope.launch { load() }
+        } else {
+            load()
+        }
+    }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -101,7 +112,7 @@ fun AutomationScreen(
                     modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    items(items, key = { it.id }) { auto ->
+                    items(automations, key = { it.id }) { auto ->
                         ListItem(
                             headlineContent = { Text(auto.name.ifBlank { auto.label }) },
                             supportingContent = {

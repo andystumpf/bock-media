@@ -2,7 +2,7 @@ package com.bockmedia.console.domain.model
 
 /** In-memory home feed cache so tab switches and pull-refresh feel instant. */
 object HomeFeedCache {
-    private const val TTL_MS = 90_000L
+    private const val TTL_MS = 600_000L // 10 min — tab switches stay instant
 
     @Volatile
     var feed: HomeFeed? = null
@@ -10,6 +10,9 @@ object HomeFeedCache {
 
     @Volatile
     private var cachedAtMs: Long = 0L
+
+    /** Last cached feed regardless of age — for instant tab revisit paint. */
+    fun peek(): HomeFeed? = feed
 
     fun getIfFresh(): HomeFeed? {
         val cached = feed ?: return null

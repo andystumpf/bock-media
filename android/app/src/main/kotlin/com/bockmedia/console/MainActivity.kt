@@ -30,7 +30,9 @@ import androidx.lifecycle.lifecycleScope
 import com.bockmedia.console.widget.NowPlayingWidget
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import com.bockmedia.console.domain.model.SessionDiskHydrator
 import retrofit2.HttpException
 
 import kotlinx.coroutines.delay
@@ -53,6 +55,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val app = BockMediaApp.get(applicationContext)
         BockImageLoader.install(applicationContext, app)
+        runBlocking(Dispatchers.IO) {
+            SessionDiskHydrator.hydrate(applicationContext)
+        }
         val deepRoute = intent.getStringExtra(EXTRA_ROUTE)
 
         setContent {
@@ -73,6 +78,18 @@ class MainActivity : ComponentActivity() {
                     val remember = app.preferences.isRememberMeSync()
                     val wasConnected = app.preferences.hasConnectedBefore()
                     if (remember || wasConnected) {
+                        // Returning user — show UI immediately; verify server in background.
+                        if (wasConnected && app.hasServerUrl()) {
+                            hasServer = true
+                            launch(Dispatchers.IO) {
+                                if (retryTestConnection(app)) {
+                                    app.preferences.setHasConnected(true)
+                                    com.bockmedia.console.data.analytics.DeviceAnalyticsReporter
+                                        .reportConnect(this@MainActivity)
+                                }
+                            }
+                            return@LaunchedEffect
+                        }
                         if (retryTestConnection(app)) {
                             app.preferences.setHasConnected(true)
                             hasServer = true
@@ -123,7 +140,7 @@ class MainActivity : ComponentActivity() {
                         if (event == Lifecycle.Event.ON_STOP && hasServer == true) {
                             lifecycleOwner.lifecycleScope.launch {
                                 withContext(Dispatchers.IO) {
-                                    HomeFeedCache.getIfFresh()?.let { feed ->
+                                    HomeFeedCache.peek()?.let { feed ->
                                         HomeCachePersistence.save(
                                             applicationContext,
                                             feed,
