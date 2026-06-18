@@ -176,9 +176,10 @@ class AppPreferences(private val context: Context) {
             }
         }
 
-        fun artworkUrl(base: String, filepath: String?): String? {
+        fun artworkUrl(base: String, filepath: String?, sizePx: Int? = null): String? {
             if (filepath.isNullOrBlank()) return null
-            return "${normalizeUrl(base)}/artwork/${encodeMediaPath(filepath)}"
+            val url = "${normalizeUrl(base)}/artwork/${encodeMediaPath(filepath)}"
+            return if (sizePx != null && sizePx > 0) "$url?size=$sizePx" else url
         }
 
         fun streamUrl(base: String, filepath: String?): String? {
@@ -193,6 +194,15 @@ class AppPreferences(private val context: Context) {
             } catch (_: Exception) {
                 null
             }
+        }
+
+        /** True when the host is only reachable on the home LAN (not over cellular). */
+        fun isLanHost(url: String?, localUrl: String? = null, externalUrl: String? = null): Boolean {
+            val host = hostOf(url) ?: return false
+            if (host in localHosts(localUrl, externalUrl)) return true
+            if (host == "localhost" || host == "127.0.0.1") return true
+            if (host.startsWith("192.168.") || host.startsWith("10.")) return true
+            return host.endsWith(".local")
         }
 
         fun localHosts(localUrl: String?, externalUrl: String?): Set<String> {

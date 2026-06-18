@@ -17,6 +17,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import com.bockmedia.console.ui.testing.BockTestTags
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -25,6 +27,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.bockmedia.console.data.repository.BockMediaRepository
+import com.bockmedia.console.data.network.NetworkReachability
 import com.bockmedia.console.domain.model.HomeArtworkCache
 import com.bockmedia.console.domain.model.HomeArtworkResolver
 import com.bockmedia.console.domain.model.HomeCard
@@ -408,11 +411,13 @@ private fun HomeCardArt(
     repository: BockMediaRepository,
     modifier: Modifier = Modifier,
 ) {
-    val baseUrl = remember(repository) { repository.peekBaseUrl() }
-    var artUrl by remember(card.id, baseUrl) {
+    val netGen = NetworkReachability.generation
+    val baseUrl = remember(repository, netGen) { repository.peekBaseUrl() }
+    var artUrl by remember(card.id, baseUrl, netGen) {
         mutableStateOf(HomeArtworkResolver.peekUrl(baseUrl, card))
     }
-    LaunchedEffect(card.id, baseUrl) {
+    LaunchedEffect(card.id, baseUrl, netGen) {
+        artUrl = HomeArtworkResolver.peekUrl(baseUrl, card)
         if (artUrl != null) return@LaunchedEffect
         artUrl = HomeArtworkResolver.resolveUrl(repository, card)
     }
@@ -549,6 +554,6 @@ fun HomeGreeting(modifier: Modifier = Modifier) {
         style = MaterialTheme.typography.titleMedium,
         fontWeight = FontWeight.Bold,
         color = MaterialTheme.colorScheme.onSurface,
-        modifier = modifier,
+        modifier = modifier.testTag(BockTestTags.HOME_GREETING),
     )
 }

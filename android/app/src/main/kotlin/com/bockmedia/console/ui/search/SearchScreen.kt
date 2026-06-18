@@ -11,6 +11,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import com.bockmedia.console.ui.testing.BockTestTags
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.bockmedia.console.data.api.dto.SearchHit
@@ -128,7 +130,9 @@ fun SearchScreen(
             query,
             { query = it },
             "What do you want to listen to?",
-            modifier = Modifier.padding(horizontal = 16.dp),
+            modifier = Modifier
+                .padding(horizontal = 16.dp)
+                .testTag(BockTestTags.SEARCH_FIELD),
             onFocusChanged = { searchFocused = it },
         )
 
@@ -267,7 +271,7 @@ private fun SearchResultsList(
         )
     }
 
-    BockLazyColumn {
+    BockLazyColumn(Modifier.testTag(BockTestTags.SEARCH_RESULTS)) {
         results.playlists.takeIf { it.isNotEmpty() }?.let { list ->
             item { SearchSectionHeader("Playlists") }
             items(list, key = { "pl-${it.id}" }) { hit ->

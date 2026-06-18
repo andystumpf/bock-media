@@ -16,6 +16,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.bockmedia.console.media.NowPlayingNotificationManager
 import com.bockmedia.console.local.OfflineNetworkMonitor
 import com.bockmedia.console.local.OfflineDownloadManager
+import com.bockmedia.console.data.network.NetworkReachability
 import com.bockmedia.console.domain.model.HomeArtworkCache
 import com.bockmedia.console.domain.model.HomeCachePersistence
 import com.bockmedia.console.domain.model.HomeFeedCache
@@ -48,22 +49,39 @@ private suspend fun retryTestConnection(app: BockMediaApp, attempts: Int = 3): B
     return false
 }
 
+private data class ColdBootState(val showApp: Boolean)
+
+private suspend fun coldBootFast(context: android.content.Context): ColdBootState {
+    val app = BockMediaApp.get(context)
+    app.preferences.applyBuildServerUrls()
+    app.preferences.clearCredentialsIfNotRemembered()
+    app.preferences.applyBuildDefaultsIfEmpty()
+    SessionDiskHydrator.hydrate(context)
+    NetworkReachability.update(context)
+    app.configuredEndpointUrl()?.let { app.repository.primeBaseUrl(it) }
+    val remember = app.preferences.isRememberMeSync()
+    val wasConnected = app.preferences.hasConnectedBefore()
+    return ColdBootState(showApp = (remember || wasConnected) && wasConnected && app.hasServerUrl())
+}
+
 class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         val app = BockMediaApp.get(applicationContext)
+        NetworkReachability.update(applicationContext)
         BockImageLoader.install(applicationContext, app)
-        runBlocking(Dispatchers.IO) {
-            SessionDiskHydrator.hydrate(applicationContext)
+        val coldBoot = runBlocking(Dispatchers.IO) { coldBootFast(applicationContext) }
+        lifecycleScope.launch(Dispatchers.IO) {
+            SessionDiskHydrator.warmHomeArtwork(applicationContext, app)
         }
         val deepRoute = intent.getStringExtra(EXTRA_ROUTE)
 
         setContent {
             BockMediaTheme {
                 val app = remember { BockMediaApp.get(this) }
-                var hasServer by remember { mutableStateOf<Boolean?>(null) }
+                var hasServer by remember { mutableStateOf<Boolean?>(if (coldBoot.showApp) true else null) }
                 val notificationPermission = rememberLauncherForActivityResult(
                     ActivityResultContracts.RequestPermission(),
                 ) { }
@@ -71,6 +89,16 @@ class MainActivity : ComponentActivity() {
                 var autoLoginError by remember { mutableStateOf<String?>(null) }
                 LaunchedEffect(Unit) {
                     NowPlayingNotificationManager.ensureChannel(this@MainActivity)
+                    if (coldBoot.showApp) {
+                        launch(Dispatchers.IO) {
+                            if (retryTestConnection(app)) {
+                                app.preferences.setHasConnected(true)
+                                com.bockmedia.console.data.analytics.DeviceAnalyticsReporter
+                                    .reportConnect(this@MainActivity)
+                            }
+                        }
+                        return@LaunchedEffect
+                    }
                     app.preferences.applyBuildServerUrls()
                     app.preferences.clearCredentialsIfNotRemembered()
                     app.preferences.applyBuildDefaultsIfEmpty()
@@ -78,7 +106,6 @@ class MainActivity : ComponentActivity() {
                     val remember = app.preferences.isRememberMeSync()
                     val wasConnected = app.preferences.hasConnectedBefore()
                     if (remember || wasConnected) {
-                        // Returning user — show UI immediately; verify server in background.
                         if (wasConnected && app.hasServerUrl()) {
                             hasServer = true
                             launch(Dispatchers.IO) {
@@ -134,6 +161,20 @@ class MainActivity : ComponentActivity() {
                             lifecycleOwner.lifecycleScope.launch {
                                 withContext(Dispatchers.IO) {
                                     NowPlayingWidget.refreshSession(applicationContext)
+                                }
+                            }
+                        }
+                        if (event == Lifecycle.Event.ON_PAUSE && hasServer == true) {
+                            lifecycleOwner.lifecycleScope.launch {
+                                withContext(Dispatchers.IO) {
+                                    HomeFeedCache.peek()?.let { feed ->
+                                        HomeCachePersistence.save(
+                                            applicationContext,
+                                            feed,
+                                            HomeArtworkCache.snapshotCardPaths(),
+                                            HomeArtworkCache.snapshotPlaylistPaths(),
+                                        )
+                                    }
                                 }
                             }
                         }

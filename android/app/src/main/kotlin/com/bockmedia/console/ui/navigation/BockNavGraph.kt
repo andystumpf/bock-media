@@ -14,6 +14,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import com.bockmedia.console.ui.testing.BockTestTags
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -146,11 +148,20 @@ fun BockApp(repository: BockMediaRepository, deepLinkRoute: String? = null) {
         bottomBar = {
             if (showBottomNav) {
                 NavigationBar(
+                    modifier = Modifier.testTag(BockTestTags.BOTTOM_NAV),
                     containerColor = MaterialTheme.colorScheme.background,
                 ) {
                     BockRoute.bottomNavRoutes.forEach { route ->
                         val selected = fullRoute?.substringBefore("/") == route.route
+                        val navTag = when (route) {
+                            BockRoute.Home -> BockTestTags.NAV_HOME
+                            BockRoute.Search -> BockTestTags.NAV_SEARCH
+                            BockRoute.Library -> BockTestTags.NAV_LIBRARY
+                            BockRoute.Automations -> BockTestTags.NAV_AUTOMATIONS
+                            else -> "bock_nav_${route.route}"
+                        }
                         NavigationBarItem(
+                            modifier = Modifier.testTag(navTag),
                             selected = selected,
                             onClick = {
                                 navController.navigate(route.route) {

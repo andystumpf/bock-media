@@ -6,6 +6,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import com.bockmedia.console.ui.testing.BockTestTags
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -163,26 +165,23 @@ fun HomeScreen(
     }
 
     suspend fun bootstrapHome() {
-        if (feed == null) {
-            HomeCachePersistence.load(context)?.let { snap ->
-                if (snap.feed.hasCurrentHomeLayout()) {
-                    HomeArtworkCache.restore(snap.cardMediaPaths, snap.playlistPaths)
-                    HomeFeedCache.put(snap.feed)
-                    feed = snap.feed
-                    loading = false
-                    HomeLoadCoordinator.markLoaded()
-                }
-            }
-        }
         HomeFeedCache.peek()?.let { cached ->
             feed = cached
             loading = false
             HomeLoadCoordinator.markLoaded()
             prefetchHomeArt(cached)
-            warmArtwork(cached)
-        }
-        runCatching {
-            repository.primeBaseUrl(BockMediaApp.get(context).configuredEndpointUrl())
+            if (!HomeArtworkCache.isFullyWarmed(cached.sections.flatMap { it.cards })) {
+                warmArtwork(cached)
+            }
+        } ?: HomeCachePersistence.load(context)?.let { snap ->
+            if (snap.feed.hasCurrentHomeLayout()) {
+                HomeArtworkCache.restore(snap.cardMediaPaths, snap.playlistPaths)
+                HomeFeedCache.put(snap.feed)
+                feed = snap.feed
+                loading = false
+                HomeLoadCoordinator.markLoaded()
+                prefetchHomeArt(snap.feed)
+            }
         }
         scope.launch {
             runCatching { repository.primeBaseUrl(BockMediaApp.get(context).resolveBaseUrl()) }
@@ -286,7 +285,7 @@ fun HomeScreen(
         when {
             loading && feed == null -> LoadingBox()
             error != null && feed == null -> ErrorText(error!!) { scope.launch { load() } }
-            else -> BockLazyColumn(Modifier.fillMaxSize()) {
+            else -> BockLazyColumn(Modifier.fillMaxSize().testTag(BockTestTags.HOME_FEED)) {
                 item {
                     HomeHeader(
                         selected = filter,

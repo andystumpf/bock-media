@@ -27,6 +27,7 @@ object LibraryArtPrefetch {
         val playlistIds = items.filter { it.kind == LibraryItemKind.Playlist }
             .mapNotNull { it.playlistId }
             .distinct()
+            .filter { HomeArtworkCache.playlistPath(it) == null }
             .take(MAX_PLAYLIST_PREFETCH)
         if (playlistIds.isNotEmpty()) {
             runCatching { repository.prefetchPlaylistCoverPaths(playlistIds) }

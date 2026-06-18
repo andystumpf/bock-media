@@ -70,18 +70,22 @@ object ServerEndpointResolver {
         preferences: AppPreferences,
         probeClient: OkHttpClient,
         forceRefresh: Boolean = false,
+        wifiAvailable: Boolean = true,
     ): String = resolveMutex.withLock {
         withContext(Dispatchers.IO) {
+            val local = preferences.getLocalServerUrlSync()
+            val external = preferences.getExternalServerUrlSync()
+
             if (!forceRefresh) {
                 cachedUrl?.let { url ->
                     if (System.currentTimeMillis() - cachedAtMs < CACHE_TTL_MS) {
-                        return@withContext url
+                        if (wifiAvailable || !AppPreferences.isLanHost(url, local, external)) {
+                            return@withContext url
+                        }
                     }
                 }
             }
 
-            val local = preferences.getLocalServerUrlSync()
-            val external = preferences.getExternalServerUrlSync()
             val localClient = probeClient.newBuilder()
                 .connectTimeout(LAN_CONNECT_SEC, TimeUnit.SECONDS)
                 .readTimeout(LAN_READ_SEC, TimeUnit.SECONDS)
@@ -95,7 +99,7 @@ object ServerEndpointResolver {
 
             val (localOk, externalOk) = coroutineScope {
                 val localProbe = async {
-                    !local.isNullOrBlank() && probe(localClient, local)
+                    wifiAvailable && !local.isNullOrBlank() && probe(localClient, local)
                 }
                 val externalProbe = async {
                     !external.isNullOrBlank() && probe(externalClient, external)
@@ -103,8 +107,13 @@ object ServerEndpointResolver {
                 localProbe.await() to externalProbe.await()
             }
 
-            val chosen = pickEndpoint(local, external, localOk, externalOk)
-                ?: throw IllegalStateException("No server URL configured")
+            val chosen = when {
+                !wifiAvailable && !external.isNullOrBlank() ->
+                    pickEndpoint(local, external, localReachable = false, externalReachable = externalOk)
+                        ?: AppPreferences.normalizeUrl(external)
+                else ->
+                    pickEndpoint(local, external, localOk, externalOk)
+            } ?: throw IllegalStateException("No server URL configured")
             if (localOk || externalOk) {
                 runCatching { preferences.setLastGoodEndpoint(chosen) }
                 cache(chosen)

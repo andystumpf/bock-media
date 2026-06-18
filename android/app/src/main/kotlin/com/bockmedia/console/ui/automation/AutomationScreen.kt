@@ -7,7 +7,9 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import com.bockmedia.console.ui.testing.BockTestTags
 import com.bockmedia.console.data.api.dto.AutomationItem
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.AutomationSessionCache
@@ -109,7 +111,10 @@ fun AutomationScreen(
                 LoadingBox(Modifier.weight(1f))
             } else {
                 BockLazyColumn(
-                    modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 8.dp)
+                        .testTag(BockTestTags.AUTOMATIONS_CONTENT),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     items(automations, key = { it.id }) { auto ->

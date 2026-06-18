@@ -5,6 +5,8 @@ import com.bockmedia.console.data.api.BockMediaApi
 import com.bockmedia.console.data.api.bockJson
 import com.bockmedia.console.data.auth.BockAuthInterceptor
 import com.bockmedia.console.data.local.AppPreferences
+import com.bockmedia.console.BuildConfig
+import com.bockmedia.console.data.network.NetworkReachability
 import com.bockmedia.console.data.network.ServerEndpointResolver
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.local.ClientIdStore
@@ -52,9 +54,12 @@ class BockMediaApp(private val appContext: Context) {
     @Volatile private var endpointPrimed = false
 
     suspend fun resolveBaseUrl(forceRefresh: Boolean = false): String {
+        NetworkReachability.update(appContext)
         if (!endpointPrimed) {
             endpointPrimed = true
-            ServerEndpointResolver.prime(preferences.getLastGoodEndpointSync())
+            val seed = configuredEndpointUrl()
+            ServerEndpointResolver.prime(seed)
+            seed?.let { repository.primeBaseUrl(it) }
         }
         val user = preferences.adminUser.first()
         val pass = preferences.adminPass.first()
@@ -65,7 +70,36 @@ class BockMediaApp(private val appContext: Context) {
             preferences = preferences,
             probeClient = buildHttpClient(user, pass, token, local, external),
             forceRefresh = forceRefresh,
-        )
+            wifiAvailable = NetworkReachability.onWifi,
+        ).also { repository.primeBaseUrl(it) }
+    }
+
+    /** Endpoint for instant paint — skips probes; cellular uses external, not LAN. */
+    suspend fun configuredEndpointUrl(): String? {
+        val local = preferences.getLocalServerUrlSync()
+        val external = preferences.getExternalServerUrlSync()
+        val lastGood = preferences.getLastGoodEndpointSync()
+        if (!NetworkReachability.onWifi) {
+            return when {
+                !external.isNullOrBlank() -> external
+                lastGood != null && !AppPreferences.isLanHost(lastGood, local, external) -> lastGood
+                else -> BuildConfig.DEFAULT_EXTERNAL_SERVER_URL.takeIf { it.isNotBlank() }
+            }
+        }
+        return lastGood ?: local ?: external
+    }
+
+    /** Switch to external URL when leaving Wi‑Fi — keeps feed/art caches, drops stale LAN client. */
+    fun onCellularNetwork() {
+        invalidateEndpoint()
+        endpointPrimed = false
+        runBlocking(Dispatchers.IO) {
+            configuredEndpointUrl()?.let { url ->
+                ServerEndpointResolver.prime(url)
+                repository.primeBaseUrl(url)
+                endpointPrimed = true
+            }
+        }
     }
 
     suspend fun api(): BockMediaApi {
@@ -169,12 +203,6 @@ class BockMediaApp(private val appContext: Context) {
     }
 
     suspend fun hasServerUrl(): Boolean = preferences.hasAnyServerUrl()
-
-    /** Last-known or configured server URL — no network probes (for instant cold-start paint). */
-    suspend fun configuredEndpointUrl(): String? =
-        preferences.getLastGoodEndpointSync()
-            ?: preferences.getLocalServerUrlSync()
-            ?: preferences.getExternalServerUrlSync()
 
     companion object {
         @Volatile

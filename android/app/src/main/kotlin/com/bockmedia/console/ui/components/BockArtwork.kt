@@ -4,7 +4,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Shape
@@ -13,8 +16,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil.compose.SubcomposeAsyncImage
-import coil.compose.SubcomposeAsyncImageContent
+import coil.compose.AsyncImage
+import coil.compose.AsyncImagePainter
 import coil.request.ImageRequest
 
 /**
@@ -57,23 +60,26 @@ fun BockArtwork(
         val key = stableArtCacheKey(model)
         ImageRequest.Builder(context)
             .data(model)
+            // Half-size bitmaps for opaque artwork — big memory/decode win on lists (perf #2).
+            .allowRgb565(true)
             .crossfade(crossfadeMs)
             .memoryCacheKey(key)
             .diskCacheKey(key)
             .build()
     }
-    SubcomposeAsyncImage(
-        model = request,
-        contentDescription = title,
-        modifier = clippedModifier,
-        contentScale = contentScale,
-        loading = {
-            // Avoid gradient flash on cold start — disk-cached images decode quickly.
-            Box(Modifier.fillMaxSize())
-        },
-        error = {
+    // AsyncImage avoids the per-tile subcomposition that makes SubcomposeAsyncImage
+    // janky in long lists, and auto-sizes the decode to the composable bounds (perf #2).
+    var isError by remember(model) { mutableStateOf(false) }
+    Box(clippedModifier) {
+        AsyncImage(
+            model = request,
+            contentDescription = title,
+            modifier = Modifier.fillMaxSize(),
+            contentScale = contentScale,
+            onState = { state -> isError = state is AsyncImagePainter.State.Error },
+        )
+        if (isError) {
             ArtGradientFallback(title, Modifier.fillMaxSize(), fallbackFontSize)
-        },
-        success = { SubcomposeAsyncImageContent() },
-    )
+        }
+    }
 }

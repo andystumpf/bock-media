@@ -12,6 +12,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import com.bockmedia.console.ui.testing.BockTestTags
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -55,6 +57,7 @@ fun TabScreenHeader(
 ) {
     Row(
         modifier = modifier
+            .testTag(BockTestTags.TAB_HEADER)
             .fillMaxWidth()
             .statusBarsPadding()
             .padding(start = 16.dp, end = 8.dp, bottom = 2.dp),
@@ -87,7 +90,12 @@ fun BockProgressIndicator(
 
 @Composable
 fun LoadingBox(modifier: Modifier = Modifier, logoSize: androidx.compose.ui.unit.Dp = 64.dp) {
-    Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+    Box(
+        modifier
+            .testTag(BockTestTags.SCREEN_LOADING)
+            .fillMaxSize(),
+        contentAlignment = Alignment.Center,
+    ) {
         BockLoadingLogo(size = logoSize)
     }
 }

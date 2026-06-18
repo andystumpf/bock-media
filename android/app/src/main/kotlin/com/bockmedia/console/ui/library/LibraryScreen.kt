@@ -22,6 +22,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import com.bockmedia.console.ui.testing.BockTestTags
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -195,7 +197,7 @@ fun LibraryScreen(
                     items = sorted,
                     repository = repository,
                     remoteOk = remoteOk,
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier.fillMaxSize().testTag(BockTestTags.LIBRARY_LIST),
                     onClick = { item -> handleLibraryClick(item, onPlay, onOpenPlaylist, onOpenArtist, onOpenAlbum) },
                     onPlay = onPlay,
                 )
@@ -203,7 +205,7 @@ fun LibraryScreen(
                     items = sorted,
                     repository = repository,
                     remoteOk = remoteOk,
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier.fillMaxSize().testTag(BockTestTags.LIBRARY_LIST),
                     onClick = { item -> handleLibraryClick(item, onPlay, onOpenPlaylist, onOpenArtist, onOpenAlbum) },
                     onPlay = onPlay,
                 )

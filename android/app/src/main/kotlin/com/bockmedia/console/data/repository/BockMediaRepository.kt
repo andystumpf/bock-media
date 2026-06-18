@@ -4,6 +4,7 @@ import com.bockmedia.console.BuildConfig
 import com.bockmedia.console.data.api.BockMediaApi
 import com.bockmedia.console.data.api.dto.*
 import com.bockmedia.console.data.local.AppPreferences
+import com.bockmedia.console.data.network.NetworkReachability
 import com.bockmedia.console.domain.model.HomeArtworkCache
 import com.bockmedia.console.domain.model.PlayTarget
 import com.bockmedia.console.domain.model.SearchSuggestion
@@ -21,6 +22,7 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import okhttp3.ResponseBody
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.sync.withLock
 
 class ApiException(val code: String, message: String) : Exception(message)
 
@@ -37,14 +39,25 @@ class BockMediaRepository(
     private val albumCoverPathCache = ConcurrentHashMap<String, String>()
     @Volatile private var cachedBaseUrl: String? = null
 
+    // Shared, short-TTL cache for the full playlist listing so Home, Library, and
+    // Search don't each hit /playlists independently on cold launch (perf #7).
+    private val playlistsListMutex = kotlinx.coroutines.sync.Mutex()
+    @Volatile private var playlistsListCache: Pair<Long, PlaylistsResponse>? = null
+    private val playlistsListTtlMs = 60_000L
+
     private suspend fun baseUrl(): String =
         cachedBaseUrl ?: baseUrlProvider().also { cachedBaseUrl = it }
 
     /** Best-effort base URL for sync artwork URL building (no network). */
-    fun peekBaseUrl(): String? =
-        cachedBaseUrl
-            ?: BuildConfig.DEFAULT_EXTERNAL_SERVER_URL.takeIf { it.isNotBlank() }
-                ?: BuildConfig.DEFAULT_LOCAL_SERVER_URL.takeIf { it.isNotBlank() }
+    fun peekBaseUrl(): String? {
+        val cached = cachedBaseUrl
+        val local = BuildConfig.DEFAULT_LOCAL_SERVER_URL.takeIf { it.isNotBlank() }
+        val external = BuildConfig.DEFAULT_EXTERNAL_SERVER_URL.takeIf { it.isNotBlank() }
+        if (cached != null && AppPreferences.isLanHost(cached, local, external) && !NetworkReachability.onWifi) {
+            return external ?: cached
+        }
+        return cached ?: external ?: local
+    }
 
     fun primeBaseUrl(url: String?) {
         url?.takeIf { it.isNotBlank() }?.let { cachedBaseUrl = AppPreferences.normalizeUrl(it) }
@@ -75,8 +88,8 @@ class BockMediaRepository(
         }
     }
 
-    suspend fun artworkUrlForPlaylist(playlistId: String, variantKey: String = playlistId): String? =
-        playlistCoverPath(playlistId, variantKey)?.let { artworkUrl(it) }
+    suspend fun artworkUrlForPlaylist(playlistId: String, variantKey: String = playlistId, sizePx: Int? = null): String? =
+        playlistCoverPath(playlistId, variantKey)?.let { artworkUrl(it, sizePx) }
 
     suspend fun artistCoverPathAt(artistName: String, pick: Int = 0): String? {
         val key = artistName.trim().lowercase()
@@ -92,11 +105,11 @@ class BockMediaRepository(
         return paths[kotlin.math.abs(pick) % paths.size]
     }
 
-    suspend fun resolveArtistArtUrl(artistName: String): String? =
-        artistCoverPathAt(artistName)?.let { artworkUrl(it) }
+    suspend fun resolveArtistArtUrl(artistName: String, sizePx: Int? = null): String? =
+        artistCoverPathAt(artistName)?.let { artworkUrl(it, sizePx) }
 
-    suspend fun resolveAlbumArtUrl(albumName: String, artist: String? = null): String? =
-        albumCoverPath(albumName, artist)?.let { artworkUrl(it) }
+    suspend fun resolveAlbumArtUrl(albumName: String, artist: String? = null, sizePx: Int? = null): String? =
+        albumCoverPath(albumName, artist)?.let { artworkUrl(it, sizePx) }
 
     private suspend fun albumCoverPath(albumName: String, artist: String? = null): String? {
         val key = "${albumName.trim().lowercase()}|${artist?.trim()?.lowercase().orEmpty()}"
@@ -182,6 +195,7 @@ class BockMediaRepository(
         playlistTrackPathsCache.clear()
         artistCoverPathsCache.clear()
         albumCoverPathCache.clear()
+        playlistsListCache = null
     }
 
     suspend fun testConnection(): Result<HealthResponse> = runCatching { api().health() }
@@ -211,8 +225,29 @@ class BockMediaRepository(
         }
         return filtered
     }
-    suspend fun playlists(search: String = "", page: Int = 1, limit: Int = 500) =
-        api().playlists(page = page, limit = limit, search = search)
+    suspend fun playlists(search: String = "", page: Int = 1, limit: Int = 500): PlaylistsResponse {
+        // Only the default full listing (no search, first page) is shared — that's the
+        // payload Home/Library/Search all request. Searches/paging always hit the API.
+        val shareable = search.isBlank() && page == 1
+        if (shareable) {
+            playlistsListCache?.let { (ts, cached) ->
+                if (System.currentTimeMillis() - ts < playlistsListTtlMs) return cached
+            }
+            return playlistsListMutex.withLock {
+                playlistsListCache?.let { (ts, cached) ->
+                    if (System.currentTimeMillis() - ts < playlistsListTtlMs) return@withLock cached
+                }
+                val fresh = api().playlists(page = page, limit = limit, search = search)
+                playlistsListCache = System.currentTimeMillis() to fresh
+                fresh
+            }
+        }
+        return api().playlists(page = page, limit = limit, search = search)
+    }
+
+    fun invalidatePlaylistsCache() {
+        playlistsListCache = null
+    }
 
     suspend fun resolvePlaylistId(name: String): String? {
         val trimmed = name.trim()
@@ -299,10 +334,10 @@ class BockMediaRepository(
     suspend fun localIp() = api().localIp()
     suspend fun identifyStatus() = api().identifyStatus()
 
-    suspend fun artworkUrl(filepath: String?): String? {
+    suspend fun artworkUrl(filepath: String?, sizePx: Int? = null): String? {
         if (filepath.isNullOrBlank()) return null
         val base = runCatching { baseUrl() }.getOrNull() ?: return null
-        return AppPreferences.artworkUrl(base, filepath)
+        return AppPreferences.artworkUrl(base, filepath, sizePx)
     }
 
     suspend fun resolvePlaybackArtUrl(

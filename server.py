@@ -3981,6 +3981,57 @@ def find_artwork(audio_path):
             or _remote_album_artwork(audio_path)
             or _default_artwork())
 
+# ── Artwork serving: resolution memo + thumbnail cache (perf #1/#5) ───────────
+_ART_RESOLVE_CACHE = {}          # track path -> resolved art file (or None)
+_ART_RESOLVE_LOCK = threading.Lock()
+_ART_MAX_AGE = 60 * 60 * 24 * 30  # 30 days — artwork for a given path is immutable
+_THUMB_CACHE = os.path.join(ARTWORK_CACHE, 'thumbs')
+
+def _resolve_art_cached(audio_path):
+    """Memoize find_artwork() so repeat tile requests skip the sidecar/ID3/iTunes chain."""
+    try:
+        cached = _ART_RESOLVE_CACHE.get(audio_path)
+    except TypeError:
+        cached = None
+    if cached is not None:
+        if os.path.isfile(cached):
+            return cached
+        with _ART_RESOLVE_LOCK:
+            _ART_RESOLVE_CACHE.pop(audio_path, None)
+    resolved = find_artwork(audio_path)
+    if resolved and os.path.isfile(resolved):
+        with _ART_RESOLVE_LOCK:
+            _ART_RESOLVE_CACHE[audio_path] = resolved
+        return resolved
+    return None
+
+def _thumbnail_for(src_path, size):
+    """Return a cached downscaled JPEG (longest edge == size) for src_path."""
+    import hashlib
+    try:
+        st = os.stat(src_path)
+    except OSError:
+        return None
+    key = hashlib.sha1(f'{src_path}:{int(st.st_mtime)}:{int(st.st_size)}:{size}'
+                       .encode('utf-8')).hexdigest()
+    out = os.path.join(_THUMB_CACHE, f'{key}.jpg')
+    if os.path.isfile(out) and os.path.getsize(out) > 0:
+        return out
+    try:
+        from PIL import Image
+        os.makedirs(_THUMB_CACHE, exist_ok=True)
+        with Image.open(src_path) as im:
+            if im.mode not in ('RGB', 'L'):
+                im = im.convert('RGB')
+            im.thumbnail((size, size), Image.LANCZOS)
+            tmp = out + '.tmp'
+            im.save(tmp, 'JPEG', quality=82, optimize=True)
+        os.replace(tmp, out)
+        return out
+    except Exception as e:
+        print(f'thumb error {src_path} @{size}: {e}', flush=True)
+        return None
+
 @app.route('/stream/<path:filepath>')
 def stream_audio(filepath):
     full_path = '/' + filepath
@@ -4035,15 +4086,28 @@ def serve_artwork(filepath):
         return 'Not found', 404
     # Mobile app / UI pass the track path — resolve to sidecar/embedded/cache art.
     if os.path.splitext(abs_path)[1].lower() not in _ART_MIME_BY_EXT:
-        resolved = find_artwork(abs_path)
+        resolved = _resolve_art_cached(abs_path)
         if resolved and os.path.isfile(resolved):
             abs_path = os.path.abspath(resolved)
             if not any(abs_path.startswith(r) for r in allowed_roots):
                 return 'Forbidden', 403
     if not os.path.isfile(abs_path):
         return 'Not found', 404
+    # Optional downscaled thumbnail for grid/list tiles: /artwork/...?size=384
+    size_arg = request.args.get('size')
+    if size_arg:
+        try:
+            size_px = max(48, min(int(size_arg), 1024))
+        except (TypeError, ValueError):
+            size_px = None
+        if size_px:
+            thumb = _thumbnail_for(abs_path, size_px)
+            if thumb:
+                abs_path = thumb
     mime = _ART_MIME_BY_EXT.get(os.path.splitext(abs_path)[1].lower(), 'image/jpeg')
-    return send_file(abs_path, mimetype=mime)
+    # Artwork for a path is immutable → let the client cache hard and revalidate
+    # cheaply (304) so repeat tile views cost zero bytes (perf #1).
+    return send_file(abs_path, mimetype=mime, conditional=True, max_age=_ART_MAX_AGE)
 
 def file_to_stream_url(filepath):
     rel = filepath.lstrip('/')

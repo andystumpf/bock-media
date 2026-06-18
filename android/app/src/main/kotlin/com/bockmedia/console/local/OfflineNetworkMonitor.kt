@@ -5,6 +5,8 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import com.bockmedia.console.BockMediaApp
+import com.bockmedia.console.data.network.NetworkReachability
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -27,17 +29,28 @@ object OfflineNetworkMonitor {
             request,
             object : ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: Network) {
-                    scope.launch(Dispatchers.IO) {
-                        OfflineDownloadManager.onNetworkAvailable(ctx)
-                        OfflineSyncWorker.enqueue(ctx)
-                    }
+                    onTransportChanged(ctx)
+                }
+
+                override fun onLost(network: Network) {
+                    onTransportChanged(ctx)
                 }
             },
         )
         registered = true
-        if (isOnline(cm)) {
-            scope.launch(Dispatchers.IO) {
-                OfflineDownloadManager.onNetworkAvailable(ctx)
+        onTransportChanged(ctx)
+    }
+
+    private fun onTransportChanged(ctx: Context) {
+        val wasWifi = NetworkReachability.onWifi
+        NetworkReachability.update(ctx)
+        if (wasWifi && !NetworkReachability.onWifi) {
+            BockMediaApp.get(ctx).onCellularNetwork()
+        }
+        scope.launch(Dispatchers.IO) {
+            OfflineDownloadManager.onNetworkAvailable(ctx)
+            if (NetworkReachability.onWifi) {
+                OfflineSyncWorker.enqueue(ctx)
             }
         }
     }

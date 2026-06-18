@@ -24,8 +24,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil.compose.SubcomposeAsyncImage
-import coil.compose.SubcomposeAsyncImageContent
 import com.bockmedia.console.data.api.httpErrorMessage
 import com.bockmedia.console.data.api.dto.PlaylistSummary
 import com.bockmedia.console.data.api.dto.PlaylistTrack
@@ -64,7 +62,12 @@ fun PlaylistsScreen(
 
     suspend fun load() {
         runCatching {
-            playlists = repository.playlists(search).items
+            val loaded = repository.playlists(search).items
+            // Batch-resolve cover paths once (one request) before rows render, so each
+            // SpotifyPlaylistRow reads its cover from cache instead of firing its own
+            // /cover call (perf #3 — fixes N+1 cover fetch).
+            repository.prefetchPlaylistCoverPaths(loaded.map { it.id })
+            playlists = loaded
             smart = repository.smartPlaylists().items
         }
     }

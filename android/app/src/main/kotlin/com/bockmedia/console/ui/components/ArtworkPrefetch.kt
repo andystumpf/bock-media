@@ -30,12 +30,13 @@ object ArtworkPrefetch {
                                 val keyStr = stableArtCacheKey(url)
                                 val memKey = MemoryCache.Key(keyStr)
                                 if (loader.memoryCache?.get(memKey) != null) return@withPermit
-                                if (loader.diskCache?.openSnapshot(keyStr) != null) {
+                                if (loader.diskCache?.openSnapshot(keyStr)?.use { true } == true) {
                                     loader.execute(
                                         ImageRequest.Builder(context)
                                             .data(url)
                                             .memoryCacheKey(keyStr)
                                             .diskCacheKey(keyStr)
+                                            .networkCachePolicy(coil.request.CachePolicy.DISABLED)
                                             .build(),
                                     )
                                     return@withPermit
