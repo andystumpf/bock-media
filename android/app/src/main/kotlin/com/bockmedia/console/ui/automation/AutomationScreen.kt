@@ -15,6 +15,8 @@ import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.AutomationSessionCache
 import com.bockmedia.console.ui.components.*
 import com.bockmedia.console.ui.util.formatTime12
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonPrimitive
@@ -60,13 +62,21 @@ fun AutomationScreen(
     suspend fun load(fromPull: Boolean = false) {
         if (!fromPull && automations.isEmpty()) loading = true
         if (fromPull) refreshing = true
-        runCatching {
-            val loaded = repository.automations().items
-            val st = repository.alexaRemoteStatus()
-            val ok = st.configured && st.authenticated == true
-            automations = loaded
+        coroutineScope {
+            // Alexa remote status is a slow Amazon round-trip and only gates the FAB /
+            // warning banner — fetch it concurrently so the list never waits on it (#9).
+            val statusDeferred = async {
+                runCatching { repository.alexaRemoteStatus() }.getOrNull()
+            }
+            val loaded = runCatching { repository.automations().items }.getOrNull()
+            if (loaded != null) {
+                automations = loaded
+                loading = false
+            }
+            val ok = statusDeferred.await()
+                ?.let { it.configured && it.authenticated == true } ?: remoteOk
             remoteOk = ok
-            AutomationSessionCache.put(loaded, ok)
+            if (loaded != null) AutomationSessionCache.put(loaded, ok)
         }
         loading = false
         refreshing = false
