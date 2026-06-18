@@ -38,6 +38,14 @@ private val PillShape = RoundedCornerShape(50)
 private val ArtShape = RoundedCornerShape(4.dp)
 private val TileSize = 148.dp
 
+private fun openHomeCard(
+    card: HomeCard,
+    onOpenPlaylist: (String) -> Unit,
+    onPlay: (HomeCard) -> Unit,
+) {
+    card.playlistId?.let(onOpenPlaylist) ?: onPlay(card)
+}
+
 @Composable
 fun HomeHeader(
     selected: HomeFilter,
@@ -114,6 +122,7 @@ fun HomeShortcutGrid(
     repository: BockMediaRepository,
     onPlay: (HomeCard) -> Unit,
     onLongPress: (HomeCard) -> Unit,
+    onOpenPlaylist: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     if (cards.isEmpty()) return
@@ -132,7 +141,7 @@ fun HomeShortcutGrid(
                     HomeShortcutTile(
                         card = card,
                         repository = repository,
-                        onClick = { onPlay(card) },
+                        onClick = { openHomeCard(card, onOpenPlaylist, onPlay) },
                         onLongClick = { onLongPress(card) },
                         modifier = Modifier.weight(1f),
                     )
@@ -191,6 +200,7 @@ fun SpotifyHomeSection(
     repository: BockMediaRepository,
     onPlay: (HomeCard) -> Unit,
     onLongPress: (HomeCard) -> Unit,
+    onOpenPlaylist: (String) -> Unit = {},
     modifier: Modifier = Modifier,
     onShowAll: ((HomeSection) -> Unit)? = null,
 ) {
@@ -238,12 +248,14 @@ fun SpotifyHomeSection(
                         GenreMixTile(
                             card = card,
                             repository = repository,
+                            onOpenPlaylist = onOpenPlaylist,
                             onPlay = onPlay,
                             onLongPress = { onLongPress(card) },
                         )
                     else -> PlaylistArtTile(
                         card = card,
                         repository = repository,
+                        onOpenPlaylist = onOpenPlaylist,
                         onPlay = onPlay,
                         onLongPress = { onLongPress(card) },
                     )
@@ -328,6 +340,7 @@ fun HomeSectionShowAllSheet(
     section: HomeSection,
     onDismiss: () -> Unit,
     onPlay: (HomeCard) -> Unit,
+    onOpenPlaylist: (String) -> Unit = {},
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(
@@ -363,7 +376,7 @@ fun HomeSectionShowAllSheet(
             ) {
                 section.cards.forEach { card ->
                     Surface(
-                        onClick = { onPlay(card) },
+                        onClick = { openHomeCard(card, onOpenPlaylist, onPlay) },
                         color = SpotifyElevated,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
@@ -418,6 +431,7 @@ private fun HomeCardArt(
 private fun PlaylistArtTile(
     card: HomeCard,
     repository: BockMediaRepository,
+    onOpenPlaylist: (String) -> Unit,
     onPlay: (HomeCard) -> Unit,
     onLongPress: () -> Unit,
 ) {
@@ -425,7 +439,7 @@ private fun PlaylistArtTile(
         modifier = Modifier
             .width(TileSize)
             .combinedClickable(
-                onClick = { onPlay(card) },
+                onClick = { openHomeCard(card, onOpenPlaylist, onPlay) },
                 onLongClick = onLongPress,
             ),
     ) {
@@ -463,6 +477,7 @@ private fun PlaylistArtTile(
 private fun GenreMixTile(
     card: HomeCard,
     repository: BockMediaRepository,
+    onOpenPlaylist: (String) -> Unit,
     onPlay: (HomeCard) -> Unit,
     onLongPress: () -> Unit,
 ) {
@@ -472,7 +487,7 @@ private fun GenreMixTile(
             .size(TileSize)
             .clip(ArtShape)
             .combinedClickable(
-                onClick = { onPlay(card) },
+                onClick = { openHomeCard(card, onOpenPlaylist, onPlay) },
                 onLongClick = onLongPress,
             ),
     ) {

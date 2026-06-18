@@ -242,6 +242,9 @@ private fun BockNavHost(
                 onOpenDownloads = {
                     navController.navigate(BockRoute.Downloads.route) { launchSingleTop = true }
                 },
+                onOpenPlaylist = { id ->
+                    navController.navigate(playlistDetailRoute(id)) { launchSingleTop = true }
+                },
             )
         }
         composable(BockRoute.NowPlaying.route) {
@@ -297,6 +300,9 @@ private fun BockNavHost(
                 onOpenArtist = { navController.navigate(albumsArtistRoute(it)) },
                 onOpenAlbum = { album, _ -> navController.navigate(songsAlbumRoute(album)) },
                 onOpenGenre = { name -> navController.navigate(genreRoute(name)) },
+                onOpenPlaylist = { id ->
+                    navController.navigate(playlistDetailRoute(id)) { launchSingleTop = true }
+                },
                 onAccountNavigate = { route ->
                     navController.navigate(route) { launchSingleTop = true }
                 },

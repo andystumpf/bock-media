@@ -35,6 +35,7 @@ fun SearchScreen(
     onOpenArtist: (String) -> Unit,
     onOpenAlbum: (String, String?) -> Unit,
     onOpenGenre: (String) -> Unit = {},
+    onOpenPlaylist: (String) -> Unit = {},
     onAccountNavigate: (String) -> Unit = {},
     snackbarHostState: SnackbarHostState? = null,
 ) {
@@ -143,6 +144,7 @@ fun SearchScreen(
                 onPlay = onPlay,
                 onOpenArtist = onOpenArtist,
                 onOpenAlbum = onOpenAlbum,
+                onOpenPlaylist = onOpenPlaylist,
                 snackbarHostState = snackbarHostState,
                 onFavoriteToggle = { path, hit, starred ->
                     scope.launch {
@@ -161,14 +163,18 @@ fun SearchScreen(
                         suggestions = suggestions,
                         repository = repository,
                         onSuggestionClick = { suggestion ->
-                            SearchBrowseLoader.playTargetFor(suggestion)?.let { target ->
-                                when (target) {
-                                    is PlayTarget.Artist -> onOpenArtist(target.name)
-                                    is PlayTarget.Album -> onOpenAlbum(target.name, target.artist)
-                                    else -> onPlay(target)
+                            if (suggestion.kind == SearchSuggestionKind.Playlist && suggestion.id != null) {
+                                onOpenPlaylist(suggestion.id)
+                            } else {
+                                SearchBrowseLoader.playTargetFor(suggestion)?.let { target ->
+                                    when (target) {
+                                        is PlayTarget.Artist -> onOpenArtist(target.name)
+                                        is PlayTarget.Album -> onOpenAlbum(target.name, target.artist)
+                                        else -> onPlay(target)
+                                    }
+                                } ?: run {
+                                    query = suggestion.title
                                 }
-                            } ?: run {
-                                query = suggestion.title
                             }
                             scope.launch { historyStore.add(suggestion.title) }
                         },
@@ -193,7 +199,10 @@ fun SearchScreen(
                         SearchPickedForYouSection(
                             cards = picked,
                             repository = repository,
-                            onCardClick = { card -> onPlay(card.playTarget) },
+                            onCardClick = { card ->
+                                card.playlistId?.let(onOpenPlaylist)
+                                    ?: onPlay(card.playTarget)
+                            },
                             modifier = Modifier.padding(bottom = 16.dp),
                         )
                     }
@@ -238,6 +247,7 @@ private fun SearchResultsList(
     onPlay: (PlayTarget) -> Unit,
     onOpenArtist: (String) -> Unit,
     onOpenAlbum: (String, String?) -> Unit,
+    onOpenPlaylist: (String) -> Unit,
     snackbarHostState: SnackbarHostState? = null,
     onFavoriteToggle: (String, SearchHit, Boolean) -> Unit,
 ) {
@@ -261,14 +271,15 @@ private fun SearchResultsList(
         results.playlists.takeIf { it.isNotEmpty() }?.let { list ->
             item { SearchSectionHeader("Playlists") }
             items(list, key = { "pl-${it.id}" }) { hit ->
-                val target = PlayTarget.Playlist(hit.id ?: "", hit.name ?: "")
+                val id = hit.id ?: return@items
+                val target = PlayTarget.Playlist(id, hit.name ?: "")
                 SearchHitRow(
                     repository = repository,
                     kind = SearchSuggestionKind.Playlist,
                     hit = hit,
                     title = hit.name ?: "",
                     subtitle = null,
-                    onClick = { onPlay(target) },
+                    onClick = { onOpenPlaylist(id) },
                     trailing = {
                         PlayDownloadActions(playTarget = target, remoteOk = remoteOk, onPlay = { onPlay(target) })
                     },
