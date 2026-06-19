@@ -3,6 +3,7 @@ package com.bockmedia.console.local
 import android.content.Context
 import com.bockmedia.console.BockMediaApp
 import com.bockmedia.console.data.local.AppPreferences
+import com.bockmedia.console.data.network.NetworkReachability
 import com.bockmedia.console.domain.model.PlayTarget
 import com.bockmedia.console.data.analytics.DeviceAnalyticsReporter
 import com.bockmedia.console.media.LocalPlaybackQueueResolver
@@ -10,18 +11,29 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import okhttp3.Request
+import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
 object OfflineDownloadManager {
     private const val MAX_TRACKS = 150
+    private const val DEFAULT_BUFFER_BYTES = 64 * 1024
+
+    // Parallel download fan-out. Wi-Fi can saturate more sockets; on cellular we use
+    // fewer to hide latency without overwhelming a slower, metered link.
+    private fun downloadConcurrency(): Int = if (NetworkReachability.onWifi) 6 else 4
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mutex = Mutex()
@@ -190,27 +202,47 @@ object OfflineDownloadManager {
 
             val client = app.buildAuthenticatedHttpClient()
             val base = app.resolveBaseUrl()
-            val tracksOnDisk = mutableListOf<OfflineTrackEntry>()
             val workingManifest = manifestFor(id, title, kind, sourcePlaylistId, mergedTracks)
 
-            mergedTracks.forEach { entry ->
-                if (cancelFlags[id]?.get() == true) error("Cancelled")
-                val dest = store.trackFile(id, entry.fileName)
-                if (dest.exists() && dest.length() > 0) {
-                    tracksOnDisk.add(entry)
-                    publishProgress(store, workingManifest, tracksOnDisk, mergedTracks)
-                    return@forEach
-                }
-                val url = AppPreferences.streamUrl(base, entry.path) ?: error("Bad stream URL")
-                dest.parentFile?.mkdirs()
-                client.newCall(Request.Builder().url(url).build()).execute().use { response ->
-                    if (!response.isSuccessful) error("Download failed (${response.code})")
-                    response.body?.byteStream()?.use { input ->
-                        dest.outputStream().use { output -> input.copyTo(output) }
-                    } ?: error("Empty response")
-                }
-                tracksOnDisk.add(entry)
-                publishProgress(store, workingManifest, tracksOnDisk, mergedTracks)
+            // Download tracks concurrently. A single sequential stream was the main
+            // slowdown — especially on cellular, where per-file latency dominates and
+            // overlapping requests recover most of the wasted round-trip time.
+            val tracksOnDisk = java.util.Collections.synchronizedList(mutableListOf<OfflineTrackEntry>())
+            val progressMutex = Mutex()
+            val gate = Semaphore(downloadConcurrency())
+            coroutineScope {
+                mergedTracks.map { entry ->
+                    async {
+                        gate.withPermit {
+                            if (cancelFlags[id]?.get() == true) error("Cancelled")
+                            val dest = store.trackFile(id, entry.fileName)
+                            if (!(dest.exists() && dest.length() > 0)) {
+                                val url = AppPreferences.streamUrl(base, entry.path)
+                                    ?: error("Bad stream URL")
+                                dest.parentFile?.mkdirs()
+                                // Stream to a .part file and atomically rename so an
+                                // interrupted download is never mistaken for a complete one.
+                                val part = File(dest.parentFile, "${dest.name}.part")
+                                client.newCall(Request.Builder().url(url).build()).execute().use { response ->
+                                    if (!response.isSuccessful) error("Download failed (${response.code})")
+                                    response.body?.byteStream()?.use { input ->
+                                        part.outputStream().use { output ->
+                                            input.copyTo(output, DEFAULT_BUFFER_BYTES)
+                                        }
+                                    } ?: error("Empty response")
+                                }
+                                if (!part.renameTo(dest)) {
+                                    part.copyTo(dest, overwrite = true)
+                                    part.delete()
+                                }
+                            }
+                            progressMutex.withLock {
+                                tracksOnDisk.add(entry)
+                                publishProgress(store, workingManifest, tracksOnDisk.toList(), mergedTracks)
+                            }
+                        }
+                    }
+                }.awaitAll()
             }
 
             val manifest = workingManifest.copy(
