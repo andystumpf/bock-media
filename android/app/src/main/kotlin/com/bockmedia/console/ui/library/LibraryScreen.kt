@@ -434,16 +434,38 @@ private fun LibraryGridTile(
     onPlay: () -> Unit,
 ) {
     Column {
-        Box(Modifier.clickable(onClick = onClick)) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .aspectRatio(1f)
+                .clickable(onClick = onClick),
+        ) {
             LibraryItemArt(
                 item = item,
                 repository = repository,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(1f),
+                modifier = Modifier.fillMaxSize(),
                 shape = if (item.kind == LibraryItemKind.Artist) CircleShape else RoundedCornerShape(8.dp),
                 fallbackFontSize = 28.sp,
             )
+            if (item.kind != LibraryItemKind.Downloaded) {
+                DownloadStatusControl(
+                    playTarget = item.playTarget,
+                    onArtwork = true,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(4.dp),
+                )
+            }
+            if (remoteOk) {
+                CircularPlayButton(
+                    onClick = onPlay,
+                    size = 48.dp,
+                    elevated = true,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(8.dp),
+                )
+            }
         }
         Spacer(Modifier.height(8.dp))
         Text(item.title, maxLines = 2, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
@@ -453,13 +475,6 @@ private fun LibraryGridTile(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        PlayDownloadActions(
-            playTarget = item.playTarget,
-            remoteOk = remoteOk,
-            onPlay = onPlay,
-            showDownload = item.kind != LibraryItemKind.Downloaded,
-            modifier = Modifier.offset(x = (-8).dp),
         )
     }
 }
