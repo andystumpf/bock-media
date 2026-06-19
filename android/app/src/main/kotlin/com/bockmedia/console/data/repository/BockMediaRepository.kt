@@ -318,6 +318,17 @@ class BockMediaRepository(
     suspend fun songs(page: Int, search: String, artist: String? = null, album: String? = null, limit: Int = 100) =
         api().songs(page = page, search = search, artist = artist, album = album, limit = limit)
 
+    private val trackYearCache = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
+    /** Release year for a file path (cached). Null when unknown or offline. */
+    suspend fun trackYear(path: String): Int? {
+        if (path.isBlank()) return null
+        trackYearCache[path]?.let { return it }
+        val year = runCatching { api().trackMeta(path).year }.getOrNull()
+        if (year != null) trackYearCache[path] = year
+        return year
+    }
+
     suspend fun watchFolders() = api().watchFolders()
     suspend fun devices() = api().devices()
     suspend fun mergeCandidates() = api().mergeCandidates()

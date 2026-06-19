@@ -160,6 +160,8 @@ fun NowPlayingScreen(
                 "next" -> LocalPlaybackController.skip(context, forward = true)
                 "previous" -> LocalPlaybackController.skip(context, forward = false)
                 "stop" -> LocalPlaybackController.stop(context)
+                "shuffle_on" -> LocalPlaybackController.setShuffle(context, true)
+                "shuffle_off" -> LocalPlaybackController.setShuffle(context, false)
             }
             return
         }
@@ -595,6 +597,9 @@ private fun SpotifyNowPlayingPage(
     }
     val displayDev = if (isLocal) liveLocal.toNowPlayingDevice() ?: dev else dev
     val canControl = canControlDevice(displayDev, alexaDevices, controlsAvailable, remoteOk)
+    LaunchedEffect(isLocal, liveLocal.shuffle, displayDev.deviceId) {
+        if (isLocal) shuffleOn[displayDev.deviceId] = liveLocal.shuffle
+    }
     val elapsedSec = prog.elapsedMs / 1000
     val durationSec = prog.durationMs / 1000
     var showMoreMenu by remember { mutableStateOf(false) }
@@ -604,6 +609,14 @@ private fun SpotifyNowPlayingPage(
     val localArtFile = if (isLocal) liveLocal.current?.localFile else null
     LaunchedEffect(displayDev.filepath, localArtFile) {
         artUrl = repository.resolvePlaybackArtUrl(context, displayDev.filepath, localArtFile)
+    }
+    var year by remember(displayDev.filepath) { mutableStateOf(displayDev.year) }
+    LaunchedEffect(displayDev.filepath, displayDev.year) {
+        year = displayDev.year
+        val fp = displayDev.filepath
+        if (year == null && !fp.isNullOrBlank()) {
+            year = repository.trackYear(fp)
+        }
     }
 
     val config = LocalConfiguration.current
@@ -672,16 +685,17 @@ private fun SpotifyNowPlayingPage(
                 ) {
                     SpotifyTrackInfoRow(
                         dev = displayDev,
+                        year = year,
                         isLiked = displayDev.filepath?.let { it in favoritePaths } == true,
                         onFavorite = onFavorite,
                         modifier = Modifier.padding(horizontal = 24.dp),
                     )
 
-                    if (displayDev.sleep != null || (displayDev.paused && !isLocal)) {
+                    if (displayDev.sleep != null || displayDev.paused) {
                         SpotifyStatusChips(
                             dev = displayDev,
                             onSleep = onSleep,
-                            showPausedBadge = !isLocal,
+                            showPausedBadge = true,
                             modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp),
                         )
                     }
@@ -693,15 +707,17 @@ private fun SpotifyNowPlayingPage(
                         modifier = Modifier.padding(horizontal = 16.dp).padding(top = 8.dp),
                     )
 
+                    SpotifyTransportControls(
+                        dev = displayDev,
+                        shuffleOn = shuffleOn,
+                        onControl = onControl,
+                        onSleep = onSleep,
+                        showShuffle = true,
+                        showSleep = !isLocal,
+                        enabled = canControl,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
                     if (canControl) {
-                        SpotifyTransportControls(
-                            dev = displayDev,
-                            shuffleOn = shuffleOn,
-                            onControl = onControl,
-                            onSleep = onSleep,
-                            showSleepAndShuffle = !isLocal,
-                            modifier = Modifier.padding(top = 4.dp),
-                        )
                         SpotifyStopButton(
                             onClick = { onControl(displayDev, "stop") },
                             modifier = Modifier
@@ -710,8 +726,11 @@ private fun SpotifyNowPlayingPage(
                         )
 
                         val serial = if (isLocal) null else resolveSerial(displayDev, alexaDevices)
-                        if (serial != null) {
-                            SpotifyVolumeRow(
+                        when {
+                            isLocal -> LocalVolumeRow(
+                                modifier = Modifier.padding(horizontal = 8.dp).padding(top = 4.dp, bottom = 8.dp),
+                            )
+                            serial != null -> SpotifyVolumeRow(
                                 dev = displayDev,
                                 serial = serial,
                                 volume = volumes[dev.deviceId],
@@ -723,6 +742,23 @@ private fun SpotifyNowPlayingPage(
                                 modifier = Modifier.padding(horizontal = 8.dp).padding(top = 4.dp, bottom = 8.dp),
                             )
                         }
+                    } else if (!isLocal) {
+                        val reason = when {
+                            !controlsAvailable -> "Playback controls aren't enabled on the server."
+                            !remoteOk -> "Alexa session expired — re-login in Settings to control this device."
+                            resolveSerial(displayDev, alexaDevices) == null ->
+                                "Rename this device on the Devices page to match the Echo's Alexa name to enable controls."
+                            else -> "Controls are unavailable for this device."
+                        }
+                        Text(
+                            reason,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color.White.copy(alpha = 0.7f),
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 24.dp, vertical = 12.dp),
+                        )
                     }
 
                     if (displayDev.upcoming.isNotEmpty()) {
@@ -873,6 +909,7 @@ private fun SpotifyPlayerTopBar(
 @Composable
 private fun SpotifyTrackInfoRow(
     dev: NowPlayingDeviceItem,
+    year: Int?,
     isLiked: Boolean,
     onFavorite: (NowPlayingDeviceItem) -> Unit,
     modifier: Modifier = Modifier,
@@ -890,9 +927,13 @@ private fun SpotifyTrackInfoRow(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
-            dev.artist?.let {
+            val artistLine = listOfNotNull(
+                dev.artist?.takeIf { it.isNotBlank() },
+                year?.takeIf { it > 0 }?.toString(),
+            ).joinToString(" · ")
+            if (artistLine.isNotBlank()) {
                 Text(
-                    it,
+                    artistLine,
                     style = MaterialTheme.typography.titleMedium,
                     color = Color.White.copy(alpha = 0.78f),
                     maxLines = 1,
@@ -1059,10 +1100,13 @@ private fun SpotifyTransportControls(
     shuffleOn: MutableMap<String, Boolean>,
     onControl: (NowPlayingDeviceItem, String) -> Unit,
     onSleep: (NowPlayingDeviceItem) -> Unit,
-    showSleepAndShuffle: Boolean = true,
+    showShuffle: Boolean = true,
+    showSleep: Boolean = true,
+    enabled: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     val shuffled = shuffleOn[dev.deviceId] == true
+    val iconTint = if (enabled) Color.White else Color.White.copy(alpha = 0.3f)
     Row(
         modifier
             .fillMaxWidth()
@@ -1070,19 +1114,22 @@ private fun SpotifyTransportControls(
         horizontalArrangement = Arrangement.SpaceEvenly,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (showSleepAndShuffle) {
+        if (showShuffle) {
             IconButton(
                 onClick = {
                     val on = !shuffled
                     shuffleOn[dev.deviceId] = on
                     onControl(dev, if (on) "shuffle_on" else "shuffle_off")
                 },
+                enabled = enabled,
                 modifier = Modifier.size(48.dp),
             ) {
                 Icon(
                     Icons.Default.Shuffle,
                     contentDescription = "Shuffle",
-                    tint = if (shuffled) MaterialTheme.colorScheme.secondary else Color.White.copy(alpha = 0.85f),
+                    tint = if (!enabled) iconTint
+                        else if (shuffled) MaterialTheme.colorScheme.secondary
+                        else Color.White.copy(alpha = 0.85f),
                 )
             }
         } else {
@@ -1090,21 +1137,22 @@ private fun SpotifyTransportControls(
         }
         IconButton(
             onClick = { onControl(dev, "previous") },
+            enabled = enabled,
             modifier = Modifier.size(52.dp),
         ) {
             Icon(
                 Icons.Default.SkipPrevious,
                 contentDescription = "Previous",
-                tint = Color.White,
+                tint = iconTint,
                 modifier = Modifier.size(38.dp),
             )
         }
         Surface(
-            onClick = { onControl(dev, if (dev.paused) "play" else "pause") },
+            onClick = { if (enabled) onControl(dev, if (dev.paused) "play" else "pause") },
             modifier = Modifier.size(if (LocalConfiguration.current.screenHeightDp < 640) 64.dp else 72.dp),
             shape = CircleShape,
-            color = Color.White,
-            shadowElevation = 8.dp,
+            color = if (enabled) Color.White else Color.White.copy(alpha = 0.3f),
+            shadowElevation = if (enabled) 8.dp else 0.dp,
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Icon(
@@ -1117,24 +1165,28 @@ private fun SpotifyTransportControls(
         }
         IconButton(
             onClick = { onControl(dev, "next") },
+            enabled = enabled,
             modifier = Modifier.size(52.dp),
         ) {
             Icon(
                 Icons.Default.SkipNext,
                 contentDescription = "Next",
-                tint = Color.White,
+                tint = iconTint,
                 modifier = Modifier.size(38.dp),
             )
         }
-        if (showSleepAndShuffle) {
+        if (showSleep) {
             IconButton(
                 onClick = { onSleep(dev) },
+                enabled = enabled,
                 modifier = Modifier.size(48.dp),
             ) {
                 Icon(
                     Icons.Default.Bedtime,
                     contentDescription = "Sleep timer",
-                    tint = if (dev.sleep != null) MaterialTheme.colorScheme.secondary else Color.White.copy(alpha = 0.85f),
+                    tint = if (!enabled) iconTint
+                        else if (dev.sleep != null) MaterialTheme.colorScheme.secondary
+                        else Color.White.copy(alpha = 0.85f),
                 )
             }
         } else {
@@ -1176,6 +1228,41 @@ private fun SpotifyVolumeRow(
                 }
             },
             valueRange = 0f..100f,
+            modifier = Modifier.weight(1f).padding(horizontal = 4.dp),
+            colors = SliderDefaults.colors(
+                thumbColor = Color.White,
+                activeTrackColor = Color.White,
+                inactiveTrackColor = Color.White.copy(alpha = 0.28f),
+            ),
+        )
+        Icon(Icons.Default.VolumeUp, null, Modifier.size(20.dp), tint = Color.White.copy(alpha = 0.65f))
+    }
+}
+
+@Composable
+private fun LocalVolumeRow(modifier: Modifier = Modifier) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val audio = remember {
+        context.getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
+    }
+    val maxVol = remember { audio.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC).coerceAtLeast(1) }
+    var level by remember { mutableStateOf(audio.getStreamVolume(android.media.AudioManager.STREAM_MUSIC).toFloat()) }
+    Row(
+        modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Default.VolumeDown, null, Modifier.size(20.dp), tint = Color.White.copy(alpha = 0.65f))
+        Slider(
+            value = level,
+            onValueChange = { v ->
+                level = v
+                audio.setStreamVolume(
+                    android.media.AudioManager.STREAM_MUSIC,
+                    v.toInt().coerceIn(0, maxVol),
+                    0,
+                )
+            },
+            valueRange = 0f..maxVol.toFloat(),
             modifier = Modifier.weight(1f).padding(horizontal = 4.dp),
             colors = SliderDefaults.colors(
                 thumbColor = Color.White,

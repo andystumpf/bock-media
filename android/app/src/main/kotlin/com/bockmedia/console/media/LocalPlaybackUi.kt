@@ -19,6 +19,7 @@ fun LocalPlaybackState.toNowPlayingDevice(): NowPlayingDeviceItem? {
         duration_ms = durationMs,
         offset_ms = positionMs,
         paused = !isPlaying,
+        sourceLabel = sourceLabel,
         upcoming = tracks.drop(index + 1).take(15).map { t ->
             UpcomingTrack(title = t.title, artist = t.artist, path = t.path)
         },

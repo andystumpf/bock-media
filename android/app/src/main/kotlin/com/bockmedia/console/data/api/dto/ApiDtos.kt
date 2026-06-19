@@ -133,6 +133,7 @@ data class NowPlayingDeviceItem(
     val track: String? = null,
     val artist: String? = null,
     val album: String? = null,
+    val year: Int? = null,
     val filepath: String? = null,
     val timestamp: Double? = null,
     val duration_ms: Long = 0,
@@ -302,6 +303,16 @@ data class GenreItem(
 
 @Serializable
 data class SongsResponse(val items: List<SongItem> = emptyList(), val total: Int = 0)
+
+@Serializable
+data class TrackMetaResponse(
+    val path: String? = null,
+    val title: String? = null,
+    val artist: String? = null,
+    val album: String? = null,
+    val genre: String? = null,
+    val year: Int? = null,
+)
 
 @Serializable
 data class SongItem(

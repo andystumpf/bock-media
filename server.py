@@ -2374,6 +2374,30 @@ def genres_list():
 
 # ── API: Songs ───────────────────────────────────────────────────────────────
 
+@app.route('/api/track_meta')
+def track_meta():
+    """Lightweight per-file metadata (incl. release year) by path.
+
+    Used by the mobile app to show the year for locally-played tracks, where the
+    now-playing item is synthesized on-device and has no year.
+    """
+    path = (request.args.get('path') or '').strip()
+    if not path:
+        return jsonify({'error': 'path required'}), 400
+    row = db_one(
+        'SELECT title, artist, album, genre, year FROM songs_cache WHERE path = ?',
+        [path],
+    ) or {}
+    return jsonify({
+        'path':   path,
+        'title':  row.get('title'),
+        'artist': row.get('artist'),
+        'album':  row.get('album'),
+        'genre':  row.get('genre'),
+        'year':   _year_for_path(path),
+    })
+
+
 @app.route('/api/songs')
 def songs():
     page = int(request.args.get('page', 1))
@@ -5818,6 +5842,7 @@ def nowplaying_devices():
             'track':      st.get('track'),
             'artist':     st.get('artist'),
             'album':      st.get('album'),
+            'year':       st.get('year') or _year_for_path(st.get('filepath')),
             'filepath':   st.get('filepath'),
             'timestamp':  st.get('timestamp'),
             'duration_ms': duration_ms,
@@ -6141,6 +6166,18 @@ def _duration_ms_for_path(path):
     duration_ms = int(duration_s * 1000) if duration_s else 0
     _DURATION_MS_CACHE[path] = (mtime, duration_ms)
     return duration_ms
+
+def _year_for_path(path):
+    """Release year (int) for a file path from songs_cache, else None."""
+    if not path:
+        return None
+    row = db_one('SELECT year FROM songs_cache WHERE path = ?', [path]) or {}
+    raw = str(row.get('year') or '').strip()
+    if not raw:
+        return None
+    # Values may be "1998", "1998-05-01", etc. — keep the leading 4-digit year.
+    digits = raw[:4]
+    return int(digits) if digits.isdigit() else None
 
 def track_metadata(path):
     """Return (title, artist, album, artwork_url) for a file path."""

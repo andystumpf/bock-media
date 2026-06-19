@@ -60,11 +60,16 @@ class LocalPlaybackService : MediaSessionService() {
                 paths = intent.getStringArrayListExtra(EXTRA_PATHS).orEmpty()
                 lastReportedIndex = -1
                 val start = intent.getIntExtra(EXTRA_START_INDEX, 0).coerceAtLeast(0)
-                startPlayback(urls, start)
+                val shuffle = intent.getBooleanExtra(EXTRA_SHUFFLE, false)
+                startPlayback(urls, start, shuffle)
             }
             ACTION_TOGGLE -> player?.let { if (it.isPlaying) it.pause() else it.play() }
             ACTION_NEXT -> player?.seekToNextMediaItem()
             ACTION_PREVIOUS -> player?.seekToPreviousMediaItem()
+            ACTION_SET_SHUFFLE -> player?.let {
+                it.shuffleModeEnabled = intent.getBooleanExtra(EXTRA_SHUFFLE, false)
+                syncState(it)
+            }
             ACTION_STOP -> {
                 DeviceAnalyticsReporter.clearPlayback(this)
                 stopProgressUpdates()
@@ -80,9 +85,10 @@ class LocalPlaybackService : MediaSessionService() {
         return START_STICKY
     }
 
-    private fun startPlayback(urls: List<String>, startIndex: Int) {
+    private fun startPlayback(urls: List<String>, startIndex: Int, shuffle: Boolean = false) {
         if (urls.isEmpty()) return
         val exo = player ?: buildPlayer().also { player = it }
+        exo.shuffleModeEnabled = shuffle
         val items = urls.mapIndexed { index, url ->
             MediaItem.Builder()
                 .setUri(url)
@@ -175,6 +181,7 @@ class LocalPlaybackService : MediaSessionService() {
             isPlaying = exo.isPlaying,
             positionMs = exo.currentPosition.coerceAtLeast(0),
             durationMs = durationMs,
+            shuffle = exo.shuffleModeEnabled,
         )
         val idx = exo.currentMediaItemIndex
         if (idx in paths.indices) {
@@ -294,7 +301,9 @@ class LocalPlaybackService : MediaSessionService() {
         const val ACTION_NEXT = "com.bockmedia.console.local.NEXT"
         const val ACTION_PREVIOUS = "com.bockmedia.console.local.PREVIOUS"
         const val ACTION_STOP = "com.bockmedia.console.local.STOP"
+        const val ACTION_SET_SHUFFLE = "com.bockmedia.console.local.SET_SHUFFLE"
         const val EXTRA_URLS = "urls"
+        const val EXTRA_SHUFFLE = "shuffle"
         const val EXTRA_TITLES = "titles"
         const val EXTRA_ARTISTS = "artists"
         const val EXTRA_ALBUMS = "albums"

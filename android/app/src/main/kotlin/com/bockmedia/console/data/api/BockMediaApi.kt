@@ -133,6 +133,9 @@ interface BockMediaApi {
     @GET("api/genres")
     suspend fun genres(@Query("limit") limit: Int = 20): GenresResponse
 
+    @GET("api/track_meta")
+    suspend fun trackMeta(@Query("path") path: String): TrackMetaResponse
+
     @GET("api/songs")
     suspend fun songs(
         @Query("page") page: Int = 1,

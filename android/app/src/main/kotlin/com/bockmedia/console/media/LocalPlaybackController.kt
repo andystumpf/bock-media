@@ -25,6 +25,7 @@ data class LocalPlaybackState(
     val positionMs: Long = 0,
     val durationMs: Long = 0,
     val shuffle: Boolean = false,
+    val sourceLabel: String? = null,
     val loading: Boolean = false,
     val error: String? = null,
 ) {
@@ -53,7 +54,7 @@ object LocalPlaybackController {
         runCatching {
             val tracks = resolver.resolve(target, shuffle)
             if (tracks.isEmpty()) error("No playable tracks found")
-            playTracks(context, tracks, shuffle = shuffle)
+            playTracks(context, tracks, shuffle = shuffle, sourceLabel = target.label)
         }.onFailure { e ->
             update { it.copy(loading = false, error = httpErrorMessage(e, "Playback failed")) }
         }
@@ -70,15 +71,24 @@ object LocalPlaybackController {
         runCatching {
             val tracks = store.localTracksForManifest(manifest)
             if (tracks.isEmpty()) error("No offline audio files found on this device")
-            playTracks(context, tracks, startIndex = startIndex, shuffle = shuffle)
+            playTracks(context, tracks, startIndex = startIndex, shuffle = shuffle, sourceLabel = manifest.title)
         }.onFailure { e ->
             update { it.copy(loading = false, error = e.message ?: "Offline playback failed") }
         }
     }
 
-    suspend fun playTracks(context: Context, tracks: List<LocalTrack>, startIndex: Int = 0, shuffle: Boolean = false) {
+    suspend fun playTracks(
+        context: Context,
+        tracks: List<LocalTrack>,
+        startIndex: Int = 0,
+        shuffle: Boolean = false,
+        sourceLabel: String? = _state.value.sourceLabel,
+    ) {
         if (tracks.isEmpty()) return
-        val ordered = if (shuffle) tracks.shuffled() else tracks
+        // Keep canonical order; ExoPlayer's shuffle mode handles randomized traversal so the
+        // shuffle toggle can be turned off again without losing the original ordering.
+        val ordered = tracks
+        val resolvedStart = if (shuffle && startIndex == 0) tracks.indices.random() else startIndex
         val base = BockMediaApp.get(context).resolveBaseUrl()
         val urls = ordered.map { track ->
             track.localFile?.let { Uri.fromFile(it).toString() }
@@ -89,8 +99,9 @@ object LocalPlaybackController {
             it.copy(
                 active = true,
                 tracks = ordered,
-                index = startIndex.coerceIn(0, ordered.lastIndex),
+                index = resolvedStart.coerceIn(0, ordered.lastIndex),
                 shuffle = shuffle,
+                sourceLabel = sourceLabel,
                 loading = false,
                 error = null,
                 isPlaying = true,
@@ -103,7 +114,8 @@ object LocalPlaybackController {
             putStringArrayListExtra(LocalPlaybackService.EXTRA_ARTISTS, ArrayList(ordered.map { it.displayArtist }))
             putStringArrayListExtra(LocalPlaybackService.EXTRA_ALBUMS, ArrayList(ordered.map { it.album.orEmpty() }))
             putStringArrayListExtra(LocalPlaybackService.EXTRA_PATHS, ArrayList(ordered.map { it.path }))
-            putExtra(LocalPlaybackService.EXTRA_START_INDEX, startIndex.coerceIn(0, ordered.lastIndex))
+            putExtra(LocalPlaybackService.EXTRA_START_INDEX, resolvedStart.coerceIn(0, ordered.lastIndex))
+            putExtra(LocalPlaybackService.EXTRA_SHUFFLE, shuffle)
         }
         context.startForegroundService(intent)
     }
@@ -117,6 +129,14 @@ object LocalPlaybackController {
     fun skip(context: Context, forward: Boolean) {
         context.startService(Intent(context, LocalPlaybackService::class.java).apply {
             action = if (forward) LocalPlaybackService.ACTION_NEXT else LocalPlaybackService.ACTION_PREVIOUS
+        })
+    }
+
+    fun setShuffle(context: Context, on: Boolean) {
+        update { it.copy(shuffle = on) }
+        context.startService(Intent(context, LocalPlaybackService::class.java).apply {
+            action = LocalPlaybackService.ACTION_SET_SHUFFLE
+            putExtra(LocalPlaybackService.EXTRA_SHUFFLE, on)
         })
     }
 
@@ -139,6 +159,7 @@ object LocalPlaybackController {
         isPlaying: Boolean,
         positionMs: Long,
         durationMs: Long,
+        shuffle: Boolean = _state.value.shuffle,
     ) {
         update {
             it.copy(
@@ -147,6 +168,7 @@ object LocalPlaybackController {
                 isPlaying = isPlaying,
                 positionMs = positionMs,
                 durationMs = durationMs,
+                shuffle = shuffle,
                 loading = false,
             )
         }
