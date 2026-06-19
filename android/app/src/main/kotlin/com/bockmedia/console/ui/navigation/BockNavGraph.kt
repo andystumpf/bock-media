@@ -33,6 +33,8 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import com.bockmedia.console.ui.analytics.AnalyticsScreen
 import com.bockmedia.console.ui.automation.AutomationScreen
@@ -95,13 +97,13 @@ fun BockApp(repository: BockMediaRepository, deepLinkRoute: String? = null) {
     }
 
     LaunchedEffect(deepLinkRoute) {
-        deepLinkRoute?.let { route ->
-            val dest = when {
-                route.startsWith("#") -> route.removePrefix("#")
-                else -> route
-            }
-            if (dest.isNotBlank()) navController.navigate(dest) { launchSingleTop = true }
-        }
+        val dest = deepLinkRoute?.removePrefix("#")?.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
+        // The NavHost installs its graph during its own composition, which can land
+        // after this effect runs. Navigating before the graph exists throws and crashes
+        // the app (killing any in-progress work), so wait until the start destination is
+        // on the back stack, then navigate defensively.
+        snapshotFlow { navController.currentBackStackEntry }.filterNotNull().first()
+        runCatching { navController.navigate(dest) { launchSingleTop = true } }
     }
 
     AlexaAuthMonitor(repository, snackbarHostState)
