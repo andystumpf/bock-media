@@ -4032,6 +4032,40 @@ def _thumbnail_for(src_path, size):
         print(f'thumb error {src_path} @{size}: {e}', flush=True)
         return None
 
+# ── nginx sendfile offload (X-Accel-Redirect) ────────────────────────────────
+# When fronted by the nginx site (which injects X-Sendfile-Proxy: nginx and maps
+# the internal locations below), hand the heavy byte-pushing to nginx's sendfile/
+# HTTP2 instead of copying the file through Python. Falls back to send_file when
+# the header is absent (direct gunicorn / rollback), so this is inert off-proxy.
+_XACCEL_ROOTS = None
+
+def _xaccel_roots():
+    global _XACCEL_ROOTS
+    if _XACCEL_ROOTS is None:
+        _XACCEL_ROOTS = (
+            (os.path.abspath(MUSIC_ROOT).rstrip('/') + '/', '/internal-media/'),
+            (os.path.abspath(ARTWORK_CACHE).rstrip('/') + '/', '/internal-art/'),
+        )
+    return _XACCEL_ROOTS
+
+def _xaccel_send(abs_path, mime, max_age=None):
+    """Return an X-Accel-Redirect response if behind nginx, else None (caller sends)."""
+    if request.headers.get('X-Sendfile-Proxy') != 'nginx':
+        return None
+    ap = os.path.abspath(abs_path)
+    internal = None
+    for root, loc in _xaccel_roots():
+        if ap.startswith(root):
+            internal = loc + quote(ap[len(root):], safe='/')
+            break
+    if not internal:
+        return None
+    resp = Response(b'', mimetype=mime)
+    resp.headers['X-Accel-Redirect'] = internal
+    if max_age is not None:
+        resp.headers['Cache-Control'] = f'public, max-age={max_age}'
+    return resp
+
 @app.route('/stream/<path:filepath>')
 def stream_audio(filepath):
     full_path = '/' + filepath
@@ -4064,6 +4098,9 @@ def stream_audio(filepath):
                         headers={'Accept-Ranges': 'none'})
 
     mime = 'audio/mpeg' if ext == '.mp3' else 'audio/mp4' if ext == '.m4a' else 'audio/aac'
+    accel = _xaccel_send(full_path, mime)
+    if accel is not None:
+        return accel
     return send_file(full_path, mimetype=mime, conditional=True)
 
 _ART_MIME_BY_EXT = {
@@ -4107,6 +4144,9 @@ def serve_artwork(filepath):
     mime = _ART_MIME_BY_EXT.get(os.path.splitext(abs_path)[1].lower(), 'image/jpeg')
     # Artwork for a path is immutable → let the client cache hard and revalidate
     # cheaply (304) so repeat tile views cost zero bytes (perf #1).
+    accel = _xaccel_send(abs_path, mime, max_age=_ART_MAX_AGE)
+    if accel is not None:
+        return accel
     return send_file(abs_path, mimetype=mime, conditional=True, max_age=_ART_MAX_AGE)
 
 def file_to_stream_url(filepath):
