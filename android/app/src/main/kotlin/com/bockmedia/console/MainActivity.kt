@@ -6,6 +6,7 @@ import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -67,7 +68,19 @@ private suspend fun coldBootFast(context: android.content.Context): ColdBootStat
 class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        enableEdgeToEdge()
+        // Transparent system-bar scrims so app content draws fully behind them.
+        // The default auto() applies a light navigation-bar scrim in light mode,
+        // which showed as a light band over dark screens (e.g. Now Playing).
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.auto(
+                android.graphics.Color.TRANSPARENT,
+                android.graphics.Color.TRANSPARENT,
+            ),
+            navigationBarStyle = SystemBarStyle.auto(
+                android.graphics.Color.TRANSPARENT,
+                android.graphics.Color.TRANSPARENT,
+            ),
+        )
         super.onCreate(savedInstanceState)
         val app = BockMediaApp.get(applicationContext)
         NetworkReachability.update(applicationContext)
