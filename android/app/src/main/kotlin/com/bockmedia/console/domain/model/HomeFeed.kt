@@ -12,6 +12,7 @@ import java.time.LocalDate
 
 enum class HomeFilter(val label: String) {
     All("All"),
+    Recents("Recents"),
     Playlists("Playlists"),
     Mixes("Mixes"),
     Radio("Radio"),
@@ -101,6 +102,7 @@ object HomeFeedLoader {
 fun HomeFilter.matches(kind: HomeSectionKind): Boolean = when (this) {
     HomeFilter.All -> kind != HomeSectionKind.Offline
     HomeFilter.Offline -> false
+    HomeFilter.Recents -> kind == HomeSectionKind.JumpBackIn || kind == HomeSectionKind.RecentPlaylists
     HomeFilter.Playlists -> kind == HomeSectionKind.JumpBackIn || kind == HomeSectionKind.RecentPlaylists || kind == HomeSectionKind.Favorites
     HomeFilter.Mixes -> kind == HomeSectionKind.TopMixes ||
         kind == HomeSectionKind.ExploreThemes ||

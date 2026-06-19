@@ -27,12 +27,18 @@ class OfflineDownloadForegroundService : Service() {
     override fun onCreate() {
         super.onCreate()
         ensureChannel()
-        promoteToForeground()
+        if (!promoteToForeground()) {
+            stopSelf()
+            return
+        }
         observeStatuses()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        promoteToForeground()
+        if (!promoteToForeground()) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
         if (!observing) observeStatuses()
         return START_STICKY
     }
@@ -43,8 +49,22 @@ class OfflineDownloadForegroundService : Service() {
         super.onDestroy()
     }
 
-    private fun promoteToForeground() {
+    /**
+     * Enter the foreground for the download notification. On Android 14+ a `dataSync`
+     * foreground service has a 6h/24h budget; once it's exhausted (or the service was
+     * started from the background) [startForeground] throws and would otherwise crash
+     * the whole app. Swallow it — downloads keep running on OfflineDownloadManager's
+     * own scope, just without the progress notification.
+     *
+     * @return true if the service successfully entered the foreground.
+     */
+    private fun promoteToForeground(): Boolean = try {
         startForeground(NOTIFICATION_ID, buildNotification("Preparing download…", 0f))
+        foregroundUnavailable = false
+        true
+    } catch (_: Exception) {
+        foregroundUnavailable = true
+        false
     }
 
     private fun observeStatuses() {
@@ -65,7 +85,9 @@ class OfflineDownloadForegroundService : Service() {
                     "Downloading ${active.size} collections"
                 }
                 val cancelId = active.singleOrNull()?.manifest?.id
-                startForeground(NOTIFICATION_ID, buildNotification(title, aggregate, cancelId))
+                runCatching {
+                    startForeground(NOTIFICATION_ID, buildNotification(title, aggregate, cancelId))
+                }
             }
         }
     }
@@ -119,12 +141,24 @@ class OfflineDownloadForegroundService : Service() {
         private const val CHANNEL_ID = "offline_downloads"
         private const val NOTIFICATION_ID = 4202
 
+        /** Set when startForeground() is rejected (Android 14+ dataSync budget exhausted). */
+        @Volatile
+        private var foregroundUnavailable = false
+
         fun start(context: Context) {
             val intent = Intent(context, OfflineDownloadForegroundService::class.java)
+            // A plain startService() carries no "must call startForeground() within the
+            // timeout" contract, so it can never trigger ForegroundServiceDidNotStartInTime.
+            // It succeeds while the app is in the foreground (the common download/resume
+            // case). If it's rejected because the app is in the background, fall back to
+            // startForegroundService — unless we already know foreground promotion is
+            // blocked (budget exhausted), in which case we skip it entirely so we never
+            // violate the FGS contract and crash. Downloads keep running on
+            // OfflineDownloadManager's own scope regardless; only the notification is lost.
+            if (runCatching { context.startService(intent) }.isSuccess) return
+            if (foregroundUnavailable) return
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
+                runCatching { context.startForegroundService(intent) }
             }
         }
     }
