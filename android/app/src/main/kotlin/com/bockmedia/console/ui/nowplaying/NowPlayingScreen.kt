@@ -8,6 +8,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.VerticalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import com.bockmedia.console.ui.components.BockLazyColumn
@@ -20,6 +21,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -42,7 +44,6 @@ import com.bockmedia.console.media.LocalPlaybackController
 import com.bockmedia.console.media.isLocalPhoneDevice
 import com.bockmedia.console.media.toNowPlayingDevice
 import com.bockmedia.console.ui.alexaControlsAvailable
-import com.bockmedia.console.ui.components.BockPullRefresh
 import com.bockmedia.console.ui.components.BockArtwork
 import com.bockmedia.console.ui.components.ErrorText
 import com.bockmedia.console.ui.components.LoadingBox
@@ -92,7 +93,6 @@ fun NowPlayingScreen(
     var controlsAvailable by remember { mutableStateOf(false) }
     var remoteOk by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(true) }
-    var refreshing by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var histPage by remember { mutableIntStateOf(1) }
     var histTotal by remember { mutableIntStateOf(0) }
@@ -138,19 +138,6 @@ fun NowPlayingScreen(
         runCatching { favoritePaths = repository.favorites().map { it.path }.toSet() }
         error = liveError ?: historyError
         loading = false
-    }
-
-    suspend fun pullRefresh() {
-        refreshing = true
-        try {
-            var liveError: String? = null
-            var historyError: String? = null
-            runCatching { refreshLive() }.onFailure { liveError = it.message }
-            runCatching { loadHistory() }.onFailure { historyError = it.message }
-            error = liveError ?: historyError
-        } finally {
-            refreshing = false
-        }
     }
 
     suspend fun runControl(dev: NowPlayingDeviceItem, action: String) {
@@ -339,16 +326,23 @@ fun NowPlayingScreen(
                 }
             }
 
+            // Force a crisp page snap whenever a settle leaves a residual offset.
+            // Without this the pager can rest a fraction off the boundary, letting the
+            // next device page peek through as a colored band over the "Up next" list.
+            LaunchedEffect(pagerState) {
+                snapshotFlow { pagerState.isScrollInProgress }
+                    .collect { scrolling ->
+                        if (!scrolling && pagerState.currentPageOffsetFraction != 0f) {
+                            pagerState.scrollToPage(pagerState.currentPage)
+                        }
+                    }
+            }
+
             Box(
                 Modifier
                     .fillMaxSize()
                     .background(Color.Black),
             ) {
-                BockPullRefresh(
-                    isRefreshing = refreshing,
-                    onRefresh = { scope.launch { pullRefresh() } },
-                    modifier = Modifier.fillMaxSize(),
-                ) {
                 if (devices.isEmpty()) {
                     SpotifyEmptyState(
                         onBack = onBack,
@@ -358,8 +352,10 @@ fun NowPlayingScreen(
                     val pagerDotsVisible = devices.size > 1
                     VerticalPager(
                         state = pagerState,
-                        modifier = Modifier.fillMaxSize(),
-                        beyondViewportPageCount = 1,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clipToBounds(),
+                        beyondViewportPageCount = 0,
                     ) { page ->
                         SpotifyNowPlayingPage(
                             dev = devices[page],
@@ -414,7 +410,6 @@ fun NowPlayingScreen(
                                 .padding(bottom = 12.dp),
                         )
                     }
-                }
                 }
             }
         }
