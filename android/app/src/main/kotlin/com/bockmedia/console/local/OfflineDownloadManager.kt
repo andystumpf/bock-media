@@ -14,6 +14,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -23,8 +24,10 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
+import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
+import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -33,11 +36,14 @@ import java.util.concurrent.atomic.AtomicInteger
 object OfflineDownloadManager {
     private const val MAX_TRACKS = 150
     private const val DEFAULT_BUFFER_BYTES = 64 * 1024
-    private const val CALL_TIMEOUT_SEC = 90L
+    private const val CALL_TIMEOUT_SEC = 120L
+    private const val TRACK_ATTEMPTS = 3
 
-    // Parallel download fan-out. Wi-Fi can saturate more sockets; on cellular we use
-    // fewer to hide latency without overwhelming a slower, metered link.
-    private fun downloadConcurrency(): Int = if (NetworkReachability.onWifi) 6 else 4
+    // Parallel download fan-out. Wi-Fi/LAN can saturate many sockets. On cellular the
+    // bottleneck is total bandwidth (often the server's home uplink), so extra parallel
+    // streams don't add throughput — they just split the pipe until each track is slow
+    // enough to hit the call timeout and fail. Keep cellular low so every track finishes.
+    private fun downloadConcurrency(): Int = if (NetworkReachability.onWifi) 6 else 2
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mutex = Mutex()
@@ -229,24 +235,7 @@ object OfflineDownloadManager {
                             gate.withPermit {
                                 val dest = store.trackFile(id, entry.fileName)
                                 if (!(dest.exists() && dest.length() > 0)) {
-                                    val url = AppPreferences.streamUrl(base, entry.path)
-                                        ?: error("Bad stream URL")
-                                    dest.parentFile?.mkdirs()
-                                    // Stream to a .part file and atomically rename so an
-                                    // interrupted download is never mistaken for complete.
-                                    val part = File(dest.parentFile, "${dest.name}.part")
-                                    client.newCall(Request.Builder().url(url).build()).execute().use { response ->
-                                        if (!response.isSuccessful) error("HTTP ${response.code}")
-                                        response.body?.byteStream()?.use { input ->
-                                            part.outputStream().use { output ->
-                                                input.copyTo(output, DEFAULT_BUFFER_BYTES)
-                                            }
-                                        } ?: error("Empty response")
-                                    }
-                                    if (!part.renameTo(dest)) {
-                                        part.copyTo(dest, overwrite = true)
-                                        part.delete()
-                                    }
+                                    downloadTrack(client, base, entry, dest, id)
                                 }
                                 progressMutex.withLock {
                                     tracksOnDisk.add(entry)
@@ -295,6 +284,50 @@ object OfflineDownloadManager {
                 ),
             )
         }
+    }
+
+    /**
+     * Download one track to a .part file then atomically rename. Retries transient
+     * failures (cellular drops, timeouts) with backoff, discarding the partial each
+     * time so the .part never lingers on a failed attempt.
+     */
+    private suspend fun downloadTrack(
+        client: OkHttpClient,
+        base: String,
+        entry: OfflineTrackEntry,
+        dest: File,
+        id: String,
+    ) {
+        val url = AppPreferences.streamUrl(base, entry.path) ?: error("Bad stream URL")
+        dest.parentFile?.mkdirs()
+        val part = File(dest.parentFile, "${dest.name}.part")
+        var lastError: Exception? = null
+        repeat(TRACK_ATTEMPTS) { attempt ->
+            if (cancelFlags[id]?.get() == true) error("Cancelled")
+            try {
+                client.newCall(Request.Builder().url(url).build()).execute().use { response ->
+                    if (!response.isSuccessful) error("HTTP ${response.code}")
+                    response.body?.byteStream()?.use { input ->
+                        part.outputStream().use { output ->
+                            input.copyTo(output, DEFAULT_BUFFER_BYTES)
+                        }
+                    } ?: error("Empty response")
+                }
+                if (!part.renameTo(dest)) {
+                    part.copyTo(dest, overwrite = true)
+                    part.delete()
+                }
+                return
+            } catch (ce: CancellationException) {
+                part.delete()
+                throw ce
+            } catch (e: Exception) {
+                lastError = e
+                part.delete()
+                if (attempt < TRACK_ATTEMPTS - 1) delay(750L * (attempt + 1))
+            }
+        }
+        throw lastError ?: IOException("Download failed")
     }
 
     private fun publishProgress(

@@ -13,7 +13,7 @@ enum class LibraryFilter(val label: String) {
     Playlists("Playlists"),
     Artists("Artists"),
     Albums("Albums"),
-    Downloaded("Downloaded"),
+    Downloaded("Downloads"),
 }
 
 enum class LibraryViewMode { List, Grid }

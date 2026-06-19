@@ -16,7 +16,7 @@ enum class HomeFilter(val label: String) {
     Mixes("Mixes"),
     Radio("Radio"),
     Discover("Discover"),
-    Offline("Offline"),
+    Offline("Downloads"),
 }
 
 enum class HomeSectionKind {

@@ -30,7 +30,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.*
+import com.bockmedia.console.local.DownloadState
 import com.bockmedia.console.local.OfflineDownloadManager
+import com.bockmedia.console.local.toPlayTarget
 import com.bockmedia.console.ui.components.*
 import com.bockmedia.console.ui.theme.HomePillActive
 import com.bockmedia.console.ui.theme.HomePillInactive
@@ -62,9 +64,36 @@ fun LibraryScreen(
     var sort by rememberSaveable { mutableStateOf(LibrarySort.Recents) }
     var search by remember { mutableStateOf("") }
 
-    val displayItems = remember(libraryData, searchItems, filter, search) {
-        if (search.isNotBlank()) searchItems.orEmpty()
-        else libraryData?.forFilter(filter).orEmpty()
+    // Downloads are read live from the offline store, not the cached LibraryData
+    // bucket — otherwise a freshly downloaded playlist won't appear here until the
+    // whole library cache is rebuilt (so it diverged from Home > Downloads).
+    val downloadStatuses by OfflineDownloadManager.statuses.collectAsState()
+    val liveDownloads = remember(downloadStatuses) {
+        downloadStatuses.values
+            .filter { it.state == DownloadState.Complete }
+            .map { it.manifest }
+            .map { manifest ->
+                LibraryItem(
+                    id = "dl-${manifest.id}",
+                    title = manifest.title,
+                    subtitle = "${manifest.tracks.size} tracks · Offline",
+                    kind = LibraryItemKind.Downloaded,
+                    playTarget = manifest.toPlayTarget(),
+                    artPath = manifest.coverArtPath,
+                    playlistId = manifest.sourcePlaylistId ?: manifest.legacyPlaylistId,
+                    sortDate = manifest.lastSyncedAtMs.takeIf { it > 0 } ?: manifest.downloadedAtMs,
+                )
+            }
+    }
+
+    val displayItems = remember(libraryData, searchItems, filter, search, liveDownloads) {
+        when {
+            filter == LibraryFilter.Downloaded ->
+                if (search.isBlank()) liveDownloads
+                else liveDownloads.filter { it.title.contains(search, ignoreCase = true) }
+            search.isNotBlank() -> searchItems.orEmpty()
+            else -> libraryData?.forFilter(filter).orEmpty()
+        }
     }
 
     suspend fun prefetchArt(items: List<LibraryItem>) {
@@ -110,6 +139,7 @@ fun LibraryScreen(
     }
 
     LaunchedEffect(Unit) {
+        OfflineDownloadManager.refresh(context)
         bootstrapLibrary()
     }
 
