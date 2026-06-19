@@ -63,6 +63,7 @@
 		6CF9DD3FE37192A58B1D9EE8 /* MiniNowPlayingBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = F67D39DB21B98C2A81872EC6 /* MiniNowPlayingBar.swift */; };
 		6E722A8D5D488F69037365E6 /* OfflineDownloadIds.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1291CDFA2FECFFB31CE543E5 /* OfflineDownloadIds.swift */; };
 		72F52CB3392C1C44C4981657 /* SearchBrowse.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78577EDBE2D82E9ABC1F35D9 /* SearchBrowse.swift */; };
+		798F4FF6F4430ED78EE5232B /* HomeFeedComposerGoldenTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C52F69774C7ECCBEF39BBA50 /* HomeFeedComposerGoldenTests.swift */; };
 		8412CF34F170C96DF18D9224 /* BrowseViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D23E7344A8A65A0A7622357 /* BrowseViews.swift */; };
 		88787BF4FCED6A5C1F442869 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A2024D5EB14C7F7C8636146F /* Assets.xcassets */; };
 		8D300B311B2097C7A2EB68F6 /* DevicePickerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75918F862E43119489B5FAC3 /* DevicePickerSheet.swift */; };
@@ -252,6 +253,7 @@
 		C463BB2CBC85DDC1541AD79D /* ServerEndpointResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerEndpointResolver.swift; sourceTree = "<group>"; };
 		C51FFAC3FD71ACC30A5AF4C8 /* SearchHistoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchHistoryStore.swift; sourceTree = "<group>"; };
 		C521D7CA6741A9BDC79827C1 /* HomeFeedRules.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeFeedRules.swift; sourceTree = "<group>"; };
+		C52F69774C7ECCBEF39BBA50 /* HomeFeedComposerGoldenTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeFeedComposerGoldenTests.swift; sourceTree = "<group>"; };
 		C98C505AD646785DA2F4AC4E /* LibraryCachePersistence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryCachePersistence.swift; sourceTree = "<group>"; };
 		CD6FC0E93762FEE687CB04FC /* OfflineDownloadStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfflineDownloadStore.swift; sourceTree = "<group>"; };
 		D6ABF2C613FF9A98DF68B8F2 /* RoutinesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoutinesView.swift; sourceTree = "<group>"; };
@@ -270,7 +272,7 @@
 		F80B7AF5FF5042D2B666FD49 /* BockMediaWidget.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = BockMediaWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		F9F3EB64BBFDF50AB66DD520 /* FavoritesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FavoritesView.swift; sourceTree = "<group>"; };
 		FFCDF62A3F48ABAEDE57003F /* WidgetSnapshotLogic.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetSnapshotLogic.swift; sourceTree = "<group>"; };
-		"TEMP_DC4BFBB5-EAD4-40EA-93D3-E089CA3EA9BD" /* Config.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config.xcconfig; sourceTree = "<group>"; };
+		"TEMP_EBB3F9B2-3726-4F93-8E6A-930FF1029876" /* Config.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -608,6 +610,7 @@
 		DBFBD13A6264C4FA40DAFE29 /* BockMediaTests */ = {
 			isa = PBXGroup;
 			children = (
+				C52F69774C7ECCBEF39BBA50 /* HomeFeedComposerGoldenTests.swift */,
 				6BE03322B94FC96A776A3088 /* ModelsTests.swift */,
 				8361ADD76AF979428D070D34 /* OfflineAndNetworkTests.swift */,
 				85BB314B6D62FD8D1ADDCF53 /* WidgetSnapshotLogicTests.swift */,
@@ -704,10 +707,10 @@
 			path = App;
 			sourceTree = "<group>";
 		};
-		"TEMP_827A4A43-2EF7-4834-BB15-03DB29C36F5E" /* ios */ = {
+		"TEMP_A2AE5AD8-3CAF-46B5-B0C5-006F91BC400E" /* ios */ = {
 			isa = PBXGroup;
 			children = (
-				"TEMP_DC4BFBB5-EAD4-40EA-93D3-E089CA3EA9BD" /* Config.xcconfig */,
+				"TEMP_EBB3F9B2-3726-4F93-8E6A-930FF1029876" /* Config.xcconfig */,
 			);
 			path = ios;
 			sourceTree = "<group>";
@@ -988,6 +991,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				798F4FF6F4430ED78EE5232B /* HomeFeedComposerGoldenTests.swift in Sources */,
 				4BC61D484F1E01E3C62E044A /* ModelsTests.swift in Sources */,
 				F71AA7A58EA30D7016EA38E1 /* OfflineAndNetworkTests.swift in Sources */,
 				ACC8589CD40480784B8BC324 /* WidgetSnapshotLogicTests.swift in Sources */,
@@ -1106,7 +1110,7 @@
 		};
 		6219BA74FFAB2E1B8F1C720E /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = "TEMP_DC4BFBB5-EAD4-40EA-93D3-E089CA3EA9BD" /* Config.xcconfig */;
+			baseConfigurationReference = "TEMP_EBB3F9B2-3726-4F93-8E6A-930FF1029876" /* Config.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;
@@ -1209,7 +1213,7 @@
 		};
 		B7DF9EF27EC8F31E180E8E80 /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = "TEMP_DC4BFBB5-EAD4-40EA-93D3-E089CA3EA9BD" /* Config.xcconfig */;
+			baseConfigurationReference = "TEMP_EBB3F9B2-3726-4F93-8E6A-930FF1029876" /* Config.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;

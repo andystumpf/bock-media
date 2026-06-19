@@ -24,6 +24,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.bockmedia.console.ui.components.BockProgressIndicator
 import com.bockmedia.console.data.api.httpErrorMessage
 import com.bockmedia.console.data.api.dto.PlaylistSummary
 import com.bockmedia.console.data.api.dto.PlaylistTrack
@@ -450,7 +451,7 @@ fun PlaylistDetailScreen(
                                 Modifier.fillMaxWidth().padding(16.dp),
                                 contentAlignment = Alignment.Center,
                             ) {
-                                CircularProgressIndicator(Modifier.size(24.dp))
+                                BockProgressIndicator(size = 24.dp)
                             }
                         }
                     }

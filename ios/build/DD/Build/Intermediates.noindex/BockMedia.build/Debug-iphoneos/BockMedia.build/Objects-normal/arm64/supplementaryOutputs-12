@@ -1,0 +1,30 @@
+{
+  "/Users/andymac/Documents/GitHub/ourMedia/ios/BockMedia/Data/API/BockAPIError.swift" : {
+    "const-values" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/BockAPIError.swiftconstvalues",
+    "dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/BockAPIError.d",
+    "diagnostics" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/BockAPIError.dia",
+    "object" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/BockAPIError.o",
+    "swift-dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/BockAPIError.swiftdeps"
+  },
+  "/Users/andymac/Documents/GitHub/ourMedia/ios/BockMedia/Data/Auth/AuthHeaders.swift" : {
+    "const-values" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/AuthHeaders.swiftconstvalues",
+    "dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/AuthHeaders.d",
+    "diagnostics" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/AuthHeaders.dia",
+    "object" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/AuthHeaders.o",
+    "swift-dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/AuthHeaders.swiftdeps"
+  },
+  "/Users/andymac/Documents/GitHub/ourMedia/ios/BockMedia/Offline/BackgroundDownloadScheduler.swift" : {
+    "const-values" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/BackgroundDownloadScheduler.swiftconstvalues",
+    "dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/BackgroundDownloadScheduler.d",
+    "diagnostics" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/BackgroundDownloadScheduler.dia",
+    "object" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/BackgroundDownloadScheduler.o",
+    "swift-dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/BackgroundDownloadScheduler.swiftdeps"
+  },
+  "/Users/andymac/Documents/GitHub/ourMedia/ios/BockMedia/UI/Theme/BockIcons.swift" : {
+    "const-values" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/BockIcons.swiftconstvalues",
+    "dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/BockIcons.d",
+    "diagnostics" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/BockIcons.dia",
+    "object" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/BockIcons.o",
+    "swift-dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/BockIcons.swiftdeps"
+  }
+}

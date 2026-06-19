@@ -1,0 +1,23 @@
+{
+  "/Users/andymac/Documents/GitHub/ourMedia/ios/BockMedia/App/MainTabView.swift" : {
+    "const-values" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/MainTabView.swiftconstvalues",
+    "dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/MainTabView.d",
+    "diagnostics" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/MainTabView.dia",
+    "object" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/MainTabView.o",
+    "swift-dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/MainTabView.swiftdeps"
+  },
+  "/Users/andymac/Documents/GitHub/ourMedia/ios/BockMedia/Features/Playlists/ManagePlaylistsView.swift" : {
+    "const-values" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/ManagePlaylistsView.swiftconstvalues",
+    "dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/ManagePlaylistsView.d",
+    "diagnostics" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/ManagePlaylistsView.dia",
+    "object" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/ManagePlaylistsView.o",
+    "swift-dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/ManagePlaylistsView.swiftdeps"
+  },
+  "/Users/andymac/Documents/GitHub/ourMedia/ios/BockMedia/Media/LocalPlaybackQueueResolver.swift" : {
+    "const-values" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/LocalPlaybackQueueResolver.swiftconstvalues",
+    "dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/LocalPlaybackQueueResolver.d",
+    "diagnostics" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/LocalPlaybackQueueResolver.dia",
+    "object" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/LocalPlaybackQueueResolver.o",
+    "swift-dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/LocalPlaybackQueueResolver.swiftdeps"
+  }
+}

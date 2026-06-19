@@ -1,0 +1,23 @@
+{
+  "/Users/andymac/Documents/GitHub/ourMedia/ios/BockMedia/App/AppDelegate.swift" : {
+    "const-values" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/AppDelegate.swiftconstvalues",
+    "dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/AppDelegate.d",
+    "diagnostics" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/AppDelegate.dia",
+    "object" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/AppDelegate.o",
+    "swift-dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/AppDelegate.swiftdeps"
+  },
+  "/Users/andymac/Documents/GitHub/ourMedia/ios/BockMedia/Data/API/ApiDtos.swift" : {
+    "const-values" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/ApiDtos.swiftconstvalues",
+    "dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/ApiDtos.d",
+    "diagnostics" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/ApiDtos.dia",
+    "object" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/ApiDtos.o",
+    "swift-dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/ApiDtos.swiftdeps"
+  },
+  "/Users/andymac/Documents/GitHub/ourMedia/ios/BockMedia/Features/Analytics/AnalyticsView.swift" : {
+    "const-values" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/AnalyticsView.swiftconstvalues",
+    "dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/AnalyticsView.d",
+    "diagnostics" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/AnalyticsView.dia",
+    "object" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/AnalyticsView.o",
+    "swift-dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/AnalyticsView.swiftdeps"
+  }
+}

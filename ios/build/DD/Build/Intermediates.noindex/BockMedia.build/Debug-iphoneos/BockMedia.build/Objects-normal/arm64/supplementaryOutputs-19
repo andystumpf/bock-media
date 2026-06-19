@@ -1,0 +1,30 @@
+{
+  "/Users/andymac/Documents/GitHub/ourMedia/ios/BockMedia/Offline/OfflineDownloadManager.swift" : {
+    "const-values" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/OfflineDownloadManager.swiftconstvalues",
+    "dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/OfflineDownloadManager.d",
+    "diagnostics" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/OfflineDownloadManager.dia",
+    "object" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/OfflineDownloadManager.o",
+    "swift-dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/OfflineDownloadManager.swiftdeps"
+  },
+  "/Users/andymac/Documents/GitHub/ourMedia/ios/BockMedia/Offline/OfflineDownloadNetwork.swift" : {
+    "const-values" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/OfflineDownloadNetwork.swiftconstvalues",
+    "dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/OfflineDownloadNetwork.d",
+    "diagnostics" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/OfflineDownloadNetwork.dia",
+    "object" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/OfflineDownloadNetwork.o",
+    "swift-dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/OfflineDownloadNetwork.swiftdeps"
+  },
+  "/Users/andymac/Documents/GitHub/ourMedia/ios/BockMedia/Offline/OfflineDownloadStore.swift" : {
+    "const-values" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/OfflineDownloadStore.swiftconstvalues",
+    "dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/OfflineDownloadStore.d",
+    "diagnostics" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/OfflineDownloadStore.dia",
+    "object" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/OfflineDownloadStore.o",
+    "swift-dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/OfflineDownloadStore.swiftdeps"
+  },
+  "/Users/andymac/Documents/GitHub/ourMedia/ios/BockMedia/Offline/OfflineModels.swift" : {
+    "const-values" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/OfflineModels.swiftconstvalues",
+    "dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/OfflineModels.d",
+    "diagnostics" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/OfflineModels.dia",
+    "object" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/OfflineModels.o",
+    "swift-dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/OfflineModels.swiftdeps"
+  }
+}

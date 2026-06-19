@@ -18,6 +18,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.bockmedia.console.data.api.dto.LyricsResponse
+import com.bockmedia.console.ui.components.BockProgressIndicator
 import com.bockmedia.console.ui.theme.BockGreen
 import com.bockmedia.console.ui.theme.BockMuted
 import kotlinx.coroutines.launch
@@ -68,7 +69,7 @@ fun LyricsPanel(
         contentAlignment = Alignment.Center,
     ) {
         when {
-            loading -> CircularProgressIndicator(color = BockGreen)
+            loading -> BockProgressIndicator(size = 32.dp)
             error != null -> Text(error, color = BockMuted, textAlign = TextAlign.Center, modifier = Modifier.padding(24.dp))
             lyrics == null -> Text("No lyrics available", color = BockMuted, textAlign = TextAlign.Center)
             lyrics.lines.isNotEmpty() -> SyncedLyricsList(lyrics, positionMs)

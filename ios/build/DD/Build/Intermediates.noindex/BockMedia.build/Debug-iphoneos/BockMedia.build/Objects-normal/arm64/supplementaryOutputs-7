@@ -1,0 +1,23 @@
+{
+  "/Users/andymac/Documents/GitHub/ourMedia/ios/BockMedia/Domain/LibrarySessionCache.swift" : {
+    "const-values" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/LibrarySessionCache.swiftconstvalues",
+    "dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/LibrarySessionCache.d",
+    "diagnostics" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/LibrarySessionCache.dia",
+    "object" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/LibrarySessionCache.o",
+    "swift-dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/LibrarySessionCache.swiftdeps"
+  },
+  "/Users/andymac/Documents/GitHub/ourMedia/ios/BockMedia/Features/Library/LibraryView.swift" : {
+    "const-values" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/LibraryView.swiftconstvalues",
+    "dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/LibraryView.d",
+    "diagnostics" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/LibraryView.dia",
+    "object" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/LibraryView.o",
+    "swift-dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/LibraryView.swiftdeps"
+  },
+  "/Users/andymac/Documents/GitHub/ourMedia/ios/BockMedia/Media/LocalPlaybackController.swift" : {
+    "const-values" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/LocalPlaybackController.swiftconstvalues",
+    "dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/LocalPlaybackController.d",
+    "diagnostics" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/LocalPlaybackController.dia",
+    "object" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/LocalPlaybackController.o",
+    "swift-dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMedia.build/Objects-normal/arm64/LocalPlaybackController.swiftdeps"
+  }
+}

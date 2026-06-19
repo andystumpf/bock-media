@@ -624,13 +624,19 @@ private fun SpotifyNowPlayingPage(
         lyricsError = null
     }
 
-    LaunchedEffect(showLyrics, displayDev.filepath, durationSec) {
+    LaunchedEffect(showLyrics, displayDev.filepath, displayDev.track, displayDev.artist, displayDev.album, durationSec) {
         if (!showLyrics) return@LaunchedEffect
         val path = displayDev.filepath?.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
         lyricsLoading = true
         lyricsError = null
         val fetched = runCatching {
-            repository.lyrics(path, durationSec.takeIf { it > 0 }?.toInt())
+            repository.lyrics(
+                path = path,
+                durationSec = durationSec.takeIf { it > 0 }?.toInt(),
+                title = displayDev.track,
+                artist = displayDev.artist,
+                album = displayDev.album,
+            )
         }.getOrNull()
         lyrics = fetched
         lyricsLoading = false

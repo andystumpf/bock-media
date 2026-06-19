@@ -225,10 +225,11 @@ final class BockMediaAPIClient {
         try await get("api/nowplaying", query: ["page": "\(page)", "limit": "\(limit)"])
     }
 
-    func analytics(from: String? = nil, to: String? = nil) async throws -> AnalyticsResponse {
+    func analytics(from: String? = nil, to: String? = nil, deviceId: String? = nil) async throws -> AnalyticsResponse {
         var query: [String: String] = [:]
         if let from { query["from"] = from }
         if let to { query["to"] = to }
+        if let deviceId, !deviceId.isEmpty { query["deviceId"] = deviceId }
         return try await get("api/analytics", query: query)
     }
 
@@ -314,10 +315,11 @@ final class BockMediaAPIClient {
         try await deleteWithBody("api/ignored", body: body)
     }
 
-    func analyticsExport(from: String? = nil, to: String? = nil) async throws -> Data {
+    func analyticsExport(from: String? = nil, to: String? = nil, deviceId: String? = nil) async throws -> Data {
         var query: [String: String] = [:]
         if let from { query["from"] = from }
         if let to { query["to"] = to }
+        if let deviceId, !deviceId.isEmpty { query["deviceId"] = deviceId }
         return try await requestData(path: "api/analytics/export", query: query)
     }
 

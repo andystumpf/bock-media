@@ -384,23 +384,95 @@ struct GroupMember: Codable {
 }
 
 struct AnalyticsResponse: Codable {
+    var totalPlays = 0
+    var uniqueTracks = 0
+    var uniqueArtists = 0
+    var uniqueAlbums = 0
+    var activity: AnalyticsActivity?
+    var hourOfDay: [HourCount] = []
+    var dayOfWeek: [DayCount] = []
+    var heatmap: [[Int]]?
     var topArtists: [CountRow] = []
     var topAlbums: [CountRow] = []
     var topTracks: [CountRow] = []
     var topDevices: [CountRow] = []
     var topGenres: [CountRow] = []
-    var byHour: [CountRow] = []
-    var byDayOfWeek: [CountRow] = []
-    var byDate: [CountRow] = []
-    var decades: [CountRow] = []
+    var topDecades: [DecadeRow] = []
+    var listeningStreak: ListeningStreak?
+    var currentStreak = 0
+    var longestStreak = 0
+    var catalogCoverage: CatalogCoverage?
+    var repeatRate: RepeatRate?
+    var mostActiveDay: MostActiveDay?
+    var deviceBreakdown: [DeviceBreakdownRow] = []
+}
+
+struct AnalyticsActivity: Codable {
+    var day: [ActivityPoint] = []
+    var week: [ActivityPoint] = []
+    var month: [ActivityPoint] = []
+    var year: [ActivityPoint] = []
+}
+
+struct ActivityPoint: Codable {
+    var label = ""
+    var count = 0
+}
+
+struct HourCount: Codable {
+    var hour = 0
+    var count = 0
+}
+
+struct DayCount: Codable {
+    var day = ""
+    var count = 0
+}
+
+struct DecadeRow: Codable {
+    var decade: String?
+    var count = 0
+}
+
+struct ListeningStreak: Codable {
+    var current = 0
+    var longest = 0
+}
+
+struct CatalogCoverage: Codable {
+    var heard = 0
+    var total = 0
+    var pct = 0.0
+}
+
+struct RepeatRate: Codable {
+    var repeated = 0
+    var total = 0
+    var pct = 0.0
+}
+
+struct MostActiveDay: Codable {
+    var date = ""
+    var count = 0
+}
+
+struct DeviceBreakdownRow: Codable {
+    var deviceId = ""
+    var name = ""
+    var platform = ""
+    var plays = 0
+    var downloads = 0
+    var connects = 0
 }
 
 struct CountRow: Codable, Identifiable {
     var label: String?
     var name: String?
+    var artist: String?
     var count: Int = 0
 
     var id: String { label ?? name ?? UUID().uuidString }
+    var displayName: String { label ?? name ?? "—" }
 }
 
 struct IgnoredResponse: Codable {

@@ -2470,86 +2470,139 @@ def _embedded_lyrics(audio_path):
     return None
 
 
-def _fetch_lrclib(title, artist, album, duration_sec):
-    from urllib.parse import urlencode
+def _lrclib_http_json(url, timeout=10):
+    from urllib.error import HTTPError
     from urllib.request import Request, urlopen
-    params = {'track_name': title or ''}
-    if artist:
-        params['artist_name'] = artist
-    if album:
-        params['album_name'] = album
-    if duration_sec and duration_sec > 0:
-        params['duration'] = int(duration_sec)
-    url = 'https://lrclib.net/api/get?' + urlencode(params)
-    cache_key = (title or '', artist or '', album or '', int(duration_sec or 0))
-    cached = _LYRICS_CACHE.get(cache_key)
-    if cached and (time.time() - cached['ts']) < _LYRICS_TTL:
-        return cached['data']
     try:
-        req = Request(url, headers={'User-Agent': 'BockMedia/1.0'})
-        with urlopen(req, timeout=6) as resp:
-            data = json.loads(resp.read().decode('utf-8', errors='replace'))
-        _LYRICS_CACHE[cache_key] = {'data': data, 'ts': time.time()}
-        return data
+        req = Request(url, headers={'User-Agent': 'BockMedia/1.0 (https://github.com/ourMedia)'})
+        with urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode('utf-8', errors='replace'))
+    except HTTPError as e:
+        if e.code in (404, 400):
+            return None
+        print(f'lrclib http {e.code} {url}: {e}', flush=True)
+        return None
     except Exception as e:
-        print(f'lrclib error {title!r}: {e}', flush=True)
+        print(f'lrclib error {url}: {e}', flush=True)
         return None
 
 
-def _lyrics_payload(path, duration_sec=None):
-    raw = _sidecar_lyrics(path)
-    source = 'lrc' if raw else None
-    if not raw:
-        raw = _embedded_lyrics(path)
-        source = 'embedded' if raw else None
-    if raw:
-        if _looks_like_lrc(raw):
-            lines, plain = _parse_lrc(raw)
-            return {
-                'synced': bool(lines),
-                'lines': lines,
-                'plain': plain or raw.strip(),
-                'source': source or 'lrc',
-            }
-        return {'synced': False, 'lines': [], 'plain': raw.strip(), 'source': source or 'embedded'}
+def _lrclib_pick_best(results, duration_sec=None):
+    if not results:
+        return None
+    if duration_sec and duration_sec > 0:
+        def _delta(item):
+            try:
+                return abs(float(item.get('duration') or 0) - float(duration_sec))
+            except (TypeError, ValueError):
+                return 9999.0
+        best = min(results, key=_delta)
+        if _delta(best) <= 5:
+            return best
+    return results[0]
 
-    row = db_one(
-        'SELECT title, artist, album, duration_seconds FROM songs_cache WHERE path = ?',
-        [path],
-    ) or {}
-    fname = os.path.splitext(os.path.basename(path))[0]
-    title = (row.get('title') or fname).strip()
-    artist = (row.get('artist') or '').strip()
-    album = (row.get('album') or '').strip()
+
+def _fetch_lrclib(title, artist, album, duration_sec):
+    from urllib.parse import urlencode
+    title = (title or '').strip()
+    artist = (artist or '').strip()
+    album = (album or '').strip()
+    if not title:
+        return None
+    cache_key = (title, artist, album, int(duration_sec or 0))
+    cached = _LYRICS_CACHE.get(cache_key)
+    if cached and (time.time() - cached['ts']) < _LYRICS_TTL:
+        return cached['data']
+
+    data = None
+    if artist and duration_sec and duration_sec > 0:
+        params = {
+            'track_name': title,
+            'artist_name': artist,
+            'album_name': album or 'Unknown Album',
+            'duration': int(duration_sec),
+        }
+        url = 'https://lrclib.net/api/get?' + urlencode(params)
+        data = _lrclib_http_json(url)
+
+    if not data:
+        search_params = {'track_name': title}
+        if artist:
+            search_params['artist_name'] = artist
+        if album:
+            search_params['album_name'] = album
+        url = 'https://lrclib.net/api/search?' + urlencode(search_params)
+        results = _lrclib_http_json(url) or []
+        if isinstance(results, list):
+            data = _lrclib_pick_best(results, duration_sec)
+
+    if data:
+        _LYRICS_CACHE[cache_key] = {'data': data, 'ts': time.time()}
+    return data
+
+
+def _lyrics_from_lrclib(remote):
+    if not remote:
+        return None
+    synced_text = (remote.get('syncedLyrics') or '').strip()
+    plain_text = (remote.get('plainLyrics') or '').strip()
+    if synced_text and _looks_like_lrc(synced_text):
+        lines, plain = _parse_lrc(synced_text)
+        return {
+            'synced': bool(lines),
+            'lines': lines,
+            'plain': plain or plain_text or synced_text,
+            'source': 'lrclib',
+        }
+    if plain_text:
+        return {'synced': False, 'lines': [], 'plain': plain_text, 'source': 'lrclib'}
+    return None
+
+
+def _lyrics_payload(path, duration_sec=None, title=None, artist=None, album=None):
+    if path and os.path.isfile(path):
+        raw = _sidecar_lyrics(path)
+        source = 'lrc' if raw else None
+        if not raw:
+            raw = _embedded_lyrics(path)
+            source = 'embedded' if raw else None
+        if raw:
+            if _looks_like_lrc(raw):
+                lines, plain = _parse_lrc(raw)
+                return {
+                    'synced': bool(lines),
+                    'lines': lines,
+                    'plain': plain or raw.strip(),
+                    'source': source or 'lrc',
+                }
+            return {'synced': False, 'lines': [], 'plain': raw.strip(), 'source': source or 'embedded'}
+
+    row = {}
+    if path:
+        row = db_one(
+            'SELECT title, artist, album, duration_seconds FROM songs_cache WHERE path = ?',
+            [path],
+        ) or {}
+    fname = os.path.splitext(os.path.basename(path or ''))[0]
+    title = (title or row.get('title') or fname).strip()
+    artist = (artist or row.get('artist') or '').strip()
+    album = (album or row.get('album') or '').strip()
     dur = duration_sec or row.get('duration_seconds')
     try:
         dur = int(float(dur)) if dur else None
     except (TypeError, ValueError):
         dur = None
 
-    remote = _fetch_lrclib(title, artist, album, dur)
-    if remote:
-        synced_text = (remote.get('syncedLyrics') or '').strip()
-        plain_text = (remote.get('plainLyrics') or '').strip()
-        if synced_text and _looks_like_lrc(synced_text):
-            lines, plain = _parse_lrc(synced_text)
-            return {
-                'synced': bool(lines),
-                'lines': lines,
-                'plain': plain or plain_text or synced_text,
-                'source': 'lrclib',
-            }
-        if plain_text:
-            return {'synced': False, 'lines': [], 'plain': plain_text, 'source': 'lrclib'}
-
-    return {'synced': False, 'lines': [], 'plain': '', 'source': None}
+    return _lyrics_from_lrclib(_fetch_lrclib(title, artist, album, dur)) or {
+        'synced': False, 'lines': [], 'plain': '', 'source': None,
+    }
 
 
 @app.route('/api/lyrics')
 def lyrics():
     """Lyrics for a track: sidecar .lrc, embedded tags, then LRCLIB lookup."""
     path = (request.args.get('path') or '').strip()
-    if not path or not os.path.isfile(path):
+    if not path:
         return jsonify({'error': 'path required'}), 400
     duration = request.args.get('duration')
     duration_sec = None
@@ -2558,7 +2611,10 @@ def lyrics():
             duration_sec = int(float(duration))
         except (TypeError, ValueError):
             pass
-    return jsonify(_lyrics_payload(path, duration_sec))
+    title = (request.args.get('title') or '').strip() or None
+    artist = (request.args.get('artist') or '').strip() or None
+    album = (request.args.get('album') or '').strip() or None
+    return jsonify(_lyrics_payload(path, duration_sec, title=title, artist=artist, album=album))
 
 
 @app.route('/api/songs')
@@ -3330,6 +3386,7 @@ def analytics_export():
     from io import StringIO
     from_str = request.args.get('from', '').strip()
     to_str   = request.args.get('to', '').strip()
+    device_id_str = request.args.get('deviceId', '').strip()
     rows = _read_stream_history()
     from_dt = to_dt = None
     try:
@@ -3340,6 +3397,8 @@ def analytics_export():
     except Exception:
         pass
     rows = _filter_history_rows(rows, from_dt, to_dt)
+    device_store = _load_devices()
+    rows = _filter_history_by_device(rows, device_id_str, device_store)
     rows = [r for r in rows
             if r.get('deviceId', '') not in ('DEVICE_ALPHA', 'DEVICE_BETA')
             and not r.get('test')]
@@ -3368,7 +3427,8 @@ def analytics():
     from collections import Counter, defaultdict
     from_str = request.args.get('from', '').strip()
     to_str   = request.args.get('to',   '').strip()
-    cache_key = (from_str, to_str)
+    device_id_str = request.args.get('deviceId', '').strip()
+    cache_key = (from_str, to_str, device_id_str)
     cached = _analytics_cache.get(cache_key)
     if cached and (time.time() - cached['ts']) < _ANALYTICS_TTL:
         return jsonify(cached['data'])
@@ -3391,8 +3451,12 @@ def analytics():
             if r.get('deviceId', '') not in ('DEVICE_ALPHA', 'DEVICE_BETA')
             and not r.get('test')]
 
+    device_store = _load_devices()
+    rows = _filter_history_by_device(rows, device_id_str, device_store)
+
     total = len(rows)
     download_rows = _filter_history_rows(_read_download_history(), from_dt, to_dt)
+    download_rows = _filter_history_by_device(download_rows, device_id_str, device_store)
     EMPTY = {
         'totalPlays': 0, 'uniqueTracks': 0, 'uniqueArtists': 0, 'uniqueAlbums': 0,
         'topTracks': [], 'topArtists': [], 'topAlbums': [], 'topDevices': [],
@@ -3409,9 +3473,8 @@ def analytics():
         'mostActiveDay':   None,
         'entity_activity': {},
         'deviceBreakdown': [],
-        'dateRange': {'from': from_str, 'to': to_str},
+        'dateRange': {'from': from_str, 'to': to_str, 'deviceId': device_id_str},
     }
-    device_store = _load_devices()
     device_breakdown = _build_device_breakdown(rows, download_rows, device_store)
     if total == 0 and not download_rows and not any(d.get('connects') for d in device_breakdown):
         EMPTY['deviceBreakdown'] = device_breakdown
@@ -3458,7 +3521,6 @@ def analytics():
 
     # Bucket devices by stable deviceId (alias-aware) so renames/merges fold
     # historical rows automatically — the label is always the *current* name.
-    device_store = _load_devices()
     def _device_label(row):
         did = row.get('deviceId') or ''
         if did:
@@ -3657,7 +3719,7 @@ def analytics():
             'devices': entity_series(device_day_ctr, top5_devices),
         },
         'deviceBreakdown': _build_device_breakdown(rows, download_rows, device_store),
-        'dateRange': {'from': from_str, 'to': to_str},
+        'dateRange': {'from': from_str, 'to': to_str, 'deviceId': device_id_str},
     }
     _analytics_cache[cache_key] = {'data': result, 'ts': time.time()}
     return jsonify(result)
@@ -3840,6 +3902,23 @@ def _filter_history_rows(rows, from_dt, to_dt):
         if to_dt and ts > to_dt:
             continue
         filtered.append(r)
+    return filtered
+
+def _filter_history_by_device(rows, device_id, device_store=None):
+    """Keep rows for one primary deviceId (alias-aware)."""
+    if not device_id:
+        return rows
+    if device_store is None:
+        device_store = _load_devices()
+    target = _resolve_device_id(device_id, device_store)
+    if not target:
+        return rows
+    filtered = []
+    for r in rows:
+        did = r.get('deviceId') or ''
+        primary = _resolve_device_id(did, device_store) if did else ''
+        if primary == target:
+            filtered.append(r)
     return filtered
 
 def _build_device_breakdown(play_rows, download_rows, device_store):

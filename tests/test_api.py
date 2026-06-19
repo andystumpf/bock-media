@@ -504,6 +504,60 @@ class TestClientAnalytics:
         match = next(d for d in devices if d['deviceId'] == 'client-debounce-id')
         assert match['connectCount'] == 1
 
+    def test_analytics_device_filter(self, client, isolated_paths):
+        for cid, track in (('device-a', 'Song A'), ('device-b', 'Song B')):
+            rv = client.post('/api/clients/report', data=json.dumps({
+                'clientId': cid,
+                'platform': 'android',
+                'deviceName': f'Phone {cid[-1].upper()}',
+                'event': 'play',
+                'track': track,
+                'artist': 'Artist',
+                'filepath': f'/music/{track.lower().replace(" ", "")}.mp3',
+            }), content_type='application/json')
+            assert rv.status_code == 200
+        all_analytics = client.get('/api/analytics').get_json()
+        assert all_analytics['totalPlays'] == 2
+        one = client.get('/api/analytics?deviceId=client-device-a').get_json()
+        assert one['totalPlays'] == 1
+        assert one['topTracks'][0]['name'] == 'Song A'
+        assert one['dateRange']['deviceId'] == 'client-device-a'
+
+
+class TestLyricsApi:
+    def test_lrclib_search_fallback(self, client, isolated_paths, monkeypatch):
+        import server
+        monkeypatch.setattr(server, '_fetch_lrclib', lambda *a, **k: {
+            'plainLyrics': 'Line one\nLine two',
+            'syncedLyrics': '',
+        })
+        rv = client.get('/api/lyrics', query_string={
+            'path': '/music/test/song.mp3',
+            'title': 'Test Song',
+            'artist': 'Test Artist',
+            'album': 'Test Album',
+            'duration': '180',
+        })
+        assert rv.status_code == 200
+        data = rv.get_json()
+        assert 'Line one' in data['plain']
+        assert data['source'] == 'lrclib'
+
+    def test_lyrics_does_not_require_file_on_disk(self, client, isolated_paths, monkeypatch):
+        import server
+        monkeypatch.setattr(server, '_fetch_lrclib', lambda *a, **k: {
+            'plainLyrics': 'Remote lyrics',
+            'syncedLyrics': '',
+        })
+        rv = client.get('/api/lyrics', query_string={
+            'path': '/missing/on/disk.mp3',
+            'title': 'Remote',
+            'artist': 'Artist',
+            'duration': '200',
+        })
+        assert rv.status_code == 200
+        assert rv.get_json()['plain'] == 'Remote lyrics'
+
 
 class TestAppDownload:
     def test_app_download_requires_auth(self, client, isolated_paths):

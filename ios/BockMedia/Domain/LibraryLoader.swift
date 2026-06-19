@@ -136,8 +136,8 @@ enum LibraryLoader {
                 subtitle: "\(artist.albums) albums · \(artist.tracks) songs",
                 kind: .artist,
                 playTarget: .artist(name: artist.name),
-                artistName: artist.name,
-                artPath: artist.artPath
+                artPath: artist.artPath,
+                artistName: artist.name
             )
         } ?? []
     }
@@ -150,9 +150,9 @@ enum LibraryLoader {
                 subtitle: [album.artist, album.year.map(String.init)].compactMap { $0 }.joined(separator: " · "),
                 kind: .album,
                 playTarget: .album(name: album.name, artist: album.artist),
-                albumName: album.name,
+                artPath: album.artPath,
                 artistName: album.artist,
-                artPath: album.artPath
+                albumName: album.name
             )
         } ?? []
     }

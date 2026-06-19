@@ -92,7 +92,8 @@ enum HomeFeedComposer {
         var seenPlaylistNames = Set<String>()
         var artByPlaylist: [String: String] = [:]
         for row in input.history {
-            guard let name = row.playlist?.trimmingCharacters(in: .whitespaces), !name.isEmpty else { continue }
+            guard let name = row.playlist?.trimmingCharacters(in: .whitespaces), !name.isEmpty,
+                  !HomeFeedRules.isAutomationPlaylistName(name) else { continue }
             let key = name.lowercased()
             if seenPlaylistNames.insert(key).inserted {
                 recentPlaylistNames.append(name)
@@ -113,6 +114,7 @@ enum HomeFeedComposer {
             subtitle: String? = nil,
             claim: Bool = true
         ) -> HomeCard? {
+            if HomeFeedRules.isAutomationPlaylistName(pl.name) { return nil }
             if claim, !registry.claimPlaylist(id: pl.id, name: pl.name) { return nil }
             let card = HomeCard(
                 id: "pl-\(pl.id)",
@@ -453,6 +455,7 @@ enum HomeFeedComposer {
         guard let dashboard else { return [] }
         return dashboard.recent.compactMap { item -> HomeCard? in
             if let playlist = item.playlist?.trimmingCharacters(in: .whitespaces), !playlist.isEmpty,
+               !HomeFeedRules.isAutomationPlaylistName(playlist),
                let pl = playlistByName[playlist.lowercased()] {
                 return HomeCard(
                     id: "pl-\(pl.id)",
@@ -634,7 +637,7 @@ enum HomeFeedComposer {
                     id: "theme-\(theme.id)",
                     title: theme.title,
                     subtitle: theme.subtitle,
-                    artPath: libraryItem?.artPath ?? resolveMixArt(genreLabel, seedArtist, index),
+                    artPath: libraryItem?.art_path ?? resolveMixArt(genreLabel, seedArtist, index),
                     playlistId: nil,
                     playTarget: .artist(name: seedArtist),
                     kind: .exploreThemes
@@ -688,7 +691,7 @@ enum HomeFeedComposer {
                 id: cardId,
                 title: genre.name,
                 subtitle: "\(genre.track_count) tracks · From your library",
-                artPath: registry.claimArtPath(genre.artPath),
+                artPath: registry.claimArtPath(genre.art_path),
                 playlistId: nil,
                 playTarget: .radio(displayTitle: "\(genre.name) Radio", seedKind: .genre, name: seedArtist, path: nil),
                 kind: .exploreThemes
@@ -747,9 +750,9 @@ enum HomeFeedComposer {
             addCard(moodPlaylistCard(pl, subtitle: theme.subtitle))
         }
 
-        if cards.isEmpty,
-           let seedArtist = HomeFeedRules.topArtistForTheme(input.history, theme: theme)
-            ?? topArtists.first?.name ?? topArtists.first?.label ?? mood.title {
+        if cards.isEmpty {
+            let seedArtist = HomeFeedRules.topArtistForTheme(input.history, theme: theme)
+                ?? topArtists.first?.name ?? topArtists.first?.label ?? mood.title
             addCard(HomeCard(
                 id: "mood-\(mood.id)-fallback",
                 title: theme.title,

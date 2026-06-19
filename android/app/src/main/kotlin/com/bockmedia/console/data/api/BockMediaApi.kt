@@ -140,6 +140,9 @@ interface BockMediaApi {
     suspend fun lyrics(
         @Query("path") path: String,
         @Query("duration") durationSec: Int? = null,
+        @Query("title") title: String? = null,
+        @Query("artist") artist: String? = null,
+        @Query("album") album: String? = null,
     ): LyricsResponse
 
     @GET("api/songs")
@@ -212,9 +215,11 @@ interface BockMediaApi {
     suspend fun reportClientEvent(@Body body: JsonObject): OkResponse
 
     @GET("api/analytics")
+    @retrofit2.http.Headers("Cache-Control: no-cache")
     suspend fun analytics(
         @Query("from") from: String? = null,
         @Query("to") to: String? = null,
+        @Query("deviceId") deviceId: String? = null,
     ): AnalyticsResponse
 
     @GET("api/analytics/export")
@@ -222,6 +227,7 @@ interface BockMediaApi {
     suspend fun analyticsExport(
         @Query("from") from: String? = null,
         @Query("to") to: String? = null,
+        @Query("deviceId") deviceId: String? = null,
     ): ResponseBody
 
     @GET("api/ignored")

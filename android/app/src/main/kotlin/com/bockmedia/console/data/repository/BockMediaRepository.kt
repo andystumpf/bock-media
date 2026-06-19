@@ -332,12 +332,21 @@ class BockMediaRepository(
     private val lyricsCache = java.util.concurrent.ConcurrentHashMap<String, LyricsResponse>()
 
     /** Lyrics for a track (cached per path). Returns null when unavailable or offline. */
-    suspend fun lyrics(path: String, durationSec: Int? = null): LyricsResponse? {
+    suspend fun lyrics(
+        path: String,
+        durationSec: Int? = null,
+        title: String? = null,
+        artist: String? = null,
+        album: String? = null,
+    ): LyricsResponse? {
         if (path.isBlank()) return null
-        lyricsCache[path]?.let { return it }
-        val resp = runCatching { api().lyrics(path, durationSec) }.getOrNull() ?: return null
+        val cacheKey = listOf(path, durationSec?.toString(), title, artist, album).joinToString("|")
+        lyricsCache[cacheKey]?.let { return it }
+        val resp = runCatching {
+            api().lyrics(path, durationSec, title, artist, album)
+        }.getOrNull() ?: return null
         if (resp.plain.isNotBlank() || resp.lines.isNotEmpty()) {
-            lyricsCache[path] = resp
+            lyricsCache[cacheKey] = resp
         }
         return resp
     }
@@ -350,7 +359,13 @@ class BockMediaRepository(
     suspend fun alexaRemoteStatus(probe: Boolean = false) =
         api().alexaRemoteStatus(probe = if (probe) "1" else null)
     suspend fun automations() = api().automations()
-    suspend fun analytics(from: String? = null, to: String? = null) = api().analytics(from, to)
+    suspend fun analytics(from: String? = null, to: String? = null, deviceId: String? = null) =
+        api().analytics(from, to, deviceId)
+
+    fun clientDeviceId(): String {
+        val cid = clientIdProvider().trim().lowercase()
+        return if (cid.isBlank()) "" else "client-$cid"
+    }
     suspend fun reportClientEvent(body: JsonObject) = api().reportClientEvent(body)
     suspend fun ignored() = api().ignored()
     suspend fun settings() = api().settings()
@@ -546,8 +561,13 @@ class BockMediaRepository(
         })
     }
 
-    suspend fun exportAnalyticsCsv(from: String?, to: String?, cacheDir: java.io.File): File {
-        val body = api().analyticsExport(from, to)
+    suspend fun exportAnalyticsCsv(
+        from: String?,
+        to: String?,
+        cacheDir: java.io.File,
+        deviceId: String? = null,
+    ): File {
+        val body = api().analyticsExport(from, to, deviceId)
         val file = java.io.File(cacheDir, "bock_media_streams.csv")
         body.byteStream().use { input ->
             file.outputStream().use { output -> input.copyTo(output) }

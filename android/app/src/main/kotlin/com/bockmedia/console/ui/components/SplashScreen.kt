@@ -11,7 +11,7 @@ import androidx.compose.ui.unit.dp
 fun SplashScreen(message: String = "Connecting…") {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            BockLoadingLogo(size = 96.dp)
+            BockProgressIndicator(size = 48.dp)
             Spacer(Modifier.height(24.dp))
             Text(
                 message,

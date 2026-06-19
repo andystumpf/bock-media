@@ -35,18 +35,71 @@ import com.patrykandpatrick.vico.compose.cartesian.rememberCartesianChart
 import com.patrykandpatrick.vico.core.cartesian.data.CartesianChartModelProducer
 import com.patrykandpatrick.vico.core.cartesian.data.columnSeries
 import com.patrykandpatrick.vico.core.cartesian.data.lineSeries
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import java.text.NumberFormat
 import java.time.Instant
 import java.time.LocalDate
-import java.time.ZoneId
+import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 
-private enum class DatePreset { Last7, Last30, AllTime, Custom }
+internal enum class DatePreset { Last7, Last30, AllTime, Custom }
 private enum class ActivityPeriod { Day, Week, Month, Year }
 
 private val isoDate = DateTimeFormatter.ISO_LOCAL_DATE
 private val intFmt = NumberFormat.getIntegerInstance()
+
+internal fun analyticsDateRange(
+    preset: DatePreset,
+    customFrom: LocalDate?,
+    customTo: LocalDate?,
+    today: LocalDate = LocalDate.now(),
+): Pair<String?, String?> = when (preset) {
+    DatePreset.Last7 -> isoDate.format(today.minusDays(6)) to isoDate.format(today)
+    DatePreset.Last30 -> isoDate.format(today.minusDays(29)) to isoDate.format(today)
+    DatePreset.AllTime -> null to null
+    DatePreset.Custom -> customFrom?.let { isoDate.format(it) } to customTo?.let { isoDate.format(it) }
+}
+
+internal fun analyticsRangeKey(
+    preset: DatePreset,
+    customFrom: LocalDate?,
+    customTo: LocalDate?,
+    deviceId: String? = null,
+): String {
+    val range = when (preset) {
+        DatePreset.Last7 -> "last7"
+        DatePreset.Last30 -> "last30"
+        DatePreset.AllTime -> "all"
+        DatePreset.Custom -> "custom:${customFrom ?: "_"}:${customTo ?: "_"}"
+    }
+    val device = deviceId?.takeIf { it.isNotBlank() } ?: "all-devices"
+    return "$range|$device"
+}
+
+internal sealed class AnalyticsDeviceFilter {
+    data object AllDevices : AnalyticsDeviceFilter()
+    data object ThisPhone : AnalyticsDeviceFilter()
+    data class Specific(val deviceId: String, val label: String) : AnalyticsDeviceFilter()
+}
+
+internal fun AnalyticsDeviceFilter.apiDeviceId(thisPhoneId: String): String? = when (this) {
+    AnalyticsDeviceFilter.AllDevices -> null
+    AnalyticsDeviceFilter.ThisPhone -> thisPhoneId.takeIf { it.isNotBlank() }
+    is AnalyticsDeviceFilter.Specific -> deviceId
+}
+
+internal fun AnalyticsDeviceFilter.displayLabel(thisPhoneId: String): String = when (this) {
+    AnalyticsDeviceFilter.AllDevices -> "All devices"
+    AnalyticsDeviceFilter.ThisPhone -> "This phone"
+    is AnalyticsDeviceFilter.Specific -> label.ifBlank { deviceId.takeLast(8) }
+}
+
+private fun localDateToPickerMillis(date: LocalDate): Long =
+    date.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+
+private fun pickerMillisToLocalDate(ms: Long): LocalDate =
+    Instant.ofEpochMilli(ms).atZone(ZoneOffset.UTC).toLocalDate()
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -64,33 +117,46 @@ fun AnalyticsScreen(repository: BockMediaRepository) {
     var loading by remember { mutableStateOf(true) }
     var refreshing by remember { mutableStateOf(false) }
     var exporting by remember { mutableStateOf(false) }
+    val thisPhoneId = remember(repository) { repository.clientDeviceId() }
+    var deviceFilter by remember { mutableStateOf<AnalyticsDeviceFilter>(AnalyticsDeviceFilter.AllDevices) }
+    var knownDevices by remember { mutableStateOf<List<DeviceItem>>(emptyList()) }
+    var showDeviceMenu by remember { mutableStateOf(false) }
 
-    fun dateRange(): Pair<String?, String?> {
-        val today = LocalDate.now()
-        return when (preset) {
-            DatePreset.Last7 -> isoDate.format(today.minusDays(6)) to isoDate.format(today)
-            DatePreset.Last30 -> isoDate.format(today.minusDays(29)) to isoDate.format(today)
-            DatePreset.AllTime -> null to null
-            DatePreset.Custom -> customFrom?.let { isoDate.format(it) } to customTo?.let { isoDate.format(it) }
-        }
-    }
+    val queryKey = analyticsRangeKey(
+        preset,
+        customFrom,
+        customTo,
+        deviceFilter.apiDeviceId(thisPhoneId),
+    )
 
-    suspend fun load() {
-        if (data == null) loading = true
-        val (from, to) = dateRange()
-        runCatching {
-            data = repository.analytics(from, to)
+    suspend fun loadAnalytics() {
+        if (data == null) loading = true else refreshing = true
+        val (from, to) = analyticsDateRange(preset, customFrom, customTo)
+        val deviceId = deviceFilter.apiDeviceId(thisPhoneId)
+        try {
+            data = repository.analytics(from, to, deviceId)
             ignored = repository.ignored().items
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // Keep the previous snapshot when a ranged reload fails.
+        } finally {
+            loading = false
+            refreshing = false
         }
-        loading = false
-        refreshing = false
     }
 
-    LaunchedEffect(preset, customFrom, customTo) { load() }
+    LaunchedEffect(Unit) {
+        runCatching { knownDevices = repository.devices() }
+    }
+
+    LaunchedEffect(queryKey) {
+        loadAnalytics()
+    }
 
     if (showFromPicker) {
         val state = rememberDatePickerState(
-            initialSelectedDateMillis = customFrom?.toEpochDay()?.times(86_400_000L)
+            initialSelectedDateMillis = customFrom?.let { localDateToPickerMillis(it) }
                 ?: System.currentTimeMillis(),
         )
         DatePickerDialog(
@@ -98,7 +164,7 @@ fun AnalyticsScreen(repository: BockMediaRepository) {
             confirmButton = {
                 TextButton(onClick = {
                     state.selectedDateMillis?.let { ms ->
-                        customFrom = Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault()).toLocalDate()
+                        customFrom = pickerMillisToLocalDate(ms)
                     }
                     preset = DatePreset.Custom
                     showFromPicker = false
@@ -109,7 +175,7 @@ fun AnalyticsScreen(repository: BockMediaRepository) {
     }
     if (showToPicker) {
         val state = rememberDatePickerState(
-            initialSelectedDateMillis = customTo?.toEpochDay()?.times(86_400_000L)
+            initialSelectedDateMillis = customTo?.let { localDateToPickerMillis(it) }
                 ?: System.currentTimeMillis(),
         )
         DatePickerDialog(
@@ -117,7 +183,7 @@ fun AnalyticsScreen(repository: BockMediaRepository) {
             confirmButton = {
                 TextButton(onClick = {
                     state.selectedDateMillis?.let { ms ->
-                        customTo = Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault()).toLocalDate()
+                        customTo = pickerMillisToLocalDate(ms)
                     }
                     preset = DatePreset.Custom
                     showToPicker = false
@@ -132,8 +198,23 @@ fun AnalyticsScreen(repository: BockMediaRepository) {
             preset = preset,
             customFrom = customFrom,
             customTo = customTo,
+            deviceFilter = deviceFilter,
+            deviceMenuExpanded = showDeviceMenu,
+            knownDevices = knownDevices,
+            thisPhoneId = thisPhoneId,
             exporting = exporting,
-            onPreset = { preset = it },
+            onPreset = { next ->
+                preset = next
+                if (next != DatePreset.Custom) {
+                    customFrom = null
+                    customTo = null
+                }
+            },
+            onDeviceMenuExpanded = { showDeviceMenu = it },
+            onDeviceFilter = {
+                deviceFilter = it
+                showDeviceMenu = false
+            },
             onFrom = { showFromPicker = true },
             onTo = { showToPicker = true },
             onClear = {
@@ -144,9 +225,10 @@ fun AnalyticsScreen(repository: BockMediaRepository) {
             onExport = {
                 scope.launch {
                     exporting = true
-                    val (from, to) = dateRange()
+                    val (from, to) = analyticsDateRange(preset, customFrom, customTo)
+                    val deviceId = deviceFilter.apiDeviceId(thisPhoneId)
                     runCatching {
-                        val file = repository.exportAnalyticsCsv(from, to, context.cacheDir)
+                        val file = repository.exportAnalyticsCsv(from, to, context.cacheDir, deviceId)
                         val uri = androidx.core.content.FileProvider.getUriForFile(
                             context,
                             "${context.packageName}.fileprovider",
@@ -173,10 +255,7 @@ fun AnalyticsScreen(repository: BockMediaRepository) {
         } else {
             BockPullRefresh(
                 isRefreshing = refreshing,
-                onRefresh = {
-                    refreshing = true
-                    scope.launch { load() }
-                },
+                onRefresh = { scope.launch { loadAnalytics() } },
                 modifier = Modifier.weight(1f),
             ) {
                 BockLazyColumn(
@@ -184,19 +263,20 @@ fun AnalyticsScreen(repository: BockMediaRepository) {
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
+                    val deviceScoped = deviceFilter !is AnalyticsDeviceFilter.AllDevices
                     data?.let { a ->
-                        item { SummaryStatsGrid(a) }
-                        if (a.deviceBreakdown.any { it.plays + it.downloads + it.connects > 0 }) {
-                            item { DeviceBreakdownCard(a.deviceBreakdown) }
+                        item(key = "stats-$queryKey") { SummaryStatsGrid(a) }
+                        if (!deviceScoped && a.deviceBreakdown.any { it.plays + it.downloads + it.connects > 0 }) {
+                            item(key = "devices-$queryKey") { DeviceBreakdownCard(a.deviceBreakdown) }
                         }
-                        item {
+                        item(key = "activity-$queryKey") {
                             ActivityChartCard(
                                 data = a,
                                 period = activityPeriod,
                                 onPeriod = { activityPeriod = it },
                             )
                         }
-                        item {
+                        item(key = "hour-dow-$queryKey") {
                             Row(
                                 Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -216,17 +296,19 @@ fun AnalyticsScreen(repository: BockMediaRepository) {
                             }
                         }
                         if (!a.heatmap.isNullOrEmpty()) {
-                            item { HeatmapCard(a.heatmap!!) }
+                            item(key = "heatmap-$queryKey") { HeatmapCard(a.heatmap!!) }
                         }
-                        item { RankingCard("Top artists", a.topArtists, BockGreen) }
-                        item { RankingCard("Top albums", a.topAlbums, BockGold) }
-                        item { RankingCard("Top tracks", a.topTracks, Color(0xFF509BF5)) }
-                        item { RankingCard("Top devices", a.topDevices, BockNavy) }
+                        item(key = "artists-$queryKey") { RankingCard("Top artists", a.topArtists, BockGreen) }
+                        item(key = "albums-$queryKey") { RankingCard("Top albums", a.topAlbums, BockGold) }
+                        item(key = "tracks-$queryKey") { RankingCard("Top tracks", a.topTracks, Color(0xFF509BF5)) }
+                        if (!deviceScoped) {
+                            item(key = "devices-top-$queryKey") { RankingCard("Top devices", a.topDevices, BockNavy) }
+                        }
                         if (a.topGenres.isNotEmpty()) {
-                            item { RankingCard("Top genres", a.topGenres, Color(0xFF8D67AB)) }
+                            item(key = "genres-$queryKey") { RankingCard("Top genres", a.topGenres, Color(0xFF8D67AB)) }
                         }
                         if (a.topDecades.isNotEmpty()) {
-                            item {
+                            item(key = "decades-$queryKey") {
                                 AnalyticsCard("By decade") {
                                     DecadeChart(a.topDecades)
                                 }
@@ -256,7 +338,7 @@ fun AnalyticsScreen(repository: BockMediaRepository) {
                                 onAllow = {
                                     scope.launch {
                                         repository.removeIgnored(track.path)
-                                        load()
+                                        loadAnalytics()
                                     }
                                 },
                             )
@@ -269,18 +351,30 @@ fun AnalyticsScreen(repository: BockMediaRepository) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AnalyticsToolbar(
     preset: DatePreset,
     customFrom: LocalDate?,
     customTo: LocalDate?,
+    deviceFilter: AnalyticsDeviceFilter,
+    deviceMenuExpanded: Boolean,
+    knownDevices: List<DeviceItem>,
+    thisPhoneId: String,
     exporting: Boolean,
     onPreset: (DatePreset) -> Unit,
+    onDeviceMenuExpanded: (Boolean) -> Unit,
+    onDeviceFilter: (AnalyticsDeviceFilter) -> Unit,
     onFrom: () -> Unit,
     onTo: () -> Unit,
     onClear: () -> Unit,
     onExport: () -> Unit,
 ) {
+    val thisPhoneName = knownDevices.firstOrNull { it.deviceId == thisPhoneId }?.name
+    val otherDevices = knownDevices
+        .filter { it.deviceId.isNotBlank() && it.deviceId != thisPhoneId }
+        .sortedBy { it.name?.lowercase() ?: it.deviceId }
+
     Column(
         Modifier
             .fillMaxWidth()
@@ -298,6 +392,87 @@ private fun AnalyticsToolbar(
                 Icon(Icons.Default.Download, null, Modifier.size(18.dp))
                 Spacer(Modifier.width(4.dp))
                 Text(if (exporting) "Exporting…" else "Export")
+            }
+        }
+        ExposedDropdownMenuBox(
+            expanded = deviceMenuExpanded,
+            onExpandedChange = onDeviceMenuExpanded,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            OutlinedTextField(
+                value = when (deviceFilter) {
+                    AnalyticsDeviceFilter.ThisPhone -> thisPhoneName?.let { "This phone ($it)" } ?: "This phone"
+                    else -> deviceFilter.displayLabel(thisPhoneId)
+                },
+                onValueChange = {},
+                readOnly = true,
+                singleLine = true,
+                label = { Text("Device") },
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = deviceMenuExpanded) },
+                modifier = Modifier
+                    .menuAnchor()
+                    .fillMaxWidth(),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = BockGreen,
+                    focusedLabelColor = BockGreen,
+                    cursorColor = BockGreen,
+                ),
+            )
+            ExposedDropdownMenu(
+                expanded = deviceMenuExpanded,
+                onDismissRequest = { onDeviceMenuExpanded(false) },
+            ) {
+                DropdownMenuItem(
+                    text = { Text("All devices") },
+                    onClick = { onDeviceFilter(AnalyticsDeviceFilter.AllDevices) },
+                    leadingIcon = {
+                        if (deviceFilter is AnalyticsDeviceFilter.AllDevices) {
+                            Icon(Icons.Default.Check, null, tint = BockGreen)
+                        }
+                    },
+                )
+                if (thisPhoneId.isNotBlank()) {
+                    DropdownMenuItem(
+                        text = {
+                            Text(thisPhoneName?.let { "This phone ($it)" } ?: "This phone")
+                        },
+                        onClick = { onDeviceFilter(AnalyticsDeviceFilter.ThisPhone) },
+                        leadingIcon = {
+                            if (deviceFilter is AnalyticsDeviceFilter.ThisPhone) {
+                                Icon(Icons.Default.Check, null, tint = BockGreen)
+                            } else {
+                                Icon(Icons.Default.PhoneAndroid, null, tint = BockMuted)
+                            }
+                        },
+                    )
+                }
+                otherDevices.forEach { device ->
+                    val selected = deviceFilter is AnalyticsDeviceFilter.Specific &&
+                        deviceFilter.deviceId == device.deviceId
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                device.name?.takeIf { it.isNotBlank() } ?: device.deviceId.takeLast(8),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        },
+                        onClick = {
+                            onDeviceFilter(
+                                AnalyticsDeviceFilter.Specific(
+                                    deviceId = device.deviceId,
+                                    label = device.name?.takeIf { it.isNotBlank() }
+                                        ?: device.deviceId.takeLast(8),
+                                ),
+                            )
+                        },
+                        leadingIcon = {
+                            if (selected) {
+                                Icon(Icons.Default.Check, null, tint = BockGreen)
+                            }
+                        },
+                    )
+                }
             }
         }
         Row(
@@ -511,8 +686,9 @@ private fun ActivityChartCard(
 @Composable
 private fun LineChart(values: List<Int>, height: androidx.compose.ui.unit.Dp) {
     val display = values.takeLast(48)
-    val producer = remember { CartesianChartModelProducer() }
-    LaunchedEffect(display) {
+    val chartKey = display.joinToString(",")
+    val producer = remember(chartKey) { CartesianChartModelProducer() }
+    LaunchedEffect(chartKey) {
         producer.runTransaction {
             lineSeries { series(display.map { it.toFloat() }) }
         }
@@ -533,8 +709,9 @@ private fun LineChart(values: List<Int>, height: androidx.compose.ui.unit.Dp) {
 @Composable
 private fun ColumnChart(values: List<Int>, height: androidx.compose.ui.unit.Dp, color: Color = BockGreen) {
     if (values.isEmpty()) return
-    val producer = remember { CartesianChartModelProducer() }
-    LaunchedEffect(values) {
+    val chartKey = values.joinToString(",")
+    val producer = remember(chartKey) { CartesianChartModelProducer() }
+    LaunchedEffect(chartKey) {
         producer.runTransaction {
             columnSeries { series(values.map { it.toFloat() }) }
         }

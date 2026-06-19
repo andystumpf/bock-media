@@ -52,8 +52,15 @@ final class HomeViewModel: ObservableObject {
         feed?.sections.first { $0.kind == .jumpBackIn }
     }
 
+    /// Top shortcut tiles are quick-access only: playlists and mixes, never
+    /// individual songs/albums (those come from play history). Recent playlists
+    /// first, backfilled from mix rows. Mirrors Android `HomeFeed.homeShortcutCards()`.
+    var shortcutCards: [HomeCard] {
+        feed?.homeShortcutCards() ?? []
+    }
+
     var showShortcuts: Bool {
-        filter == .all && jumpBackInSection != nil
+        filter == .all && !shortcutCards.isEmpty
     }
 
     var filteredSections: [HomeSection] {
@@ -66,6 +73,8 @@ final class HomeViewModel: ObservableObject {
             case .all:
                 if showShortcuts && section.kind == .jumpBackIn { return false }
                 return section.kind != .offline
+            case .recents:
+                return section.kind == .jumpBackIn || section.kind == .recentPlaylists
             case .playlists:
                 return section.kind == .jumpBackIn || section.kind == .recentPlaylists || section.kind == .favorites
             case .mixes:
@@ -117,10 +126,10 @@ struct HomeView: View {
                 } else if viewModel.filteredSections.isEmpty && !viewModel.showShortcuts {
                     emptyState
                 } else {
-                    if viewModel.showShortcuts, let jump = viewModel.jumpBackInSection {
+                    if viewModel.showShortcuts {
                         HomeShortcutGrid(
                             appState: appState,
-                            cards: jump.cards,
+                            cards: viewModel.shortcutCards,
                             artworkEpoch: artworkEpoch,
                             onLongPress: { actionCard = $0 }
                         )

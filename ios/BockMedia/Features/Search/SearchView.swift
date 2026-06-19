@@ -381,7 +381,7 @@ struct SearchView: View {
     private func songRow(_ hit: SearchHit) -> some View {
         let path = hit.path ?? ""
         let starred = favoritePaths.contains(path)
-        HStack {
+        return HStack {
             Button {
                 if let path = hit.path {
                     appState.play(.song(path: path, title: hit.title ?? hit.name ?? path))

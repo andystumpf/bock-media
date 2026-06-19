@@ -1,0 +1,69 @@
+{
+  "" : {
+    "diagnostics" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/BockMediaWidget-primary.dia",
+    "emit-module-dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/BockMediaWidget-primary-emit-module.d",
+    "emit-module-diagnostics" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/BockMediaWidget-primary-emit-module.dia",
+    "pch" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/BockMediaWidget-primary-Bridging-header.pch",
+    "swift-dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/BockMediaWidget-primary.swiftdeps"
+  },
+  "/Users/andymac/Documents/GitHub/ourMedia/ios/BockMedia/UI/Theme/BockIcons.swift" : {
+    "const-values" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/BockIcons.swiftconstvalues",
+    "dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/BockIcons.d",
+    "diagnostics" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/BockIcons.dia",
+    "index-unit-output-path" : "/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/BockIcons.o",
+    "llvm-bc" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/BockIcons.bc",
+    "object" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/BockIcons.o",
+    "swift-dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/BockIcons.swiftdeps",
+    "swiftmodule" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/BockIcons~partial.swiftmodule"
+  },
+  "/Users/andymac/Documents/GitHub/ourMedia/ios/BockMedia/Widget/WidgetControlQueue.swift" : {
+    "const-values" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/WidgetControlQueue.swiftconstvalues",
+    "dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/WidgetControlQueue.d",
+    "diagnostics" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/WidgetControlQueue.dia",
+    "index-unit-output-path" : "/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/WidgetControlQueue.o",
+    "llvm-bc" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/WidgetControlQueue.bc",
+    "object" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/WidgetControlQueue.o",
+    "swift-dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/WidgetControlQueue.swiftdeps",
+    "swiftmodule" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/WidgetControlQueue~partial.swiftmodule"
+  },
+  "/Users/andymac/Documents/GitHub/ourMedia/ios/BockMedia/Widget/WidgetSessionStore.swift" : {
+    "const-values" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/WidgetSessionStore.swiftconstvalues",
+    "dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/WidgetSessionStore.d",
+    "diagnostics" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/WidgetSessionStore.dia",
+    "index-unit-output-path" : "/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/WidgetSessionStore.o",
+    "llvm-bc" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/WidgetSessionStore.bc",
+    "object" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/WidgetSessionStore.o",
+    "swift-dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/WidgetSessionStore.swiftdeps",
+    "swiftmodule" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/WidgetSessionStore~partial.swiftmodule"
+  },
+  "/Users/andymac/Documents/GitHub/ourMedia/ios/BockMedia/Widget/WidgetSnapshotLogic.swift" : {
+    "const-values" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/WidgetSnapshotLogic.swiftconstvalues",
+    "dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/WidgetSnapshotLogic.d",
+    "diagnostics" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/WidgetSnapshotLogic.dia",
+    "index-unit-output-path" : "/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/WidgetSnapshotLogic.o",
+    "llvm-bc" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/WidgetSnapshotLogic.bc",
+    "object" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/WidgetSnapshotLogic.o",
+    "swift-dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/WidgetSnapshotLogic.swiftdeps",
+    "swiftmodule" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/WidgetSnapshotLogic~partial.swiftmodule"
+  },
+  "/Users/andymac/Documents/GitHub/ourMedia/ios/BockMediaWidget/BockMediaWidget.swift" : {
+    "const-values" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/BockMediaWidget.swiftconstvalues",
+    "dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/BockMediaWidget.d",
+    "diagnostics" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/BockMediaWidget.dia",
+    "index-unit-output-path" : "/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/BockMediaWidget.o",
+    "llvm-bc" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/BockMediaWidget.bc",
+    "object" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/BockMediaWidget.o",
+    "swift-dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/BockMediaWidget.swiftdeps",
+    "swiftmodule" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/BockMediaWidget~partial.swiftmodule"
+  },
+  "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/DerivedSources/GeneratedAssetSymbols.swift" : {
+    "const-values" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/GeneratedAssetSymbols.swiftconstvalues",
+    "dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/GeneratedAssetSymbols.d",
+    "diagnostics" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/GeneratedAssetSymbols.dia",
+    "index-unit-output-path" : "/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/GeneratedAssetSymbols.o",
+    "llvm-bc" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/GeneratedAssetSymbols.bc",
+    "object" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/GeneratedAssetSymbols.o",
+    "swift-dependencies" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/GeneratedAssetSymbols.swiftdeps",
+    "swiftmodule" : "/Users/andymac/Documents/GitHub/ourMedia/ios/build/DD/Build/Intermediates.noindex/BockMedia.build/Debug-iphoneos/BockMediaWidget.build/Objects-normal/arm64/GeneratedAssetSymbols~partial.swiftmodule"
+  }
+}

@@ -180,17 +180,23 @@ final class BockMediaRepository: ObservableObject {
         return try await api.streamHistory(page: page, limit: limit)
     }
 
-    func analytics(from: String? = nil, to: String? = nil) async throws -> AnalyticsResponse {
+    func analytics(from: String? = nil, to: String? = nil, deviceId: String? = nil) async throws -> AnalyticsResponse {
         try await ensureAPI()
-        return try await api.analytics(from: from, to: to)
+        return try await api.analytics(from: from, to: to, deviceId: deviceId)
     }
 
-    func exportAnalyticsCSV(from: String? = nil, to: String? = nil) async throws -> URL {
+    func exportAnalyticsCSV(from: String? = nil, to: String? = nil, deviceId: String? = nil) async throws -> URL {
         try await ensureAPI()
-        let data = try await api.analyticsExport(from: from, to: to)
+        let data = try await api.analyticsExport(from: from, to: to, deviceId: deviceId)
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("bock_media_streams.csv")
         try data.write(to: url)
         return url
+    }
+
+    /// Server device-id for this phone's own plays. Mirrors Android `clientDeviceId()`.
+    func clientDeviceId() -> String {
+        let cid = ClientIdStore.clientId().trimmingCharacters(in: .whitespaces).lowercased()
+        return cid.isEmpty ? "" : "client-\(cid)"
     }
 
     func deviceGroups() async throws -> DeviceGroupsResponse {

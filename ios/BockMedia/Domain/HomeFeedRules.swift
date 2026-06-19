@@ -158,7 +158,13 @@ enum HomeFeedRules {
     }
 
     static func isSpecialHomePlaylistName(_ name: String) -> Bool {
-        isDailyMixName(name) || isDiscoverName(name) || isGenreMixPlaylistName(name) || isExplicitRadioPlaylistName(name)
+        isDailyMixName(name) || isDiscoverName(name) || isGenreMixPlaylistName(name)
+            || isExplicitRadioPlaylistName(name) || isAutomationPlaylistName(name)
+    }
+
+    /// Scheduled automation playlists — excluded from recents, mixes, and shortcut tiles.
+    static func isAutomationPlaylistName(_ name: String) -> Bool {
+        name.trimmingCharacters(in: .whitespaces).lowercased().hasPrefix("automations")
     }
 
     static func browsablePlaylists(_ all: [PlaylistSummary]) -> [PlaylistSummary] {

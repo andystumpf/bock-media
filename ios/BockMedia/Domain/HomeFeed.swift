@@ -2,6 +2,7 @@ import Foundation
 
 enum HomeFilter: String, CaseIterable, Identifiable {
     case all = "All"
+    case recents = "Recents"
     case playlists = "Playlists"
     case mixes = "Mixes"
     case radio = "Radio"
@@ -35,6 +36,45 @@ struct HomeSection: Identifiable {
 
 struct HomeFeed {
     let sections: [HomeSection]
+}
+
+private let homeShortcutMixKinds: Set<HomeSectionKind> = [
+    .topMixes, .mood, .dailyMixes, .exploreThemes, .recentPlaylists,
+]
+
+extension HomeCard {
+    /// Quick-access tiles: playlists and mixes only — never albums or individual tracks.
+    var eligibleForHomeShortcut: Bool {
+        switch playTarget {
+        case .album, .song:
+            return false
+        case .playlist(_, let name):
+            return !HomeFeedRules.isAutomationPlaylistName(name)
+        case .artist, .radio:
+            return homeShortcutMixKinds.contains(kind)
+        }
+    }
+}
+
+extension HomeFeed {
+    /// Up to `limit` shortcut tiles: recent playlists first, then backfilled from mix rows.
+    /// Mirrors Android `HomeFeed.homeShortcutCards()`.
+    func homeShortcutCards(limit: Int = 6) -> [HomeCard] {
+        let jump = (sections.first { $0.kind == .jumpBackIn }?.cards ?? [])
+            .filter { $0.eligibleForHomeShortcut }
+        var seen = Set(jump.map { $0.id })
+        var result = jump
+        if result.count >= limit { return Array(result.prefix(limit)) }
+        for section in sections where homeShortcutMixKinds.contains(section.kind) {
+            for card in section.cards {
+                guard card.eligibleForHomeShortcut, !seen.contains(card.id) else { continue }
+                result.append(card)
+                seen.insert(card.id)
+                if result.count >= limit { return result }
+            }
+        }
+        return result
+    }
 }
 
 @MainActor

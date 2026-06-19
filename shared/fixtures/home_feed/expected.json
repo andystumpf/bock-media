@@ -1,0 +1,6 @@
+{
+  "_comment": "Golden invariants for HomeFeedComposer. The same input.json drives Android (HomeFeedComposerGoldenTest) and iOS (HomeFeedComposerGoldenTests). These assertions are RNG- and section-order-independent, so they must hold identically on both platforms: scheduled 'Automations …' playlists never surface, shortcut tiles are playlist/mix-only (never album/song), and every card id is unique.",
+  "forbiddenTitlePrefix": "Automations",
+  "maxShortcutTiles": 6,
+  "automationPlaylistName": "Automations - Daily"
+}

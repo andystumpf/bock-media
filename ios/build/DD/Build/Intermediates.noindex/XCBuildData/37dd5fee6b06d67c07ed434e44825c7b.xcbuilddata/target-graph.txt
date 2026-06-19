@@ -1,0 +1,4 @@
+Target dependency graph (2 targets)
+Target 'BockMedia' in project 'BockMedia'
+➜ Explicit dependency on target 'BockMediaWidget' in project 'BockMedia'
+Target 'BockMediaWidget' in project 'BockMedia' (no dependencies)

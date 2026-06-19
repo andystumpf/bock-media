@@ -212,7 +212,7 @@ struct PlaylistDetailView: View {
             guard !loadingMore else { return }
             loadingMore = true
         } else {
-            loading = tracks.isEmpty()
+            loading = tracks.isEmpty
             loadError = nil
         }
         defer {
