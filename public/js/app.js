@@ -2451,9 +2451,16 @@ register('devices', async () => {
   renderDevices();
 });
 
+function isAppClient(d) {
+  return (d && d.platform === 'android') || (d && (d.deviceId || '').startsWith('client-'));
+}
+
 function renderDevices() {
   const devices = window._devices || [];
-  const rows = devices.map((d, i) => `
+  // Keep the Alexa list clean: phone/app clients (which can re-register on each
+  // reinstall) live in their own section instead of crowding the Echo devices.
+  const alexaDevices = devices.filter(d => !isAppClient(d));
+  const rows = devices.map((d, i) => isAppClient(d) ? '' : `
     <li id="dev-row-${i}">
       <span class="device-icon-col"><i class="fa fa-headphones"></i></span>
       <span class="device-name-text">${escHtml(d.name)}</span>
@@ -2501,12 +2508,13 @@ function renderDevices() {
     ${candHtml}
     ${renderDeviceGroupsCard()}
     ${renderSpeakersCard()}
+    ${renderAppClientsCard()}
     <div class="card">
       <div class="card-header" style="display:flex;align-items:center;justify-content:space-between">
-        <h3><i class="fa fa-headphones"></i> Alexa Devices (${devices.length})</h3>
+        <h3><i class="fa fa-headphones"></i> Alexa Devices (${alexaDevices.length})</h3>
         <div style="display:flex;gap:8px;align-items:center">
-          ${window._devicesRemoteConfigured && unnamedCount(devices) > 0
-            ? `<button class="btn-sm btn-primary" onclick="startFixDevices()"><i class="fa fa-wand-magic-sparkles"></i> Fix my devices (${unnamedCount(devices)})</button>`
+          ${window._devicesRemoteConfigured && unnamedCount(alexaDevices) > 0
+            ? `<button class="btn-sm btn-primary" onclick="startFixDevices()"><i class="fa fa-wand-magic-sparkles"></i> Fix my devices (${unnamedCount(alexaDevices)})</button>`
             : ''}
           ${window._devicesRemoteConfigured
             ? `<button id="identify-btn" class="btn-sm btn-default" onclick="startIdentify()"><i class="fa fa-volume-high"></i> Identify all</button>`
@@ -2518,6 +2526,31 @@ function renderDevices() {
         ? `<ul class="device-list">${rows}</ul>`
         : `<div class="empty-state"><i class="fa fa-headphones"></i><p>No devices yet — start streaming from an Echo to register it.</p></div>`}
     </div>`);
+}
+
+function renderAppClientsCard() {
+  const devices = window._devices || [];
+  // Preserve original indices so edit/delete actions hit the right entry.
+  const clients = devices.map((d, i) => ({ d, i })).filter(x => isAppClient(x.d));
+  if (!clients.length) return '';
+  const rows = clients.map(({ d, i }) => `
+    <li id="dev-row-${i}">
+      <span class="device-icon-col"><i class="fa fa-mobile-screen"></i></span>
+      <span class="device-name-text">${escHtml(d.name)}</span>
+      <span class="device-last-seen" style="font-size:11px;color:#9aa;margin-left:8px">${d.lastSeen ? 'Last seen ' + fmtDateTime(new Date(d.lastSeen * 1000).toISOString()) : ''}</span>
+      <div class="row-actions">
+        ${actionBtn({ kind: 'edit', onclick: `startEditDevice(${i})`, title: 'Edit name', icon: 'pen' })}
+        ${actionBtn({ kind: 'delete', onclick: `deleteDevice(${i})`, title: 'Remove device', icon: 'trash' })}
+      </div>
+    </li>`).join('');
+  return `
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-header"><h3><i class="fa fa-mobile-screen"></i> App Clients (${clients.length})</h3></div>
+      <div class="card-body" style="padding:8px 16px 4px">
+        <p class="hint" style="margin:0 0 8px">Phones and tablets running the app. A fresh install or reset registers a new client — safe to remove stale entries here.</p>
+        <ul class="device-list" style="margin:0">${rows}</ul>
+      </div>
+    </div>`;
 }
 
 function renderSpeakersCard() {
