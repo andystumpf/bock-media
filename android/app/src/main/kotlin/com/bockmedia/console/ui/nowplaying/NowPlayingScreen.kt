@@ -599,6 +599,10 @@ private fun SpotifyNowPlayingPage(
     val durationSec = prog.durationMs / 1000
     var showMoreMenu by remember { mutableStateOf(false) }
     var showUpNext by remember { mutableStateOf(false) }
+    var showLyrics by remember { mutableStateOf(false) }
+    var lyrics by remember { mutableStateOf<com.bockmedia.console.data.api.dto.LyricsResponse?>(null) }
+    var lyricsLoading by remember { mutableStateOf(false) }
+    var lyricsError by remember { mutableStateOf<String?>(null) }
     var artUrl by remember(displayDev.filepath) { mutableStateOf<String?>(null) }
     val context = androidx.compose.ui.platform.LocalContext.current
     val localArtFile = if (isLocal) liveLocal.current?.localFile else null
@@ -611,6 +615,27 @@ private fun SpotifyNowPlayingPage(
         val fp = displayDev.filepath
         if (year == null && !fp.isNullOrBlank()) {
             year = repository.trackYear(fp)
+        }
+    }
+
+    LaunchedEffect(displayDev.filepath) {
+        showLyrics = false
+        lyrics = null
+        lyricsError = null
+    }
+
+    LaunchedEffect(showLyrics, displayDev.filepath, durationSec) {
+        if (!showLyrics) return@LaunchedEffect
+        val path = displayDev.filepath?.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
+        lyricsLoading = true
+        lyricsError = null
+        val fetched = runCatching {
+            repository.lyrics(path, durationSec.takeIf { it > 0 }?.toInt())
+        }.getOrNull()
+        lyrics = fetched
+        lyricsLoading = false
+        if (fetched == null || (fetched.lines.isEmpty() && fetched.plain.isBlank())) {
+            lyricsError = "No lyrics found for this track"
         }
     }
 
@@ -648,16 +673,39 @@ private fun SpotifyNowPlayingPage(
                 )
                 val artSize = maxArt.coerceAtLeast(180.dp)
 
-                BockArtwork(
-                    model = artUrl,
-                    title = displayDev.track ?: "Now playing",
-                    modifier = Modifier
+                Box(
+                    Modifier
                         .size(artSize)
                         .align(Alignment.TopCenter)
                         .padding(top = if (compact) 4.dp else 12.dp),
-                    shape = RoundedCornerShape(artCorner),
-                    fallbackFontSize = 48.sp,
-                )
+                ) {
+                    if (showLyrics) {
+                        LyricsPanel(
+                            lyrics = lyrics,
+                            loading = lyricsLoading,
+                            error = lyricsError,
+                            positionMs = prog.elapsedMs,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    } else {
+                        BockArtwork(
+                            model = artUrl,
+                            title = displayDev.track ?: "Now playing",
+                            modifier = Modifier.fillMaxSize(),
+                            shape = RoundedCornerShape(artCorner),
+                            fallbackFontSize = 48.sp,
+                        )
+                    }
+                    if (displayDev.filepath != null) {
+                        LyricsTogglePill(
+                            showingLyrics = showLyrics,
+                            onClick = { showLyrics = !showLyrics },
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(bottom = 10.dp),
+                        )
+                    }
+                }
 
                 Column(
                     Modifier
@@ -776,6 +824,14 @@ private fun SpotifyNowPlayingPage(
             onDismissRequest = { showMoreMenu = false },
         ) {
             if (dev.filepath != null) {
+                DropdownMenuItem(
+                    text = { Text("Lyrics") },
+                    onClick = {
+                        showMoreMenu = false
+                        showLyrics = true
+                    },
+                    leadingIcon = { Icon(Icons.Default.Lyrics, null) },
+                )
                 DropdownMenuItem(
                     text = { Text("Never play again") },
                     onClick = {

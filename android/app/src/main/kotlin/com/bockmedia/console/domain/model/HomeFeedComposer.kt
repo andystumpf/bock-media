@@ -90,7 +90,7 @@ object HomeFeedComposer {
         val recentPlaylistNames = linkedSetOf<String>()
         val artByPlaylist = mutableMapOf<String, String>()
         for (row in input.history) {
-            row.playlist?.trim()?.takeIf { it.isNotBlank() }?.let { name ->
+            row.playlist?.trim()?.takeIf { it.isNotBlank() && !HomeFeedRules.isAutomationPlaylistName(it) }?.let { name ->
                 recentPlaylistNames.add(name)
                 row.filepath?.let { artByPlaylist.putIfAbsent(name.lowercase(), it) }
             }
@@ -103,6 +103,7 @@ object HomeFeedComposer {
             subtitle: String? = null,
             claim: Boolean = true,
         ): HomeCard? {
+            if (HomeFeedRules.isAutomationPlaylistName(pl.name)) return null
             if (claim && !registry.claimPlaylist(pl.id, pl.name)) return null
             val card = HomeCard(
                 id = "pl-${pl.id}",
@@ -388,6 +389,7 @@ object HomeFeedComposer {
     ): List<HomeCard> = dashboard?.recent.orEmpty().mapNotNull { item ->
         val playlistName = item.playlist?.trim()?.takeIf { it.isNotBlank() }
         if (playlistName != null) {
+            if (HomeFeedRules.isAutomationPlaylistName(playlistName)) return@mapNotNull null
             val pl = playlistByName[playlistName.lowercase()] ?: return@mapNotNull null
             return@mapNotNull HomeCard(
                 id = "pl-${pl.id}",

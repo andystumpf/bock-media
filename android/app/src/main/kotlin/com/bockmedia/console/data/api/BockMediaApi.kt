@@ -136,6 +136,12 @@ interface BockMediaApi {
     @GET("api/track_meta")
     suspend fun trackMeta(@Query("path") path: String): TrackMetaResponse
 
+    @GET("api/lyrics")
+    suspend fun lyrics(
+        @Query("path") path: String,
+        @Query("duration") durationSec: Int? = null,
+    ): LyricsResponse
+
     @GET("api/songs")
     suspend fun songs(
         @Query("page") page: Int = 1,

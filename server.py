@@ -2398,6 +2398,169 @@ def track_meta():
     })
 
 
+# ── Lyrics (sidecar .lrc, embedded tags, LRCLIB fallback) ─────────────────────
+
+_LRC_TIMESTAMP = re.compile(r'\[(\d{1,2}):(\d{2}(?:\.\d{1,3})?)\]')
+_LRC_META = re.compile(r'^\[[a-z]+:', re.I)
+_LYRICS_CACHE: dict = {}
+_LYRICS_TTL = 3600
+
+
+def _looks_like_lrc(text):
+    return bool(text and _LRC_TIMESTAMP.search(text))
+
+
+def _parse_lrc(text):
+    """Parse LRC into [{timeMs, text}, ...] plus a plain-text fallback."""
+    lines = []
+    plain = []
+    for raw in (text or '').splitlines():
+        s = raw.strip()
+        if not s or _LRC_META.match(s):
+            continue
+        matches = list(_LRC_TIMESTAMP.finditer(s))
+        if matches:
+            lyric = _LRC_TIMESTAMP.sub('', s).strip()
+            if not lyric:
+                continue
+            for m in matches:
+                mins = int(m.group(1))
+                secs = float(m.group(2))
+                lines.append({'timeMs': int((mins * 60 + secs) * 1000), 'text': lyric})
+            plain.append(lyric)
+        elif not s.startswith('['):
+            plain.append(s)
+    lines.sort(key=lambda x: x['timeMs'])
+    return lines, '\n'.join(plain).strip()
+
+
+def _sidecar_lyrics(audio_path):
+    base, _ = os.path.splitext(audio_path)
+    for ext in ('.lrc', '.LRC', '.txt', '.TXT'):
+        p = base + ext
+        if os.path.isfile(p):
+            try:
+                with open(p, encoding='utf-8', errors='replace') as fh:
+                    return fh.read()
+            except Exception:
+                pass
+    return None
+
+
+def _embedded_lyrics(audio_path):
+    try:
+        from mutagen import File as MutaFile
+        f = MutaFile(audio_path)
+        if f is None or not getattr(f, 'tags', None):
+            return None
+        tags = f.tags
+        for key in ('lyrics', 'LYRICS', 'unsynced lyrics', 'UNSYNCEDLYRICS', '©lyr'):
+            if key in tags:
+                val = tags[key]
+                text = val[0] if isinstance(val, (list, tuple)) else str(val)
+                if str(text).strip():
+                    return str(text)
+        if hasattr(tags, 'getall'):
+            for frame in tags.getall('USLT') or []:
+                text = getattr(frame, 'text', '') or ''
+                if str(text).strip():
+                    return str(text)
+    except Exception as e:
+        print(f'embedded lyrics error {audio_path}: {e}', flush=True)
+    return None
+
+
+def _fetch_lrclib(title, artist, album, duration_sec):
+    from urllib.parse import urlencode
+    from urllib.request import Request, urlopen
+    params = {'track_name': title or ''}
+    if artist:
+        params['artist_name'] = artist
+    if album:
+        params['album_name'] = album
+    if duration_sec and duration_sec > 0:
+        params['duration'] = int(duration_sec)
+    url = 'https://lrclib.net/api/get?' + urlencode(params)
+    cache_key = (title or '', artist or '', album or '', int(duration_sec or 0))
+    cached = _LYRICS_CACHE.get(cache_key)
+    if cached and (time.time() - cached['ts']) < _LYRICS_TTL:
+        return cached['data']
+    try:
+        req = Request(url, headers={'User-Agent': 'BockMedia/1.0'})
+        with urlopen(req, timeout=6) as resp:
+            data = json.loads(resp.read().decode('utf-8', errors='replace'))
+        _LYRICS_CACHE[cache_key] = {'data': data, 'ts': time.time()}
+        return data
+    except Exception as e:
+        print(f'lrclib error {title!r}: {e}', flush=True)
+        return None
+
+
+def _lyrics_payload(path, duration_sec=None):
+    raw = _sidecar_lyrics(path)
+    source = 'lrc' if raw else None
+    if not raw:
+        raw = _embedded_lyrics(path)
+        source = 'embedded' if raw else None
+    if raw:
+        if _looks_like_lrc(raw):
+            lines, plain = _parse_lrc(raw)
+            return {
+                'synced': bool(lines),
+                'lines': lines,
+                'plain': plain or raw.strip(),
+                'source': source or 'lrc',
+            }
+        return {'synced': False, 'lines': [], 'plain': raw.strip(), 'source': source or 'embedded'}
+
+    row = db_one(
+        'SELECT title, artist, album, duration_seconds FROM songs_cache WHERE path = ?',
+        [path],
+    ) or {}
+    fname = os.path.splitext(os.path.basename(path))[0]
+    title = (row.get('title') or fname).strip()
+    artist = (row.get('artist') or '').strip()
+    album = (row.get('album') or '').strip()
+    dur = duration_sec or row.get('duration_seconds')
+    try:
+        dur = int(float(dur)) if dur else None
+    except (TypeError, ValueError):
+        dur = None
+
+    remote = _fetch_lrclib(title, artist, album, dur)
+    if remote:
+        synced_text = (remote.get('syncedLyrics') or '').strip()
+        plain_text = (remote.get('plainLyrics') or '').strip()
+        if synced_text and _looks_like_lrc(synced_text):
+            lines, plain = _parse_lrc(synced_text)
+            return {
+                'synced': bool(lines),
+                'lines': lines,
+                'plain': plain or plain_text or synced_text,
+                'source': 'lrclib',
+            }
+        if plain_text:
+            return {'synced': False, 'lines': [], 'plain': plain_text, 'source': 'lrclib'}
+
+    return {'synced': False, 'lines': [], 'plain': '', 'source': None}
+
+
+@app.route('/api/lyrics')
+def lyrics():
+    """Lyrics for a track: sidecar .lrc, embedded tags, then LRCLIB lookup."""
+    path = (request.args.get('path') or '').strip()
+    if not path or not os.path.isfile(path):
+        return jsonify({'error': 'path required'}), 400
+    duration = request.args.get('duration')
+    duration_sec = None
+    if duration:
+        try:
+            duration_sec = int(float(duration))
+        except (TypeError, ValueError):
+            pass
+    return jsonify(_lyrics_payload(path, duration_sec))
+
+
 @app.route('/api/songs')
 def songs():
     page = int(request.args.get('page', 1))

@@ -57,6 +57,43 @@ data class HomeFeed(
 fun HomeFeed.hasCurrentHomeLayout(): Boolean =
     sections.count { it.kind == HomeSectionKind.Mood } >= HomeMoodSections.all().size
 
+private val homeShortcutMixKinds = setOf(
+    HomeSectionKind.TopMixes,
+    HomeSectionKind.Mood,
+    HomeSectionKind.DailyMixes,
+    HomeSectionKind.ExploreThemes,
+    HomeSectionKind.RecentPlaylists,
+)
+
+/** Quick-access tiles: playlists and mixes only — never albums or individual tracks. */
+fun HomeCard.eligibleForHomeShortcut(): Boolean = when (playTarget) {
+    is PlayTarget.Album, is PlayTarget.Song -> false
+    is PlayTarget.Playlist -> !HomeFeedRules.isAutomationPlaylistName(playTarget.name)
+    is PlayTarget.Artist, is PlayTarget.Radio -> kind in homeShortcutMixKinds
+    else -> false
+}
+
+/** Up to [limit] shortcut tiles: recent playlists first, then backfilled from mix rows. */
+fun HomeFeed.homeShortcutCards(limit: Int = 6): List<HomeCard> {
+    val jump = sections.firstOrNull { it.kind == HomeSectionKind.JumpBackIn }
+        ?.cards
+        ?.filter { it.eligibleForHomeShortcut() }
+        .orEmpty()
+    val seen = jump.map { it.id }.toMutableSet()
+    val result = jump.toMutableList()
+    if (result.size >= limit) return result.take(limit)
+    for (section in sections) {
+        if (section.kind !in homeShortcutMixKinds) continue
+        for (card in section.cards) {
+            if (!card.eligibleForHomeShortcut() || card.id in seen) continue
+            result.add(card)
+            seen.add(card.id)
+            if (result.size >= limit) return result
+        }
+    }
+    return result
+}
+
 object HomeFeedLoader {
     private const val HISTORY_LIMIT = 150
     private const val PLAYLIST_LIMIT = 500

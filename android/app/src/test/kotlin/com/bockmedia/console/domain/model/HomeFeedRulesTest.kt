@@ -43,4 +43,12 @@ class HomeFeedRulesTest {
         )
         assertEquals("B", HomeFeedRules.topArtistForGenre(history, "Jazz"))
     }
+
+    @Test
+    fun isAutomationPlaylistName_matchesPrefixOnly() {
+        assertTrue(HomeFeedRules.isAutomationPlaylistName("Automations Morning"))
+        assertTrue(HomeFeedRules.isAutomationPlaylistName("automations kitchen"))
+        assertFalse(HomeFeedRules.isAutomationPlaylistName("My Automations"))
+        assertFalse(HomeFeedRules.isAutomationPlaylistName("Country Bangers Only"))
+    }
 }

@@ -315,6 +315,20 @@ data class TrackMetaResponse(
 )
 
 @Serializable
+data class LyricsResponse(
+    val synced: Boolean = false,
+    val lines: List<LyricLine> = emptyList(),
+    val plain: String = "",
+    val source: String? = null,
+)
+
+@Serializable
+data class LyricLine(
+    @SerialName("timeMs") val timeMs: Long = 0,
+    val text: String = "",
+)
+
+@Serializable
 data class SongItem(
     val title: String? = null,
     val artist: String? = null,

@@ -224,13 +224,7 @@ fun HomeScreen(
         if (filter == HomeFilter.Offline) loadOffline()
     }
 
-    // Top shortcut tiles are quick-access only: restrict to playlists and mixes,
-    // never individual songs, tracks, or albums (those come from play history).
-    val shortcutCards = feed?.sections
-        ?.firstOrNull { it.kind == HomeSectionKind.JumpBackIn }
-        ?.cards
-        ?.filter { it.playTarget is PlayTarget.Playlist }
-        .orEmpty()
+    val shortcutCards = feed?.homeShortcutCards().orEmpty()
     val showShortcuts = filter == HomeFilter.All && shortcutCards.isNotEmpty()
 
     val sections = when (filter) {

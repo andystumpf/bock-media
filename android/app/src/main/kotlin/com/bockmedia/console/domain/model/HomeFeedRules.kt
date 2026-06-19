@@ -162,7 +162,12 @@ object HomeFeedRules {
             )
 
     fun isSpecialHomePlaylistName(name: String): Boolean =
-        isDailyMixName(name) || isDiscoverName(name) || isGenreMixPlaylistName(name) || isExplicitRadioPlaylistName(name)
+        isDailyMixName(name) || isDiscoverName(name) || isGenreMixPlaylistName(name) ||
+            isExplicitRadioPlaylistName(name) || isAutomationPlaylistName(name)
+
+    /** Scheduled automation playlists — excluded from recents, mixes, and shortcut tiles. */
+    fun isAutomationPlaylistName(name: String): Boolean =
+        name.trim().startsWith("Automations", ignoreCase = true)
 
     fun browsablePlaylists(all: List<PlaylistSummary>): List<PlaylistSummary> =
         all.filter { it.tracks > 0 && !isSpecialHomePlaylistName(it.name) }

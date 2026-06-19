@@ -329,6 +329,19 @@ class BockMediaRepository(
         return year
     }
 
+    private val lyricsCache = java.util.concurrent.ConcurrentHashMap<String, LyricsResponse>()
+
+    /** Lyrics for a track (cached per path). Returns null when unavailable or offline. */
+    suspend fun lyrics(path: String, durationSec: Int? = null): LyricsResponse? {
+        if (path.isBlank()) return null
+        lyricsCache[path]?.let { return it }
+        val resp = runCatching { api().lyrics(path, durationSec) }.getOrNull() ?: return null
+        if (resp.plain.isNotBlank() || resp.lines.isNotEmpty()) {
+            lyricsCache[path] = resp
+        }
+        return resp
+    }
+
     suspend fun watchFolders() = api().watchFolders()
     suspend fun devices() = api().devices()
     suspend fun mergeCandidates() = api().mergeCandidates()

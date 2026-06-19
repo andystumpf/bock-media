@@ -185,7 +185,7 @@ fun AnalyticsScreen(repository: BockMediaRepository) {
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     data?.let { a ->
-                        item { SummaryStatsRow(a) }
+                        item { SummaryStatsGrid(a) }
                         if (a.deviceBreakdown.any { it.plays + it.downloads + it.connects > 0 }) {
                             item { DeviceBreakdownCard(a.deviceBreakdown) }
                         }
@@ -300,18 +300,20 @@ private fun AnalyticsToolbar(
                 Text(if (exporting) "Exporting…" else "Export")
             }
         }
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(
-                listOf(
-                    DatePreset.Last7 to "7 days",
-                    DatePreset.Last30 to "30 days",
-                    DatePreset.AllTime to "All time",
-                ),
-            ) { (p, label) ->
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            listOf(
+                DatePreset.Last7 to "7 days",
+                DatePreset.Last30 to "30 days",
+                DatePreset.AllTime to "All time",
+            ).forEach { (p, label) ->
                 FilterChip(
                     selected = preset == p,
                     onClick = { onPreset(p) },
-                    label = { Text(label) },
+                    label = { Text(label, maxLines = 1) },
+                    modifier = Modifier.weight(1f),
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = BockGreen,
                         selectedLabelColor = Color(0xFF0F1419),
@@ -334,60 +336,90 @@ private fun AnalyticsToolbar(
 }
 
 @Composable
-private fun SummaryStatsRow(data: AnalyticsResponse) {
+private fun SummaryStatsGrid(data: AnalyticsResponse) {
     val streak = data.listeningStreak ?: ListeningStreak(data.currentStreak, data.longestStreak)
     val cov = data.catalogCoverage
     val rr = data.repeatRate
-    LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        item {
-            StatCard(
-                icon = Icons.Default.Headphones,
-                tint = Color(0xFF509BF5),
-                value = intFmt.format(data.totalPlays),
-                label = "Total plays",
-                subtitle = "${intFmt.format(data.uniqueArtists)} artists",
-            )
-        }
-        item {
-            StatCard(
-                icon = Icons.Default.LocalFireDepartment,
-                tint = BockGold,
-                value = "${streak.current}",
-                label = "Day streak",
-                subtitle = "Best: ${streak.longest}",
-            )
-        }
-        item {
-            StatCard(
-                icon = Icons.Default.Album,
-                tint = Color(0xFF8D67AB),
-                value = if (cov != null && cov.pct < 0.1 && cov.heard > 0) "<0.1%" else "${cov?.pct ?: 0}%",
-                label = "Catalog heard",
-                subtitle = cov?.let { "${intFmt.format(it.heard)} / ${intFmt.format(it.total)}" },
-            )
-        }
-        item {
-            StatCard(
-                icon = Icons.Default.Repeat,
-                tint = BockGreen,
-                value = "${rr?.pct ?: 0}%",
-                label = "Repeat rate",
-                subtitle = rr?.let { "${intFmt.format(it.repeated)} replays" },
-            )
-        }
+    val tiles = buildList {
+        add(
+            StatTile(
+                Icons.Default.Headphones,
+                Color(0xFF509BF5),
+                intFmt.format(data.totalPlays),
+                "Total plays",
+                "${intFmt.format(data.uniqueArtists)} artists",
+            ),
+        )
+        add(
+            StatTile(
+                Icons.Default.LocalFireDepartment,
+                BockGold,
+                "${streak.current}",
+                "Day streak",
+                "Best: ${streak.longest}",
+            ),
+        )
+        add(
+            StatTile(
+                Icons.Default.Album,
+                Color(0xFF8D67AB),
+                if (cov != null && cov.pct < 0.1 && cov.heard > 0) "<0.1%" else "${cov?.pct ?: 0}%",
+                "Catalog heard",
+                cov?.let { "${intFmt.format(it.heard)} / ${intFmt.format(it.total)}" },
+            ),
+        )
+        add(
+            StatTile(
+                Icons.Default.Repeat,
+                BockGreen,
+                "${rr?.pct ?: 0}%",
+                "Repeat rate",
+                rr?.let { "${intFmt.format(it.repeated)} replays" },
+            ),
+        )
         data.mostActiveDay?.let { mad ->
-            item {
-                StatCard(
-                    icon = Icons.Default.CalendarMonth,
-                    tint = Color(0xFFE91429),
-                    value = intFmt.format(mad.count),
-                    label = "Best day",
-                    subtitle = mad.date,
-                )
+            add(
+                StatTile(
+                    Icons.Default.CalendarMonth,
+                    Color(0xFFE91429),
+                    intFmt.format(mad.count),
+                    "Best day",
+                    mad.date,
+                ),
+            )
+        }
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        tiles.chunked(2).forEach { row ->
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                row.forEach { tile ->
+                    StatCard(
+                        icon = tile.icon,
+                        tint = tile.tint,
+                        value = tile.value,
+                        label = tile.label,
+                        subtitle = tile.subtitle,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                if (row.size == 1) {
+                    Spacer(Modifier.weight(1f))
+                }
             }
         }
     }
 }
+
+private data class StatTile(
+    val icon: ImageVector,
+    val tint: Color,
+    val value: String,
+    val label: String,
+    val subtitle: String?,
+)
 
 @Composable
 private fun StatCard(
@@ -396,11 +428,12 @@ private fun StatCard(
     value: String,
     label: String,
     subtitle: String? = null,
+    modifier: Modifier = Modifier,
 ) {
     Surface(
         shape = RoundedCornerShape(14.dp),
         color = SpotifyElevated,
-        modifier = Modifier.width(148.dp),
+        modifier = modifier,
     ) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Icon(icon, null, tint = tint, modifier = Modifier.size(22.dp))
