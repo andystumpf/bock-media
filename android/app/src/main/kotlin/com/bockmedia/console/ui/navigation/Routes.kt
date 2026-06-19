@@ -44,7 +44,7 @@ sealed class BockRoute(val route: String, val title: String, val icon: ImageVect
         }
 
         val accountMenuRoutes: List<BockRoute> by lazy {
-            listOf(Settings, Downloads, Routines, RecentRequests, Rooms, Devices, Analytics)
+            listOf(Settings, Downloads, RecentRequests, Rooms, Devices, Analytics)
         }
 
         val allRoutes: List<BockRoute> by lazy {

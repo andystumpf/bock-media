@@ -1,16 +1,38 @@
 package com.bockmedia.console.ui.components
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.bockmedia.console.ui.navigation.BockRoute
+import com.bockmedia.console.ui.theme.BockGreen
+import com.bockmedia.console.ui.theme.BockMuted
+import com.bockmedia.console.ui.theme.SpotifyElevated
+
+private data class AccountMenuSection(
+    val title: String,
+    val routes: List<BockRoute>,
+)
+
+private val accountMenuSections = listOf(
+    AccountMenuSection("Library", listOf(BockRoute.Settings, BockRoute.Downloads)),
+    AccountMenuSection("Alexa & home", listOf(
+        BockRoute.RecentRequests,
+        BockRoute.Rooms,
+        BockRoute.Devices,
+        BockRoute.Analytics,
+    )),
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -21,8 +43,8 @@ fun AccountMenuButton(onNavigate: (String) -> Unit) {
     IconButton(onClick = { open = true }) {
         Surface(
             shape = CircleShape,
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.92f),
-            tonalElevation = 2.dp,
+            color = SpotifyElevated,
+            tonalElevation = 0.dp,
             modifier = Modifier.size(40.dp),
         ) {
             Box(contentAlignment = Alignment.Center) {
@@ -30,7 +52,7 @@ fun AccountMenuButton(onNavigate: (String) -> Unit) {
                     Icons.Default.Person,
                     contentDescription = "Account menu",
                     modifier = Modifier.size(22.dp),
-                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                    tint = MaterialTheme.colorScheme.onSurface,
                 )
             }
         }
@@ -40,48 +62,126 @@ fun AccountMenuButton(onNavigate: (String) -> Unit) {
         ModalBottomSheet(
             onDismissRequest = { open = false },
             sheetState = sheetState,
-            containerColor = MaterialTheme.colorScheme.surface,
+            containerColor = MaterialTheme.colorScheme.background,
+            dragHandle = {
+                Box(
+                    Modifier
+                        .padding(top = 12.dp, bottom = 4.dp)
+                        .width(40.dp)
+                        .height(4.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(BockMuted.copy(alpha = 0.45f)),
+                )
+            },
         ) {
             Column(
                 Modifier
                     .fillMaxWidth()
-                    .padding(bottom = 32.dp),
+                    .padding(horizontal = 20.dp)
+                    .padding(bottom = 36.dp),
+                verticalArrangement = Arrangement.spacedBy(20.dp),
             ) {
-                Text(
-                    "Bock Media",
-                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                )
-                Text(
-                    "Settings & admin",
-                    modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 16.dp),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Column(Modifier.padding(horizontal = 8.dp)) {
-                    BockRoute.accountMenuRoutes.forEach { route ->
-                        Surface(
-                            onClick = {
-                                open = false
-                                onNavigate(route.route)
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = MaterialTheme.shapes.medium,
-                            color = MaterialTheme.colorScheme.surface,
-                        ) {
-                            Row(
-                                Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Icon(route.icon, null, tint = MaterialTheme.colorScheme.secondary)
-                                Spacer(Modifier.width(16.dp))
-                                Text(route.title, style = MaterialTheme.typography.bodyLarge)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    Surface(
+                        shape = CircleShape,
+                        color = BockGreen.copy(alpha = 0.18f),
+                        modifier = Modifier.size(52.dp),
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                Icons.Default.Person,
+                                contentDescription = null,
+                                tint = BockGreen,
+                                modifier = Modifier.size(28.dp),
+                            )
+                        }
+                    }
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(
+                            "Bock Media",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            "Settings & household",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = BockMuted,
+                        )
+                    }
+                }
+
+                accountMenuSections.forEach { section ->
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            section.title.uppercase(),
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = BockMuted,
+                            modifier = Modifier.padding(start = 4.dp),
+                        )
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            section.routes.forEach { route ->
+                                AccountMenuRow(
+                                    route = route,
+                                    onClick = {
+                                        open = false
+                                        onNavigate(route.route)
+                                    },
+                                )
                             }
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun AccountMenuRow(
+    route: BockRoute,
+    onClick: () -> Unit,
+) {
+    Surface(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        color = SpotifyElevated,
+    ) {
+        Row(
+            Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                modifier = Modifier.size(40.dp),
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        route.icon,
+                        contentDescription = null,
+                        tint = BockGreen,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+            }
+            Spacer(Modifier.width(14.dp))
+            Text(
+                route.title,
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
+            )
+            Icon(
+                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = BockMuted,
+                modifier = Modifier.size(22.dp),
+            )
         }
     }
 }

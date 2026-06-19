@@ -35,7 +35,7 @@ struct AccountMenuButton: View {
 
     var body: some View {
         Menu {
-            ForEach([AccountRoute.settings, .downloads, .routines, .recent, .rooms, .devices, .analytics]) { item in
+            ForEach([AccountRoute.settings, .downloads, .recent, .rooms, .devices, .analytics]) { item in
                 Button {
                     route = item
                 } label: {

@@ -422,21 +422,80 @@ data class AutomationItem(
 
 @Serializable
 data class AnalyticsResponse(
-    val totals: JsonObject? = null,
+    @SerialName("totalPlays") val totalPlays: Int = 0,
+    @SerialName("uniqueTracks") val uniqueTracks: Int = 0,
+    @SerialName("uniqueArtists") val uniqueArtists: Int = 0,
+    @SerialName("uniqueAlbums") val uniqueAlbums: Int = 0,
+    val activity: AnalyticsActivity? = null,
+    @SerialName("hourOfDay") val hourOfDay: List<HourCount> = emptyList(),
+    @SerialName("dayOfWeek") val dayOfWeek: List<DayCount> = emptyList(),
+    val heatmap: List<List<Int>>? = null,
     val topArtists: List<CountRow> = emptyList(),
     val topAlbums: List<CountRow> = emptyList(),
     val topTracks: List<CountRow> = emptyList(),
     val topDevices: List<CountRow> = emptyList(),
     val topGenres: List<CountRow> = emptyList(),
-    val byHour: List<CountRow> = emptyList(),
-    val byDayOfWeek: List<CountRow> = emptyList(),
-    val byDate: List<CountRow> = emptyList(),
-    val heatmap: JsonElement? = null,
-    val decades: List<CountRow> = emptyList(),
+    @SerialName("topDecades") val topDecades: List<DecadeRow> = emptyList(),
+    @SerialName("listeningStreak") val listeningStreak: ListeningStreak? = null,
+    @SerialName("currentStreak") val currentStreak: Int = 0,
+    @SerialName("longestStreak") val longestStreak: Int = 0,
+    @SerialName("catalogCoverage") val catalogCoverage: CatalogCoverage? = null,
+    @SerialName("repeatRate") val repeatRate: RepeatRate? = null,
+    @SerialName("mostActiveDay") val mostActiveDay: MostActiveDay? = null,
+    @SerialName("deviceBreakdown") val deviceBreakdown: List<DeviceBreakdownRow> = emptyList(),
 )
 
 @Serializable
-data class CountRow(val label: String? = null, val name: String? = null, val count: Int = 0)
+data class AnalyticsActivity(
+    val day: List<ActivityPoint> = emptyList(),
+    val week: List<ActivityPoint> = emptyList(),
+    val month: List<ActivityPoint> = emptyList(),
+    val year: List<ActivityPoint> = emptyList(),
+)
+
+@Serializable
+data class ActivityPoint(val label: String = "", val count: Int = 0)
+
+@Serializable
+data class HourCount(val hour: Int = 0, val count: Int = 0)
+
+@Serializable
+data class DayCount(val day: String = "", val count: Int = 0)
+
+@Serializable
+data class DecadeRow(val decade: String? = null, val count: Int = 0)
+
+@Serializable
+data class ListeningStreak(val current: Int = 0, val longest: Int = 0)
+
+@Serializable
+data class CatalogCoverage(val heard: Int = 0, val total: Int = 0, val pct: Double = 0.0)
+
+@Serializable
+data class RepeatRate(val repeated: Int = 0, val total: Int = 0, val pct: Double = 0.0)
+
+@Serializable
+data class MostActiveDay(val date: String = "", val count: Int = 0)
+
+@Serializable
+data class DeviceBreakdownRow(
+    @SerialName("deviceId") val deviceId: String = "",
+    val name: String = "",
+    val platform: String = "",
+    val plays: Int = 0,
+    val downloads: Int = 0,
+    val connects: Int = 0,
+)
+
+@Serializable
+data class CountRow(
+    val label: String? = null,
+    val name: String? = null,
+    val artist: String? = null,
+    val count: Int = 0,
+)
+
+fun CountRow.displayName(): String = label ?: name ?: "—"
 
 @Serializable
 data class IgnoredResponse(val items: List<IgnoredTrack> = emptyList())
