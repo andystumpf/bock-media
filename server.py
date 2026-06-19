@@ -4099,11 +4099,27 @@ def stream_audio(filepath):
         return 'Not found', 404
     ext = os.path.splitext(full_path)[1].lower()
 
-    if ext in TRANSCODE_EXTS:
-        if get_pref('FlacSupport', '').lower() != 'true':
-            return 'Transcoding not enabled', 415
+    # Optional client-requested transcode bitrate (kbps). Low-bandwidth clients
+    # (e.g. cellular downloads) pass ?br=128 to pull a small MP3 instead of the
+    # full-size original, syncing a playlist in a fraction of the bytes.
+    br = (request.args.get('br') or '').strip()
+    req_bitrate = max(48, min(int(br), 320)) if br.isdigit() else None
+
+    is_flac_ext = ext in TRANSCODE_EXTS
+    transcode = req_bitrate is not None or is_flac_ext
+    # Non-native formats still require FlacSupport unless the client explicitly
+    # asked for a bitrate (an intentional download/transcode request).
+    if transcode and is_flac_ext and req_bitrate is None and get_pref('FlacSupport', '').lower() != 'true':
+        return 'Transcoding not enabled', 415
+    if transcode and not _ffmpeg_available():
+        if is_flac_ext:
+            return 'Transcoding not available', 415
+        transcode = False  # native file with no ffmpeg → serve original bytes
+
+    if transcode:
         ffmpeg_bin = get_pref('FFmpegLocation', '').strip() or 'ffmpeg'
-        bitrate    = get_pref('TranscodeBitrate', '128').strip() or '128'
+        bitrate    = str(req_bitrate) if req_bitrate is not None \
+            else (get_pref('TranscodeBitrate', '128').strip() or '128')
         def _generate():
             proc = subprocess.Popen(
                 [ffmpeg_bin, '-i', full_path, '-ar', '44100', '-ac', '2',

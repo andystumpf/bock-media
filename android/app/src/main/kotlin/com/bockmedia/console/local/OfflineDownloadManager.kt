@@ -39,6 +39,11 @@ object OfflineDownloadManager {
     private const val CALL_TIMEOUT_SEC = 120L
     private const val TRACK_ATTEMPTS = 3
 
+    // On cellular we ask the server to transcode to a small MP3 (~128 kbps) instead
+    // of pulling the full-size original. Audio is bandwidth-bound on cell, so fewer
+    // bytes is the single biggest speedup. Wi-Fi/LAN keeps original quality.
+    private const val CELLULAR_BITRATE_KBPS = 128
+
     // Parallel download fan-out. Wi-Fi/LAN can saturate many sockets. On cellular the
     // bottleneck is total bandwidth (often the server's home uplink), so extra parallel
     // streams don't add throughput — they just split the pipe until each track is slow
@@ -298,7 +303,9 @@ object OfflineDownloadManager {
         dest: File,
         id: String,
     ) {
-        val url = AppPreferences.streamUrl(base, entry.path) ?: error("Bad stream URL")
+        val baseUrl = AppPreferences.streamUrl(base, entry.path) ?: error("Bad stream URL")
+        // Cellular: fetch a compact transcode so the playlist syncs in far fewer bytes.
+        val url = if (NetworkReachability.onWifi) baseUrl else "$baseUrl?br=$CELLULAR_BITRATE_KBPS"
         dest.parentFile?.mkdirs()
         val part = File(dest.parentFile, "${dest.name}.part")
         var lastError: Exception? = null
