@@ -1,4 +1,11 @@
+import Charts
 import SwiftUI
+
+private struct AnalyticsChartPoint: Identifiable {
+    let id: Int
+    let label: String
+    let count: Int
+}
 
 private enum DatePreset: String, CaseIterable, Identifiable {
     case last7 = "Last 7 days"
@@ -50,14 +57,14 @@ struct AnalyticsView: View {
             }
 
             if let data {
+                chartSection("Plays by date", data.byDate)
+                chartSection("By hour", data.byHour)
+                chartSection("By day of week", data.byDayOfWeek)
                 section("Top artists", data.topArtists)
                 section("Top albums", data.topAlbums)
                 section("Top tracks", data.topTracks)
                 section("Top devices", data.topDevices)
                 section("Genres", data.topGenres)
-                section("By date", data.byDate)
-                section("By hour", data.byHour)
-                section("By day of week", data.byDayOfWeek)
                 section("Decades", data.decades)
             } else if !loading {
                 Text("No analytics data").foregroundStyle(BockColors.muted)
@@ -77,14 +84,15 @@ struct AnalyticsView: View {
                         }
                     }
                     .swipeActions {
-                        Button(role: .destructive) {
+                        Button {
                             Task {
                                 try? await appState.repository.removeIgnored(path: track.path)
                                 await load()
                             }
                         } label: {
-                            Text("Remove")
+                            Text("Allow again")
                         }
+                        .tint(BockColors.green)
                     }
                 }
             }
@@ -129,6 +137,27 @@ struct AnalyticsView: View {
                             .foregroundStyle(BockColors.muted)
                     }
                 }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func chartSection(_ title: String, _ rows: [CountRow]) -> some View {
+        if !rows.isEmpty {
+            let points = rows.prefix(24).enumerated().map { idx, row in
+                AnalyticsChartPoint(id: idx, label: row.label ?? row.name ?? "", count: row.count)
+            }
+            Section(title) {
+                Chart(points) { point in
+                    BarMark(
+                        x: .value("Bucket", point.label),
+                        y: .value("Plays", point.count)
+                    )
+                    .foregroundStyle(BockColors.green)
+                }
+                .chartXAxis(.hidden)
+                .frame(height: 180)
+                .padding(.vertical, 4)
             }
         }
     }

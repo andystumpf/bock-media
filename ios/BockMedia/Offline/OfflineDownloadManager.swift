@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 @MainActor
@@ -8,10 +9,47 @@ final class OfflineDownloadManager: ObservableObject {
     @Published private(set) var statuses: [String: OfflineCollectionStatus] = [:]
 
     private let store = OfflineDownloadStore()
-    private var activeTasks: [String: Task<Void, Never>] = [:]
+    private let session = OfflineBackgroundSession.shared
+    private var prepareTasks: [String: Task<Void, Never>] = [:]
     private var cancelFlags: Set<String> = []
+    private var cancellables: Set<AnyCancellable> = []
+    private var reconcileCancellable: AnyCancellable?
 
-    private init() {}
+    private weak var repository: BockMediaRepository?
+    private var preferences: AppPreferences?
+    private var wasOnWifi = true
+
+    private init() {
+        reconcileCancellable = NotificationCenter.default
+            .publisher(for: .offlineDownloadTaskFinished)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] note in
+                MainActor.assumeIsolated {
+                    guard let id = note.userInfo?["collectionId"] as? String else { return }
+                    self?.reconcile(collectionId: id)
+                }
+            }
+    }
+
+    /// Wires in the repository/preferences so the manager can resume downloads
+    /// from background tasks and network-change callbacks without a live screen.
+    func configure(repository: BockMediaRepository, preferences: AppPreferences) {
+        self.repository = repository
+        self.preferences = preferences
+        wasOnWifi = OfflineDownloadNetwork.shared.isOnWifi
+        cancellables.removeAll()
+        OfflineDownloadNetwork.shared.$isOnWifi
+            .removeDuplicates()
+            .sink { [weak self] onWifi in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    let resumed = onWifi && !self.wasOnWifi
+                    self.wasOnWifi = onWifi
+                    if resumed { self.resumeIncomplete() }
+                }
+            }
+            .store(in: &cancellables)
+    }
 
     func refresh() {
         let persisted = store.listManifests().reduce(into: [String: OfflineCollectionStatus]()) { acc, manifest in
@@ -35,6 +73,7 @@ final class OfflineDownloadManager: ObservableObject {
     }
 
     func download(repository: BockMediaRepository, preferences: AppPreferences, target: PlayTarget) {
+        configure(repository: repository, preferences: preferences)
         let id = target.downloadId()
         if statuses[id]?.state == .downloading { return }
         if let reason = OfflineDownloadNetwork.shared.blockedReason(preferences: preferences) {
@@ -48,28 +87,32 @@ final class OfflineDownloadManager: ObservableObject {
             return
         }
         cancelFlags.remove(id)
-        activeTasks[id]?.cancel()
-        activeTasks[id] = Task {
-            await downloadLocked(repository: repository, target: target, resyncOnly: false)
-            activeTasks[id] = nil
+        prepareTasks[id]?.cancel()
+        prepareTasks[id] = Task {
+            await prepareAndEnqueue(repository: repository, target: target, resyncOnly: false)
+            prepareTasks[id] = nil
         }
     }
 
     func cancelCollection(_ id: String) {
         cancelFlags.insert(id)
-        activeTasks[id]?.cancel()
+        prepareTasks[id]?.cancel()
+        prepareTasks[id] = nil
+        session.cancel(collectionId: id)
         if var status = statuses[id], status.state == .downloading {
             status.state = .failed
             status.error = "Cancelled"
             statuses[id] = status
         }
+        DownloadNotifications.clear(collectionId: id)
         cancelFlags.remove(id)
-        activeTasks[id] = nil
     }
 
     func deleteCollection(_ id: String) {
+        session.cancel(collectionId: id)
         store.deleteCollection(id)
         statuses.removeValue(forKey: id)
+        DownloadNotifications.clear(collectionId: id)
     }
 
     func retry(repository: BockMediaRepository, preferences: AppPreferences, id: String) {
@@ -79,14 +122,33 @@ final class OfflineDownloadManager: ObservableObject {
 
     func resync(repository: BockMediaRepository, preferences: AppPreferences, target: PlayTarget) {
         guard OfflineDownloadNetwork.shared.canDownloadNow(preferences: preferences) else { return }
+        configure(repository: repository, preferences: preferences)
         let id = target.downloadId()
-        activeTasks[id] = Task {
-            await downloadLocked(repository: repository, target: target, resyncOnly: true)
-            activeTasks[id] = nil
+        prepareTasks[id]?.cancel()
+        prepareTasks[id] = Task {
+            await prepareAndEnqueue(repository: repository, target: target, resyncOnly: true)
+            prepareTasks[id] = nil
         }
     }
 
-    private func downloadLocked(repository: BockMediaRepository, target: PlayTarget, resyncOnly: Bool) async {
+    /// Re-enqueues any missing tracks for incomplete collections. Invoked from the
+    /// background-refresh task and when Wi‑Fi connectivity returns.
+    func resumeIncomplete() {
+        guard let repository, let preferences,
+              OfflineDownloadNetwork.shared.canDownloadNow(preferences: preferences) else { return }
+        for manifest in store.listManifests() where !store.isCollectionComplete(manifest) {
+            let id = manifest.id
+            if statuses[id]?.state == .downloading { continue }
+            if session.pendingCount(collectionId: id) > 0 { continue }
+            prepareTasks[id]?.cancel()
+            prepareTasks[id] = Task {
+                await prepareAndEnqueue(repository: repository, target: manifest.toPlayTarget(), resyncOnly: true)
+                prepareTasks[id] = nil
+            }
+        }
+    }
+
+    private func prepareAndEnqueue(repository: BockMediaRepository, target: PlayTarget, resyncOnly: Bool) async {
         let id = target.downloadId()
         let existing = store.readManifest(id)
         statuses[id] = OfflineCollectionStatus(
@@ -104,32 +166,27 @@ final class OfflineDownloadManager: ObservableObject {
             let merged = store.mergeTrackEntries(existing: existing, resolved: resolved, collectionId: id)
             guard !merged.isEmpty else { throw LocalPlaybackError.noTracks }
 
-            let shell = manifestShell(id: id, target: target, tracks: merged)
-            if resyncOnly && merged.allSatisfy({ store.resolveTrackFile(manifest: shell, entry: $0) != nil }) {
-                var manifest = shell
-                manifest.lastSyncedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
-                try store.saveManifest(manifest)
-                statuses[id] = OfflineCollectionStatus(manifest: manifest, state: .complete, progress: 1)
+            var manifest = manifestShell(id: id, target: target, tracks: merged)
+            manifest.tracks = merged
+            manifest.coverArtPath = merged.first?.path ?? manifest.coverArtPath
+            try store.saveManifest(manifest)
+
+            if cancelFlags.contains(id) { throw CancellationError() }
+
+            let missing = merged.filter { store.resolveTrackFile(manifest: manifest, entry: $0) == nil }
+            if missing.isEmpty {
+                finalizeComplete(id: id, manifest: manifest)
                 return
             }
+            _ = resyncOnly
 
-            guard let base = try? await repository.resolveBaseURL() else { throw LocalPlaybackError.missingStreamURL }
+            guard let base = try? await repository.resolveBaseURL() else {
+                throw LocalPlaybackError.missingStreamURL
+            }
 
-            var done: [OfflineTrackEntry] = []
-            for entry in merged {
-                try Task.checkCancellation()
-                if cancelFlags.contains(id) { throw CancellationError() }
-
-                if let existingFile = store.resolveTrackFile(manifest: shell, entry: entry) {
-                    _ = existingFile
-                    done.append(entry)
-                    try publishProgress(shell: shell, done: done, all: merged)
-                    continue
-                }
-
+            for entry in missing {
                 guard let urlString = ServerURL.streamURL(base: base, filepath: entry.path),
-                      let url = URL(string: urlString) else { throw LocalPlaybackError.missingStreamURL }
-
+                      let url = URL(string: urlString) else { continue }
                 var request = URLRequest(url: url)
                 AuthHeaders.apply(
                     to: &request,
@@ -138,54 +195,71 @@ final class OfflineDownloadManager: ObservableObject {
                     password: repository.preferences.adminPass,
                     token: repository.preferences.mobileToken
                 )
-
                 let dest = store.trackFile(collectionId: id, fileName: entry.fileName)
-                try FileManager.default.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
-                let (tempURL, response) = try await URLSession.shared.download(for: request)
-                guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-                    throw URLError(.badServerResponse)
-                }
-                if FileManager.default.fileExists(atPath: dest.path) {
-                    try FileManager.default.removeItem(at: dest)
-                }
-                try FileManager.default.moveItem(at: tempURL, to: dest)
-                done.append(entry)
-                try publishProgress(shell: shell, done: done, all: merged)
+                session.enqueue(
+                    OfflinePendingDownload(
+                        collectionId: id, path: entry.path, fileName: entry.fileName, destPath: dest.path
+                    ),
+                    request: request
+                )
             }
 
-            var manifest = shell
-            manifest.tracks = merged
-            manifest.lastSyncedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
-            try store.saveManifest(manifest)
-            store.pruneOrphanFiles(collectionId: id, tracks: merged)
-            statuses[id] = OfflineCollectionStatus(manifest: manifest, state: .complete, progress: 1)
-        } catch is CancellationError {
-            if var status = statuses[id] {
-                status.state = .failed
-                status.error = "Cancelled"
-                statuses[id] = status
-            }
-        } catch {
-            let partial = store.readManifest(id)
             statuses[id] = OfflineCollectionStatus(
-                manifest: partial ?? manifestShell(id: id, target: target, tracks: []),
-                state: .failed,
-                progress: partial.map { store.completionProgress($0) } ?? 0,
-                error: error.localizedDescription
+                manifest: manifest,
+                state: .downloading,
+                progress: store.completionProgress(manifest)
             )
+            DownloadNotifications.show(collectionId: id, title: manifest.title)
+        } catch is CancellationError {
+            markFailed(id: id, target: target, error: "Cancelled")
+        } catch {
+            markFailed(id: id, target: target, error: error.localizedDescription)
         }
     }
 
-    private func publishProgress(shell: OfflineCollectionManifest, done: [OfflineTrackEntry], all: [OfflineTrackEntry]) throws {
-        var manifest = shell
-        manifest.tracks = all
-        manifest.coverArtPath = done.first?.path ?? manifest.coverArtPath
-        try store.saveManifest(manifest)
-        statuses[manifest.id] = OfflineCollectionStatus(
-            manifest: manifest,
-            state: .downloading,
-            progress: Float(done.count) / Float(max(all.count, 1))
+    /// Recomputes a collection's status after a background task finishes.
+    private func reconcile(collectionId id: String) {
+        guard let manifest = store.readManifest(id) else { return }
+        if store.isCollectionComplete(manifest) {
+            finalizeComplete(id: id, manifest: manifest)
+            return
+        }
+        let pending = session.pendingCount(collectionId: id)
+        if pending > 0 {
+            statuses[id] = OfflineCollectionStatus(
+                manifest: manifest,
+                state: .downloading,
+                progress: store.completionProgress(manifest)
+            )
+        } else {
+            statuses[id] = OfflineCollectionStatus(
+                manifest: manifest,
+                state: .failed,
+                progress: store.completionProgress(manifest),
+                error: "Some tracks failed to download"
+            )
+            DownloadNotifications.clear(collectionId: id)
+        }
+    }
+
+    private func finalizeComplete(id: String, manifest: OfflineCollectionManifest) {
+        var done = manifest
+        done.lastSyncedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
+        try? store.saveManifest(done)
+        store.pruneOrphanFiles(collectionId: id, tracks: done.tracks)
+        statuses[id] = OfflineCollectionStatus(manifest: done, state: .complete, progress: 1)
+        DownloadNotifications.clear(collectionId: id)
+    }
+
+    private func markFailed(id: String, target: PlayTarget, error: String) {
+        let partial = store.readManifest(id)
+        statuses[id] = OfflineCollectionStatus(
+            manifest: partial ?? manifestShell(id: id, target: target, tracks: []),
+            state: .failed,
+            progress: partial.map { store.completionProgress($0) } ?? 0,
+            error: error
         )
+        DownloadNotifications.clear(collectionId: id)
     }
 
     private func manifestShell(id: String, target: PlayTarget, tracks: [OfflineTrackEntry]) -> OfflineCollectionManifest {

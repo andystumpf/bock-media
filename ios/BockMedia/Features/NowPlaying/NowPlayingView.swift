@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 @MainActor
@@ -12,57 +13,93 @@ final class NowPlayingViewModel: ObservableObject {
     @Published var volumes: [String: Int] = [:]
     @Published var artURLs: [String: URL] = [:]
 
-    private var pollTask: Task<Void, Never>?
+    private let service = NowPlayingPollService.shared
+    private var repository: BockMediaRepository?
+    private var cancellables: Set<AnyCancellable> = []
+    private var applyTask: Task<Void, Never>?
+    private var remoteOkCheckedAt: Date?
+    private var subscribed = false
+    private static let remoteStatusTTL: TimeInterval = 30
 
     var device: NowPlayingDeviceItem? {
         devices.indices.contains(selectedIndex) ? devices[selectedIndex] : devices.first
     }
 
     func start(repository: BockMediaRepository) {
-        pollTask?.cancel()
-        pollTask = Task {
-            await refresh(repository: repository)
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 1_500_000_000)
-                await refresh(repository: repository)
-            }
+        self.repository = repository
+        service.configure(repository: repository)
+        if !subscribed {
+            service.addSubscriber()
+            subscribed = true
         }
+
+        cancellables.removeAll()
+        service.$items
+            .combineLatest(service.$controlsAvailable, service.$alexaDevices)
+            .sink { [weak self] _ in MainActor.assumeIsolated { self?.scheduleApply() } }
+            .store(in: &cancellables)
+        NotificationCenter.default.publisher(for: .localPlaybackDidChange)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in MainActor.assumeIsolated { self?.scheduleApply() } }
+            .store(in: &cancellables)
+
+        Task { await service.refreshNow() }
+        scheduleApply()
     }
 
     func stop() {
-        pollTask?.cancel()
-        pollTask = nil
+        cancellables.removeAll()
+        applyTask?.cancel()
+        applyTask = nil
+        if subscribed {
+            service.removeSubscriber()
+            subscribed = false
+        }
     }
 
     func refresh(repository: BockMediaRepository) async {
-        do {
-            let np = try await repository.nowPlayingDevices()
-            controlsAvailable = np.controlsAvailable
-            let status = try await repository.alexaRemoteStatus()
-            remoteOk = alexaControlsAvailable(status)
-            if alexaDevices.isEmpty {
-                alexaDevices = try await repository.alexaRemoteDevices()
-            }
-            let local = LocalPlaybackController.shared.nowPlayingDeviceItem()
-            devices = NowPlayingMerge.devicesForMobile(
-                remote: np.items,
-                local: local,
-                alexaDevices: alexaDevices
-            )
-            if selectedIndex >= devices.count {
-                selectedIndex = max(0, devices.count - 1)
-            }
-            let focusIdx = devices.firstIndex(where: { $0.deviceId == PlaybackFocus.focusedDeviceId })
-            if let focusIdx, focusIdx != selectedIndex {
-                selectedIndex = focusIdx
-            }
-            await resolveArtwork(repository: repository)
-            await refreshVolumes(repository: repository)
-            error = nil
-        } catch {
-            self.error = error.localizedDescription
+        await service.refreshNow()
+        await apply()
+    }
+
+    private func scheduleApply() {
+        applyTask?.cancel()
+        applyTask = Task { [weak self] in await self?.apply() }
+    }
+
+    private func apply() async {
+        guard let repository else { return }
+        controlsAvailable = service.controlsAvailable
+        alexaDevices = service.alexaDevices
+        await refreshRemoteOkIfStale(repository: repository)
+
+        let local = LocalPlaybackController.shared.nowPlayingDeviceItem()
+        devices = NowPlayingMerge.devicesForMobile(
+            remote: service.items,
+            local: local,
+            alexaDevices: alexaDevices
+        )
+        if selectedIndex >= devices.count {
+            selectedIndex = max(0, devices.count - 1)
         }
-        loading = false
+        let focusIdx = devices.firstIndex(where: { $0.deviceId == PlaybackFocus.focusedDeviceId })
+        if let focusIdx, focusIdx != selectedIndex {
+            selectedIndex = focusIdx
+        }
+        await resolveArtwork(repository: repository)
+        await refreshVolumes(repository: repository)
+        error = nil
+        if service.lastUpdated != nil || LocalPlaybackController.shared.state.active {
+            loading = false
+        }
+    }
+
+    private func refreshRemoteOkIfStale(repository: BockMediaRepository) async {
+        if let at = remoteOkCheckedAt, Date().timeIntervalSince(at) < Self.remoteStatusTTL { return }
+        if let status = try? await repository.alexaRemoteStatus() {
+            remoteOk = alexaControlsAvailable(status)
+            remoteOkCheckedAt = Date()
+        }
     }
 
     func control(repository: BockMediaRepository, action: String, device dev: NowPlayingDeviceItem) async {

@@ -32,10 +32,6 @@ final class BockMediaAPIClient {
         try await get("api/dashboard/quick")
     }
 
-    func playbackStatus() async throws -> PlaybackStatusResponse {
-        try await get("api/playback/status")
-    }
-
     // MARK: - Browse
 
     func playlists(page: Int = 1, limit: Int = 100, search: String = "") async throws -> PlaylistsResponse {

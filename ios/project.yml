@@ -106,3 +106,27 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.bockmedia.console.tests
         GENERATE_INFOPLIST_FILE: YES
+  BockMediaUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: BockMediaUITests
+    dependencies:
+      - target: BockMedia
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.bockmedia.console.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: BockMedia
+schemes:
+  BockMedia:
+    build:
+      targets:
+        BockMedia: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - BockMediaTests
+        - BockMediaUITests

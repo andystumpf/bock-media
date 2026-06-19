@@ -41,10 +41,15 @@ final class LocalPlaybackController: ObservableObject {
 
     private var player: AVPlayer?
     private var timeObserver: Any?
+    private var endObserver: NSObjectProtocol?
     private var lastPlaybackReportMs: Int64 = 0
+    private var remoteCommandsConfigured = false
+    private var currentArtwork: MPMediaItemArtwork?
+    private var artworkToken = 0
 
     private init() {
         configureAudioSession()
+        setupRemoteCommands()
     }
 
     func playTarget(repository: BockMediaRepository, target: PlayTarget, shuffle: Bool) async {
@@ -108,6 +113,7 @@ final class LocalPlaybackController: ObservableObject {
             player.play()
             state.isPlaying = true
         }
+        if let track = state.current { updateNowPlayingInfo(track: track) }
         reportPlaybackState(force: true)
         notifyWidgetSession()
     }
@@ -130,16 +136,43 @@ final class LocalPlaybackController: ObservableObject {
         Task { try? await playCurrent() }
     }
 
+    func seek(toSeconds seconds: Double) {
+        guard let player, seconds.isFinite, seconds >= 0 else { return }
+        let target = CMTime(seconds: seconds, preferredTimescale: 600)
+        player.seek(to: target) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.state.positionMs = Int64(seconds * 1000)
+                if let track = self.state.current { self.updateNowPlayingInfo(track: track) }
+            }
+        }
+    }
+
     func stopPlayback() {
         player?.pause()
         removeTimeObserver()
+        removeEndObserver()
         player = nil
         if let analyticsRepository {
             DeviceAnalyticsReporter.clearPlayback(repository: analyticsRepository)
         }
         state = LocalPlaybackState()
+        currentArtwork = nil
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+        setRemoteCommandsEnabled(false)
         notifyWidgetSession()
+    }
+
+    /// Auto-advance when the current item finishes, mirroring ExoPlayer's queue behavior on Android.
+    private func handleTrackEnded() {
+        guard state.active, !state.tracks.isEmpty else { return }
+        if state.index >= state.tracks.count - 1 {
+            // Reached the end of the queue: stop cleanly.
+            stopPlayback()
+        } else {
+            state.index += 1
+            Task { try? await playCurrent() }
+        }
     }
 
     func nowPlayingDeviceItem() -> NowPlayingDeviceItem? {
@@ -161,7 +194,9 @@ final class LocalPlaybackController: ObservableObject {
     private func playCurrent() async throws {
         guard let track = state.current else { return }
         removeTimeObserver()
+        removeEndObserver()
         configureAudioSession()
+        currentArtwork = nil
 
         let item = AVPlayerItem(url: track.playbackURL)
         if player == nil {
@@ -169,14 +204,33 @@ final class LocalPlaybackController: ObservableObject {
         } else {
             player?.replaceCurrentItem(with: item)
         }
+        observeEnd(for: item)
         player?.play()
         state.isPlaying = true
+        setRemoteCommandsEnabled(true)
         updateNowPlayingInfo(track: track)
         observeTime()
+        loadArtwork(for: track)
         if let analyticsRepository {
             DeviceAnalyticsReporter.reportPlay(repository: analyticsRepository, track: track)
         }
         notifyWidgetSession()
+    }
+
+    private func loadArtwork(for track: LocalTrack) {
+        guard let analyticsRepository else { return }
+        artworkToken += 1
+        let token = artworkToken
+        let path = track.path
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            guard let urlStr = await analyticsRepository.artworkURL(for: path),
+                  let url = URL(string: urlStr),
+                  let image = await ArtworkImageCache.load(url) else { return }
+            guard token == self.artworkToken, self.state.current?.path == path else { return }
+            self.currentArtwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+            self.updateNowPlayingInfo(track: track)
+        }
     }
 
     private func notifyWidgetSession() {
@@ -194,10 +248,79 @@ final class LocalPlaybackController: ObservableObject {
             MPMediaItemPropertyPlaybackDuration: Double(state.durationMs) / 1000,
             MPNowPlayingInfoPropertyElapsedPlaybackTime: Double(state.positionMs) / 1000,
             MPNowPlayingInfoPropertyPlaybackRate: state.isPlaying ? 1 : 0,
+            MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.audio.rawValue,
+            MPMediaItemPropertyPersistentID: UInt64(bitPattern: Int64(track.path.hashValue)),
         ]
+        if !state.tracks.isEmpty {
+            info[MPNowPlayingInfoPropertyPlaybackQueueIndex] = state.index
+            info[MPNowPlayingInfoPropertyPlaybackQueueCount] = state.tracks.count
+        }
         if let artist = track.artist { info[MPMediaItemPropertyArtist] = artist }
         if let album = track.album { info[MPMediaItemPropertyAlbumTitle] = album }
+        if let currentArtwork { info[MPMediaItemPropertyArtwork] = currentArtwork }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+    }
+
+    private func setupRemoteCommands() {
+        guard !remoteCommandsConfigured else { return }
+        remoteCommandsConfigured = true
+        let center = MPRemoteCommandCenter.shared()
+
+        center.playCommand.addTarget { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.state.active else { return .noSuchContent }
+                if !self.state.isPlaying { self.togglePlayPause() }
+                return .success
+            }
+        }
+        center.pauseCommand.addTarget { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.state.active else { return .noSuchContent }
+                if self.state.isPlaying { self.togglePlayPause() }
+                return .success
+            }
+        }
+        center.togglePlayPauseCommand.addTarget { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.state.active else { return .noSuchContent }
+                self.togglePlayPause()
+                return .success
+            }
+        }
+        center.nextTrackCommand.addTarget { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.state.active, self.state.tracks.count > 1 else { return .noSuchContent }
+                self.skipNext()
+                return .success
+            }
+        }
+        center.previousTrackCommand.addTarget { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.state.active, self.state.tracks.count > 1 else { return .noSuchContent }
+                self.skipPrevious()
+                return .success
+            }
+        }
+        center.changePlaybackPositionCommand.addTarget { [weak self] event in
+            MainActor.assumeIsolated {
+                guard let self, self.state.active,
+                      let e = event as? MPChangePlaybackPositionCommandEvent else { return .commandFailed }
+                self.seek(toSeconds: e.positionTime)
+                return .success
+            }
+        }
+        setRemoteCommandsEnabled(false)
+    }
+
+    private func setRemoteCommandsEnabled(_ enabled: Bool) {
+        let center = MPRemoteCommandCenter.shared()
+        center.playCommand.isEnabled = enabled
+        center.pauseCommand.isEnabled = enabled
+        center.togglePlayPauseCommand.isEnabled = enabled
+        center.changePlaybackPositionCommand.isEnabled = enabled
+        let multi = enabled && state.tracks.count > 1
+        center.nextTrackCommand.isEnabled = multi
+        center.previousTrackCommand.isEnabled = multi
     }
 
     private func observeTime() {
@@ -241,6 +364,23 @@ final class LocalPlaybackController: ObservableObject {
             player.removeTimeObserver(timeObserver)
         }
         timeObserver = nil
+    }
+
+    private func observeEnd(for item: AVPlayerItem) {
+        endObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.handleTrackEnded() }
+        }
+    }
+
+    private func removeEndObserver() {
+        if let endObserver {
+            NotificationCenter.default.removeObserver(endObserver)
+        }
+        endObserver = nil
     }
 }
 

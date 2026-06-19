@@ -308,6 +308,17 @@ private struct WidgetDeviceCard: View {
 
 @main
 struct BockMediaWidgetBundle: WidgetBundle {
+    init() {
+        // The widget runs in its own process, so it can't share the app's
+        // in-memory artwork cache. Give it a disk-backed URLCache so AsyncImage
+        // artwork loads are cached between timeline refreshes.
+        URLCache.shared = URLCache(
+            memoryCapacity: 16_000_000,
+            diskCapacity: 128_000_000,
+            diskPath: "bock_widget_artwork"
+        )
+    }
+
     var body: some Widget {
         NowPlayingWidget()
     }

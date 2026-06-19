@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 @MainActor
@@ -8,61 +9,87 @@ final class MiniNowPlayingModel: ObservableObject {
     @Published var artURL: URL?
     @Published var isLocal = false
 
-    private var pollTask: Task<Void, Never>?
+    private let service = NowPlayingPollService.shared
+    private var repository: BockMediaRepository?
+    private var cancellables: Set<AnyCancellable> = []
+    private var recomputeTask: Task<Void, Never>?
+    private var artworkPath: String?
+    private var subscribed = false
 
     func start(repository: BockMediaRepository, remoteOk: Bool) {
-        pollTask?.cancel()
-        pollTask = Task {
-            await refresh(repository: repository, remoteOk: remoteOk)
-            while !Task.isCancelled {
-                let interval: UInt64 = device != nil ? 3_000_000_000 : 5_000_000_000
-                try? await Task.sleep(nanoseconds: interval)
-                await refresh(repository: repository, remoteOk: remoteOk)
-            }
+        self.repository = repository
+        service.configure(repository: repository)
+        if !subscribed {
+            service.addSubscriber()
+            subscribed = true
         }
+
+        cancellables.removeAll()
+        // Recompute whenever the shared poller publishes, or local playback changes.
+        service.$items
+            .combineLatest(service.$controlsAvailable, service.$alexaDevices)
+            .sink { [weak self] _ in MainActor.assumeIsolated { self?.scheduleRecompute() } }
+            .store(in: &cancellables)
+        NotificationCenter.default.publisher(for: .localPlaybackDidChange)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in MainActor.assumeIsolated { self?.scheduleRecompute() } }
+            .store(in: &cancellables)
+
+        scheduleRecompute()
     }
 
     func refreshOnFocus(repository: BockMediaRepository, remoteOk: Bool) async {
-        await refresh(repository: repository, remoteOk: remoteOk)
+        await service.refreshNow()
+        scheduleRecompute()
     }
 
     func stop() {
-        pollTask?.cancel()
+        cancellables.removeAll()
+        recomputeTask?.cancel()
+        if subscribed {
+            service.removeSubscriber()
+            subscribed = false
+        }
     }
 
-    private func refresh(repository: BockMediaRepository, remoteOk: Bool) async {
-        let result = await WidgetSessionBridge.fetchNowPlayingItems(
-            repository: repository,
-            alexaDevices: alexaDevices
-        )
-        alexaDevices = result.alexaDevices
-        await WidgetSessionBridge.update(
-            repository: repository,
-            items: result.items,
-            controlsAvailable: result.controlsAvailable
-        )
+    private func scheduleRecompute() {
+        recomputeTask?.cancel()
+        recomputeTask = Task { [weak self] in await self?.recompute() }
+    }
+
+    private func recompute() async {
+        guard let repository else { return }
+        alexaDevices = service.alexaDevices
 
         if let local = LocalPlaybackController.shared.nowPlayingDeviceItem() {
             isLocal = true
             device = local
             controlsAvailable = true
-            if let path = local.filepath, let urlStr = await repository.artworkURL(for: path) {
-                artURL = URL(string: urlStr)
-            }
-            _ = remoteOk
+            await resolveArt(path: local.filepath, repository: repository)
             return
         }
         isLocal = false
-        controlsAvailable = result.controlsAvailable
-        _ = PlaybackFocus.syncPendingFocus(items: result.items, alexaDevices: alexaDevices)
-        device = PlaybackFocus.resolveFocusedItem(items: result.items, alexaDevices: alexaDevices)
-            ?? result.items.first
-        if let path = device?.filepath, let urlStr = await repository.artworkURL(for: path) {
+        controlsAvailable = service.controlsAvailable
+        let items = service.items
+        _ = PlaybackFocus.syncPendingFocus(items: items, alexaDevices: alexaDevices)
+        device = PlaybackFocus.resolveFocusedItem(items: items, alexaDevices: alexaDevices)
+            ?? items.first
+        await resolveArt(path: device?.filepath, repository: repository)
+    }
+
+    private func resolveArt(path: String?, repository: BockMediaRepository) async {
+        guard let path else {
+            artworkPath = nil
+            artURL = nil
+            return
+        }
+        if path == artworkPath, artURL != nil { return }
+        artworkPath = path
+        if let urlStr = await repository.artworkURL(for: path) {
             artURL = URL(string: urlStr)
         } else {
             artURL = nil
         }
-        _ = remoteOk
     }
 
     var canControl: Bool {

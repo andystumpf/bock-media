@@ -19,9 +19,17 @@ struct RootView: View {
         .preferredColorScheme(.dark)
         .task { await appState.bootstrap() }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active {
-                BackgroundDownloadScheduler.schedule()
+            switch phase {
+            case .active:
+                NowPlayingPollService.shared.setForeground(true)
                 NotificationCenter.default.post(name: .widgetSessionShouldRefresh, object: nil)
+            case .background:
+                NowPlayingPollService.shared.setForeground(false)
+                BackgroundDownloadScheduler.schedule()
+            case .inactive:
+                break
+            @unknown default:
+                break
             }
         }
         .onOpenURL { url in

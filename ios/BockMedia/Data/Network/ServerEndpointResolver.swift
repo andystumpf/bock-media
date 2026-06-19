@@ -1,4 +1,5 @@
 import Foundation
+import Network
 
 actor ServerEndpointResolver {
     static let shared = ServerEndpointResolver()
@@ -9,6 +10,32 @@ actor ServerEndpointResolver {
 
     private let lanTimeout: TimeInterval = 8
     private let externalTimeout: TimeInterval = 10
+
+    /// Mirrors Android: on cellular we skip the (doomed) LAN probe and go
+    /// straight to the external URL instead of wasting the LAN timeout.
+    private var onCellular = false
+    private let pathMonitor = NWPathMonitor()
+    private let pathQueue = DispatchQueue(label: "com.bockmedia.endpoint.path")
+
+    init() {
+        pathMonitor.pathUpdateHandler = { [weak self] path in
+            let cellular = path.status == .satisfied
+                && path.usesInterfaceType(.cellular)
+                && !path.usesInterfaceType(.wifi)
+                && !path.usesInterfaceType(.wiredEthernet)
+            Task { await self?.updateCellular(cellular) }
+        }
+        pathMonitor.start(queue: pathQueue)
+    }
+
+    private func updateCellular(_ cellular: Bool) {
+        if cellular != onCellular {
+            onCellular = cellular
+            // Network class changed; the previously chosen endpoint may no longer
+            // be reachable, so drop the cache and re-resolve on next request.
+            invalidate()
+        }
+    }
 
     func invalidate() {
         cachedURL = nil
@@ -51,8 +78,9 @@ actor ServerEndpointResolver {
         let external = preferences.externalServerURL
         let localHosts = preferences.localHosts()
 
+        let skipLan = onCellular
         async let localOk: Bool = {
-            guard let local, !local.isEmpty else { return false }
+            guard !skipLan, let local, !local.isEmpty else { return false }
             return await probe(
                 base: local,
                 timeout: lanTimeout,

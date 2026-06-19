@@ -11,9 +11,12 @@ enum BackgroundDownloadScheduler {
                 return
             }
             refresh.expirationHandler = { refresh.setTaskCompleted(success: false) }
-            OfflineDownloadManager.shared.refresh()
-            refresh.setTaskCompleted(success: true)
-            schedule()
+            Task { @MainActor in
+                OfflineDownloadManager.shared.refresh()
+                OfflineDownloadManager.shared.resumeIncomplete()
+                refresh.setTaskCompleted(success: true)
+                schedule()
+            }
         }
     }
 

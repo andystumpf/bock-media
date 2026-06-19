@@ -19,6 +19,8 @@ final class AppState: ObservableObject {
 
     init() {
         repository = BockMediaRepository(preferences: preferences)
+        OfflineDownloadManager.shared.configure(repository: repository, preferences: preferences)
+        NowPlayingPollService.shared.configure(repository: repository)
     }
 
     func bootstrap() async {
