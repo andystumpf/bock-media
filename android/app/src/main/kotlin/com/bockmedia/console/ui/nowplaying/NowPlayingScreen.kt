@@ -843,12 +843,15 @@ private fun ArtBackdrop(artUrl: String?) {
             Modifier
                 .fillMaxSize()
                 .background(
+                    // Near-opaque at the very top/bottom so the inter-page seam (status-bar
+                    // and nav-bar dead space) reads as dark and doesn't flash the blurred
+                    // artwork as a bright colour band between device pages.
                     Brush.verticalGradient(
-                        listOf(
-                            Color.Black.copy(alpha = 0.55f),
-                            Color.Black.copy(alpha = 0.35f),
-                            Color.Black.copy(alpha = 0.65f),
-                        ),
+                        0f to Color.Black.copy(alpha = 0.94f),
+                        0.18f to Color.Black.copy(alpha = 0.5f),
+                        0.5f to Color.Black.copy(alpha = 0.38f),
+                        0.82f to Color.Black.copy(alpha = 0.6f),
+                        1f to Color.Black.copy(alpha = 0.96f),
                     ),
                 ),
         )
