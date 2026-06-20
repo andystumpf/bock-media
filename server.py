@@ -18,6 +18,8 @@ import socket
 import datetime
 import threading
 import uuid
+import hashlib
+import hmac
 import ipaddress
 from logging.handlers import RotatingFileHandler
 from urllib.parse import quote, urlparse
@@ -3533,6 +3535,319 @@ def recent():
         print(f'Recent error: {e}')
         return jsonify({'items': [], 'total': 0})
 
+# ── Household members (profiles), bindings & attribution ─────────────────────
+# A "member" is a person in the household (Andy, Emma, Jack). Members own taste,
+# history, recommendations, playlists and messages. They are *bound* to devices
+# for attribution: a phone install → its active member; an Echo → the room's
+# default member (Amazon never tells a skill who is speaking). This is an
+# attribution + policy layer, NOT a security boundary — only parent actions are
+# PIN-gated. Everything persists locally in DATA_DIR. Zero third-party sharing.
+
+HOUSEHOLD_PATH = os.path.join(DATA_DIR, 'household.json')
+_HOUSEHOLD_LOCK = threading.Lock()
+
+_VALID_ROLES = ('parent', 'kid')
+
+
+def _household_defaults():
+    return {'members': [], 'clientBindings': {}, 'deviceOwners': {}}
+
+
+def _load_household():
+    try:
+        with open(HOUSEHOLD_PATH) as f:
+            data = json.load(f)
+    except Exception:
+        return _household_defaults()
+    if not isinstance(data, dict):
+        return _household_defaults()
+    base = _household_defaults()
+    base.update({k: data.get(k, base[k]) for k in base})
+    if not isinstance(base['members'], list):
+        base['members'] = []
+    if not isinstance(base['clientBindings'], dict):
+        base['clientBindings'] = {}
+    if not isinstance(base['deviceOwners'], dict):
+        base['deviceOwners'] = {}
+    return base
+
+
+def _save_household(data):
+    _atomic_json_write(HOUSEHOLD_PATH, data)
+
+
+def _slug(name):
+    s = re.sub(r'[^a-z0-9]+', '-', (name or '').strip().lower()).strip('-')
+    return s or 'member'
+
+
+def _gen_member_id(name, members):
+    base = f'p-{_slug(name)}'
+    existing = {m.get('id') for m in members}
+    if base not in existing:
+        return base
+    i = 2
+    while f'{base}-{i}' in existing:
+        i += 1
+    return f'{base}-{i}'
+
+
+def _member_by_id(member_id, household=None):
+    if not member_id:
+        return None
+    h = household or _load_household()
+    for m in h.get('members', []):
+        if m.get('id') == member_id:
+            return m
+    return None
+
+
+def _member_label(member_id, household=None):
+    m = _member_by_id(member_id, household)
+    return (m or {}).get('name') or ''
+
+
+def _public_member(m):
+    """Member without secret fields (pinHash)."""
+    return {
+        'id': m.get('id'),
+        'name': m.get('name'),
+        'role': m.get('role') or 'kid',
+        'color': m.get('color'),
+        'avatar': m.get('avatar'),
+        'hasPin': bool(m.get('pinHash')),
+        'createdAt': m.get('createdAt'),
+    }
+
+
+def _hash_pin(pin):
+    salt = os.urandom(16)
+    dk = hashlib.pbkdf2_hmac('sha256', pin.encode('utf-8'), salt, 100_000)
+    return 'pbkdf2_sha256$100000$' + base64.b64encode(salt).decode() + '$' + base64.b64encode(dk).decode()
+
+
+def _verify_pin(pin, stored):
+    try:
+        algo, iters, salt_b64, dk_b64 = (stored or '').split('$')
+        if algo != 'pbkdf2_sha256':
+            return False
+        salt = base64.b64decode(salt_b64)
+        dk = base64.b64decode(dk_b64)
+        test = hashlib.pbkdf2_hmac('sha256', (pin or '').encode('utf-8'), salt, int(iters))
+        return hmac.compare_digest(test, dk)
+    except Exception:
+        return False
+
+
+def _parent_pin_ok(member_id, pin, household=None):
+    """True if member is a parent and the PIN matches (or no parent has a PIN
+    set yet — first-run grace so the house isn't locked out)."""
+    h = household or _load_household()
+    m = _member_by_id(member_id, h)
+    if not m or (m.get('role') or 'kid') != 'parent':
+        return False
+    if not m.get('pinHash'):
+        return True
+    return _verify_pin(pin, m.get('pinHash'))
+
+
+def member_for_client(client_id, household=None):
+    """Resolve the member bound to a phone/tablet install."""
+    did = _client_device_id(client_id) if client_id else None
+    if not did:
+        return None
+    h = household or _load_household()
+    return h.get('clientBindings', {}).get(did)
+
+
+def member_for_device(device_id, household=None):
+    """Resolve the default member for an Echo/room (alias-aware)."""
+    if not device_id or device_id == 'default':
+        return None
+    h = household or _load_household()
+    owners = h.get('deviceOwners', {})
+    primary = _resolve_device_id(device_id)
+    return owners.get(primary) or owners.get(device_id)
+
+
+def resolve_play_member(*, device_id=None, client_id=None, explicit_member=None,
+                        household=None):
+    """Attribute a play to a household member.
+
+    Priority: explicit (app says "this is me") → phone install → room default.
+    Returns a member id or '' when unknown (household-level only).
+    """
+    h = household or _load_household()
+    if explicit_member and _member_by_id(explicit_member, h):
+        return explicit_member
+    if client_id:
+        m = member_for_client(client_id, h)
+        if m:
+            return m
+    if device_id:
+        m = member_for_device(device_id, h)
+        if m:
+            return m
+    return ''
+
+
+@app.route('/api/household')
+def household_get():
+    """Members (public), client/device bindings with friendly labels."""
+    h = _load_household()
+    device_store = _load_devices()
+    owners = []
+    for did, mid in h.get('deviceOwners', {}).items():
+        owners.append({
+            'deviceId': did,
+            'deviceName': _device_label(did),
+            'memberId': mid,
+            'memberName': _member_label(mid, h),
+        })
+    clients = []
+    for did, mid in h.get('clientBindings', {}).items():
+        entry = device_store.get(did) or {}
+        clients.append({
+            'clientDeviceId': did,
+            'deviceName': entry.get('name') or did,
+            'platform': entry.get('platform'),
+            'memberId': mid,
+            'memberName': _member_label(mid, h),
+        })
+    return jsonify({
+        'members': [_public_member(m) for m in h.get('members', [])],
+        'deviceOwners': owners,
+        'clientBindings': clients,
+    })
+
+
+@app.route('/api/household/members', methods=['POST'])
+def household_create_member():
+    body = request.get_json(silent=True) or {}
+    name = (body.get('name') or '').strip()
+    if not name:
+        return jsonify({'error': 'name required'}), 400
+    role = (body.get('role') or 'kid').strip().lower()
+    if role not in _VALID_ROLES:
+        return jsonify({'error': f'role must be one of {_VALID_ROLES}'}), 400
+    with _HOUSEHOLD_LOCK:
+        h = _load_household()
+        member = {
+            'id': _gen_member_id(name, h['members']),
+            'name': name,
+            'role': role,
+            'color': (body.get('color') or '').strip() or None,
+            'avatar': (body.get('avatar') or '').strip() or None,
+            'pinHash': None,
+            'createdAt': time.time(),
+        }
+        h['members'].append(member)
+        _save_household(h)
+    return jsonify(_public_member(member)), 201
+
+
+@app.route('/api/household/members/<member_id>', methods=['PUT', 'DELETE'])
+def household_modify_member(member_id):
+    with _HOUSEHOLD_LOCK:
+        h = _load_household()
+        m = _member_by_id(member_id, h)
+        if not m:
+            return jsonify({'error': 'not_found'}), 404
+        if request.method == 'DELETE':
+            h['members'] = [x for x in h['members'] if x.get('id') != member_id]
+            h['clientBindings'] = {k: v for k, v in h['clientBindings'].items() if v != member_id}
+            h['deviceOwners'] = {k: v for k, v in h['deviceOwners'].items() if v != member_id}
+            _save_household(h)
+            return jsonify({'ok': True})
+        body = request.get_json(silent=True) or {}
+        if 'name' in body:
+            name = (body.get('name') or '').strip()
+            if not name:
+                return jsonify({'error': 'name cannot be empty'}), 400
+            m['name'] = name
+        if 'role' in body:
+            role = (body.get('role') or '').strip().lower()
+            if role not in _VALID_ROLES:
+                return jsonify({'error': f'role must be one of {_VALID_ROLES}'}), 400
+            m['role'] = role
+        if 'color' in body:
+            m['color'] = (body.get('color') or '').strip() or None
+        if 'avatar' in body:
+            m['avatar'] = (body.get('avatar') or '').strip() or None
+        _save_household(h)
+        return jsonify(_public_member(m))
+
+
+@app.route('/api/household/members/<member_id>/pin', methods=['POST'])
+def household_member_pin(member_id):
+    """Set (verify=false) or verify (verify=true) a parent's PIN.
+
+    Setting a PIN the first time is allowed; replacing an existing PIN requires
+    the current PIN in `currentPin`.
+    """
+    body = request.get_json(silent=True) or {}
+    pin = (str(body.get('pin') or '')).strip()
+    if body.get('verify'):
+        h = _load_household()
+        m = _member_by_id(member_id, h)
+        if not m:
+            return jsonify({'error': 'not_found'}), 404
+        return jsonify({'ok': _verify_pin(pin, m.get('pinHash'))})
+    if len(pin) < 4:
+        return jsonify({'error': 'pin must be at least 4 digits'}), 400
+    with _HOUSEHOLD_LOCK:
+        h = _load_household()
+        m = _member_by_id(member_id, h)
+        if not m:
+            return jsonify({'error': 'not_found'}), 404
+        if m.get('role') != 'parent':
+            return jsonify({'error': 'only parents can have a PIN'}), 400
+        if m.get('pinHash') and not _verify_pin(str(body.get('currentPin') or ''), m['pinHash']):
+            return jsonify({'error': 'current pin required'}), 403
+        m['pinHash'] = _hash_pin(pin)
+        _save_household(h)
+    return jsonify({'ok': True, 'hasPin': True})
+
+
+@app.route('/api/clients/bind', methods=['POST'])
+def household_bind_client():
+    body = request.get_json(silent=True) or {}
+    client_id = (body.get('clientId') or '').strip()
+    member_id = (body.get('memberId') or '').strip()
+    did = _client_device_id(client_id)
+    if not did:
+        return jsonify({'error': 'clientId required'}), 400
+    with _HOUSEHOLD_LOCK:
+        h = _load_household()
+        if member_id and not _member_by_id(member_id, h):
+            return jsonify({'error': 'unknown memberId'}), 400
+        if member_id:
+            h['clientBindings'][did] = member_id
+        else:
+            h['clientBindings'].pop(did, None)
+        _save_household(h)
+    return jsonify({'ok': True, 'clientDeviceId': did, 'memberId': member_id or None})
+
+
+@app.route('/api/devices/<device_id>/owner', methods=['POST', 'DELETE'])
+def household_device_owner(device_id):
+    with _HOUSEHOLD_LOCK:
+        h = _load_household()
+        primary = _resolve_device_id(device_id)
+        if request.method == 'DELETE':
+            h['deviceOwners'].pop(primary, None)
+            h['deviceOwners'].pop(device_id, None)
+            _save_household(h)
+            return jsonify({'ok': True})
+        body = request.get_json(silent=True) or {}
+        member_id = (body.get('memberId') or '').strip()
+        if not _member_by_id(member_id, h):
+            return jsonify({'error': 'unknown memberId'}), 400
+        h['deviceOwners'][primary] = member_id
+        _save_household(h)
+    return jsonify({'ok': True, 'deviceId': primary, 'memberId': member_id})
+
+
 # ── API: Client analytics (Android / iOS) ────────────────────────────────────
 
 @app.route('/api/clients/report', methods=['POST'])
@@ -3555,6 +3870,8 @@ def client_report():
 
     now_iso = datetime.datetime.now().isoformat(timespec='seconds')
     label = _device_label(did)
+    member_id = resolve_play_member(client_id=client_id,
+                                    explicit_member=(body.get('memberId') or '').strip())
 
     if event == 'connect':
         _record_client_connect(did)
@@ -3575,6 +3892,7 @@ def client_report():
             'device': label,
             'deviceId': did,
             'platform': platform or None,
+            'memberId': member_id or None,
             'date': now_iso,
         })
         _write_client_np_state(did, {
@@ -3601,6 +3919,7 @@ def client_report():
         'deviceId': did,
         'device': label,
         'platform': platform or None,
+        'memberId': member_id or None,
         'collectionTitle': title,
         'collectionKind': kind,
         'trackCount': track_count,
@@ -3681,7 +4000,9 @@ def analytics():
     from_str = request.args.get('from', '').strip()
     to_str   = request.args.get('to',   '').strip()
     device_id_str = request.args.get('deviceId', '').strip()
-    cache_key = (from_str, to_str, device_id_str)
+    member_str = request.args.get('member', '').strip()
+    platform_str = request.args.get('platform', '').strip()
+    cache_key = (from_str, to_str, device_id_str, member_str, platform_str)
     cached = _analytics_cache.get(cache_key)
     if cached and (time.time() - cached['ts']) < _ANALYTICS_TTL:
         return jsonify(cached['data'])
@@ -3706,10 +4027,15 @@ def analytics():
 
     device_store = _load_devices()
     rows = _filter_history_by_device(rows, device_id_str, device_store)
+    household = _load_household()
+    rows = _filter_history_by_member(rows, member_str, household)
+    rows = _filter_history_by_platform(rows, platform_str)
 
     total = len(rows)
     download_rows = _filter_history_rows(_read_download_history(), from_dt, to_dt)
     download_rows = _filter_history_by_device(download_rows, device_id_str, device_store)
+    download_rows = _filter_history_by_member(download_rows, member_str, household)
+    download_rows = _filter_history_by_platform(download_rows, platform_str)
     EMPTY = {
         'totalPlays': 0, 'uniqueTracks': 0, 'uniqueArtists': 0, 'uniqueAlbums': 0,
         'topTracks': [], 'topArtists': [], 'topAlbums': [], 'topDevices': [],
@@ -4174,6 +4500,49 @@ def _filter_history_by_device(rows, device_id, device_store=None):
         if primary == target:
             filtered.append(r)
     return filtered
+
+def _member_for_did(did, household=None):
+    """Member attributed to a deviceId: client install binding or Echo owner."""
+    if not did:
+        return ''
+    h = household or _load_household()
+    if _is_client_device(did):
+        return h.get('clientBindings', {}).get(did, '') or ''
+    return member_for_device(did, h) or ''
+
+
+def _row_member(row, household=None):
+    """Member for a history row: explicit memberId, else the device's owner."""
+    mid = row.get('memberId')
+    if mid:
+        return mid
+    return _member_for_did(row.get('deviceId') or '', household)
+
+
+def _row_platform(row):
+    """Platform for a row, inferring 'alexa' for legacy rows on Echo devices."""
+    p = (row.get('platform') or '').strip().lower()
+    if p:
+        return p
+    did = row.get('deviceId') or ''
+    if did and not _is_client_device(did) and did != 'default':
+        return 'alexa'
+    return ''
+
+
+def _filter_history_by_member(rows, member_id, household=None):
+    if not member_id:
+        return rows
+    h = household or _load_household()
+    return [r for r in rows if _row_member(r, h) == member_id]
+
+
+def _filter_history_by_platform(rows, platform):
+    if not platform:
+        return rows
+    p = platform.strip().lower()
+    return [r for r in rows if _row_platform(r) == p]
+
 
 def _build_device_breakdown(play_rows, download_rows, device_store):
     """Per-device connects, plays, and downloads for the analytics dashboard."""
@@ -7158,6 +7527,8 @@ def _msp_handle_event(req, ctx):
                 'filepath': path,
                 'device':   _device_label(_np_device_id()),
                 'deviceId': _np_device_id(),
+                'memberId': resolve_play_member(device_id=_np_device_id()) or None,
+                'platform': 'alexa',
                 'playlist': src.get('playlist'),
                 'sourceLabel': src.get('sourceLabel'),
                 'date':     datetime.datetime.now().isoformat(timespec='seconds'),
@@ -7318,6 +7689,8 @@ def alexa_skill():
                 'filepath': path,
                 'device':   device_label,
                 'deviceId': _np_device_id(),
+                'memberId': resolve_play_member(device_id=_np_device_id()) or None,
+                'platform': 'alexa',
                 'playlist': src.get('playlist'),
                 'sourceLabel': src.get('sourceLabel'),
                 'date':     datetime.datetime.now().isoformat(timespec='seconds'),
