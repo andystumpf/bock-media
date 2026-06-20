@@ -280,7 +280,7 @@
 		F80B7AF5FF5042D2B666FD49 /* BockMediaWidget.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = BockMediaWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		F9F3EB64BBFDF50AB66DD520 /* FavoritesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FavoritesView.swift; sourceTree = "<group>"; };
 		FFCDF62A3F48ABAEDE57003F /* WidgetSnapshotLogic.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetSnapshotLogic.swift; sourceTree = "<group>"; };
-		"TEMP_0ECB598E-5A0A-4531-9874-59310D3E1F06" /* Config.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config.xcconfig; sourceTree = "<group>"; };
+		"TEMP_C4C849EB-AEE5-4625-9787-9773485C5F99" /* Config.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -735,10 +735,10 @@
 			path = App;
 			sourceTree = "<group>";
 		};
-		"TEMP_10FEDB04-D4A8-4E38-BB74-2FA6AC4754EF" /* ios */ = {
+		"TEMP_3BB78709-5748-4678-B00A-454184916D9C" /* ios */ = {
 			isa = PBXGroup;
 			children = (
-				"TEMP_0ECB598E-5A0A-4531-9874-59310D3E1F06" /* Config.xcconfig */,
+				"TEMP_C4C849EB-AEE5-4625-9787-9773485C5F99" /* Config.xcconfig */,
 			);
 			path = ios;
 			sourceTree = "<group>";
@@ -1070,7 +1070,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 2.3.0;
+				MARKETING_VERSION = 2.3.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.bockmedia.console;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -1089,7 +1089,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 2.3.0;
+				MARKETING_VERSION = 2.3.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.bockmedia.console.widget;
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
@@ -1133,7 +1133,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 2.3.0;
+				MARKETING_VERSION = 2.3.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.bockmedia.console;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -1142,7 +1142,7 @@
 		};
 		6219BA74FFAB2E1B8F1C720E /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = "TEMP_0ECB598E-5A0A-4531-9874-59310D3E1F06" /* Config.xcconfig */;
+			baseConfigurationReference = "TEMP_C4C849EB-AEE5-4625-9787-9773485C5F99" /* Config.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;
@@ -1235,7 +1235,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 2.3.0;
+				MARKETING_VERSION = 2.3.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.bockmedia.console.widget;
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
@@ -1245,7 +1245,7 @@
 		};
 		B7DF9EF27EC8F31E180E8E80 /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = "TEMP_0ECB598E-5A0A-4531-9874-59310D3E1F06" /* Config.xcconfig */;
+			baseConfigurationReference = "TEMP_C4C849EB-AEE5-4625-9787-9773485C5F99" /* Config.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;

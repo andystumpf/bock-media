@@ -37,12 +37,14 @@ fun SettingsScreen(
     val scope = rememberCoroutineScope()
     val app = remember { BockMediaApp.get(context) }
     var wifiOnlyDownloads by remember { mutableStateOf(false) }
+    var crossfadeSeconds by remember { mutableFloatStateOf(0f) }
     var loading by remember { mutableStateOf(true) }
     var message by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
         loading = true
         wifiOnlyDownloads = app.preferences.isDownloadWifiOnlySync()
+        crossfadeSeconds = app.preferences.getCrossfadeSecondsSync().toFloat()
         loading = false
     }
 
@@ -85,6 +87,38 @@ fun SettingsScreen(
                             wifiOnlyDownloads = checked
                             scope.launch { app.preferences.setDownloadWifiOnly(checked) }
                         },
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+            SettingsSectionHeader(
+                title = "This Phone playback",
+                icon = Icons.Default.Settings,
+                subtitle = "Local audio on this device only",
+            )
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                    Text("Crossfade", fontWeight = FontWeight.SemiBold)
+                    Text(
+                        if (crossfadeSeconds <= 0f) {
+                            "Off — hard cut between songs"
+                        } else {
+                            "${crossfadeSeconds.toInt()} s overlap before each track ends"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Slider(
+                        value = crossfadeSeconds,
+                        onValueChange = { crossfadeSeconds = it },
+                        onValueChangeFinished = {
+                            scope.launch {
+                                app.preferences.setCrossfadeSeconds(crossfadeSeconds.toInt())
+                            }
+                        },
+                        valueRange = 0f..20f,
+                        steps = 19,
                     )
                 }
             }

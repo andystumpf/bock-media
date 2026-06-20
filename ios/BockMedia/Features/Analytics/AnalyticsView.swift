@@ -72,11 +72,17 @@ struct AnalyticsView: View {
         List {
             toolbarSection
 
-            if let data {
-                summarySection(data)
-                if !deviceScoped, data.deviceBreakdown.contains(where: { $0.plays + $0.downloads + $0.connects > 0 }) {
-                    deviceBreakdownSection(data.deviceBreakdown)
+            if loading && data == nil {
+                Section {
+                    HStack {
+                        Spacer()
+                        ProgressView()
+                        Spacer()
+                    }
+                    .listRowBackground(Color.clear)
                 }
+            } else if let data {
+                summarySection(data)
                 activitySection(data)
                 hourDowSection(data)
                 if let heatmap = data.heatmap, !heatmap.isEmpty {
@@ -90,6 +96,9 @@ struct AnalyticsView: View {
                 }
                 rankingSection("Top genres", data.topGenres, Color(red: 0x8D / 255, green: 0x67 / 255, blue: 0xAB / 255))
                 decadeSection(data.topDecades)
+                if !deviceScoped, data.deviceBreakdown.contains(where: { $0.plays + $0.downloads + $0.connects > 0 }) {
+                    deviceBreakdownSection(data.deviceBreakdown)
+                }
             } else if !loading {
                 Text("No analytics data").foregroundStyle(BockColors.muted)
             }
@@ -256,7 +265,7 @@ struct AnalyticsView: View {
             .filter { $0.plays + $0.downloads + $0.connects > 0 }
             .sorted { ($0.plays + $0.downloads) > ($1.plays + $1.downloads) }
             .prefix(6)
-        return CardSection(title: "Devices") {
+        return CardSection(title: "Device Activity") {
             ForEach(Array(active), id: \.deviceId) { d in
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {

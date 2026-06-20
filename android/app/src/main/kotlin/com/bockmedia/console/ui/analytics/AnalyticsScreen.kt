@@ -266,9 +266,6 @@ fun AnalyticsScreen(repository: BockMediaRepository) {
                     val deviceScoped = deviceFilter !is AnalyticsDeviceFilter.AllDevices
                     data?.let { a ->
                         item(key = "stats-$queryKey") { SummaryStatsGrid(a) }
-                        if (!deviceScoped && a.deviceBreakdown.any { it.plays + it.downloads + it.connects > 0 }) {
-                            item(key = "devices-$queryKey") { DeviceBreakdownCard(a.deviceBreakdown) }
-                        }
                         item(key = "activity-$queryKey") {
                             ActivityChartCard(
                                 data = a,
@@ -313,6 +310,11 @@ fun AnalyticsScreen(repository: BockMediaRepository) {
                                     DecadeChart(a.topDecades)
                                 }
                             }
+                        }
+                    }
+                    if (!deviceScoped && data?.deviceBreakdown?.any { it.plays + it.downloads + it.connects > 0 } == true) {
+                        item(key = "devices-$queryKey") {
+                            DeviceBreakdownCard(data!!.deviceBreakdown)
                         }
                     }
                     item {
@@ -870,7 +872,7 @@ private fun DeviceBreakdownCard(devices: List<DeviceBreakdownRow>) {
         .sortedByDescending { it.plays + it.downloads }
         .take(6)
     if (active.isEmpty()) return
-    AnalyticsCard("Devices") {
+    AnalyticsCard("Device Activity") {
         active.forEach { d ->
             Row(
                 Modifier.fillMaxWidth().padding(vertical = 4.dp),

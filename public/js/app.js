@@ -3664,8 +3664,12 @@ async function _loadAnalytics() {
   }
   renderPage('Analytics', _buildAnalyticsHTML(data));
   _restoreDateInputs();
-  _initAnalyticsCharts(data);
-  if (Object.keys(data.playsPerDay || {}).length >= 7) _initEntityActivityCharts(data);
+  try {
+    _initAnalyticsCharts(data);
+    if (Object.keys(data.playsPerDay || {}).length >= 7) _initEntityActivityCharts(data);
+  } catch (e) {
+    console.error('Analytics charts failed:', e);
+  }
   loadIgnoredPanel();
 }
 
@@ -3901,8 +3905,6 @@ function _buildAnalyticsHTML(d) {
   return `
     <div class="card" style="margin-bottom:20px">${_anDatePickerHtml(d)}</div>
 
-    ${_buildDeviceBreakdownHTML(d.deviceBreakdown)}
-
     <div class="stats-grid">
       <div class="stat-card">
         <div class="stat-icon blue"><i class="fa fa-headphones"></i></div>
@@ -4035,6 +4037,8 @@ function _buildAnalyticsHTML(d) {
       </div>
     </div>` : ''}
 
+    ${_buildDeviceBreakdownHTML(d.deviceBreakdown)}
+
     <div class="card" style="margin-top:20px">
       <div class="card-header"><h3><i class="fa fa-ban"></i> Never Play Again</h3></div>
       <div class="card-body" id="an-ignored-body">
@@ -4101,6 +4105,10 @@ function _buildHeatmapHTML(matrix) {
 }
 
 function _initAnalyticsCharts(d) {
+  if (typeof Chart === 'undefined') {
+    console.error('Chart.js is not loaded — analytics charts skipped');
+    return;
+  }
   const C = {
     navy: '#30426a', orange: '#e99d1a', green: '#2eaa5a',
     purple: '#7c4dbd', teal: '#1a9ba1',
@@ -4290,7 +4298,7 @@ const _AN_COLORS = ['#4e91e6','#e6914e','#4ec74e','#e64e4e','#a44ee6','#e6c84e',
 
 function _buildEntityChart(canvasId, seriesMap) {
   const canvas = document.getElementById(canvasId);
-  if (!canvas) return;
+  if (!canvas || typeof Chart === 'undefined') return;
   const allDays = [...new Set(Object.values(seriesMap).flatMap(m => Object.keys(m)))].sort();
   if (!allDays.length) return;
   const datasets = Object.entries(seriesMap).map(([label, dayCounts], i) => ({

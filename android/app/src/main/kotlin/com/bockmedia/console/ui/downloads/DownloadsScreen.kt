@@ -305,7 +305,7 @@ internal fun DownloadDetailScreen(
                     Spacer(Modifier.height(8.dp))
                 }
             }
-            items(manifest.tracks.size, key = { manifest.tracks[it].path }) { index ->
+            items(manifest.tracks.size, key = { idx -> "dl-$idx-${manifest.tracks[idx].path}" }) { index ->
                 val track = manifest.tracks[index]
                 Row(
                     Modifier

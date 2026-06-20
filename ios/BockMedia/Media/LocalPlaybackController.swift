@@ -40,12 +40,21 @@ final class LocalPlaybackController: ObservableObject {
     private var analyticsRepository: BockMediaRepository?
 
     private var player: AVPlayer?
+    private var incomingPlayer: AVPlayer?
     private var timeObserver: Any?
     private var endObserver: NSObjectProtocol?
     private var lastPlaybackReportMs: Int64 = 0
     private var remoteCommandsConfigured = false
     private var currentArtwork: MPMediaItemArtwork?
     private var artworkToken = 0
+    private var crossfading = false
+    private var crossfadeTimer: Timer?
+    private var crossfadeStartedAt: Date?
+    private var crossfadeDuration: TimeInterval = 0
+
+    private var crossfadeSeconds: Int {
+        min(20, max(0, UserDefaults.standard.integer(forKey: "crossfade_seconds")))
+    }
 
     private init() {
         configureAudioSession()
@@ -90,6 +99,7 @@ final class LocalPlaybackController: ObservableObject {
     }
 
     func playTracks(_ tracks: [LocalTrack], shuffle: Bool, startIndex: Int = 0) async throws {
+        cancelCrossfade()
         let ordered = shuffle ? tracks.shuffled() : tracks
         let index = min(max(0, startIndex), max(0, ordered.count - 1))
         state = LocalPlaybackState(
@@ -105,13 +115,26 @@ final class LocalPlaybackController: ObservableObject {
     }
 
     func togglePlayPause() {
-        guard let player else { return }
-        if state.isPlaying {
-            player.pause()
-            state.isPlaying = false
+        if crossfading {
+            let playing = incomingPlayer?.rate ?? 0 > 0
+            if playing {
+                incomingPlayer?.pause()
+                player?.pause()
+                state.isPlaying = false
+            } else {
+                incomingPlayer?.play()
+                player?.play()
+                state.isPlaying = true
+            }
         } else {
-            player.play()
-            state.isPlaying = true
+            guard let player else { return }
+            if state.isPlaying {
+                player.pause()
+                state.isPlaying = false
+            } else {
+                player.play()
+                state.isPlaying = true
+            }
         }
         if let track = state.current { updateNowPlayingInfo(track: track) }
         reportPlaybackState(force: true)
@@ -120,26 +143,31 @@ final class LocalPlaybackController: ObservableObject {
 
     func skipNext() {
         guard !state.tracks.isEmpty else { return }
+        cancelCrossfade()
         state.index = (state.index + 1) % state.tracks.count
         Task { try? await playCurrent() }
     }
 
     func playAtIndex(_ index: Int) {
         guard state.tracks.indices.contains(index) else { return }
+        cancelCrossfade()
         state.index = index
         Task { try? await playCurrent() }
     }
 
     func skipPrevious() {
         guard !state.tracks.isEmpty else { return }
+        cancelCrossfade()
         state.index = state.index > 0 ? state.index - 1 : state.tracks.count - 1
         Task { try? await playCurrent() }
     }
 
     func seek(toSeconds seconds: Double) {
-        guard let player, seconds.isFinite, seconds >= 0 else { return }
+        guard seconds.isFinite, seconds >= 0 else { return }
         let target = CMTime(seconds: seconds, preferredTimescale: 600)
-        player.seek(to: target) { [weak self] _ in
+        let active = crossfading ? incomingPlayer : player
+        guard let active else { return }
+        active.seek(to: target) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.state.positionMs = Int64(seconds * 1000)
@@ -149,6 +177,7 @@ final class LocalPlaybackController: ObservableObject {
     }
 
     func stopPlayback() {
+        cancelCrossfade()
         player?.pause()
         removeTimeObserver()
         removeEndObserver()
@@ -163,11 +192,10 @@ final class LocalPlaybackController: ObservableObject {
         notifyWidgetSession()
     }
 
-    /// Auto-advance when the current item finishes, mirroring ExoPlayer's queue behavior on Android.
     private func handleTrackEnded() {
         guard state.active, !state.tracks.isEmpty else { return }
+        if crossfading { return }
         if state.index >= state.tracks.count - 1 {
-            // Reached the end of the queue: stop cleanly.
             stopPlayback()
         } else {
             state.index += 1
@@ -193,6 +221,7 @@ final class LocalPlaybackController: ObservableObject {
 
     private func playCurrent() async throws {
         guard let track = state.current else { return }
+        cancelCrossfade()
         removeTimeObserver()
         removeEndObserver()
         configureAudioSession()
@@ -204,7 +233,8 @@ final class LocalPlaybackController: ObservableObject {
         } else {
             player?.replaceCurrentItem(with: item)
         }
-        observeEnd(for: item)
+        player?.volume = 1
+        observeEnd(for: item, player: player)
         player?.play()
         state.isPlaying = true
         setRemoteCommandsEnabled(true)
@@ -215,6 +245,90 @@ final class LocalPlaybackController: ObservableObject {
             DeviceAnalyticsReporter.reportPlay(repository: analyticsRepository, track: track)
         }
         notifyWidgetSession()
+    }
+
+    private func startCrossfade(overlapSeconds: TimeInterval) {
+        guard !crossfading, crossfadeSeconds > 0 else { return }
+        guard state.index < state.tracks.count - 1 else { return }
+        let nextIndex = state.index + 1
+        let nextTrack = state.tracks[nextIndex]
+        crossfading = true
+        crossfadeDuration = max(0.05, overlapSeconds)
+        crossfadeStartedAt = Date()
+
+        let item = AVPlayerItem(url: nextTrack.playbackURL)
+        let incoming = AVPlayer(playerItem: item)
+        incoming.volume = 0
+        incoming.play()
+        incomingPlayer = incoming
+        state.index = nextIndex
+        state.isPlaying = true
+        updateNowPlayingInfo(track: nextTrack)
+        loadArtwork(for: nextTrack)
+        if let analyticsRepository {
+            DeviceAnalyticsReporter.reportPlay(repository: analyticsRepository, track: nextTrack)
+        }
+
+        crossfadeTimer?.invalidate()
+        crossfadeTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] timer in
+            Task { @MainActor [weak self] in
+                guard let self, self.crossfading,
+                      let started = self.crossfadeStartedAt,
+                      let outgoing = self.player,
+                      let incoming = self.incomingPlayer else {
+                    timer.invalidate()
+                    return
+                }
+                let elapsed = Date().timeIntervalSince(started)
+                let progress = min(1, elapsed / self.crossfadeDuration)
+                outgoing.volume = Float(1 - progress)
+                incoming.volume = Float(progress)
+                if progress >= 1 {
+                    timer.invalidate()
+                    self.completeCrossfade()
+                }
+            }
+        }
+    }
+
+    private func completeCrossfade() {
+        crossfadeTimer?.invalidate()
+        crossfadeTimer = nil
+        crossfadeStartedAt = nil
+        guard crossfading else { return }
+        // Tear down the periodic time observer while `self.player` still references the
+        // outgoing player that created it — AVPlayer.removeTimeObserver must be called on
+        // the same player that added the token, otherwise it's invalid and can crash.
+        removeTimeObserver()
+        let outgoing = player
+        outgoing?.pause()
+        outgoing?.replaceCurrentItem(with: nil)
+        if let incoming = incomingPlayer {
+            player = incoming
+            incomingPlayer = nil
+            if let item = player?.currentItem {
+                observeEnd(for: item, player: player)
+            }
+        }
+        player?.volume = 1
+        crossfading = false
+        observeTime()
+        if let track = state.current {
+            updateNowPlayingInfo(track: track)
+            reportPlaybackState(force: true)
+        }
+        notifyWidgetSession()
+    }
+
+    private func cancelCrossfade() {
+        crossfadeTimer?.invalidate()
+        crossfadeTimer = nil
+        crossfadeStartedAt = nil
+        crossfading = false
+        player?.volume = 1
+        incomingPlayer?.pause()
+        incomingPlayer?.replaceCurrentItem(with: nil)
+        incomingPlayer = nil
     }
 
     private func loadArtwork(for track: LocalTrack) {
@@ -326,15 +440,29 @@ final class LocalPlaybackController: ObservableObject {
     private func observeTime() {
         guard let player else { return }
         timeObserver = player.addPeriodicTimeObserver(
-            forInterval: CMTime(seconds: 0.5, preferredTimescale: 600),
+            forInterval: CMTime(seconds: 0.1, preferredTimescale: 600),
             queue: .main
         ) { [weak self] time in
             Task { @MainActor [weak self] in
-                guard let self, let player = self.player else { return }
+                guard let self else { return }
+                let active = self.crossfading ? self.incomingPlayer : self.player
+                guard let active else { return }
                 let ms = Int64(time.seconds * 1000)
-                self.state.positionMs = ms
-                if let duration = player.currentItem?.duration.seconds, duration.isFinite {
+                if !self.crossfading {
+                    self.state.positionMs = ms
+                } else if let incoming = self.incomingPlayer {
+                    self.state.positionMs = Int64(incoming.currentTime().seconds * 1000)
+                }
+                if let duration = active.currentItem?.duration.seconds, duration.isFinite, duration > 0 {
                     self.state.durationMs = Int64(duration * 1000)
+                    if !self.crossfading,
+                       self.crossfadeSeconds > 0,
+                       self.state.index < self.state.tracks.count - 1 {
+                        let remaining = duration - time.seconds
+                        if remaining <= Double(self.crossfadeSeconds) {
+                            self.startCrossfade(overlapSeconds: min(Double(self.crossfadeSeconds), remaining))
+                        }
+                    }
                 }
                 if let track = self.state.current {
                     self.updateNowPlayingInfo(track: track)
@@ -366,7 +494,7 @@ final class LocalPlaybackController: ObservableObject {
         timeObserver = nil
     }
 
-    private func observeEnd(for item: AVPlayerItem) {
+    private func observeEnd(for item: AVPlayerItem, player: AVPlayer?) {
         endObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: item,

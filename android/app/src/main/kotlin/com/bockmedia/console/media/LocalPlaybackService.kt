@@ -5,6 +5,9 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
+import android.media.AudioManager
+import android.media.AudioFocusRequest
+import android.media.AudioAttributes as AndroidAudioAttributes
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -42,6 +45,27 @@ class LocalPlaybackService : MediaSessionService() {
     private var crossfadeStartedAtMs = 0L
     private var crossfadeDurationMs = 0L
     private var crossfadeTargetIndex = -1
+    private var audioManager: AudioManager? = null
+    private var audioFocusRequest: AudioFocusRequest? = null
+    private var resumeOnFocusGain = false
+    private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
+        when (change) {
+            AudioManager.AUDIOFOCUS_LOSS -> {
+                resumeOnFocusGain = false
+                pauseAllPlayers()
+            }
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+                resumeOnFocusGain = leadPlayer()?.isPlaying == true
+                pauseAllPlayers()
+            }
+            AudioManager.AUDIOFOCUS_GAIN -> {
+                if (resumeOnFocusGain) {
+                    resumeOnFocusGain = false
+                    playAllPlayers()
+                }
+            }
+        }
+    }
     private val crossfadeHandler = Handler(Looper.getMainLooper())
     private val progressHandler = Handler(Looper.getMainLooper())
     private val progressRunnable = object : Runnable {
@@ -97,11 +121,19 @@ class LocalPlaybackService : MediaSessionService() {
                         incomingPlayer?.pause()
                         player?.pause()
                     } else {
+                        requestAudioFocus()
                         incomingPlayer?.play()
                         player?.play()
                     }
                 } else {
-                    player?.let { if (it.isPlaying) it.pause() else it.play() }
+                    player?.let {
+                        if (it.isPlaying) {
+                            it.pause()
+                        } else {
+                            requestAudioFocus()
+                            it.play()
+                        }
+                    }
                 }
             }
             ACTION_NEXT -> skip(forward = true)
@@ -129,6 +161,7 @@ class LocalPlaybackService : MediaSessionService() {
         val items = urlList.mapIndexed { index, url -> mediaItemFor(index, url) }
         exo.setMediaItems(items, startIndex.coerceAtMost(items.lastIndex), 0)
         exo.volume = 1f
+        requestAudioFocus()
         exo.prepare()
         exo.play()
         reportPlayIfNeeded(startIndex.coerceAtMost(items.lastIndex))
@@ -168,42 +201,37 @@ class LocalPlaybackService : MediaSessionService() {
         crossfadeTargetIndex = nextIndex
         crossfadeDurationMs = overlapMs.coerceAtLeast(CROSSFADE_TICK_MS)
         crossfadeStartedAtMs = System.currentTimeMillis()
+        // Give the incoming player the FULL queue with absolute indices so that once
+        // it's promoted, currentMediaItemIndex still lines up with paths/titles/etc.
+        // and it keeps auto-advancing through the rest of the playlist.
         val incoming = buildSecondaryPlayer().also { incomingPlayer = it }
-        incoming.setMediaItem(mediaItemFor(nextIndex, urls[nextIndex]))
+        val items = urls.mapIndexed { i, url -> mediaItemFor(i, url) }
+        incoming.setMediaItems(items, nextIndex, 0)
         incoming.volume = 0f
         incoming.prepare()
         incoming.play()
         reportPlayIfNeeded(nextIndex)
         crossfadeHandler.removeCallbacks(crossfadeVolumeRunnable)
         crossfadeHandler.post(crossfadeVolumeRunnable)
-        syncState(incoming)
         startForeground(NOTIFICATION_ID, buildNotification())
     }
 
     private fun completeCrossfade() {
         crossfadeHandler.removeCallbacks(crossfadeVolumeRunnable)
-        val outgoing = player
         val incoming = incomingPlayer ?: run {
             crossfading = false
             crossfadeTargetIndex = -1
             return
         }
-        val newIndex = crossfadeTargetIndex.coerceAtLeast(0)
+        val outgoing = player
         crossfadeTargetIndex = -1
-        outgoing?.release()
         player = incoming
         incomingPlayer = null
         crossfading = false
         incoming.volume = 1f
-        if (newIndex in urls.indices) {
-            val remaining = urls.drop(newIndex).mapIndexed { offset, url ->
-                mediaItemFor(newIndex + offset, url)
-            }
-            val position = incoming.currentPosition.coerceAtLeast(0)
-            incoming.setMediaItems(remaining, 0, position)
-        }
+        outgoing?.release()
         attachMediaSession(incoming)
-        reportPlayIfNeeded(newIndex)
+        reportPlayIfNeeded(incoming.currentMediaItemIndex)
         syncState(incoming)
         startForeground(NOTIFICATION_ID, buildNotification())
     }
@@ -231,6 +259,7 @@ class LocalPlaybackService : MediaSessionService() {
 
     private fun stopPlayback() {
         cancelCrossfade(releaseIncoming = true)
+        abandonAudioFocus()
         DeviceAnalyticsReporter.clearPlayback(this)
         stopProgressUpdates()
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -271,14 +300,11 @@ class LocalPlaybackService : MediaSessionService() {
     }
 
     private fun buildSecondaryPlayer(): ExoPlayer {
+        // Uses the same listener as the primary player. Its callbacks are no-ops while
+        // crossfading (guarded below), and once promoted it drives transitions,
+        // notifications, and the next crossfade just like the original player.
         val exo = buildExoPlayer()
-        exo.addListener(object : Player.Listener {
-            override fun onPlaybackStateChanged(playbackState: Int) {
-                if (playbackState == Player.STATE_ENDED && crossfading) {
-                    completeCrossfade()
-                }
-            }
-        })
+        exo.addListener(primaryPlayerListener(exo))
         return exo
     }
 
@@ -294,9 +320,59 @@ class LocalPlaybackService : MediaSessionService() {
                     .setUsage(C.USAGE_MEDIA)
                     .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
                     .build(),
-                true,
+                // Focus is managed once at the service level (see requestAudioFocus). Letting
+                // each ExoPlayer grab focus would make the incoming player steal it from the
+                // outgoing one mid-crossfade, pausing it — so the two tracks never truly overlap.
+                false,
             )
             .build()
+    }
+
+    private fun requestAudioFocus() {
+        val am = audioManager
+            ?: (getSystemService(AudioManager::class.java)).also { audioManager = it }
+            ?: return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val attrs = AndroidAudioAttributes.Builder()
+                .setUsage(AndroidAudioAttributes.USAGE_MEDIA)
+                .setContentType(AndroidAudioAttributes.CONTENT_TYPE_MUSIC)
+                .build()
+            val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                .setAudioAttributes(attrs)
+                .setOnAudioFocusChangeListener(focusListener)
+                .build()
+            audioFocusRequest = req
+            am.requestAudioFocus(req)
+        } else {
+            @Suppress("DEPRECATION")
+            am.requestAudioFocus(
+                focusListener,
+                AudioManager.STREAM_MUSIC,
+                AudioManager.AUDIOFOCUS_GAIN,
+            )
+        }
+    }
+
+    private fun abandonAudioFocus() {
+        val am = audioManager ?: return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            audioFocusRequest?.let { am.abandonAudioFocusRequest(it) }
+            audioFocusRequest = null
+        } else {
+            @Suppress("DEPRECATION")
+            am.abandonAudioFocus(focusListener)
+        }
+        resumeOnFocusGain = false
+    }
+
+    private fun pauseAllPlayers() {
+        player?.pause()
+        incomingPlayer?.pause()
+    }
+
+    private fun playAllPlayers() {
+        player?.play()
+        if (crossfading) incomingPlayer?.play()
     }
 
     private fun primaryPlayerListener(exo: ExoPlayer) = object : Player.Listener {
@@ -443,6 +519,7 @@ class LocalPlaybackService : MediaSessionService() {
 
     override fun onDestroy() {
         cancelCrossfade(releaseIncoming = true)
+        abandonAudioFocus()
         stopProgressUpdates()
         player?.release()
         mediaSession?.release()

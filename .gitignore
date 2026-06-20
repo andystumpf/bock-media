@@ -7,6 +7,7 @@
 
 # iOS local build config (copy from Config.xcconfig.example)
 ios/Config.xcconfig
+ios/build/
 
 # Runtime state (auto-generated, not committed)
 *.bak

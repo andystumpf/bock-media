@@ -4544,6 +4544,9 @@ def client_report():
             'artist': artist,
             'album': album,
             'filepath': filepath,
+            'playlist': (body.get('playlist') or '').strip() or None,
+            'playlistId': (body.get('playlistId') or body.get('playlist_id') or '').strip() or None,
+            'sourceLabel': (body.get('sourceLabel') or body.get('source_label') or '').strip() or None,
             'playing': True,
             'paused': False,
             'offset_ms': 0,
@@ -5052,6 +5055,9 @@ def _write_client_np_state(device_id, body, platform=None):
     artist = (body.get('artist') or '').strip() or None
     album = (body.get('album') or '').strip() or None
     filepath = (body.get('filepath') or body.get('path') or '').strip() or None
+    playlist = (body.get('playlist') or '').strip() or None
+    playlist_id = (body.get('playlistId') or body.get('playlist_id') or '').strip() or None
+    source_label = (body.get('sourceLabel') or body.get('source_label') or '').strip() or None
     if not track and not filepath:
         write_np_state_for_device(device_id, None)
         return
@@ -5064,6 +5070,9 @@ def _write_client_np_state(device_id, body, platform=None):
         'artist': artist,
         'album': album,
         'filepath': filepath,
+        'playlist': playlist,
+        'playlistId': playlist_id,
+        'sourceLabel': source_label,
         'playing': bool(playing),
         'paused': paused,
         'offset_ms': int(body.get('offset_ms') or body.get('offsetMs') or 0),

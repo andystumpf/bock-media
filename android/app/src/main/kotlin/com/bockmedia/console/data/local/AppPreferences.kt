@@ -5,6 +5,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
@@ -24,10 +25,12 @@ class AppPreferences(private val context: Context) {
     private val keyRememberMe = booleanPreferencesKey("remember_me")
     private val keyHasConnected = booleanPreferencesKey("has_connected")
     private val keyDownloadWifiOnly = booleanPreferencesKey("download_wifi_only")
+    private val keyCrossfadeSeconds = intPreferencesKey("crossfade_seconds")
     private val keyLastEndpoint = stringPreferencesKey("last_good_endpoint")
 
     val rememberMe: Flow<Boolean> = context.dataStore.data.map { it[keyRememberMe] != false }
     val downloadWifiOnly: Flow<Boolean> = context.dataStore.data.map { it[keyDownloadWifiOnly] == true }
+    val crossfadeSeconds: Flow<Int> = context.dataStore.data.map { (it[keyCrossfadeSeconds] ?: 0).coerceIn(0, 20) }
 
     val localServerUrl: Flow<String?> = context.dataStore.data.map { it[keyLocalUrl] }
     val externalServerUrl: Flow<String?> = context.dataStore.data.map { it[keyExternalUrl] }
@@ -80,6 +83,14 @@ class AppPreferences(private val context: Context) {
         context.dataStore.data.first()[keyRememberMe] != false
 
     suspend fun isDownloadWifiOnlySync(): Boolean = downloadWifiOnly.first()
+
+    suspend fun getCrossfadeSecondsSync(): Int = crossfadeSeconds.first()
+
+    suspend fun setCrossfadeSeconds(seconds: Int) {
+        context.dataStore.edit { prefs ->
+            prefs[keyCrossfadeSeconds] = seconds.coerceIn(0, 20)
+        }
+    }
 
     suspend fun setDownloadWifiOnly(wifiOnly: Boolean) {
         context.dataStore.edit { prefs ->

@@ -33,4 +33,9 @@ extension AppPreferences {
         get { UserDefaults.standard.bool(forKey: "download_wifi_only") }
         set { UserDefaults.standard.set(newValue, forKey: "download_wifi_only") }
     }
+
+    var crossfadeSeconds: Int {
+        get { min(20, max(0, UserDefaults.standard.integer(forKey: "crossfade_seconds"))) }
+        set { UserDefaults.standard.set(min(20, max(0, newValue)), forKey: "crossfade_seconds") }
+    }
 }
