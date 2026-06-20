@@ -4057,6 +4057,170 @@ def device_policy(device_id):
     return jsonify({'deviceId': key, **_public_policy(policies[key])})
 
 
+# ── Household requests — shared "Up Next" per room ───────────────────────────
+# Anyone in the house adds a track to a room's up-next from their phone. In a
+# kid-safe room with requireApproval, requests wait as "queued" until a parent
+# approves; otherwise they're "approved" immediately. Approved requests splice
+# into the room's playback at the next track boundary.
+
+REQUESTS_PATH = os.path.join(DATA_DIR, 'requests.json')
+_REQUESTS_LOCK = threading.Lock()
+
+
+def _load_requests():
+    try:
+        with open(REQUESTS_PATH) as f:
+            data = json.load(f)
+        if isinstance(data, dict) and isinstance(data.get('rooms'), dict):
+            return data
+    except Exception:
+        pass
+    return {'rooms': {}}
+
+
+def _save_requests(data):
+    _atomic_json_write(REQUESTS_PATH, data)
+
+
+def _room_request_list(key, data=None):
+    data = data or _load_requests()
+    return ((data.get('rooms', {}).get(key)) or {}).get('queue', [])
+
+
+def _request_public(r, household=None):
+    return {
+        'id': r.get('id'),
+        'path': r.get('path'),
+        'track': r.get('track'),
+        'artist': r.get('artist'),
+        'byMemberId': r.get('byMemberId'),
+        'byMemberName': _member_label(r.get('byMemberId'), household),
+        'status': r.get('status'),
+        'ts': r.get('ts'),
+    }
+
+
+def _room_upnext_public(key, household=None):
+    """Pending/approved requests for a room (for now-playing UI)."""
+    h = household or _load_household()
+    return [_request_public(r, h) for r in _room_request_list(key)
+            if r.get('status') in ('queued', 'approved')]
+
+
+def _consume_next_request(room_key):
+    """Pop (FIFO) the next approved request for a room. Returns its path or None."""
+    if not room_key:
+        return None
+    with _REQUESTS_LOCK:
+        data = _load_requests()
+        room = data.get('rooms', {}).get(room_key)
+        if not room:
+            return None
+        for r in room.get('queue', []):
+            if r.get('status') == 'approved':
+                r['status'] = 'done'
+                _save_requests(data)
+                return r.get('path')
+    return None
+
+
+@app.route('/api/rooms/<device_id>/queue')
+def room_queue(device_id):
+    key = _room_key(device_id)
+    h = _load_household()
+    return jsonify({
+        'deviceId': key,
+        'deviceName': _device_label(key),
+        'queue': [_request_public(r, h) for r in _room_request_list(key)],
+    })
+
+
+@app.route('/api/rooms/<device_id>/requests', methods=['POST'])
+def room_add_request(device_id):
+    body = request.get_json(silent=True) or {}
+    path = (body.get('path') or '').strip()
+    if not path:
+        return jsonify({'error': 'path required'}), 400
+    member_id = resolve_play_member(device_id=device_id,
+                                    client_id=(body.get('clientId') or '').strip(),
+                                    explicit_member=(body.get('memberId') or '').strip())
+    key = _room_key(device_id)
+    policy = _policy_for(device_id)
+    if policy.get('safe') and policy.get('allowExplicit') is False and _is_explicit_path(path):
+        return jsonify({'error': 'explicit_blocked', 'code': 'explicit_blocked'}), 403
+    track = (body.get('track') or '').strip()
+    artist = (body.get('artist') or '').strip()
+    if not track:
+        title, art, _album, _ = track_metadata_fast(path)
+        track, artist = title, (artist or art)
+    needs_approval = bool(policy.get('safe') and policy.get('requireApproval'))
+    item = {
+        'id': 'rq-' + uuid.uuid4().hex[:10],
+        'path': path,
+        'track': track,
+        'artist': artist or None,
+        'byMemberId': member_id or None,
+        'status': 'queued' if needs_approval else 'approved',
+        'ts': time.time(),
+    }
+    with _REQUESTS_LOCK:
+        data = _load_requests()
+        room = data['rooms'].setdefault(key, {'queue': []})
+        room.setdefault('queue', []).append(item)
+        _save_requests(data)
+    return jsonify(_request_public(item)), 201
+
+
+@app.route('/api/rooms/<device_id>/requests/<rid>/approve', methods=['POST'])
+def room_approve_request(device_id, rid):
+    body = request.get_json(silent=True) or {}
+    if not _parent_pin_ok(body.get('memberId'), str(body.get('pin') or '')):
+        return jsonify({'error': 'parent_pin_required'}), 403
+    key = _room_key(device_id)
+    with _REQUESTS_LOCK:
+        data = _load_requests()
+        for r in _room_request_list(key, data):
+            if r.get('id') == rid:
+                r['status'] = 'approved'
+                _save_requests(data)
+                return jsonify(_request_public(r))
+    return jsonify({'error': 'not_found'}), 404
+
+
+@app.route('/api/rooms/<device_id>/requests/<rid>', methods=['DELETE'])
+def room_delete_request(device_id, rid):
+    key = _room_key(device_id)
+    with _REQUESTS_LOCK:
+        data = _load_requests()
+        room = data.get('rooms', {}).get(key) or {}
+        q = room.get('queue', [])
+        new_q = [r for r in q if r.get('id') != rid]
+        if len(new_q) == len(q):
+            return jsonify({'error': 'not_found'}), 404
+        room['queue'] = new_q
+        _save_requests(data)
+    return jsonify({'ok': True})
+
+
+@app.route('/api/rooms/<device_id>/requests/reorder', methods=['POST'])
+def room_reorder_requests(device_id):
+    body = request.get_json(silent=True) or {}
+    order = body.get('order') or []
+    if not isinstance(order, list):
+        return jsonify({'error': 'order must be a list'}), 400
+    key = _room_key(device_id)
+    with _REQUESTS_LOCK:
+        data = _load_requests()
+        room = data.get('rooms', {}).get(key) or {}
+        q = room.get('queue', [])
+        rank = {rid: i for i, rid in enumerate(order)}
+        q.sort(key=lambda r: rank.get(r.get('id'), len(order)))
+        room['queue'] = q
+        data.setdefault('rooms', {})[key] = room
+        _save_requests(data)
+    return jsonify({'ok': True, 'queue': [_request_public(r) for r in q]})
+
+
 # ── API: Client analytics (Android / iOS) ────────────────────────────────────
 
 @app.route('/api/clients/report', methods=['POST'])
@@ -6962,6 +7126,7 @@ def nowplaying_devices():
             'context': src.get('context'),
             'sourceLabel': src.get('sourceLabel'),
             'platform': platform,
+            'upNext': _room_upnext_public(_room_key(did)),
         })
     # Collapse rows that resolve to the same physical Echo (a rotated deviceId
     # can yield two rows for one speaker). Keep the most recently active.
@@ -7929,6 +8094,14 @@ def alexa_skill():
             return alexa_empty()
         if stop_after_idx is not None and next_idx > int(stop_after_idx):
             return alexa_empty()
+        # Shared up-next: a household member's approved request plays next,
+        # spliced into the queue so the original playlist resumes after it.
+        req_path = _consume_next_request(_room_key(_np_device_id()))
+        if req_path and os.path.isfile(req_path):
+            new_tracks = (tracks[:next_idx] + [req_path] + tracks[next_idx:])[:_QUEUE_TRACK_LIMIT]
+            req_token = encode_token({**data, 'tracks': new_tracks, 'idx': next_idx})
+            return _np_play_path(req_path, req_token,
+                                 previous_token=token, play_behavior='ENQUEUE')
         if next_idx >= len(tracks):
             if data.get('loop'):
                 next_idx = 0
