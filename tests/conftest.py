@@ -75,6 +75,11 @@ def isolated_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(server, 'HEALTH_STATE_PATH', str(state_dir / 'health_state.json'))
     monkeypatch.setattr(server, 'SMART_PLAYLISTS_PATH', str(state_dir / 'smart_playlists.json'))
     monkeypatch.setattr(server, 'LOG_PATH', str(state_dir / 'server.log'))
+    monkeypatch.setattr(server, 'HOUSEHOLD_PATH', str(state_dir / 'household.json'))
+    monkeypatch.setattr(server, 'ROOM_POLICY_PATH', str(state_dir / 'room_policies.json'))
+    monkeypatch.setattr(server, 'REQUESTS_PATH', str(state_dir / 'requests.json'))
+    monkeypatch.setattr(server, 'PLAYLIST_META_PATH', str(state_dir / 'playlist_meta.json'))
+    monkeypatch.setattr(server, 'MESSAGES_PATH', str(state_dir / 'messages.jsonl'))
     return tmp_path
 
 
