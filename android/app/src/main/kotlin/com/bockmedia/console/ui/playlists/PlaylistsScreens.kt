@@ -426,7 +426,7 @@ fun PlaylistDetailScreen(
                             }
                         }
                     }
-                    items(tracks.size, key = { tracks[it].path ?: "t-$it-${tracks[it].title}" }) { idx ->
+                    items(tracks.size, key = { idx -> "pl-$playlistId-row-$idx" }) { idx ->
                         val t = tracks[idx]
                         val trackNum = idx + 1
                         SpotifyTrackRow(

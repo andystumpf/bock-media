@@ -9,6 +9,7 @@ import com.bockmedia.console.data.api.httpErrorMessage
 import com.bockmedia.console.data.local.AppPreferences
 import com.bockmedia.console.domain.model.LocalTrack
 import com.bockmedia.console.domain.model.PlayTarget
+import com.bockmedia.console.domain.model.toLocalPlayContext
 import com.bockmedia.console.local.OfflineDownloadStore
 import com.bockmedia.console.local.OfflineCollectionManifest
 import com.bockmedia.console.local.downloadId
@@ -26,6 +27,8 @@ data class LocalPlaybackState(
     val durationMs: Long = 0,
     val shuffle: Boolean = false,
     val sourceLabel: String? = null,
+    val playlist: String? = null,
+    val playlistId: String? = null,
     val loading: Boolean = false,
     val error: String? = null,
 ) {
@@ -54,7 +57,15 @@ object LocalPlaybackController {
         runCatching {
             val tracks = resolver.resolve(target, shuffle)
             if (tracks.isEmpty()) error("No playable tracks found")
-            playTracks(context, tracks, shuffle = shuffle, sourceLabel = target.label)
+            val ctx = target.toLocalPlayContext()
+            playTracks(
+                context,
+                tracks,
+                shuffle = shuffle,
+                sourceLabel = ctx.sourceLabel,
+                playlist = ctx.playlist,
+                playlistId = ctx.playlistId,
+            )
         }.onFailure { e ->
             update { it.copy(loading = false, error = httpErrorMessage(e, "Playback failed")) }
         }
@@ -71,7 +82,15 @@ object LocalPlaybackController {
         runCatching {
             val tracks = store.localTracksForManifest(manifest)
             if (tracks.isEmpty()) error("No offline audio files found on this device")
-            playTracks(context, tracks, startIndex = startIndex, shuffle = shuffle, sourceLabel = manifest.title)
+            playTracks(
+                context,
+                tracks,
+                startIndex = startIndex,
+                shuffle = shuffle,
+                sourceLabel = "Playlist · ${manifest.title}",
+                playlist = manifest.title,
+                playlistId = manifest.sourcePlaylistId ?: manifest.legacyPlaylistId,
+            )
         }.onFailure { e ->
             update { it.copy(loading = false, error = e.message ?: "Offline playback failed") }
         }
@@ -83,6 +102,8 @@ object LocalPlaybackController {
         startIndex: Int = 0,
         shuffle: Boolean = false,
         sourceLabel: String? = _state.value.sourceLabel,
+        playlist: String? = _state.value.playlist,
+        playlistId: String? = _state.value.playlistId,
     ) {
         if (tracks.isEmpty()) return
         // Keep canonical order; ExoPlayer's shuffle mode handles randomized traversal so the
@@ -102,11 +123,14 @@ object LocalPlaybackController {
                 index = resolvedStart.coerceIn(0, ordered.lastIndex),
                 shuffle = shuffle,
                 sourceLabel = sourceLabel,
+                playlist = playlist,
+                playlistId = playlistId,
                 loading = false,
                 error = null,
                 isPlaying = true,
             )
         }
+        val crossfadeMs = BockMediaApp.get(context).preferences.getCrossfadeSecondsSync() * 1000L
         val intent = Intent(context, LocalPlaybackService::class.java).apply {
             action = LocalPlaybackService.ACTION_PLAY
             putStringArrayListExtra(LocalPlaybackService.EXTRA_URLS, ArrayList(urls))
@@ -116,6 +140,7 @@ object LocalPlaybackController {
             putStringArrayListExtra(LocalPlaybackService.EXTRA_PATHS, ArrayList(ordered.map { it.path }))
             putExtra(LocalPlaybackService.EXTRA_START_INDEX, resolvedStart.coerceIn(0, ordered.lastIndex))
             putExtra(LocalPlaybackService.EXTRA_SHUFFLE, shuffle)
+            putExtra(LocalPlaybackService.EXTRA_CROSSFADE_MS, crossfadeMs)
         }
         context.startForegroundService(intent)
     }
@@ -145,6 +170,15 @@ object LocalPlaybackController {
             action = LocalPlaybackService.ACTION_STOP
         })
         _state.value = LocalPlaybackState()
+    }
+
+    fun seekTo(context: Context, positionMs: Long) {
+        val pos = positionMs.coerceAtLeast(0)
+        update { it.copy(positionMs = pos) }
+        context.startService(Intent(context, LocalPlaybackService::class.java).apply {
+            action = LocalPlaybackService.ACTION_SEEK
+            putExtra(LocalPlaybackService.EXTRA_POSITION_MS, pos)
+        })
     }
 
     suspend fun seekToQueueIndex(context: Context, index: Int) {

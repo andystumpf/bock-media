@@ -2,6 +2,8 @@ package com.bockmedia.console.domain.model
 
 import com.bockmedia.console.data.api.dto.AlexaDevice
 import com.bockmedia.console.data.api.dto.NowPlayingDeviceItem
+import com.bockmedia.console.media.LOCAL_PHONE_DEVICE_ID
+import com.bockmedia.console.media.isLocalPhoneDevice
 
 /** Remembers which speaker the user last started playback on. */
 object PlaybackFocus {
@@ -22,6 +24,13 @@ object PlaybackFocus {
         private set
 
     fun notePlayStarted(deviceValue: String, deviceLabel: String?) {
+        if (deviceValue == LOCAL_PHONE_DEVICE_ID || isLocalPhoneDevice(deviceValue)) {
+            focusedDeviceId = LOCAL_PHONE_DEVICE_ID
+            pendingDeviceValue = null
+            pendingDeviceLabel = null
+            generation++
+            return
+        }
         pendingDeviceValue = deviceValue.trim().takeIf { it.isNotEmpty() }
         pendingDeviceLabel = deviceLabel?.trim()?.takeIf { it.isNotEmpty() }
         generation++
@@ -56,6 +65,10 @@ object PlaybackFocus {
     }
 
     fun focusedIndex(items: List<NowPlayingDeviceItem>): Int {
+        if (focusedDeviceId == LOCAL_PHONE_DEVICE_ID) {
+            val idx = items.indexOfFirst { isLocalPhoneDevice(it.deviceId) }
+            if (idx >= 0) return idx
+        }
         val id = focusedDeviceId ?: return 0
         return items.indexOfFirst { it.deviceId == id }.coerceAtLeast(0)
     }

@@ -6,6 +6,7 @@ import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.Analytics
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LibraryMusic
@@ -36,6 +37,7 @@ sealed class BockRoute(val route: String, val title: String, val icon: ImageVect
     data object RecentRequests : BockRoute("recent", "Voice log", Icons.Default.RecordVoiceOver)
     data object Rooms : BockRoute("rooms", "Rooms", Icons.Default.Home)
     data object Devices : BockRoute("devices", "Alexa Devices", Icons.Default.Speaker)
+    data object Family : BockRoute("family", "Family", Icons.Default.Group)
     data object Analytics : BockRoute("analytics", "Analytics", Icons.Default.Analytics)
     data object Settings : BockRoute("settings", "Settings", Icons.Default.Settings)
     data object About : BockRoute("about", "About", Icons.Default.Info)
@@ -46,7 +48,7 @@ sealed class BockRoute(val route: String, val title: String, val icon: ImageVect
         }
 
         val accountMenuRoutes: List<BockRoute> by lazy {
-            listOf(Settings, Downloads, RecentRequests, Rooms, Devices, Analytics, About)
+            listOf(Settings, Downloads, RecentRequests, Rooms, Devices, Family, Analytics, About)
         }
 
         val allRoutes: List<BockRoute> by lazy {

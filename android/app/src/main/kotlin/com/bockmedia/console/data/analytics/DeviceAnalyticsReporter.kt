@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import com.bockmedia.console.BockMediaApp
 import com.bockmedia.console.domain.model.LocalTrack
+import com.bockmedia.console.media.LocalPlaybackController
 import com.bockmedia.console.local.ClientIdStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -23,11 +24,15 @@ object DeviceAnalyticsReporter {
     }
 
     fun reportPlay(context: Context, track: LocalTrack) {
+        val ctx = LocalPlaybackController.state.value
         post(context, "play") {
             put("track", track.title)
             track.artist?.let { put("artist", it) }
             track.album?.let { put("album", it) }
             put("filepath", track.path)
+            ctx.playlist?.let { put("playlist", it) }
+            ctx.playlistId?.let { put("playlistId", it) }
+            ctx.sourceLabel?.let { put("sourceLabel", it) }
         }
         reportPlayback(context, track, playing = true, offsetMs = 0, durationMs = 0, force = true)
     }
@@ -43,6 +48,7 @@ object DeviceAnalyticsReporter {
         val now = System.currentTimeMillis()
         if (!force && now - lastPlaybackReportMs < PLAYBACK_THROTTLE_MS) return
         lastPlaybackReportMs = now
+        val ctx = LocalPlaybackController.state.value
         post(context, "playback") {
             put("track", track.title)
             track.artist?.let { put("artist", it) }
@@ -52,6 +58,9 @@ object DeviceAnalyticsReporter {
             put("paused", !playing)
             put("offset_ms", offsetMs)
             put("duration_ms", durationMs)
+            ctx.playlist?.let { put("playlist", it) }
+            ctx.playlistId?.let { put("playlistId", it) }
+            ctx.sourceLabel?.let { put("sourceLabel", it) }
         }
     }
 

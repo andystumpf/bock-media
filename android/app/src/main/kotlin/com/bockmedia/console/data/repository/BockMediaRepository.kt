@@ -359,8 +359,58 @@ class BockMediaRepository(
     suspend fun alexaRemoteStatus(probe: Boolean = false) =
         api().alexaRemoteStatus(probe = if (probe) "1" else null)
     suspend fun automations() = api().automations()
-    suspend fun analytics(from: String? = null, to: String? = null, deviceId: String? = null) =
-        api().analytics(from, to, deviceId)
+    suspend fun analytics(
+        from: String? = null,
+        to: String? = null,
+        deviceId: String? = null,
+        member: String? = null,
+        platform: String? = null,
+    ) = api().analytics(from, to, deviceId, member, platform)
+
+    // ── Household / Family ──────────────────────────────────────────────────
+    suspend fun household() = api().household()
+
+    suspend fun createMember(name: String, role: String) =
+        api().createMember(buildJsonObject {
+            put("name", name)
+            put("role", role)
+        })
+
+    suspend fun updateMember(id: String, role: String) =
+        api().updateMember(id, buildJsonObject { put("role", role) })
+
+    suspend fun deleteMember(id: String) = api().deleteMember(id)
+
+    suspend fun setMemberPin(id: String, pin: String, currentPin: String?) =
+        api().setMemberPin(id, buildJsonObject {
+            put("pin", pin)
+            if (!currentPin.isNullOrBlank()) put("currentPin", currentPin)
+        })
+
+    suspend fun setDeviceOwner(deviceId: String, memberId: String?) =
+        if (memberId.isNullOrBlank()) {
+            api().clearDeviceOwner(deviceId)
+        } else {
+            api().setDeviceOwner(deviceId, buildJsonObject { put("memberId", memberId) })
+        }
+
+    suspend fun roomPolicy(deviceId: String) = api().roomPolicy(deviceId)
+
+    suspend fun setRoomPolicy(deviceId: String, body: JsonObject) =
+        api().setRoomPolicy(deviceId, body)
+
+    suspend fun householdAnalytics() = api().householdAnalytics()
+
+    suspend fun messages(member: String?) = api().messages(member)
+
+    suspend fun sendMessage(fromMemberId: String?, toMemberId: String?, text: String) =
+        api().sendMessage(buildJsonObject {
+            put("text", text)
+            put("clientId", clientIdProvider())
+            put("scope", if (!toMemberId.isNullOrBlank()) "direct" else "household")
+            if (!fromMemberId.isNullOrBlank()) put("fromMemberId", fromMemberId)
+            if (!toMemberId.isNullOrBlank()) put("toMemberId", toMemberId)
+        })
 
     fun clientDeviceId(): String {
         val cid = clientIdProvider().trim().lowercase()

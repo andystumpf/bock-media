@@ -58,6 +58,13 @@ struct PlaylistDetailView: View {
     @State private var loadError: String?
     private let pageSize = 100
 
+    /// Stable, unique identity for each row. `key` = "offset-trackId": the trackId keeps
+    /// identity tied to content (so sort/filter/pagination reuse views correctly) and the
+    /// offset prefix keeps keys unique when duplicate paths share the same trackId.
+    private var indexedTracks: [(key: String, index: Int, track: PlaylistTrack)] {
+        tracks.enumerated().map { (key: "\($0.offset)-\($0.element.id)", index: $0.offset, track: $0.element) }
+    }
+
     var body: some View {
         Group {
             if loading && tracks.isEmpty {
@@ -73,8 +80,12 @@ struct PlaylistDetailView: View {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         playlistHeader
                         filterSortBar
-                        ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
-                            trackRow(index: index + 1, track: track)
+                        // Key combines the track's stable id with its position: the id keeps
+                        // SwiftUI identity tied to content across sort/filter/pagination, while
+                        // the offset prefix guarantees uniqueness even when a playlist contains
+                        // duplicate paths (which share an id and would otherwise crash ForEach).
+                        ForEach(indexedTracks, id: \.key) { item in
+                            trackRow(index: item.index + 1, track: item.track)
                         }
                         if loadingMore {
                             HStack { Spacer(); ProgressView(); Spacer() }

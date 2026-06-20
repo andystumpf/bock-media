@@ -45,6 +45,23 @@ struct SettingsView: View {
                     set: { appState.preferences.downloadWifiOnly = $0 }
                 ))
             }
+            Section("This Phone playback") {
+                let seconds = appState.preferences.crossfadeSeconds
+                VStack(alignment: .leading, spacing: 8) {
+                    LabeledContent("Crossfade", value: seconds == 0 ? "Off" : "\(seconds) s")
+                    Text(seconds == 0 ? "Hard cut between songs" : "Overlap before each track ends")
+                        .font(.caption)
+                        .foregroundStyle(BockColors.muted)
+                    Slider(
+                        value: Binding(
+                            get: { Double(appState.preferences.crossfadeSeconds) },
+                            set: { appState.preferences.crossfadeSeconds = Int($0.rounded()) }
+                        ),
+                        in: 0...20,
+                        step: 1
+                    )
+                }
+            }
             Section("Watch folders") {
                 if watchFolders.isEmpty {
                     Text("No watch folders configured.")

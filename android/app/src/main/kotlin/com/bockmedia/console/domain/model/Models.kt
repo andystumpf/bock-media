@@ -23,6 +23,26 @@ sealed class PlayTarget {
     }
 }
 
+data class LocalPlayContext(
+    val sourceLabel: String,
+    val playlist: String? = null,
+    val playlistId: String? = null,
+)
+
+fun PlayTarget.toLocalPlayContext(): LocalPlayContext = when (this) {
+    is PlayTarget.Playlist -> LocalPlayContext(
+        sourceLabel = "Playlist · $name",
+        playlist = name,
+        playlistId = id.takeIf { it.isNotBlank() },
+    )
+    is PlayTarget.Artist -> LocalPlayContext(sourceLabel = "Artist · $name")
+    is PlayTarget.Album -> LocalPlayContext(
+        sourceLabel = listOfNotNull("Album", name).joinToString(" · "),
+    )
+    is PlayTarget.Song -> LocalPlayContext(sourceLabel = "Song")
+    is PlayTarget.Radio -> LocalPlayContext(sourceLabel = "Mix · $displayTitle")
+}
+
 data class NowPlayingProgress(
     val elapsedMs: Long,
     val durationMs: Long,

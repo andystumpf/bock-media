@@ -630,6 +630,7 @@ private fun SpotifyNowPlayingPage(
                 deviceName = displayDev.deviceName,
                 paused = displayDev.paused,
                 isLocal = isLocal,
+                playContext = (displayDev.sourceLabel ?: displayDev.playlist)?.takeIf { isLocal },
                 onBack = onBack,
                 onHistory = onHistory,
             )
@@ -720,6 +721,10 @@ private fun SpotifyNowPlayingPage(
                         fraction = prog.fraction,
                         elapsedSec = elapsedSec,
                         durationSec = durationSec,
+                        seekable = isLocal && prog.durationMs > 0,
+                        onSeek = { frac ->
+                            LocalPlaybackController.seekTo(context, (frac * prog.durationMs).toLong())
+                        },
                         modifier = Modifier.padding(horizontal = 16.dp).padding(top = 8.dp),
                     )
 
@@ -846,6 +851,7 @@ private fun SpotifyPlayerTopBar(
     deviceName: String?,
     paused: Boolean,
     isLocal: Boolean = false,
+    playContext: String? = null,
     onBack: () -> Unit,
     onHistory: () -> Unit,
 ) {
@@ -876,9 +882,16 @@ private fun SpotifyPlayerTopBar(
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                if (paused) "Paused" else if (isLocal) "Playing on this phone" else "Playing on Alexa",
+                when {
+                    paused -> "Paused"
+                    isLocal && !playContext.isNullOrBlank() -> playContext
+                    isLocal -> "Playing on this phone"
+                    else -> "Playing on Alexa"
+                },
                 style = MaterialTheme.typography.labelSmall,
                 color = Color.White.copy(alpha = 0.65f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         }
         IconButton(onClick = onHistory) {
@@ -1011,22 +1024,35 @@ private fun SpotifyProgressBar(
     elapsedSec: Long,
     durationSec: Long,
     modifier: Modifier = Modifier,
+    seekable: Boolean = false,
+    onSeek: (Float) -> Unit = {},
 ) {
+    var dragging by remember { mutableStateOf(false) }
+    var dragFraction by remember { mutableStateOf(0f) }
+    val sliderValue = if (dragging) dragFraction else fraction.coerceIn(0f, 1f)
+    val shownElapsed = if (dragging && durationSec > 0) (sliderValue * durationSec).toLong() else elapsedSec
+    val sliderColors = SliderDefaults.colors(
+        thumbColor = Color.White,
+        activeTrackColor = Color.White,
+        inactiveTrackColor = Color.White.copy(alpha = 0.28f),
+        disabledThumbColor = Color.White,
+        disabledActiveTrackColor = Color.White,
+        disabledInactiveTrackColor = Color.White.copy(alpha = 0.28f),
+    )
     Column(modifier.fillMaxWidth()) {
         Slider(
-            value = fraction.coerceIn(0f, 1f),
-            onValueChange = {},
-            enabled = false,
+            value = sliderValue,
+            onValueChange = { if (seekable) { dragging = true; dragFraction = it } },
+            onValueChangeFinished = {
+                if (seekable) { onSeek(dragFraction); dragging = false }
+            },
+            enabled = seekable,
             modifier = Modifier.fillMaxWidth(),
-            colors = SliderDefaults.colors(
-                disabledThumbColor = Color.White,
-                disabledActiveTrackColor = Color.White,
-                disabledInactiveTrackColor = Color.White.copy(alpha = 0.28f),
-            ),
+            colors = sliderColors,
         )
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(
-                formatPlaybackTime(elapsedSec),
+                formatPlaybackTime(shownElapsed),
                 style = MaterialTheme.typography.labelSmall,
                 color = Color.White.copy(alpha = 0.65f),
             )

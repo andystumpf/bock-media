@@ -107,8 +107,16 @@ fun MiniNowPlayingBar(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                val subtitle = if (localItem != null) {
+                    listOfNotNull(
+                        dev.artist?.takeIf { it.isNotBlank() },
+                        dev.sourceLabel ?: dev.playlist,
+                    ).joinToString(" · ")
+                } else {
+                    listOfNotNull(dev.artist, dev.deviceName).joinToString(" · ")
+                }
                 Text(
-                    listOfNotNull(dev.artist, dev.deviceName).joinToString(" · "),
+                    subtitle,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,

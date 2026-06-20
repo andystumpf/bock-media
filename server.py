@@ -18,6 +18,8 @@ import socket
 import datetime
 import threading
 import uuid
+import hashlib
+import hmac
 import ipaddress
 from logging.handlers import RotatingFileHandler
 from urllib.parse import quote, urlparse
@@ -751,6 +753,11 @@ def playlists():
         sort_by = 'name'
     reverse = order == 'desc'
 
+    member_filter = (request.args.get('member') or '').strip()
+    if not member_filter and (request.args.get('clientId') or '').strip():
+        member_filter = member_for_client(request.args.get('clientId').strip()) or ''
+    pl_meta = _load_playlist_meta()
+    household = _load_household() if member_filter else None
     try:
         tree = ET.parse(os.path.join(DATA_DIR, 'ServerPlaylists.xml'))
         all_playlists = []
@@ -761,8 +768,12 @@ def playlists():
             name = xml_text(key, 'Name')
             if search and search not in name.lower():
                 continue
+            pid = xml_text(key, 'ID')
+            meta_entry = pl_meta.get(pid)
+            if member_filter and not _playlist_visible_to(meta_entry, member_filter):
+                continue
             all_playlists.append({
-                'id': xml_text(key, 'ID'),
+                'id': pid,
                 'name': name,
                 'trackCount': xml_int(key, 'TrackCount'),
                 'shuffle': xml_text(key, 'Shuffle') == 'true',
@@ -772,6 +783,7 @@ def playlists():
                 'source': xml_text(key, 'SourceID'),
                 'sourceName': xml_text(key, 'SourceName'),
                 'isAudioBook': xml_text(key, 'IsAudioBook') == 'true',
+                **_public_playlist_meta(meta_entry, household),
             })
 
         if sort_by == 'trackCount':
@@ -1435,10 +1447,12 @@ def alexa_remote_volume():
         return jsonify({'error': 'device required'}), 400
     if not 0 <= volume <= 100:
         return jsonify({'error': 'volume must be 0-100'}), 400
+    # Kid-safe: clamp to the room's volume cap so "Alexa, louder" can't exceed it.
+    volume, capped = _clamp_volume_for(target, volume)
     try:
         import alexa_remote
         result = alexa_remote.set_volume(target, volume)
-        return jsonify({'ok': True, **result})
+        return jsonify({'ok': True, 'capped': capped, **result})
     except ImportError:
         return jsonify({'error': 'alexapy not installed', 'code': 'not_installed'}), 503
     except Exception as e:
@@ -1931,6 +1945,17 @@ def play_on_device():
         targets = _expand_play_targets(device)
     except ValueError as e:
         return jsonify({'error': str(e), 'code': str(e)}), 400
+    # Kid-safe enforcement: block content not permitted in a safe room.
+    blocked = []
+    for serial, member_name in targets:
+        ok, reason = _policy_check_play(_policy_for(serial), kind=kind,
+                                        playlist_id=(pid if kind == 'playlist' else None),
+                                        path=fpath)
+        if not ok:
+            blocked.append({'device': member_name, 'reason': reason})
+    if blocked:
+        return jsonify({'error': 'kid_safe_blocked', 'code': 'kid_safe_blocked',
+                        'blocked': blocked}), 403
     pl_label = name if kind == 'playlist' else None
     ctx_label = None if kind == 'playlist' else (
         f'Artist · {name}' if kind == 'artist' else
@@ -3533,6 +3558,940 @@ def recent():
         print(f'Recent error: {e}')
         return jsonify({'items': [], 'total': 0})
 
+# ── Household members (profiles), bindings & attribution ─────────────────────
+# A "member" is a person in the household (Andy, Emma, Jack). Members own taste,
+# history, recommendations, playlists and messages. They are *bound* to devices
+# for attribution: a phone install → its active member; an Echo → the room's
+# default member (Amazon never tells a skill who is speaking). This is an
+# attribution + policy layer, NOT a security boundary — only parent actions are
+# PIN-gated. Everything persists locally in DATA_DIR. Zero third-party sharing.
+
+HOUSEHOLD_PATH = os.path.join(DATA_DIR, 'household.json')
+_HOUSEHOLD_LOCK = threading.Lock()
+
+_VALID_ROLES = ('parent', 'kid')
+
+
+def _household_defaults():
+    return {'members': [], 'clientBindings': {}, 'deviceOwners': {}}
+
+
+def _load_household():
+    try:
+        with open(HOUSEHOLD_PATH) as f:
+            data = json.load(f)
+    except Exception:
+        return _household_defaults()
+    if not isinstance(data, dict):
+        return _household_defaults()
+    base = _household_defaults()
+    base.update({k: data.get(k, base[k]) for k in base})
+    if not isinstance(base['members'], list):
+        base['members'] = []
+    if not isinstance(base['clientBindings'], dict):
+        base['clientBindings'] = {}
+    if not isinstance(base['deviceOwners'], dict):
+        base['deviceOwners'] = {}
+    return base
+
+
+def _save_household(data):
+    _atomic_json_write(HOUSEHOLD_PATH, data)
+
+
+def _slug(name):
+    s = re.sub(r'[^a-z0-9]+', '-', (name or '').strip().lower()).strip('-')
+    return s or 'member'
+
+
+def _gen_member_id(name, members):
+    base = f'p-{_slug(name)}'
+    existing = {m.get('id') for m in members}
+    if base not in existing:
+        return base
+    i = 2
+    while f'{base}-{i}' in existing:
+        i += 1
+    return f'{base}-{i}'
+
+
+def _member_by_id(member_id, household=None):
+    if not member_id:
+        return None
+    h = household or _load_household()
+    for m in h.get('members', []):
+        if m.get('id') == member_id:
+            return m
+    return None
+
+
+def _member_label(member_id, household=None):
+    m = _member_by_id(member_id, household)
+    return (m or {}).get('name') or ''
+
+
+def _public_member(m):
+    """Member without secret fields (pinHash)."""
+    return {
+        'id': m.get('id'),
+        'name': m.get('name'),
+        'role': m.get('role') or 'kid',
+        'color': m.get('color'),
+        'avatar': m.get('avatar'),
+        'hasPin': bool(m.get('pinHash')),
+        'createdAt': m.get('createdAt'),
+    }
+
+
+def _hash_pin(pin):
+    salt = os.urandom(16)
+    dk = hashlib.pbkdf2_hmac('sha256', pin.encode('utf-8'), salt, 100_000)
+    return 'pbkdf2_sha256$100000$' + base64.b64encode(salt).decode() + '$' + base64.b64encode(dk).decode()
+
+
+def _verify_pin(pin, stored):
+    try:
+        algo, iters, salt_b64, dk_b64 = (stored or '').split('$')
+        if algo != 'pbkdf2_sha256':
+            return False
+        salt = base64.b64decode(salt_b64)
+        dk = base64.b64decode(dk_b64)
+        test = hashlib.pbkdf2_hmac('sha256', (pin or '').encode('utf-8'), salt, int(iters))
+        return hmac.compare_digest(test, dk)
+    except Exception:
+        return False
+
+
+def _parent_pin_ok(member_id, pin, household=None):
+    """True if member is a parent and the PIN matches (or no parent has a PIN
+    set yet — first-run grace so the house isn't locked out)."""
+    h = household or _load_household()
+    m = _member_by_id(member_id, h)
+    if not m or (m.get('role') or 'kid') != 'parent':
+        return False
+    if not m.get('pinHash'):
+        return True
+    return _verify_pin(pin, m.get('pinHash'))
+
+
+def member_for_client(client_id, household=None):
+    """Resolve the member bound to a phone/tablet install."""
+    did = _client_device_id(client_id) if client_id else None
+    if not did:
+        return None
+    h = household or _load_household()
+    return h.get('clientBindings', {}).get(did)
+
+
+def member_for_device(device_id, household=None):
+    """Resolve the default member for an Echo/room (alias-aware)."""
+    if not device_id or device_id == 'default':
+        return None
+    h = household or _load_household()
+    owners = h.get('deviceOwners', {})
+    primary = _resolve_device_id(device_id)
+    return owners.get(primary) or owners.get(device_id)
+
+
+def resolve_play_member(*, device_id=None, client_id=None, explicit_member=None,
+                        household=None):
+    """Attribute a play to a household member.
+
+    Priority: explicit (app says "this is me") → phone install → room default.
+    Returns a member id or '' when unknown (household-level only).
+    """
+    h = household or _load_household()
+    if explicit_member and _member_by_id(explicit_member, h):
+        return explicit_member
+    if client_id:
+        m = member_for_client(client_id, h)
+        if m:
+            return m
+    if device_id:
+        m = member_for_device(device_id, h)
+        if m:
+            return m
+    return ''
+
+
+@app.route('/api/household')
+def household_get():
+    """Members (public), client/device bindings with friendly labels."""
+    h = _load_household()
+    device_store = _load_devices()
+    owners = []
+    for did, mid in h.get('deviceOwners', {}).items():
+        owners.append({
+            'deviceId': did,
+            'deviceName': _device_label(did),
+            'memberId': mid,
+            'memberName': _member_label(mid, h),
+        })
+    clients = []
+    for did, mid in h.get('clientBindings', {}).items():
+        entry = device_store.get(did) or {}
+        clients.append({
+            'clientDeviceId': did,
+            'deviceName': entry.get('name') or did,
+            'platform': entry.get('platform'),
+            'memberId': mid,
+            'memberName': _member_label(mid, h),
+        })
+    return jsonify({
+        'members': [_public_member(m) for m in h.get('members', [])],
+        'deviceOwners': owners,
+        'clientBindings': clients,
+    })
+
+
+@app.route('/api/household/members', methods=['POST'])
+def household_create_member():
+    body = request.get_json(silent=True) or {}
+    name = (body.get('name') or '').strip()
+    if not name:
+        return jsonify({'error': 'name required'}), 400
+    role = (body.get('role') or 'kid').strip().lower()
+    if role not in _VALID_ROLES:
+        return jsonify({'error': f'role must be one of {_VALID_ROLES}'}), 400
+    with _HOUSEHOLD_LOCK:
+        h = _load_household()
+        member = {
+            'id': _gen_member_id(name, h['members']),
+            'name': name,
+            'role': role,
+            'color': (body.get('color') or '').strip() or None,
+            'avatar': (body.get('avatar') or '').strip() or None,
+            'pinHash': None,
+            'createdAt': time.time(),
+        }
+        h['members'].append(member)
+        _save_household(h)
+    return jsonify(_public_member(member)), 201
+
+
+@app.route('/api/household/members/<member_id>', methods=['PUT', 'DELETE'])
+def household_modify_member(member_id):
+    with _HOUSEHOLD_LOCK:
+        h = _load_household()
+        m = _member_by_id(member_id, h)
+        if not m:
+            return jsonify({'error': 'not_found'}), 404
+        if request.method == 'DELETE':
+            h['members'] = [x for x in h['members'] if x.get('id') != member_id]
+            h['clientBindings'] = {k: v for k, v in h['clientBindings'].items() if v != member_id}
+            h['deviceOwners'] = {k: v for k, v in h['deviceOwners'].items() if v != member_id}
+            _save_household(h)
+            return jsonify({'ok': True})
+        body = request.get_json(silent=True) or {}
+        if 'name' in body:
+            name = (body.get('name') or '').strip()
+            if not name:
+                return jsonify({'error': 'name cannot be empty'}), 400
+            m['name'] = name
+        if 'role' in body:
+            role = (body.get('role') or '').strip().lower()
+            if role not in _VALID_ROLES:
+                return jsonify({'error': f'role must be one of {_VALID_ROLES}'}), 400
+            m['role'] = role
+        if 'color' in body:
+            m['color'] = (body.get('color') or '').strip() or None
+        if 'avatar' in body:
+            m['avatar'] = (body.get('avatar') or '').strip() or None
+        _save_household(h)
+        return jsonify(_public_member(m))
+
+
+@app.route('/api/household/members/<member_id>/pin', methods=['POST'])
+def household_member_pin(member_id):
+    """Set (verify=false) or verify (verify=true) a parent's PIN.
+
+    Setting a PIN the first time is allowed; replacing an existing PIN requires
+    the current PIN in `currentPin`.
+    """
+    body = request.get_json(silent=True) or {}
+    pin = (str(body.get('pin') or '')).strip()
+    if body.get('verify'):
+        h = _load_household()
+        m = _member_by_id(member_id, h)
+        if not m:
+            return jsonify({'error': 'not_found'}), 404
+        return jsonify({'ok': _verify_pin(pin, m.get('pinHash'))})
+    if len(pin) < 4:
+        return jsonify({'error': 'pin must be at least 4 digits'}), 400
+    with _HOUSEHOLD_LOCK:
+        h = _load_household()
+        m = _member_by_id(member_id, h)
+        if not m:
+            return jsonify({'error': 'not_found'}), 404
+        if m.get('role') != 'parent':
+            return jsonify({'error': 'only parents can have a PIN'}), 400
+        if m.get('pinHash') and not _verify_pin(str(body.get('currentPin') or ''), m['pinHash']):
+            return jsonify({'error': 'current pin required'}), 403
+        m['pinHash'] = _hash_pin(pin)
+        _save_household(h)
+    return jsonify({'ok': True, 'hasPin': True})
+
+
+@app.route('/api/clients/bind', methods=['POST'])
+def household_bind_client():
+    body = request.get_json(silent=True) or {}
+    client_id = (body.get('clientId') or '').strip()
+    member_id = (body.get('memberId') or '').strip()
+    did = _client_device_id(client_id)
+    if not did:
+        return jsonify({'error': 'clientId required'}), 400
+    with _HOUSEHOLD_LOCK:
+        h = _load_household()
+        if member_id and not _member_by_id(member_id, h):
+            return jsonify({'error': 'unknown memberId'}), 400
+        if member_id:
+            h['clientBindings'][did] = member_id
+        else:
+            h['clientBindings'].pop(did, None)
+        _save_household(h)
+    return jsonify({'ok': True, 'clientDeviceId': did, 'memberId': member_id or None})
+
+
+@app.route('/api/devices/<device_id>/owner', methods=['POST', 'DELETE'])
+def household_device_owner(device_id):
+    with _HOUSEHOLD_LOCK:
+        h = _load_household()
+        primary = _resolve_device_id(device_id)
+        if request.method == 'DELETE':
+            h['deviceOwners'].pop(primary, None)
+            h['deviceOwners'].pop(device_id, None)
+            _save_household(h)
+            return jsonify({'ok': True})
+        body = request.get_json(silent=True) or {}
+        member_id = (body.get('memberId') or '').strip()
+        if not _member_by_id(member_id, h):
+            return jsonify({'error': 'unknown memberId'}), 400
+        h['deviceOwners'][primary] = member_id
+        _save_household(h)
+    return jsonify({'ok': True, 'deviceId': primary, 'memberId': member_id})
+
+
+# ── Kid-safe room policies ───────────────────────────────────────────────────
+# Per-room rules enforced server-side (so they hold for phone, voice and
+# routines alike): allow-list of playlists, explicit-content block, volume cap,
+# and quiet hours. Keyed by the room's canonical id (primary skill deviceId when
+# known, else hardware serial). Policy edits require a parent PIN.
+
+ROOM_POLICY_PATH = os.path.join(DATA_DIR, 'room_policies.json')
+_ROOM_POLICY_LOCK = threading.Lock()
+
+
+def _load_room_policies():
+    try:
+        with open(ROOM_POLICY_PATH) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_room_policies(data):
+    _atomic_json_write(ROOM_POLICY_PATH, data)
+
+
+def _room_key(identifier):
+    """Canonical room key for a serial or deviceId: primary skill deviceId when
+    we've correlated one, otherwise the hardware serial / raw id."""
+    if not identifier:
+        return ''
+    store = _load_devices()
+    prim = _resolve_device_id(identifier, store)
+    if prim in store:
+        return prim
+    by_serial = _primary_by_serial(identifier, store)
+    return by_serial or identifier
+
+
+def _policy_for(identifier):
+    return _load_room_policies().get(_room_key(identifier), {}) or {}
+
+
+def _is_explicit_path(path):
+    """Best-effort explicit flag from songs_cache; False if unknown/unavailable."""
+    if not path:
+        return False
+    try:
+        row = db_one('SELECT explicit FROM songs_cache WHERE path = ?', [path])
+        return bool(row and row.get('explicit'))
+    except Exception:
+        return False
+
+
+def _parse_hhmm(s):
+    try:
+        h, m = (s or '').split(':')
+        return int(h) * 60 + int(m)
+    except Exception:
+        return None
+
+
+def _in_quiet_hours(policy, now=None):
+    """True if `now` falls inside any configured quiet-hours window."""
+    windows = policy.get('quietHours') or []
+    if not windows:
+        return False
+    now = now or datetime.datetime.now()
+    minute_of_day = now.hour * 60 + now.minute
+    weekday = now.weekday()  # Mon=0
+    for w in windows:
+        days = w.get('days')
+        if days and weekday not in days:
+            continue
+        start = _parse_hhmm(w.get('from'))
+        end = _parse_hhmm(w.get('to'))
+        if start is None or end is None:
+            continue
+        if start <= end:
+            if start <= minute_of_day < end:
+                return True
+        else:  # overnight window, e.g. 20:30 -> 07:00
+            if minute_of_day >= start or minute_of_day < end:
+                return True
+    return False
+
+
+def _policy_check_play(policy, *, kind=None, playlist_id=None, path=None,
+                       now=None):
+    """Return (ok, reason) for a play attempt against a room policy."""
+    if not policy or not policy.get('safe'):
+        return True, ''
+    if _in_quiet_hours(policy, now):
+        return False, 'quiet_hours'
+    if policy.get('allowExplicit') is False and _is_explicit_path(path):
+        return False, 'explicit_blocked'
+    allow = policy.get('allowPlaylistIds')
+    if allow:
+        if (kind or 'playlist') != 'playlist' or not playlist_id or playlist_id not in allow:
+            return False, 'not_in_allowlist'
+    return True, ''
+
+
+def _clamp_volume_for(identifier, volume):
+    """Clamp a requested volume to the room's maxVolume (if any)."""
+    policy = _policy_for(identifier)
+    cap = policy.get('maxVolume') if policy.get('safe') else None
+    if isinstance(cap, int) and volume > cap:
+        return cap, True
+    return volume, False
+
+
+def _serial_for_room_key(key):
+    """Hardware serial usable with alexa_remote for a room key, or None."""
+    if not key:
+        return None
+    entry = _load_devices().get(key) or {}
+    if entry.get('serial'):
+        return entry['serial']
+    if not _is_client_device(key) and not str(key).startswith('amzn1.'):
+        return key  # key is itself a serial
+    return None
+
+
+def _volume_cap_loop():
+    """Periodically pull safe-room volumes back under their cap (so a voice
+    'louder' can't exceed it). No-ops unless caps are configured + Alexa is set."""
+    while True:
+        time.sleep(60)
+        try:
+            policies = _load_room_policies()
+            caps = {k: v for k, v in policies.items()
+                    if v.get('safe') and isinstance(v.get('maxVolume'), int)}
+            if not caps:
+                continue
+            import alexa_remote
+            if not alexa_remote.is_configured():
+                continue
+            for key, pol in caps.items():
+                serial = _serial_for_room_key(key)
+                if not serial:
+                    continue
+                try:
+                    cur = alexa_remote.get_volume(serial)
+                    if isinstance(cur, int) and cur > pol['maxVolume']:
+                        alexa_remote.set_volume(serial, pol['maxVolume'])
+                        print(f"[KID-SAFE] clamped {key} volume {cur}->{pol['maxVolume']}", flush=True)
+                except Exception:
+                    continue
+        except Exception:
+            continue
+
+
+def _public_policy(policy):
+    return {
+        'safe': bool(policy.get('safe')),
+        'allowPlaylistIds': policy.get('allowPlaylistIds') or [],
+        'allowExplicit': policy.get('allowExplicit', True),
+        'maxVolume': policy.get('maxVolume'),
+        'quietHours': policy.get('quietHours') or [],
+        'requireApproval': bool(policy.get('requireApproval')),
+    }
+
+
+@app.route('/api/devices/<device_id>/policy', methods=['GET', 'POST', 'DELETE'])
+def device_policy(device_id):
+    key = _room_key(device_id)
+    if request.method == 'GET':
+        return jsonify({'deviceId': key, **_public_policy(_policy_for(device_id))})
+    body = request.get_json(silent=True) or {}
+    # Parent PIN gate for any change.
+    if not _parent_pin_ok(body.get('memberId'), str(body.get('pin') or '')):
+        return jsonify({'error': 'parent_pin_required'}), 403
+    with _ROOM_POLICY_LOCK:
+        policies = _load_room_policies()
+        if request.method == 'DELETE':
+            policies.pop(key, None)
+            _save_room_policies(policies)
+            return jsonify({'ok': True})
+        cur = policies.get(key, {}) or {}
+        if 'safe' in body:
+            cur['safe'] = bool(body['safe'])
+        if 'allowPlaylistIds' in body:
+            ids = body.get('allowPlaylistIds') or []
+            cur['allowPlaylistIds'] = [str(x) for x in ids] if isinstance(ids, list) else []
+        if 'allowExplicit' in body:
+            cur['allowExplicit'] = bool(body['allowExplicit'])
+        if 'maxVolume' in body:
+            mv = body.get('maxVolume')
+            cur['maxVolume'] = max(0, min(100, int(mv))) if mv is not None else None
+        if 'quietHours' in body:
+            cur['quietHours'] = body.get('quietHours') or []
+        if 'requireApproval' in body:
+            cur['requireApproval'] = bool(body['requireApproval'])
+        policies[key] = cur
+        _save_room_policies(policies)
+    return jsonify({'deviceId': key, **_public_policy(policies[key])})
+
+
+# ── Household requests — shared "Up Next" per room ───────────────────────────
+# Anyone in the house adds a track to a room's up-next from their phone. In a
+# kid-safe room with requireApproval, requests wait as "queued" until a parent
+# approves; otherwise they're "approved" immediately. Approved requests splice
+# into the room's playback at the next track boundary.
+
+REQUESTS_PATH = os.path.join(DATA_DIR, 'requests.json')
+_REQUESTS_LOCK = threading.Lock()
+
+
+def _load_requests():
+    try:
+        with open(REQUESTS_PATH) as f:
+            data = json.load(f)
+        if isinstance(data, dict) and isinstance(data.get('rooms'), dict):
+            return data
+    except Exception:
+        pass
+    return {'rooms': {}}
+
+
+def _save_requests(data):
+    _atomic_json_write(REQUESTS_PATH, data)
+
+
+def _room_request_list(key, data=None):
+    data = data or _load_requests()
+    return ((data.get('rooms', {}).get(key)) or {}).get('queue', [])
+
+
+def _request_public(r, household=None):
+    return {
+        'id': r.get('id'),
+        'path': r.get('path'),
+        'track': r.get('track'),
+        'artist': r.get('artist'),
+        'byMemberId': r.get('byMemberId'),
+        'byMemberName': _member_label(r.get('byMemberId'), household),
+        'status': r.get('status'),
+        'ts': r.get('ts'),
+    }
+
+
+def _room_upnext_public(key, household=None):
+    """Pending/approved requests for a room (for now-playing UI)."""
+    h = household or _load_household()
+    return [_request_public(r, h) for r in _room_request_list(key)
+            if r.get('status') in ('queued', 'approved')]
+
+
+def _consume_next_request(room_key):
+    """Pop (FIFO) the next approved request for a room. Returns its path or None."""
+    if not room_key:
+        return None
+    with _REQUESTS_LOCK:
+        data = _load_requests()
+        room = data.get('rooms', {}).get(room_key)
+        if not room:
+            return None
+        for r in room.get('queue', []):
+            if r.get('status') == 'approved':
+                r['status'] = 'done'
+                _save_requests(data)
+                return r.get('path')
+    return None
+
+
+@app.route('/api/rooms/<device_id>/queue')
+def room_queue(device_id):
+    key = _room_key(device_id)
+    h = _load_household()
+    return jsonify({
+        'deviceId': key,
+        'deviceName': _device_label(key),
+        'queue': [_request_public(r, h) for r in _room_request_list(key)],
+    })
+
+
+@app.route('/api/rooms/<device_id>/requests', methods=['POST'])
+def room_add_request(device_id):
+    body = request.get_json(silent=True) or {}
+    path = (body.get('path') or '').strip()
+    if not path:
+        return jsonify({'error': 'path required'}), 400
+    member_id = resolve_play_member(device_id=device_id,
+                                    client_id=(body.get('clientId') or '').strip(),
+                                    explicit_member=(body.get('memberId') or '').strip())
+    key = _room_key(device_id)
+    policy = _policy_for(device_id)
+    if policy.get('safe') and policy.get('allowExplicit') is False and _is_explicit_path(path):
+        return jsonify({'error': 'explicit_blocked', 'code': 'explicit_blocked'}), 403
+    track = (body.get('track') or '').strip()
+    artist = (body.get('artist') or '').strip()
+    if not track:
+        title, art, _album, _ = track_metadata_fast(path)
+        track, artist = title, (artist or art)
+    needs_approval = bool(policy.get('safe') and policy.get('requireApproval'))
+    item = {
+        'id': 'rq-' + uuid.uuid4().hex[:10],
+        'path': path,
+        'track': track,
+        'artist': artist or None,
+        'byMemberId': member_id or None,
+        'status': 'queued' if needs_approval else 'approved',
+        'ts': time.time(),
+    }
+    with _REQUESTS_LOCK:
+        data = _load_requests()
+        room = data['rooms'].setdefault(key, {'queue': []})
+        room.setdefault('queue', []).append(item)
+        _save_requests(data)
+    return jsonify(_request_public(item)), 201
+
+
+@app.route('/api/rooms/<device_id>/requests/<rid>/approve', methods=['POST'])
+def room_approve_request(device_id, rid):
+    body = request.get_json(silent=True) or {}
+    if not _parent_pin_ok(body.get('memberId'), str(body.get('pin') or '')):
+        return jsonify({'error': 'parent_pin_required'}), 403
+    key = _room_key(device_id)
+    with _REQUESTS_LOCK:
+        data = _load_requests()
+        for r in _room_request_list(key, data):
+            if r.get('id') == rid:
+                r['status'] = 'approved'
+                _save_requests(data)
+                return jsonify(_request_public(r))
+    return jsonify({'error': 'not_found'}), 404
+
+
+@app.route('/api/rooms/<device_id>/requests/<rid>', methods=['DELETE'])
+def room_delete_request(device_id, rid):
+    key = _room_key(device_id)
+    with _REQUESTS_LOCK:
+        data = _load_requests()
+        room = data.get('rooms', {}).get(key) or {}
+        q = room.get('queue', [])
+        new_q = [r for r in q if r.get('id') != rid]
+        if len(new_q) == len(q):
+            return jsonify({'error': 'not_found'}), 404
+        room['queue'] = new_q
+        _save_requests(data)
+    return jsonify({'ok': True})
+
+
+@app.route('/api/rooms/<device_id>/requests/reorder', methods=['POST'])
+def room_reorder_requests(device_id):
+    body = request.get_json(silent=True) or {}
+    order = body.get('order') or []
+    if not isinstance(order, list):
+        return jsonify({'error': 'order must be a list'}), 400
+    key = _room_key(device_id)
+    with _REQUESTS_LOCK:
+        data = _load_requests()
+        room = data.get('rooms', {}).get(key) or {}
+        q = room.get('queue', [])
+        rank = {rid: i for i, rid in enumerate(order)}
+        q.sort(key=lambda r: rank.get(r.get('id'), len(order)))
+        room['queue'] = q
+        data.setdefault('rooms', {})[key] = room
+        _save_requests(data)
+    return jsonify({'ok': True, 'queue': [_request_public(r) for r in q]})
+
+
+# ── Playlist ownership & sharing ─────────────────────────────────────────────
+# A sidecar (so ServerPlaylists.xml stays untouched) records who owns a playlist
+# and who can see it. Legacy playlists with no meta are treated as household-
+# visible so nothing disappears.
+
+PLAYLIST_META_PATH = os.path.join(DATA_DIR, 'playlist_meta.json')
+_PLAYLIST_META_LOCK = threading.Lock()
+
+
+def _load_playlist_meta():
+    try:
+        with open(PLAYLIST_META_PATH) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_playlist_meta(data):
+    _atomic_json_write(PLAYLIST_META_PATH, data)
+
+
+def _playlist_visible_to(meta_entry, member_id):
+    if not meta_entry:
+        return True  # legacy = household-visible
+    owner = meta_entry.get('ownerMemberId')
+    if owner and owner == member_id:
+        return True
+    vis = meta_entry.get('visibility') or 'household'
+    if vis == 'household':
+        return True
+    if vis == 'shared':
+        return member_id in (meta_entry.get('sharedWith') or [])
+    return False  # private, non-owner
+
+
+def _public_playlist_meta(entry, household=None):
+    if not entry:
+        return {'ownerMemberId': None, 'ownerName': '', 'visibility': 'household',
+                'sharedWith': []}
+    return {
+        'ownerMemberId': entry.get('ownerMemberId'),
+        'ownerName': _member_label(entry.get('ownerMemberId'), household),
+        'visibility': entry.get('visibility') or 'household',
+        'sharedWith': entry.get('sharedWith') or [],
+    }
+
+
+def _set_playlist_owner(playlist_id, member_id, visibility='household'):
+    if not playlist_id:
+        return
+    with _PLAYLIST_META_LOCK:
+        meta = _load_playlist_meta()
+        cur = meta.get(playlist_id, {})
+        cur.setdefault('createdAt', time.time())
+        if member_id:
+            cur['ownerMemberId'] = member_id
+        cur.setdefault('visibility', visibility)
+        cur.setdefault('sharedWith', [])
+        meta[playlist_id] = cur
+        _save_playlist_meta(meta)
+
+
+@app.route('/api/playlists/<playlist_id>/share', methods=['POST'])
+def share_playlist(playlist_id):
+    body = request.get_json(silent=True) or {}
+    to_members = body.get('toMemberIds') or []
+    if not isinstance(to_members, list) or not to_members:
+        return jsonify({'error': 'toMemberIds required'}), 400
+    household = _load_household()
+    to_members = [m for m in to_members if _member_by_id(m, household)]
+    with _PLAYLIST_META_LOCK:
+        meta = _load_playlist_meta()
+        cur = meta.get(playlist_id, {})
+        actor = resolve_play_member(client_id=(body.get('clientId') or '').strip(),
+                                    explicit_member=(body.get('memberId') or '').strip(),
+                                    household=household)
+        if actor and not cur.get('ownerMemberId'):
+            cur['ownerMemberId'] = actor
+        shared = set(cur.get('sharedWith') or [])
+        shared.update(to_members)
+        cur['sharedWith'] = sorted(shared)
+        if (cur.get('visibility') or 'household') == 'private':
+            cur['visibility'] = 'shared'
+        cur.setdefault('createdAt', time.time())
+        meta[playlist_id] = cur
+        _save_playlist_meta(meta)
+    # Drop a note in each recipient's message inbox (P5).
+    try:
+        name = _msp_playlist_by_id(playlist_id)[0] or 'a playlist'
+        for m in to_members:
+            _post_message(from_member=cur.get('ownerMemberId'), to_member=m,
+                          scope='direct', text=f'shared "{name}" with you',
+                          attach={'type': 'playlist', 'id': playlist_id})
+    except Exception:
+        pass
+    return jsonify({'ok': True, 'playlistId': playlist_id,
+                    **_public_playlist_meta(meta[playlist_id], household)})
+
+
+@app.route('/api/playlists/<playlist_id>/visibility', methods=['POST'])
+def set_playlist_visibility(playlist_id):
+    body = request.get_json(silent=True) or {}
+    vis = (body.get('visibility') or '').strip().lower()
+    if vis not in ('private', 'household', 'shared'):
+        return jsonify({'error': 'visibility must be private|household|shared'}), 400
+    with _PLAYLIST_META_LOCK:
+        meta = _load_playlist_meta()
+        cur = meta.get(playlist_id, {})
+        cur['visibility'] = vis
+        cur.setdefault('sharedWith', [])
+        cur.setdefault('createdAt', time.time())
+        meta[playlist_id] = cur
+        _save_playlist_meta(meta)
+    return jsonify({'ok': True, **_public_playlist_meta(meta[playlist_id])})
+
+
+@app.route('/api/playlists/<playlist_id>/copy', methods=['POST'])
+def copy_playlist(playlist_id):
+    body = request.get_json(silent=True) or {}
+    name, source = _msp_playlist_by_id(playlist_id)
+    if not source:
+        return jsonify({'error': 'not_found'}), 404
+    tracks = _tracks_from_source(source)
+    if not tracks:
+        return jsonify({'error': 'playlist has no tracks'}), 400
+    actor = resolve_play_member(client_id=(body.get('clientId') or '').strip(),
+                                explicit_member=(body.get('memberId') or '').strip())
+    new_name = (body.get('name') or '').strip() or f'{name} (copy)'
+    new_pid = str(uuid.uuid4())
+    result = _persist_playlist(new_pid, new_name, tracks, create=True)
+    if not result:
+        return jsonify({'error': 'copy_failed'}), 500
+    _set_playlist_owner(new_pid, actor, visibility='private')
+    return jsonify({**result, **_public_playlist_meta(_load_playlist_meta().get(new_pid))}), 201
+
+
+# ── Music messages (family chat about music) ─────────────────────────────────
+# Lightweight, music-anchored messaging between household members. Not a general
+# chat app: each message is text plus an optional track/album/playlist attachment.
+
+MESSAGES_PATH = os.path.join(DATA_DIR, 'messages.jsonl')
+_MESSAGES_LOCK = threading.Lock()
+
+
+def _post_message(*, from_member, to_member=None, scope='household', text='',
+                  attach=None):
+    msg = {
+        'id': 'm-' + uuid.uuid4().hex[:10],
+        'fromMemberId': from_member or None,
+        'toMemberId': to_member or None,
+        'scope': scope or 'household',
+        'text': text or '',
+        'attach': attach or None,
+        'ts': time.time(),
+        'readBy': [],
+    }
+    with _MESSAGES_LOCK:
+        with open(MESSAGES_PATH, 'a') as f:
+            f.write(json.dumps(msg) + '\n')
+    return msg
+
+
+def _read_messages(limit=1000):
+    out = []
+    try:
+        with open(MESSAGES_PATH) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    out.append(json.loads(line))
+                except Exception:
+                    continue
+    except Exception:
+        return []
+    return out[-limit:]
+
+
+def _message_visible_to(m, member_id):
+    scope = m.get('scope') or 'household'
+    if scope == 'household' or scope.startswith('room:'):
+        return True
+    return m.get('toMemberId') == member_id or m.get('fromMemberId') == member_id
+
+
+def _public_message(m, household=None):
+    return {
+        'id': m.get('id'),
+        'fromMemberId': m.get('fromMemberId'),
+        'fromName': _member_label(m.get('fromMemberId'), household),
+        'toMemberId': m.get('toMemberId'),
+        'toName': _member_label(m.get('toMemberId'), household),
+        'scope': m.get('scope'),
+        'text': m.get('text'),
+        'attach': m.get('attach'),
+        'ts': m.get('ts'),
+        'readBy': m.get('readBy') or [],
+    }
+
+
+@app.route('/api/messages')
+def messages_list():
+    member = (request.args.get('member') or '').strip()
+    if not member and (request.args.get('clientId') or '').strip():
+        member = member_for_client(request.args.get('clientId').strip()) or ''
+    household = _load_household()
+    msgs = _read_messages()
+    visible = [m for m in msgs if _message_visible_to(m, member)] if member else msgs
+    unread = sum(1 for m in visible
+                 if member and member not in (m.get('readBy') or [])
+                 and m.get('fromMemberId') != member)
+    return jsonify({
+        'items': [_public_message(m, household) for m in visible],
+        'unread': unread,
+    })
+
+
+@app.route('/api/messages', methods=['POST'])
+def messages_post():
+    body = request.get_json(silent=True) or {}
+    from_member = resolve_play_member(client_id=(body.get('clientId') or '').strip(),
+                                      explicit_member=(body.get('fromMemberId') or '').strip())
+    to_member = (body.get('toMemberId') or '').strip() or None
+    scope = (body.get('scope') or '').strip() or ('direct' if to_member else 'household')
+    text = (body.get('text') or '').strip()
+    attach = body.get('attach') if isinstance(body.get('attach'), dict) else None
+    if not text and not attach:
+        return jsonify({'error': 'text or attach required'}), 400
+    msg = _post_message(from_member=from_member, to_member=to_member,
+                        scope=scope, text=text, attach=attach)
+    return jsonify(_public_message(msg)), 201
+
+
+@app.route('/api/messages/<msg_id>/read', methods=['POST'])
+def messages_mark_read(msg_id):
+    body = request.get_json(silent=True) or {}
+    member = resolve_play_member(client_id=(body.get('clientId') or '').strip(),
+                                 explicit_member=(body.get('memberId') or '').strip())
+    if not member:
+        return jsonify({'error': 'memberId required'}), 400
+    with _MESSAGES_LOCK:
+        msgs = _read_messages(limit=100000)
+        found = False
+        for m in msgs:
+            if m.get('id') == msg_id:
+                rb = set(m.get('readBy') or [])
+                rb.add(member)
+                m['readBy'] = sorted(rb)
+                found = True
+                break
+        if found:
+            tmp = MESSAGES_PATH + '.tmp'
+            with open(tmp, 'w') as f:
+                for m in msgs:
+                    f.write(json.dumps(m) + '\n')
+            os.replace(tmp, MESSAGES_PATH)
+    return jsonify({'ok': found})
+
+
 # ── API: Client analytics (Android / iOS) ────────────────────────────────────
 
 @app.route('/api/clients/report', methods=['POST'])
@@ -3555,6 +4514,8 @@ def client_report():
 
     now_iso = datetime.datetime.now().isoformat(timespec='seconds')
     label = _device_label(did)
+    member_id = resolve_play_member(client_id=client_id,
+                                    explicit_member=(body.get('memberId') or '').strip())
 
     if event == 'connect':
         _record_client_connect(did)
@@ -3575,6 +4536,7 @@ def client_report():
             'device': label,
             'deviceId': did,
             'platform': platform or None,
+            'memberId': member_id or None,
             'date': now_iso,
         })
         _write_client_np_state(did, {
@@ -3582,6 +4544,9 @@ def client_report():
             'artist': artist,
             'album': album,
             'filepath': filepath,
+            'playlist': (body.get('playlist') or '').strip() or None,
+            'playlistId': (body.get('playlistId') or body.get('playlist_id') or '').strip() or None,
+            'sourceLabel': (body.get('sourceLabel') or body.get('source_label') or '').strip() or None,
             'playing': True,
             'paused': False,
             'offset_ms': 0,
@@ -3601,6 +4566,7 @@ def client_report():
         'deviceId': did,
         'device': label,
         'platform': platform or None,
+        'memberId': member_id or None,
         'collectionTitle': title,
         'collectionKind': kind,
         'trackCount': track_count,
@@ -3675,13 +4641,70 @@ def analytics_export():
     )
 
 
+@app.route('/api/analytics/household')
+def analytics_household():
+    """Family overview: plays per member, per room, platform split, leaderboard."""
+    from collections import Counter
+    from_str = request.args.get('from', '').strip()
+    to_str = request.args.get('to', '').strip()
+    from_dt = to_dt = None
+    try:
+        if from_str:
+            from_dt = datetime.datetime.fromisoformat(from_str)
+        if to_str:
+            to_dt = datetime.datetime.fromisoformat(to_str).replace(hour=23, minute=59, second=59)
+    except Exception:
+        pass
+    rows = _filter_history_rows(_read_stream_history(), from_dt, to_dt)
+    rows = [r for r in rows if not r.get('test')
+            and r.get('deviceId', '') not in ('DEVICE_ALPHA', 'DEVICE_BETA')]
+    household = _load_household()
+    device_store = _load_devices()
+    per_member = Counter()
+    per_room = Counter()
+    per_platform = Counter()
+    for r in rows:
+        mid = _row_member(r, household) or 'unattributed'
+        per_member[mid] += 1
+        did = r.get('deviceId') or ''
+        per_room[_device_label(did) if did else (r.get('device') or 'Unknown')] += 1
+        per_platform[_row_platform(r) or 'unknown'] += 1
+
+    def _named(counter):
+        out = []
+        for k, v in counter.most_common():
+            if k == 'unattributed':
+                out.append({'memberId': None, 'name': 'Unattributed', 'plays': v})
+            else:
+                out.append({'memberId': k, 'name': _member_label(k, household) or k, 'plays': v})
+        return out
+
+    members = [_public_member(m) for m in household.get('members', [])]
+    pl_meta = _load_playlist_meta()
+    shares = [{'playlistId': pid, 'ownerName': _member_label(e.get('ownerMemberId'), household),
+               'sharedWith': [_member_label(x, household) for x in (e.get('sharedWith') or [])]}
+              for pid, e in pl_meta.items() if e.get('sharedWith')]
+    return jsonify({
+        'totalPlays': len(rows),
+        'members': members,
+        'byMember': _named(per_member),
+        'byRoom': [{'room': k, 'plays': v} for k, v in per_room.most_common()],
+        'byPlatform': [{'platform': k, 'plays': v} for k, v in per_platform.most_common()],
+        'leaderboard': _named(per_member)[:10],
+        'shares': shares,
+        'dateRange': {'from': from_str, 'to': to_str},
+    })
+
+
 @app.route('/api/analytics')
 def analytics():
     from collections import Counter, defaultdict
     from_str = request.args.get('from', '').strip()
     to_str   = request.args.get('to',   '').strip()
     device_id_str = request.args.get('deviceId', '').strip()
-    cache_key = (from_str, to_str, device_id_str)
+    member_str = request.args.get('member', '').strip()
+    platform_str = request.args.get('platform', '').strip()
+    cache_key = (from_str, to_str, device_id_str, member_str, platform_str)
     cached = _analytics_cache.get(cache_key)
     if cached and (time.time() - cached['ts']) < _ANALYTICS_TTL:
         return jsonify(cached['data'])
@@ -3706,10 +4729,15 @@ def analytics():
 
     device_store = _load_devices()
     rows = _filter_history_by_device(rows, device_id_str, device_store)
+    household = _load_household()
+    rows = _filter_history_by_member(rows, member_str, household)
+    rows = _filter_history_by_platform(rows, platform_str)
 
     total = len(rows)
     download_rows = _filter_history_rows(_read_download_history(), from_dt, to_dt)
     download_rows = _filter_history_by_device(download_rows, device_id_str, device_store)
+    download_rows = _filter_history_by_member(download_rows, member_str, household)
+    download_rows = _filter_history_by_platform(download_rows, platform_str)
     EMPTY = {
         'totalPlays': 0, 'uniqueTracks': 0, 'uniqueArtists': 0, 'uniqueAlbums': 0,
         'topTracks': [], 'topArtists': [], 'topAlbums': [], 'topDevices': [],
@@ -4027,6 +5055,9 @@ def _write_client_np_state(device_id, body, platform=None):
     artist = (body.get('artist') or '').strip() or None
     album = (body.get('album') or '').strip() or None
     filepath = (body.get('filepath') or body.get('path') or '').strip() or None
+    playlist = (body.get('playlist') or '').strip() or None
+    playlist_id = (body.get('playlistId') or body.get('playlist_id') or '').strip() or None
+    source_label = (body.get('sourceLabel') or body.get('source_label') or '').strip() or None
     if not track and not filepath:
         write_np_state_for_device(device_id, None)
         return
@@ -4039,6 +5070,9 @@ def _write_client_np_state(device_id, body, platform=None):
         'artist': artist,
         'album': album,
         'filepath': filepath,
+        'playlist': playlist,
+        'playlistId': playlist_id,
+        'sourceLabel': source_label,
         'playing': bool(playing),
         'paused': paused,
         'offset_ms': int(body.get('offset_ms') or body.get('offsetMs') or 0),
@@ -4174,6 +5208,49 @@ def _filter_history_by_device(rows, device_id, device_store=None):
         if primary == target:
             filtered.append(r)
     return filtered
+
+def _member_for_did(did, household=None):
+    """Member attributed to a deviceId: client install binding or Echo owner."""
+    if not did:
+        return ''
+    h = household or _load_household()
+    if _is_client_device(did):
+        return h.get('clientBindings', {}).get(did, '') or ''
+    return member_for_device(did, h) or ''
+
+
+def _row_member(row, household=None):
+    """Member for a history row: explicit memberId, else the device's owner."""
+    mid = row.get('memberId')
+    if mid:
+        return mid
+    return _member_for_did(row.get('deviceId') or '', household)
+
+
+def _row_platform(row):
+    """Platform for a row, inferring 'alexa' for legacy rows on Echo devices."""
+    p = (row.get('platform') or '').strip().lower()
+    if p:
+        return p
+    did = row.get('deviceId') or ''
+    if did and not _is_client_device(did) and did != 'default':
+        return 'alexa'
+    return ''
+
+
+def _filter_history_by_member(rows, member_id, household=None):
+    if not member_id:
+        return rows
+    h = household or _load_household()
+    return [r for r in rows if _row_member(r, h) == member_id]
+
+
+def _filter_history_by_platform(rows, platform):
+    if not platform:
+        return rows
+    p = platform.strip().lower()
+    return [r for r in rows if _row_platform(r) == p]
+
 
 def _build_device_breakdown(play_rows, download_rows, device_store):
     """Per-device connects, plays, and downloads for the analytics dashboard."""
@@ -5454,7 +6531,10 @@ def create_playlist():
     result = _persist_playlist(pid, name, tracks, create=True)
     if not result:
         return jsonify({'error': 'create_failed'}), 500
-    return jsonify(result), 201
+    owner = resolve_play_member(client_id=(body.get('clientId') or '').strip(),
+                                explicit_member=(body.get('memberId') or '').strip())
+    _set_playlist_owner(pid, owner, visibility=(body.get('visibility') or 'household'))
+    return jsonify({**result, **_public_playlist_meta(_load_playlist_meta().get(pid))}), 201
 
 
 @app.route('/api/playlists/merge', methods=['POST'])
@@ -6239,6 +7319,10 @@ def _relabel_devices_on_boot():
 threading.Thread(target=_relabel_devices_on_boot, daemon=True,
                  name='device-relabel').start()
 
+# Keep kid-safe rooms under their volume cap even after voice "louder".
+threading.Thread(target=_volume_cap_loop, daemon=True,
+                 name='kid-safe-volume').start()
+
 @app.route('/api/currenttrack')
 def current_track():
     raw = request.args.get('deviceId') or 'default'
@@ -6380,6 +7464,7 @@ def nowplaying_devices():
             'context': src.get('context'),
             'sourceLabel': src.get('sourceLabel'),
             'platform': platform,
+            'upNext': _room_upnext_public(_room_key(did)),
         })
     # Collapse rows that resolve to the same physical Echo (a rotated deviceId
     # can yield two rows for one speaker). Keep the most recently active.
@@ -7158,6 +8243,8 @@ def _msp_handle_event(req, ctx):
                 'filepath': path,
                 'device':   _device_label(_np_device_id()),
                 'deviceId': _np_device_id(),
+                'memberId': resolve_play_member(device_id=_np_device_id()) or None,
+                'platform': 'alexa',
                 'playlist': src.get('playlist'),
                 'sourceLabel': src.get('sourceLabel'),
                 'date':     datetime.datetime.now().isoformat(timespec='seconds'),
@@ -7318,6 +8405,8 @@ def alexa_skill():
                 'filepath': path,
                 'device':   device_label,
                 'deviceId': _np_device_id(),
+                'memberId': resolve_play_member(device_id=_np_device_id()) or None,
+                'platform': 'alexa',
                 'playlist': src.get('playlist'),
                 'sourceLabel': src.get('sourceLabel'),
                 'date':     datetime.datetime.now().isoformat(timespec='seconds'),
@@ -7343,6 +8432,14 @@ def alexa_skill():
             return alexa_empty()
         if stop_after_idx is not None and next_idx > int(stop_after_idx):
             return alexa_empty()
+        # Shared up-next: a household member's approved request plays next,
+        # spliced into the queue so the original playlist resumes after it.
+        req_path = _consume_next_request(_room_key(_np_device_id()))
+        if req_path and os.path.isfile(req_path):
+            new_tracks = (tracks[:next_idx] + [req_path] + tracks[next_idx:])[:_QUEUE_TRACK_LIMIT]
+            req_token = encode_token({**data, 'tracks': new_tracks, 'idx': next_idx})
+            return _np_play_path(req_path, req_token,
+                                 previous_token=token, play_behavior='ENQUEUE')
         if next_idx >= len(tracks):
             if data.get('loop'):
                 next_idx = 0

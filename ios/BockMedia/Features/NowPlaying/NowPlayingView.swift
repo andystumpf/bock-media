@@ -347,7 +347,7 @@ struct NowPlayingView: View {
                     ForEach(Array(viewModel.devices.enumerated()), id: \.element.id) { idx, dev in
                         NowPlayingDevicePage(
                             dev: displayDevice(dev),
-                            artURL: viewModel.artURLs[dev.deviceId],
+                            initialArtURL: viewModel.artURLs[dev.deviceId],
                             viewModel: viewModel,
                             repository: appState.repository,
                             showPagerInset: viewModel.devices.count > 1,
@@ -394,12 +394,15 @@ struct NowPlayingView: View {
 
 private struct NowPlayingDevicePage: View {
     let dev: NowPlayingDeviceItem
-    let artURL: URL?
+    let initialArtURL: URL?
     @ObservedObject var viewModel: NowPlayingViewModel
     let repository: BockMediaRepository
     var showPagerInset: Bool
     let onUpNext: () -> Void
     let upNextCount: Int
+
+    @State private var artURL: URL?
+    @State private var artPath: String = ""
 
     var body: some View {
         let progress = viewModel.progress(for: dev)
@@ -457,7 +460,10 @@ private struct NowPlayingDevicePage: View {
                                 .foregroundStyle(.white.opacity(0.65))
                         }
 
-                        if dev.duration_ms > 0 || progress.durationMs > 0 {
+                        if dev.deviceId == LocalPlaybackIds.localPhoneDeviceId {
+                            LocalSeekBar()
+                                .padding(.horizontal, 20)
+                        } else if dev.duration_ms > 0 || progress.durationMs > 0 {
                             let dur = max(dev.duration_ms, progress.durationMs)
                             VStack(spacing: 4) {
                                 ProgressView(value: progress.fraction)
@@ -545,6 +551,70 @@ private struct NowPlayingDevicePage: View {
                     .background(Color.black.opacity(0.95))
                 }
             }
+        }
+        // Resolve artwork from the *live* track so it never lags a song behind the
+        // title/metadata (which update instantly from LocalPlaybackController).
+        .task(id: dev.filepath) {
+            let path = dev.filepath ?? ""
+            if path != artPath {
+                artURL = nil
+                artPath = path
+            }
+            if path.isEmpty {
+                artURL = nil
+                return
+            }
+            if let str = await repository.artworkURL(for: path), let url = URL(string: str) {
+                guard dev.filepath == path else { return }
+                artURL = url
+            } else {
+                artURL = initialArtURL
+            }
+        }
+    }
+}
+
+/// Interactive scrubber for local phone playback — drag to seek to any point.
+private struct LocalSeekBar: View {
+    @ObservedObject private var controller = LocalPlaybackController.shared
+    @State private var dragging = false
+    @State private var dragFraction: Double = 0
+
+    var body: some View {
+        let durationMs = controller.state.durationMs
+        let positionMs = controller.state.positionMs
+        let liveFraction = durationMs > 0
+            ? min(max(Double(positionMs) / Double(durationMs), 0), 1)
+            : 0
+        let fraction = dragging ? dragFraction : liveFraction
+        let shownMs = dragging ? Int64(dragFraction * Double(durationMs)) : positionMs
+
+        VStack(spacing: 4) {
+            Slider(
+                value: Binding(
+                    get: { fraction },
+                    set: { dragging = true; dragFraction = $0 }
+                ),
+                in: 0...1,
+                onEditingChanged: { editing in
+                    if !editing {
+                        if durationMs > 0 {
+                            controller.seek(toSeconds: dragFraction * Double(durationMs) / 1000)
+                        }
+                        dragging = false
+                    }
+                }
+            )
+            .tint(BockColors.green)
+            .disabled(durationMs <= 0)
+
+            HStack {
+                Text(formatPlaybackTime(seconds: shownMs / 1000))
+                Spacer()
+                Text(formatPlaybackTime(seconds: durationMs / 1000))
+            }
+            .font(.caption)
+            .foregroundStyle(.white.opacity(0.55))
         }
     }
 }

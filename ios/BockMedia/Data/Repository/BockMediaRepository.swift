@@ -258,6 +258,76 @@ final class BockMediaRepository: ObservableObject {
         _ = try await api.reportClientEvent(body: body)
     }
 
+    // MARK: - Household / Family
+
+    func household() async throws -> HouseholdResponse {
+        try await ensureAPI()
+        return try await api.household()
+    }
+
+    func createMember(name: String, role: String) async throws -> HouseholdMember {
+        try await ensureAPI()
+        return try await api.createMember(body: ["name": name, "role": role])
+    }
+
+    func updateMember(id: String, role: String) async throws -> HouseholdMember {
+        try await ensureAPI()
+        return try await api.updateMember(id: id, body: ["role": role])
+    }
+
+    func deleteMember(id: String) async throws {
+        try await ensureAPI()
+        _ = try await api.deleteMember(id: id)
+    }
+
+    func setMemberPin(id: String, pin: String, currentPin: String?) async throws -> OkResponse {
+        try await ensureAPI()
+        var body: [String: Any] = ["pin": pin]
+        if let currentPin, !currentPin.isEmpty { body["currentPin"] = currentPin }
+        return try await api.setMemberPin(id: id, body: body)
+    }
+
+    func setDeviceOwner(deviceId: String, memberId: String?) async throws {
+        try await ensureAPI()
+        if let memberId, !memberId.isEmpty {
+            _ = try await api.setDeviceOwner(id: deviceId, body: ["memberId": memberId])
+        } else {
+            _ = try await api.clearDeviceOwner(id: deviceId)
+        }
+    }
+
+    func roomPolicy(deviceId: String) async throws -> RoomPolicy {
+        try await ensureAPI()
+        return try await api.roomPolicy(id: deviceId)
+    }
+
+    func setRoomPolicy(deviceId: String, body: [String: Any]) async throws -> RoomPolicy {
+        try await ensureAPI()
+        return try await api.setRoomPolicy(id: deviceId, body: body)
+    }
+
+    func householdAnalytics() async throws -> HouseholdAnalytics {
+        try await ensureAPI()
+        return try await api.householdAnalytics()
+    }
+
+    func messages(member: String?) async throws -> MessagesResponse {
+        try await ensureAPI()
+        return try await api.messages(member: member)
+    }
+
+    func sendMessage(fromMemberId: String?, toMemberId: String?, text: String) async throws -> FamilyMessage {
+        try await ensureAPI()
+        var body: [String: Any] = [
+            "text": text,
+            "clientId": ClientIdStore.clientId(),
+            "scope": (toMemberId?.isEmpty == false) ? "direct" : "household",
+        ]
+        if let fromMemberId, !fromMemberId.isEmpty { body["fromMemberId"] = fromMemberId }
+        if let toMemberId, !toMemberId.isEmpty { body["toMemberId"] = toMemberId }
+        return try await api.sendMessage(body: body)
+    }
+
     func alexaRemoteStatus() async throws -> AlexaRemoteStatus {
         try await ensureAPI()
         return try await api.alexaRemoteStatus()

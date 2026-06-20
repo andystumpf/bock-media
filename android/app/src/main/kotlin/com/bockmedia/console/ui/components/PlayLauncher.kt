@@ -10,6 +10,7 @@ import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.PlayTarget
 import com.bockmedia.console.domain.model.PlaybackFocus
 import com.bockmedia.console.local.LastDeviceStore
+import com.bockmedia.console.media.LOCAL_PHONE_DEVICE_ID
 import com.bockmedia.console.media.LocalPlaybackController
 import kotlinx.coroutines.launch
 import retrofit2.HttpException
@@ -63,6 +64,7 @@ fun PlayTargetLauncher(
     snackbarHostState: SnackbarHostState,
     onClear: () -> Unit,
     onPlayStarted: (deviceValue: String, deviceLabel: String?) -> Unit = { _, _ -> },
+    onLocalPlayStarted: () -> Unit = {},
 ) {
     if (target == null) return
     val context = LocalContext.current
@@ -96,6 +98,8 @@ fun PlayTargetLauncher(
                     if (err != null) {
                         snackbarHostState.showSnackbar(err)
                     } else {
+                        PlaybackFocus.notePlayStarted(LOCAL_PHONE_DEVICE_ID, "This phone")
+                        onLocalPlayStarted()
                         snackbarHostState.showSnackbar("Playing \"${target.label}\" on this phone")
                         showPicker = false
                         onClear()
