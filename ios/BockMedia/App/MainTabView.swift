@@ -167,6 +167,8 @@ struct MainTabView: View {
             RoomsView(appState: appState)
         case .devices:
             DevicesView(appState: appState)
+        case .family:
+            FamilyView(appState: appState)
         case .analytics:
             AnalyticsView(appState: appState)
         case .about:

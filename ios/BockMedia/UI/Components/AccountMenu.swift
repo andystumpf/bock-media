@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum AccountRoute: String, Identifiable, Equatable {
-    case settings, downloads, routines, recent, rooms, devices, analytics, about
+    case settings, downloads, routines, recent, rooms, devices, family, analytics, about
 
     var id: String { rawValue }
 
@@ -13,6 +13,7 @@ enum AccountRoute: String, Identifiable, Equatable {
         case .recent: return "Voice log"
         case .rooms: return "Rooms"
         case .devices: return "Alexa Devices"
+        case .family: return "Family"
         case .analytics: return "Analytics"
         case .about: return "About"
         }
@@ -26,6 +27,7 @@ enum AccountRoute: String, Identifiable, Equatable {
         case .recent: return .recordVoiceOver
         case .rooms: return .home
         case .devices: return .speaker
+        case .family: return .person
         case .analytics: return .analytics
         case .about: return .settings
         }
@@ -45,7 +47,7 @@ struct AccountMenuButton: View {
 
     var body: some View {
         Menu {
-            ForEach([AccountRoute.settings, .downloads, .recent, .rooms, .devices, .analytics, .about]) { item in
+            ForEach([AccountRoute.settings, .downloads, .recent, .rooms, .devices, .family, .analytics, .about]) { item in
                 Button {
                     route = item
                 } label: {

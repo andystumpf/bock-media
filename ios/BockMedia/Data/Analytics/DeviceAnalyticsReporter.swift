@@ -68,6 +68,9 @@ enum DeviceAnalyticsReporter {
                 "deviceName": deviceLabel(),
                 "event": event,
             ]
+            if let memberId = ActiveProfileStore.activeMemberId() {
+                body["memberId"] = memberId
+            }
             extra(&body)
             try? await repository.reportClientEvent(body)
         }

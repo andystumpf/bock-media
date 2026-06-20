@@ -225,16 +225,91 @@ final class BockMediaAPIClient {
         try await get("api/nowplaying", query: ["page": "\(page)", "limit": "\(limit)"])
     }
 
-    func analytics(from: String? = nil, to: String? = nil, deviceId: String? = nil) async throws -> AnalyticsResponse {
+    func analytics(
+        from: String? = nil,
+        to: String? = nil,
+        deviceId: String? = nil,
+        member: String? = nil,
+        platform: String? = nil
+    ) async throws -> AnalyticsResponse {
         var query: [String: String] = [:]
         if let from { query["from"] = from }
         if let to { query["to"] = to }
         if let deviceId, !deviceId.isEmpty { query["deviceId"] = deviceId }
+        if let member, !member.isEmpty { query["member"] = member }
+        if let platform, !platform.isEmpty { query["platform"] = platform }
         return try await get("api/analytics", query: query)
     }
 
     func reportClientEvent(body: [String: Any]) async throws -> OkResponse {
         try await post("api/clients/report", body: body)
+    }
+
+    // MARK: - Household / Family
+
+    func household() async throws -> HouseholdResponse {
+        try await get("api/household")
+    }
+
+    func createMember(body: [String: Any]) async throws -> HouseholdMember {
+        try await post("api/household/members", body: body)
+    }
+
+    func updateMember(id: String, body: [String: Any]) async throws -> HouseholdMember {
+        try await request(path: "api/household/members/\(id)", method: "PUT", query: [:], body: body)
+    }
+
+    func deleteMember(id: String) async throws -> OkResponse {
+        try await request(path: "api/household/members/\(id)", method: "DELETE", query: [:], body: nil)
+    }
+
+    func setMemberPin(id: String, body: [String: Any]) async throws -> OkResponse {
+        try await post("api/household/members/\(id)/pin", body: body)
+    }
+
+    func bindClient(body: [String: Any]) async throws -> OkResponse {
+        try await post("api/clients/bind", body: body)
+    }
+
+    func setDeviceOwner(id: String, body: [String: Any]) async throws -> OkResponse {
+        try await post("api/devices/\(id)/owner", body: body)
+    }
+
+    func clearDeviceOwner(id: String) async throws -> OkResponse {
+        try await request(path: "api/devices/\(id)/owner", method: "DELETE", query: [:], body: nil)
+    }
+
+    func roomPolicy(id: String) async throws -> RoomPolicy {
+        try await get("api/devices/\(id)/policy")
+    }
+
+    func setRoomPolicy(id: String, body: [String: Any]) async throws -> RoomPolicy {
+        try await post("api/devices/\(id)/policy", body: body)
+    }
+
+    func householdAnalytics(from: String? = nil, to: String? = nil) async throws -> HouseholdAnalytics {
+        var query: [String: String] = [:]
+        if let from, !from.isEmpty { query["from"] = from }
+        if let to, !to.isEmpty { query["to"] = to }
+        return try await get("api/analytics/household", query: query)
+    }
+
+    func messages(member: String? = nil) async throws -> MessagesResponse {
+        var query: [String: String] = [:]
+        if let member, !member.isEmpty { query["member"] = member }
+        return try await get("api/messages", query: query)
+    }
+
+    func sendMessage(body: [String: Any]) async throws -> FamilyMessage {
+        try await post("api/messages", body: body)
+    }
+
+    func sharePlaylist(id: String, body: [String: Any]) async throws -> OkResponse {
+        try await post("api/playlists/\(id)/share", body: body)
+    }
+
+    func roomRequest(deviceId: String, body: [String: Any]) async throws -> OkResponse {
+        try await post("api/rooms/\(deviceId)/requests", body: body)
     }
 
     // MARK: - Playback
