@@ -347,7 +347,7 @@ struct NowPlayingView: View {
                     ForEach(Array(viewModel.devices.enumerated()), id: \.element.id) { idx, dev in
                         NowPlayingDevicePage(
                             dev: displayDevice(dev),
-                            artURL: viewModel.artURLs[dev.deviceId],
+                            initialArtURL: viewModel.artURLs[dev.deviceId],
                             viewModel: viewModel,
                             repository: appState.repository,
                             showPagerInset: viewModel.devices.count > 1,
@@ -394,12 +394,15 @@ struct NowPlayingView: View {
 
 private struct NowPlayingDevicePage: View {
     let dev: NowPlayingDeviceItem
-    let artURL: URL?
+    let initialArtURL: URL?
     @ObservedObject var viewModel: NowPlayingViewModel
     let repository: BockMediaRepository
     var showPagerInset: Bool
     let onUpNext: () -> Void
     let upNextCount: Int
+
+    @State private var artURL: URL?
+    @State private var artPath: String = ""
 
     var body: some View {
         let progress = viewModel.progress(for: dev)
@@ -547,6 +550,25 @@ private struct NowPlayingDevicePage: View {
                     .padding(.bottom, showPagerInset ? 36 : 16)
                     .background(Color.black.opacity(0.95))
                 }
+            }
+        }
+        // Resolve artwork from the *live* track so it never lags a song behind the
+        // title/metadata (which update instantly from LocalPlaybackController).
+        .task(id: dev.filepath) {
+            let path = dev.filepath ?? ""
+            if path != artPath {
+                artURL = nil
+                artPath = path
+            }
+            if path.isEmpty {
+                artURL = nil
+                return
+            }
+            if let str = await repository.artworkURL(for: path), let url = URL(string: str) {
+                guard dev.filepath == path else { return }
+                artURL = url
+            } else {
+                artURL = initialArtURL
             }
         }
     }
