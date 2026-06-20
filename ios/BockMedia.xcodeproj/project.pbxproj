@@ -44,6 +44,7 @@
 		3C312B3AF680035445DDCBEB /* SetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E3DCB7FF89D2B837A7DFB01 /* SetupView.swift */; };
 		3D826163300C0FD8F419D8FB /* PhonePlayback.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CC695189DB77B2380B67826 /* PhonePlayback.swift */; };
 		3EE7E3FA8ED34A331DD3AFF3 /* ServerEndpointResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = C463BB2CBC85DDC1541AD79D /* ServerEndpointResolver.swift */; };
+		4021E8432D6DB2CB2BB0739E /* AboutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9B253A49D2E2447BEB1021C /* AboutView.swift */; };
 		4A335928C04380449389D2E3 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AF0681BB0768DB0E4BA8C22 /* AppState.swift */; };
 		4BC61D484F1E01E3C62E044A /* ModelsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BE03322B94FC96A776A3088 /* ModelsTests.swift */; };
 		4BCAFDFDE64587E400CF1D3C /* HomeLoadCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = F770544B548EE417CE6A9931 /* HomeLoadCoordinator.swift */; };
@@ -243,6 +244,7 @@
 		A7E18E4C61681676CEEB48FB /* HomeComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeComponents.swift; sourceTree = "<group>"; };
 		A8765ECD4B264BB438A2AAC5 /* HomeCachePersistence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeCachePersistence.swift; sourceTree = "<group>"; };
 		A87D8297AB66C44EDDE32C1F /* BockTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BockTheme.swift; sourceTree = "<group>"; };
+		A9B253A49D2E2447BEB1021C /* AboutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AboutView.swift; sourceTree = "<group>"; };
 		A9C1E147FD04D856340161E8 /* BockMediaTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = BockMediaTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		AED4F166716568AA33D9A26C /* PlaylistAdminSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaylistAdminSheets.swift; sourceTree = "<group>"; };
 		B1BB23134EA00E9114374375 /* HomeFeedComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeFeedComposer.swift; sourceTree = "<group>"; };
@@ -272,7 +274,7 @@
 		F80B7AF5FF5042D2B666FD49 /* BockMediaWidget.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = BockMediaWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		F9F3EB64BBFDF50AB66DD520 /* FavoritesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FavoritesView.swift; sourceTree = "<group>"; };
 		FFCDF62A3F48ABAEDE57003F /* WidgetSnapshotLogic.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetSnapshotLogic.swift; sourceTree = "<group>"; };
-		"TEMP_EBB3F9B2-3726-4F93-8E6A-930FF1029876" /* Config.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config.xcconfig; sourceTree = "<group>"; };
+		"TEMP_E1E14F0B-5484-4D78-8B52-7600EE56D12B" /* Config.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -322,6 +324,14 @@
 				3D432AE0C29FFD8D4886088E /* NowPlayingView.swift */,
 			);
 			path = NowPlaying;
+			sourceTree = "<group>";
+		};
+		15EFA8FFDDBCE65F21D7AD7C /* About */ = {
+			isa = PBXGroup;
+			children = (
+				A9B253A49D2E2447BEB1021C /* AboutView.swift */,
+			);
+			path = About;
 			sourceTree = "<group>";
 		};
 		1F8B5E64AC0BC851320CE1E7 /* Auth */ = {
@@ -569,6 +579,7 @@
 		A747E665903BB3D741DABA5B /* Features */ = {
 			isa = PBXGroup;
 			children = (
+				15EFA8FFDDBCE65F21D7AD7C /* About */,
 				D50FEB089B50BBF1E25BFC7A /* Analytics */,
 				5442A87EC9309DC5F8B667CD /* Automations */,
 				83614EEA151BA694F3CEB609 /* Devices */,
@@ -707,10 +718,10 @@
 			path = App;
 			sourceTree = "<group>";
 		};
-		"TEMP_A2AE5AD8-3CAF-46B5-B0C5-006F91BC400E" /* ios */ = {
+		"TEMP_37E1D02D-A991-4A57-9507-E77E4570C29F" /* ios */ = {
 			isa = PBXGroup;
 			children = (
-				"TEMP_EBB3F9B2-3726-4F93-8E6A-930FF1029876" /* Config.xcconfig */,
+				"TEMP_E1E14F0B-5484-4D78-8B52-7600EE56D12B" /* Config.xcconfig */,
 			);
 			path = ios;
 			sourceTree = "<group>";
@@ -886,6 +897,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				4021E8432D6DB2CB2BB0739E /* AboutView.swift in Sources */,
 				12F5D1B79FBEFDEE6193A173 /* AccountMenu.swift in Sources */,
 				195A31D4093FB99E55238FAB /* AddToPlaylistSheet.swift in Sources */,
 				F0CFE36BC8D7648C60492E7B /* AlexaAuthMonitor.swift in Sources */,
@@ -1110,7 +1122,7 @@
 		};
 		6219BA74FFAB2E1B8F1C720E /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = "TEMP_EBB3F9B2-3726-4F93-8E6A-930FF1029876" /* Config.xcconfig */;
+			baseConfigurationReference = "TEMP_E1E14F0B-5484-4D78-8B52-7600EE56D12B" /* Config.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;
@@ -1213,7 +1225,7 @@
 		};
 		B7DF9EF27EC8F31E180E8E80 /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = "TEMP_EBB3F9B2-3726-4F93-8E6A-930FF1029876" /* Config.xcconfig */;
+			baseConfigurationReference = "TEMP_E1E14F0B-5484-4D78-8B52-7600EE56D12B" /* Config.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;

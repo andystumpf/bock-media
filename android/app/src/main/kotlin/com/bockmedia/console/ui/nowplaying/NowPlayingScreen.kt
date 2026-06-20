@@ -98,7 +98,6 @@ fun NowPlayingScreen(
     var histTotal by remember { mutableIntStateOf(0) }
     var tick by remember { mutableIntStateOf(0) }
     var sleepDevice by remember { mutableStateOf<NowPlayingDeviceItem?>(null) }
-    var ignoreDevice by remember { mutableStateOf<NowPlayingDeviceItem?>(null) }
     var showHistory by remember { mutableStateOf(false) }
     var favoritePaths by remember { mutableStateOf<Set<String>>(emptySet()) }
     val volumes = remember { mutableStateMapOf<String, Int?>() }
@@ -261,34 +260,6 @@ fun NowPlayingScreen(
         )
     }
 
-    ignoreDevice?.let { dev ->
-        AlertDialog(
-            onDismissRequest = { ignoreDevice = null },
-            title = { Text("Never play again?") },
-            text = { Text("\"${dev.track ?: "this song"}\" will be skipped in future playback.") },
-            confirmButton = {
-                TextButton(onClick = {
-                    scope.launch {
-                        val path = dev.filepath
-                        if (path != null) {
-                            runCatching {
-                                repository.addIgnored(path)
-                                snackbarHostState.showSnackbar("\"${dev.track ?: "Song"}\" won't play again")
-                                if (canControlDevice(dev, alexaDevices, controlsAvailable, remoteOk)) {
-                                    runControl(dev, "next")
-                                }
-                            }.onFailure {
-                                snackbarHostState.showSnackbar("Failed to ignore track")
-                            }
-                        }
-                        ignoreDevice = null
-                    }
-                }) { Text("Never again") }
-            },
-            dismissButton = { TextButton(onClick = { ignoreDevice = null }) { Text("Cancel") } },
-        )
-    }
-
     if (showHistory) {
         StreamingHistorySheet(
             history = history,
@@ -374,7 +345,6 @@ fun NowPlayingScreen(
                             onHistory = { showHistory = true },
                             onControl = { d, action -> scope.launch { runControl(d, action) } },
                             onSleep = { sleepDevice = it },
-                            onIgnore = { ignoreDevice = it },
                             favoritePaths = favoritePaths,
                             onFavorite = { d ->
                                 scope.launch {
@@ -573,7 +543,6 @@ private fun SpotifyNowPlayingPage(
     onHistory: () -> Unit,
     onControl: (NowPlayingDeviceItem, String) -> Unit,
     onSleep: (NowPlayingDeviceItem) -> Unit,
-    onIgnore: (NowPlayingDeviceItem) -> Unit,
     favoritePaths: Set<String>,
     onFavorite: (NowPlayingDeviceItem) -> Unit,
 ) {
@@ -597,7 +566,6 @@ private fun SpotifyNowPlayingPage(
     }
     val elapsedSec = prog.elapsedMs / 1000
     val durationSec = prog.durationMs / 1000
-    var showMoreMenu by remember { mutableStateOf(false) }
     var showUpNext by remember { mutableStateOf(false) }
     var showLyrics by remember { mutableStateOf(false) }
     var lyrics by remember { mutableStateOf<com.bockmedia.console.data.api.dto.LyricsResponse?>(null) }
@@ -664,7 +632,6 @@ private fun SpotifyNowPlayingPage(
                 isLocal = isLocal,
                 onBack = onBack,
                 onHistory = onHistory,
-                onMore = { showMoreMenu = true },
             )
 
             BoxWithConstraints(
@@ -767,19 +734,9 @@ private fun SpotifyNowPlayingPage(
                         modifier = Modifier.padding(top = 4.dp),
                     )
                     if (canControl) {
-                        SpotifyStopButton(
-                            onClick = { onControl(displayDev, "stop") },
-                            modifier = Modifier
-                                .padding(horizontal = 24.dp)
-                                .padding(top = 4.dp, bottom = 4.dp),
-                        )
-
                         val serial = if (isLocal) null else resolveSerial(displayDev, alexaDevices)
-                        when {
-                            isLocal -> LocalVolumeRow(
-                                modifier = Modifier.padding(horizontal = 8.dp).padding(top = 4.dp, bottom = 8.dp),
-                            )
-                            serial != null -> SpotifyVolumeRow(
+                        if (serial != null) {
+                            SpotifyVolumeRow(
                                 dev = displayDev,
                                 serial = serial,
                                 volume = volumes[dev.deviceId],
@@ -825,37 +782,6 @@ private fun SpotifyNowPlayingPage(
             }
         }
 
-        DropdownMenu(
-            expanded = showMoreMenu,
-            onDismissRequest = { showMoreMenu = false },
-        ) {
-            if (dev.filepath != null) {
-                DropdownMenuItem(
-                    text = { Text("Lyrics") },
-                    onClick = {
-                        showMoreMenu = false
-                        showLyrics = true
-                    },
-                    leadingIcon = { Icon(Icons.Default.Lyrics, null) },
-                )
-                DropdownMenuItem(
-                    text = { Text("Never play again") },
-                    onClick = {
-                        showMoreMenu = false
-                        onIgnore(dev)
-                    },
-                    leadingIcon = { Icon(Icons.Default.Block, null) },
-                )
-            }
-            DropdownMenuItem(
-                text = { Text("Stop playback") },
-                onClick = {
-                    showMoreMenu = false
-                    onControl(dev, "stop")
-                },
-                leadingIcon = { Icon(Icons.Default.Stop, null) },
-            )
-        }
         if (showUpNext) {
             UpNextSheet(
                 tracks = displayDev.upcoming,
@@ -922,7 +848,6 @@ private fun SpotifyPlayerTopBar(
     isLocal: Boolean = false,
     onBack: () -> Unit,
     onHistory: () -> Unit,
-    onMore: () -> Unit,
 ) {
     Row(
         Modifier
@@ -958,9 +883,6 @@ private fun SpotifyPlayerTopBar(
         }
         IconButton(onClick = onHistory) {
             Icon(Icons.Default.History, contentDescription = "History", tint = Color.White)
-        }
-        IconButton(onClick = onMore) {
-            Icon(Icons.Default.MoreHoriz, contentDescription = "More", tint = Color.White)
         }
     }
 }
@@ -1120,41 +1042,6 @@ private fun SpotifyProgressBar(
 }
 
 @Composable
-private fun SpotifyStopButton(
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Surface(
-        onClick = onClick,
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(50),
-        color = Color.White.copy(alpha = 0.1f),
-    ) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                Icons.Default.Stop,
-                contentDescription = null,
-                tint = Color.White,
-                modifier = Modifier.size(20.dp),
-            )
-            Spacer(Modifier.width(8.dp))
-            Text(
-                "Stop",
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = Color.White,
-            )
-        }
-    }
-}
-
-@Composable
 private fun SpotifyTransportControls(
     dev: NowPlayingDeviceItem,
     shuffleOn: MutableMap<String, Boolean>,
@@ -1288,41 +1175,6 @@ private fun SpotifyVolumeRow(
                 }
             },
             valueRange = 0f..100f,
-            modifier = Modifier.weight(1f).padding(horizontal = 4.dp),
-            colors = SliderDefaults.colors(
-                thumbColor = Color.White,
-                activeTrackColor = Color.White,
-                inactiveTrackColor = Color.White.copy(alpha = 0.28f),
-            ),
-        )
-        Icon(Icons.Default.VolumeUp, null, Modifier.size(20.dp), tint = Color.White.copy(alpha = 0.65f))
-    }
-}
-
-@Composable
-private fun LocalVolumeRow(modifier: Modifier = Modifier) {
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val audio = remember {
-        context.getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
-    }
-    val maxVol = remember { audio.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC).coerceAtLeast(1) }
-    var level by remember { mutableStateOf(audio.getStreamVolume(android.media.AudioManager.STREAM_MUSIC).toFloat()) }
-    Row(
-        modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(Icons.Default.VolumeDown, null, Modifier.size(20.dp), tint = Color.White.copy(alpha = 0.65f))
-        Slider(
-            value = level,
-            onValueChange = { v ->
-                level = v
-                audio.setStreamVolume(
-                    android.media.AudioManager.STREAM_MUSIC,
-                    v.toInt().coerceIn(0, maxVol),
-                    0,
-                )
-            },
-            valueRange = 0f..maxVol.toFloat(),
             modifier = Modifier.weight(1f).padding(horizontal = 4.dp),
             colors = SliderDefaults.colors(
                 thumbColor = Color.White,

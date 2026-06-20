@@ -57,6 +57,7 @@ import com.bockmedia.console.ui.playlists.PlaylistsScreen
 import com.bockmedia.console.ui.rooms.RoomsScreen
 import com.bockmedia.console.ui.search.GenreDetailScreen
 import com.bockmedia.console.ui.search.SearchScreen
+import com.bockmedia.console.ui.about.AboutScreen
 import com.bockmedia.console.ui.settings.SettingsScreen
 import java.net.URLDecoder
 
@@ -418,6 +419,9 @@ private fun BockNavHost(
                 },
                 onOpenPlaylists = { navController.navigate(BockRoute.Playlists.route) },
             )
+        }
+        composable(BockRoute.About.route) {
+            AboutScreen(repository = repository)
         }
     }
 }

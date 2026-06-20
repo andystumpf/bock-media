@@ -1,0 +1,229 @@
+2026-06-20 05:31:28 +0000 [MT] Initial pipeline context: <IDEDistributionProcessingPipelineContext: 0x7b9eacf00; archive(resolved)="<IDEArchive: 0x7b7c4f8e0>", distributionTask(resolved)="2", distributionDestination(resolved)="1", distributionMethod(resolved)="<IDEDistributionMethodDevelopmentSigned: 0x7b96afd30>", team(resolved)="<IDEProvisioningBasicTeam: 0x7b9e78860; teamID='4524GF2BNX', teamName='(null)'>">
+	Chain (14, self inclusive):
+	<IDEDistributionProcessingPipelineContext: 0x7b9eacf00; archive = "<IDEArchive: 0x7b7c4f8e0>", distributionMethod="<IDEDistributionMethodDevelopmentSigned: 0x7b96afd30>", team="<IDEProvisioningBasicTeam: 0x7b9e78860; teamID='4524GF2BNX', teamName='(null)'>">
+	<IDEDistributionProcessingPipelineContext: 0x7b9ead200; archive = "<IDEArchive: 0x7b7c4f8e0>", distributionMethod="<IDEDistributionMethodDevelopmentSigned: 0x7b96afd30>", team="<IDEProvisioningBasicTeam: 0x7b9e78860; teamID='4524GF2BNX', teamName='(null)'>">
+	<IDEDistributionContext: 0x7b9e5e580; archive = "<IDEArchive: 0x7b7c4f8e0>", distributionMethod="<IDEDistributionMethodDevelopmentSigned: 0x7b96afd30>", team="<IDEProvisioningBasicTeam: 0x7b9e78860; teamID='4524GF2BNX', teamName='(null)'>">
+	<IDEDistributionContext: 0x7b9e5d680; archive = "<IDEArchive: 0x7b7c4f8e0>", distributionMethod="<IDEDistributionMethodDevelopmentSigned: 0x7b96afd30>", team="<IDEProvisioningBasicTeam: 0x7b9e78860; teamID='4524GF2BNX', teamName='(null)'>">
+	<IDEDistributionContext: 0x7b9e5d400; archive = "<IDEArchive: 0x7b7c4f8e0>", distributionMethod="<IDEDistributionMethodDevelopmentSigned: 0x7b96afd30>", team="<IDEProvisioningBasicTeam: 0x7b9e78860; teamID='4524GF2BNX', teamName='(null)'>">
+	<IDEDistributionContext: 0x7b9e5d180; archive = "<IDEArchive: 0x7b7c4f8e0>", distributionMethod="<IDEDistributionMethodDevelopmentSigned: 0x7b96afd30>", team="<IDEProvisioningBasicTeam: 0x7b9e78860; teamID='4524GF2BNX', teamName='(null)'>">
+	<IDEDistributionContext: 0x7b9e5cf00; archive = "<IDEArchive: 0x7b7c4f8e0>", distributionMethod="<IDEDistributionMethodDevelopmentSigned: 0x7b96afd30>", team="<IDEProvisioningBasicTeam: 0x7b9e78860; teamID='4524GF2BNX', teamName='(null)'>">
+	<IDEDistributionContext: 0x7b9e5cc80; archive = "<IDEArchive: 0x7b7c4f8e0>", distributionMethod="<IDEDistributionMethodDevelopmentSigned: 0x7b96afd30>", team="<IDEProvisioningBasicTeam: 0x7b9e78860; teamID='4524GF2BNX', teamName='(null)'>">
+	<IDEDistributionContext: 0x7b9e5ca00; archive = "<IDEArchive: 0x7b7c4f8e0>", distributionMethod="<IDEDistributionMethodDevelopmentSigned: 0x7b96afd30>", team="<IDEProvisioningBasicTeam: 0x7b9e78860; teamID='4524GF2BNX', teamName='(null)'>">
+	<IDEDistributionContext: 0x7b9e5c780; archive = "<IDEArchive: 0x7b7c4f8e0>", distributionMethod="<IDEDistributionMethodDevelopmentSigned: 0x7b96afd30>", team="(null)">
+	<IDEDistributionContext: 0x7b9e5c500; archive = "<IDEArchive: 0x7b7c4f8e0>", distributionMethod="<IDEDistributionMethodDevelopmentSigned: 0x7b96afd30>", team="(null)">
+	<IDEDistributionContext: 0x7b9e5c280; archive = "<IDEArchive: 0x7b7c4f8e0>", distributionMethod="<IDEDistributionMethodDevelopmentSigned: 0x7b96afd30>", team="(null)">
+	<IDEDistributionContext: 0x7b9e5c000; archive = "<IDEArchive: 0x7b7c4f8e0>", distributionMethod="<IDEDistributionMethodDevelopmentSigned: 0x7b96afd30>", team="(null)">
+	<IDEDistributionContext: 0x1029f2830; archive = "<IDEArchive: 0x7b7c4f8e0>", distributionMethod="(null)", team="(null)">
+</IDEDistributionProcessingPipelineContext: 0x7b9eacf00>
+2026-06-20 05:31:28 +0000 [MT] Processing step: IDEDistributionCreateDestRootStep
+2026-06-20 05:31:28 +0000 [MT] Processing step: IDEDistributionCopyItemStep
+2026-06-20 05:31:28 +0000 [MT] Running /usr/bin/ditto '-V' '/Users/andymac/Documents/GitHub/ourMedia/ios/build/BockMedia.xcarchive/Products/Applications/BockMedia.app' '/var/folders/09/rbl5h4vs23q6316yvzf5gpkr0000gn/T/XcodeDistPipeline.~~~7aVqGX/Root/Payload/BockMedia.app'
+2026-06-20 05:31:28 +0000  >>> Copying /Users/andymac/Documents/GitHub/ourMedia/ios/build/BockMedia.xcarchive/Products/Applications/BockMedia.app 
+2026-06-20 05:31:28 +0000  copying file ./_CodeSignature/CodeResources ... 
+2026-06-20 05:31:28 +0000  4179 bytes for ./_CodeSignature/CodeResources
+2026-06-20 05:31:28 +0000  copying file ./PlugIns/BockMediaWidget.appex/_CodeSignature/CodeResources ... 
+2026-06-20 05:31:28 +0000  2246 bytes for ./PlugIns/BockMediaWidget.appex/_CodeSignature/CodeResources
+2026-06-20 05:31:28 +0000  copying file ./PlugIns/BockMediaWidget.appex/BockMediaWidget ... 
+2026-06-20 05:31:28 +0000  222464 bytes for ./PlugIns/BockMediaWidget.appex/BockMediaWidget
+2026-06-20 05:31:28 +0000  copying file ./PlugIns/BockMediaWidget.appex/Assets.car ... 
+2026-06-20 05:31:28 +0000  809192 bytes for ./PlugIns/BockMediaWidget.appex/Assets.car
+2026-06-20 05:31:28 +0000  copying file ./PlugIns/BockMediaWidget.appex/embedded.mobileprovision ... 
+2026-06-20 05:31:28 +0000  12554 bytes for ./PlugIns/BockMediaWidget.appex/embedded.mobileprovision
+2026-06-20 05:31:28 +0000  copying file ./PlugIns/BockMediaWidget.appex/Info.plist ... 
+2026-06-20 05:31:28 +0000  1028 bytes for ./PlugIns/BockMediaWidget.appex/Info.plist
+2026-06-20 05:31:28 +0000  copying file ./AppIcon60x60@2x.png ... 
+2026-06-20 05:31:28 +0000  23834 bytes for ./AppIcon60x60@2x.png
+2026-06-20 05:31:28 +0000  copying file ./Assets.car ... 
+2026-06-20 05:31:28 +0000  2963144 bytes for ./Assets.car
+2026-06-20 05:31:28 +0000  copying file ./AppIcon76x76@2x~ipad.png ... 
+2026-06-20 05:31:28 +0000  36861 bytes for ./AppIcon76x76@2x~ipad.png
+2026-06-20 05:31:28 +0000  copying file ./BockMedia ... 
+2026-06-20 05:31:28 +0000  2934000 bytes for ./BockMedia
+2026-06-20 05:31:28 +0000  copying file ./embedded.mobileprovision ... 
+2026-06-20 05:31:28 +0000  12501 bytes for ./embedded.mobileprovision
+2026-06-20 05:31:28 +0000  copying file ./Info.plist ... 
+2026-06-20 05:31:28 +0000  1701 bytes for ./Info.plist
+2026-06-20 05:31:28 +0000  copying file ./PkgInfo ... 
+2026-06-20 05:31:28 +0000  8 bytes for ./PkgInfo
+2026-06-20 05:31:28 +0000 [MT] /usr/bin/ditto exited with 0
+2026-06-20 05:31:28 +0000 [MT] Processing step: IDEDistributionEmbedProfileStep
+2026-06-20 05:31:28 +0000 [MT] Processing step: IDEDistributionInfoPlistStep
+2026-06-20 05:31:28 +0000 [MT] Skipping step: IDEDistributionInfoPlistStep because it said so
+2026-06-20 05:31:28 +0000 [MT] Skipping step: IDEDistributionInfoPlistStep because it said so
+2026-06-20 05:31:28 +0000 [MT] Processing step: IDEDistributionAppThinningPlistStep
+2026-06-20 05:31:28 +0000 [MT] Skipping step: IDEDistributionAppThinningPlistStep because it said so
+2026-06-20 05:31:28 +0000 [MT] Processing step: IDEDistributionSymbolsStep
+2026-06-20 05:31:28 +0000 [MT] Skipping step: IDEDistributionSymbolsStep because it said so
+2026-06-20 05:31:28 +0000 [MT] Processing step: IDEDistributionAppThinningStep
+2026-06-20 05:31:28 +0000 [MT] Skipping step: IDEDistributionAppThinningStep because it said so
+2026-06-20 05:31:28 +0000 [MT] Processing step: IDEDistributionArchThinningStep
+2026-06-20 05:31:28 +0000 [MT] Archs to thin for item /Users/andymac/Documents/GitHub/ourMedia/ios/build/BockMedia.xcarchive/Products/Applications/BockMedia.app/PlugIns/BockMediaWidget.appex are []
+2026-06-20 05:31:28 +0000 [MT] Archs to thin for item /Users/andymac/Documents/GitHub/ourMedia/ios/build/BockMedia.xcarchive/Products/Applications/BockMedia.app are []
+2026-06-20 05:31:28 +0000 [MT] Processing step: IDEDistributionODRStep
+2026-06-20 05:31:28 +0000 [MT] Processing step: IDEDistributionStripXattrsStep
+2026-06-20 05:31:28 +0000 [MT] Skipping stripping extended attributes because the codesign step will strip them.
+2026-06-20 05:31:28 +0000 [MT] Skipping stripping extended attributes because the codesign step will strip them.
+2026-06-20 05:31:28 +0000 [MT] Processing step: IDEDistributionCodesignStep
+2026-06-20 05:31:28 +0000 [MT] Entitlements for <IDEDistributionItem: 0x7b9e1dce0; bundleID='com.bockmedia.console.widget', path='<DVTFilePath:0x7b7d7c000:'/Users/andymac/Documents/GitHub/ourMedia/ios/build/BockMedia.xcarchive/Products/Applications/BockMedia.app/PlugIns/BockMediaWidget.appex'>', codeSigningInfo='<_DVTCodeSigningInformation_Path: 0x7b9e1db60; isSigned='1', isAdHocSigned='0', signingCertificate='<DVTSigningCertificate: 0x7b9ee55c0; name='Apple Development: a.ndystumpf77@gmail.com (JHUXX3LL3Z)', hash='60190FAEBDB1BD16C53D412301A7CF632DA35755', serialNumber='615A8308F211E68966B08D768B23538C', certificateKinds='(
+    "1.2.840.113635.100.6.1.12",
+    "1.2.840.113635.100.6.1.2"
+), issueDate='2025-10-21 21:16:41 +0000''>', entitlements='{
+    "application-identifier" = "4524GF2BNX.com.bockmedia.console.widget";
+    "com.apple.developer.team-identifier" = 4524GF2BNX;
+    "com.apple.security.application-groups" =     (
+        "group.com.bockmedia.console"
+    );
+    "get-task-allow" = 1;
+}', teamID='4524GF2BNX', identifier='com.bockmedia.console.widget', executablePath='<DVTFilePath:0x7b9e1d260:'/Users/andymac/Documents/GitHub/ourMedia/ios/build/BockMedia.xcarchive/Products/Applications/BockMedia.app/PlugIns/BockMediaWidget.appex/BockMediaWidget'>', hardenedRuntime='0'>'>: {
+    "application-identifier" = "4524GF2BNX.com.bockmedia.console.widget";
+    "com.apple.developer.team-identifier" = 4524GF2BNX;
+    "com.apple.security.application-groups" =     (
+        "group.com.bockmedia.console"
+    );
+    "get-task-allow" = 1;
+}
+2026-06-20 05:31:28 +0000 [MT] Associated App Clip Identifiers Filter: Skipping because "com.apple.developer.associated-appclip-app-identifiers" is not present
+2026-06-20 05:31:28 +0000 [MT] Entitlements for <IDEDistributionItem: 0x7b9e1dce0; bundleID='com.bockmedia.console.widget', path='<DVTFilePath:0x7b7d7c000:'/Users/andymac/Documents/GitHub/ourMedia/ios/build/BockMedia.xcarchive/Products/Applications/BockMedia.app/PlugIns/BockMediaWidget.appex'>', codeSigningInfo='<_DVTCodeSigningInformation_Path: 0x7b9e1db60; isSigned='1', isAdHocSigned='0', signingCertificate='<DVTSigningCertificate: 0x7b9ee61c0; name='Apple Development: a.ndystumpf77@gmail.com (JHUXX3LL3Z)', hash='60190FAEBDB1BD16C53D412301A7CF632DA35755', serialNumber='615A8308F211E68966B08D768B23538C', certificateKinds='(
+    "1.2.840.113635.100.6.1.12",
+    "1.2.840.113635.100.6.1.2"
+), issueDate='2025-10-21 21:16:41 +0000''>', entitlements='{
+    "application-identifier" = "4524GF2BNX.com.bockmedia.console.widget";
+    "com.apple.developer.team-identifier" = 4524GF2BNX;
+    "com.apple.security.application-groups" =     (
+        "group.com.bockmedia.console"
+    );
+    "get-task-allow" = 1;
+}', teamID='4524GF2BNX', identifier='com.bockmedia.console.widget', executablePath='<DVTFilePath:0x7b9e1d260:'/Users/andymac/Documents/GitHub/ourMedia/ios/build/BockMedia.xcarchive/Products/Applications/BockMedia.app/PlugIns/BockMediaWidget.appex/BockMediaWidget'>', hardenedRuntime='0'>'> are: {
+    "application-identifier" = "4524GF2BNX.com.bockmedia.console.widget";
+    "com.apple.developer.team-identifier" = 4524GF2BNX;
+    "com.apple.security.application-groups" =     (
+        "group.com.bockmedia.console"
+    );
+    "get-task-allow" = 1;
+}
+2026-06-20 05:31:28 +0000 [MT] Writing entitlements for <IDEDistributionItem: 0x7b9e1dce0; bundleID='com.bockmedia.console.widget', path='<DVTFilePath:0x7b7d7c000:'/Users/andymac/Documents/GitHub/ourMedia/ios/build/BockMedia.xcarchive/Products/Applications/BockMedia.app/PlugIns/BockMediaWidget.appex'>', codeSigningInfo='<_DVTCodeSigningInformation_Path: 0x7b9e1db60; isSigned='1', isAdHocSigned='0', signingCertificate='<DVTSigningCertificate: 0x7b9ee61c0; name='Apple Development: a.ndystumpf77@gmail.com (JHUXX3LL3Z)', hash='60190FAEBDB1BD16C53D412301A7CF632DA35755', serialNumber='615A8308F211E68966B08D768B23538C', certificateKinds='(
+    "1.2.840.113635.100.6.1.12",
+    "1.2.840.113635.100.6.1.2"
+), issueDate='2025-10-21 21:16:41 +0000''>', entitlements='{
+    "application-identifier" = "4524GF2BNX.com.bockmedia.console.widget";
+    "com.apple.developer.team-identifier" = 4524GF2BNX;
+    "com.apple.security.application-groups" =     (
+        "group.com.bockmedia.console"
+    );
+    "get-task-allow" = 1;
+}', teamID='4524GF2BNX', identifier='com.bockmedia.console.widget', executablePath='<DVTFilePath:0x7b9e1d260:'/Users/andymac/Documents/GitHub/ourMedia/ios/build/BockMedia.xcarchive/Products/Applications/BockMedia.app/PlugIns/BockMediaWidget.appex/BockMediaWidget'>', hardenedRuntime='0'>'> to: /var/folders/09/rbl5h4vs23q6316yvzf5gpkr0000gn/T/XcodeDistPipeline.~~~7aVqGX/entitlements~~~3HoPaO
+2026-06-20 05:31:28 +0000 [MT] invoking codesign: <NSConcreteTask: 0x7b9ee1f40; launchPath='/usr/bin/codesign', arguments='(
+    "-f",
+    "-s",
+    60190FAEBDB1BD16C53D412301A7CF632DA35755,
+    "--entitlements",
+    "/var/folders/09/rbl5h4vs23q6316yvzf5gpkr0000gn/T/XcodeDistPipeline.~~~7aVqGX/entitlements~~~3HoPaO",
+    "--preserve-metadata=identifier,flags,runtime,launch-constraints,library-constraints",
+    "--generate-entitlement-der",
+    "--strip-disallowed-xattrs",
+    "-vvv",
+    "/var/folders/09/rbl5h4vs23q6316yvzf5gpkr0000gn/T/XcodeDistPipeline.~~~7aVqGX/Root/Payload/BockMedia.app/PlugIns/BockMediaWidget.appex"
+)'>
+2026-06-20 05:31:28 +0000 [MT] codesign output: /var/folders/09/rbl5h4vs23q6316yvzf5gpkr0000gn/T/XcodeDistPipeline.~~~7aVqGX/Root/Payload/BockMedia.app/PlugIns/BockMediaWidget.appex: replacing existing signature
+/var/folders/09/rbl5h4vs23q6316yvzf5gpkr0000gn/T/XcodeDistPipeline.~~~7aVqGX/Root/Payload/BockMedia.app/PlugIns/BockMediaWidget.appex: signed bundle with Mach-O thin (arm64) [com.bockmedia.console.widget]
+2026-06-20 05:31:28 +0000 [MT] Entitlements for <IDEDistributionItem: 0x7b9e1dd40; bundleID='com.bockmedia.console', path='<DVTFilePath:0x7b9390180:'/Users/andymac/Documents/GitHub/ourMedia/ios/build/BockMedia.xcarchive/Products/Applications/BockMedia.app'>', codeSigningInfo='<_DVTCodeSigningInformation_Path: 0x7b9e1dda0; isSigned='1', isAdHocSigned='0', signingCertificate='<DVTSigningCertificate: 0x7b9ee55c0; name='Apple Development: a.ndystumpf77@gmail.com (JHUXX3LL3Z)', hash='60190FAEBDB1BD16C53D412301A7CF632DA35755', serialNumber='615A8308F211E68966B08D768B23538C', certificateKinds='(
+    "1.2.840.113635.100.6.1.12",
+    "1.2.840.113635.100.6.1.2"
+), issueDate='2025-10-21 21:16:41 +0000''>', entitlements='{
+    "application-identifier" = "4524GF2BNX.com.bockmedia.console";
+    "com.apple.developer.team-identifier" = 4524GF2BNX;
+    "com.apple.security.application-groups" =     (
+        "group.com.bockmedia.console"
+    );
+    "get-task-allow" = 1;
+}', teamID='4524GF2BNX', identifier='com.bockmedia.console', executablePath='<DVTFilePath:0x7b9e1d740:'/Users/andymac/Documents/GitHub/ourMedia/ios/build/BockMedia.xcarchive/Products/Applications/BockMedia.app/BockMedia'>', hardenedRuntime='0'>'>: {
+    "application-identifier" = "4524GF2BNX.com.bockmedia.console";
+    "com.apple.developer.team-identifier" = 4524GF2BNX;
+    "com.apple.security.application-groups" =     (
+        "group.com.bockmedia.console"
+    );
+    "get-task-allow" = 1;
+}
+2026-06-20 05:31:28 +0000 [MT] Associated App Clip Identifiers Filter: Skipping because "com.apple.developer.associated-appclip-app-identifiers" is not present
+2026-06-20 05:31:28 +0000 [MT] Entitlements for <IDEDistributionItem: 0x7b9e1dd40; bundleID='com.bockmedia.console', path='<DVTFilePath:0x7b9390180:'/Users/andymac/Documents/GitHub/ourMedia/ios/build/BockMedia.xcarchive/Products/Applications/BockMedia.app'>', codeSigningInfo='<_DVTCodeSigningInformation_Path: 0x7b9e1dda0; isSigned='1', isAdHocSigned='0', signingCertificate='<DVTSigningCertificate: 0x7b9ee61c0; name='Apple Development: a.ndystumpf77@gmail.com (JHUXX3LL3Z)', hash='60190FAEBDB1BD16C53D412301A7CF632DA35755', serialNumber='615A8308F211E68966B08D768B23538C', certificateKinds='(
+    "1.2.840.113635.100.6.1.12",
+    "1.2.840.113635.100.6.1.2"
+), issueDate='2025-10-21 21:16:41 +0000''>', entitlements='{
+    "application-identifier" = "4524GF2BNX.com.bockmedia.console";
+    "com.apple.developer.team-identifier" = 4524GF2BNX;
+    "com.apple.security.application-groups" =     (
+        "group.com.bockmedia.console"
+    );
+    "get-task-allow" = 1;
+}', teamID='4524GF2BNX', identifier='com.bockmedia.console', executablePath='<DVTFilePath:0x7b9e1d740:'/Users/andymac/Documents/GitHub/ourMedia/ios/build/BockMedia.xcarchive/Products/Applications/BockMedia.app/BockMedia'>', hardenedRuntime='0'>'> are: {
+    "application-identifier" = "4524GF2BNX.com.bockmedia.console";
+    "com.apple.developer.team-identifier" = 4524GF2BNX;
+    "com.apple.security.application-groups" =     (
+        "group.com.bockmedia.console"
+    );
+    "get-task-allow" = 1;
+}
+2026-06-20 05:31:28 +0000 [MT] Writing entitlements for <IDEDistributionItem: 0x7b9e1dd40; bundleID='com.bockmedia.console', path='<DVTFilePath:0x7b9390180:'/Users/andymac/Documents/GitHub/ourMedia/ios/build/BockMedia.xcarchive/Products/Applications/BockMedia.app'>', codeSigningInfo='<_DVTCodeSigningInformation_Path: 0x7b9e1dda0; isSigned='1', isAdHocSigned='0', signingCertificate='<DVTSigningCertificate: 0x7b9ee61c0; name='Apple Development: a.ndystumpf77@gmail.com (JHUXX3LL3Z)', hash='60190FAEBDB1BD16C53D412301A7CF632DA35755', serialNumber='615A8308F211E68966B08D768B23538C', certificateKinds='(
+    "1.2.840.113635.100.6.1.12",
+    "1.2.840.113635.100.6.1.2"
+), issueDate='2025-10-21 21:16:41 +0000''>', entitlements='{
+    "application-identifier" = "4524GF2BNX.com.bockmedia.console";
+    "com.apple.developer.team-identifier" = 4524GF2BNX;
+    "com.apple.security.application-groups" =     (
+        "group.com.bockmedia.console"
+    );
+    "get-task-allow" = 1;
+}', teamID='4524GF2BNX', identifier='com.bockmedia.console', executablePath='<DVTFilePath:0x7b9e1d740:'/Users/andymac/Documents/GitHub/ourMedia/ios/build/BockMedia.xcarchive/Products/Applications/BockMedia.app/BockMedia'>', hardenedRuntime='0'>'> to: /var/folders/09/rbl5h4vs23q6316yvzf5gpkr0000gn/T/XcodeDistPipeline.~~~7aVqGX/entitlements~~~bCtVcj
+2026-06-20 05:31:28 +0000 [MT] invoking codesign: <NSConcreteTask: 0x7b9ee3660; launchPath='/usr/bin/codesign', arguments='(
+    "-f",
+    "-s",
+    60190FAEBDB1BD16C53D412301A7CF632DA35755,
+    "--entitlements",
+    "/var/folders/09/rbl5h4vs23q6316yvzf5gpkr0000gn/T/XcodeDistPipeline.~~~7aVqGX/entitlements~~~bCtVcj",
+    "--preserve-metadata=identifier,flags,runtime,launch-constraints,library-constraints",
+    "--generate-entitlement-der",
+    "--strip-disallowed-xattrs",
+    "-vvv",
+    "/var/folders/09/rbl5h4vs23q6316yvzf5gpkr0000gn/T/XcodeDistPipeline.~~~7aVqGX/Root/Payload/BockMedia.app"
+)'>
+2026-06-20 05:31:28 +0000 [MT] codesign output: /var/folders/09/rbl5h4vs23q6316yvzf5gpkr0000gn/T/XcodeDistPipeline.~~~7aVqGX/Root/Payload/BockMedia.app: replacing existing signature
+/var/folders/09/rbl5h4vs23q6316yvzf5gpkr0000gn/T/XcodeDistPipeline.~~~7aVqGX/Root/Payload/BockMedia.app: signed app bundle with Mach-O thin (arm64) [com.bockmedia.console]
+2026-06-20 05:31:28 +0000 [MT] Processing step: IDEDistributionZipODRItemStep
+2026-06-20 05:31:28 +0000 [MT] Skipping step: IDEDistributionZipODRItemStep because it said so
+2026-06-20 05:31:28 +0000 [MT] Skipping step: IDEDistributionZipODRItemStep because it said so
+2026-06-20 05:31:28 +0000 [MT] Processing step: IDEDistributionCreateIPAStep
+2026-06-20 05:31:28 +0000 [MT] Running /usr/bin/ditto '-V' '-c' '-k' '--norsrc' '/var/folders/09/rbl5h4vs23q6316yvzf5gpkr0000gn/T/XcodeDistPipeline.~~~7aVqGX/Root' '/var/folders/09/rbl5h4vs23q6316yvzf5gpkr0000gn/T/XcodeDistPipeline.~~~7aVqGX/Packages/BockMedia.ipa'
+2026-06-20 05:31:28 +0000  >>> Copying /var/folders/09/rbl5h4vs23q6316yvzf5gpkr0000gn/T/XcodeDistPipeline.~~~7aVqGX/Root 
+2026-06-20 05:31:28 +0000  copying file ./Payload/BockMedia.app/_CodeSignature/CodeResources ... 
+2026-06-20 05:31:28 +0000  4179 bytes for ./Payload/BockMedia.app/_CodeSignature/CodeResources
+2026-06-20 05:31:28 +0000  copying file ./Payload/BockMedia.app/PlugIns/BockMediaWidget.appex/_CodeSignature/CodeResources ... 
+2026-06-20 05:31:28 +0000  2246 bytes for ./Payload/BockMedia.app/PlugIns/BockMediaWidget.appex/_CodeSignature/CodeResources
+copying file ./Payload/BockMedia.app/PlugIns/BockMediaWidget.appex/BockMediaWidget ... 
+2026-06-20 05:31:28 +0000  222464 bytes for ./Payload/BockMedia.app/PlugIns/BockMediaWidget.appex/BockMediaWidget
+2026-06-20 05:31:28 +0000  copying file ./Payload/BockMedia.app/PlugIns/BockMediaWidget.appex/Assets.car ... 
+2026-06-20 05:31:29 +0000  809192 bytes for ./Payload/BockMedia.app/PlugIns/BockMediaWidget.appex/Assets.car
+2026-06-20 05:31:29 +0000  copying file ./Payload/BockMedia.app/PlugIns/BockMediaWidget.appex/embedded.mobileprovision ... 
+2026-06-20 05:31:29 +0000  12554 bytes for ./Payload/BockMedia.app/PlugIns/BockMediaWidget.appex/embedded.mobileprovision
+2026-06-20 05:31:29 +0000  copying file ./Payload/BockMedia.app/PlugIns/BockMediaWidget.appex/Info.plist ... 
+2026-06-20 05:31:29 +0000  1028 bytes for ./Payload/BockMedia.app/PlugIns/BockMediaWidget.appex/Info.plist
+2026-06-20 05:31:29 +0000  copying file ./Payload/BockMedia.app/AppIcon60x60@2x.png ... 
+2026-06-20 05:31:29 +0000  23834 bytes for ./Payload/BockMedia.app/AppIcon60x60@2x.png
+2026-06-20 05:31:29 +0000  copying file ./Payload/BockMedia.app/Assets.car ... 
+2026-06-20 05:31:29 +0000  2963144 bytes for ./Payload/BockMedia.app/Assets.car
+2026-06-20 05:31:29 +0000  copying file ./Payload/BockMedia.app/AppIcon76x76@2x~ipad.png ... 
+2026-06-20 05:31:29 +0000  36861 bytes for ./Payload/BockMedia.app/AppIcon76x76@2x~ipad.png
+2026-06-20 05:31:29 +0000  copying file ./Payload/BockMedia.app/BockMedia ... 
+2026-06-20 05:31:29 +0000  2934000 bytes for ./Payload/BockMedia.app/BockMedia
+2026-06-20 05:31:29 +0000  copying file ./Payload/BockMedia.app/embedded.mobileprovision ... 
+2026-06-20 05:31:29 +0000  12501 bytes for ./Payload/BockMedia.app/embedded.mobileprovision
+2026-06-20 05:31:29 +0000  copying file ./Payload/BockMedia.app/Info.plist ... 
+2026-06-20 05:31:29 +0000  1701 bytes for ./Payload/BockMedia.app/Info.plist
+2026-06-20 05:31:29 +0000  copying file ./Payload/BockMedia.app/PkgInfo ... 
+2026-06-20 05:31:29 +0000  8 bytes for ./Payload/BockMedia.app/PkgInfo
+2026-06-20 05:31:29 +0000 [MT] /usr/bin/ditto exited with 0
+2026-06-20 05:31:29 +0000 [MT] Processing step: IDEDistributionAppStoreInformationStep
+2026-06-20 05:31:29 +0000 [MT] Skipping step: IDEDistributionAppStoreInformationStep because it said so
+2026-06-20 05:31:29 +0000 [MT] Processing step: IDEDistributionGenerateProcessedDistributionItems
+2026-06-20 05:31:29 +0000 [MT] IDEDistributionItem init <DVTFilePath:0x7b7f2caf0:'/var/folders/09/rbl5h4vs23q6316yvzf5gpkr0000gn/T/XcodeDistPipeline.~~~7aVqGX/Root/Payload/BockMedia.app/PlugIns/BockMediaWidget.appex'>
+2026-06-20 05:31:29 +0000 [MT] IDEDistributionItem init <DVTFilePath:0x7b9fc9a40:'/var/folders/09/rbl5h4vs23q6316yvzf5gpkr0000gn/T/XcodeDistPipeline.~~~7aVqGX/Root/Payload/BockMedia.app'>
+2026-06-20 05:31:29 +0000 [MT] Processing step: IDEDistributionCreateManifestStep

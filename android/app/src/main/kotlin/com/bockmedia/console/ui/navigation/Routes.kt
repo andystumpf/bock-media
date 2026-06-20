@@ -7,6 +7,7 @@ import androidx.compose.material.icons.filled.Analytics
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MusicNote
@@ -37,6 +38,7 @@ sealed class BockRoute(val route: String, val title: String, val icon: ImageVect
     data object Devices : BockRoute("devices", "Alexa Devices", Icons.Default.Speaker)
     data object Analytics : BockRoute("analytics", "Analytics", Icons.Default.Analytics)
     data object Settings : BockRoute("settings", "Settings", Icons.Default.Settings)
+    data object About : BockRoute("about", "About", Icons.Default.Info)
 
     companion object {
         val bottomNavRoutes: List<BockRoute> by lazy {
@@ -44,7 +46,7 @@ sealed class BockRoute(val route: String, val title: String, val icon: ImageVect
         }
 
         val accountMenuRoutes: List<BockRoute> by lazy {
-            listOf(Settings, Downloads, RecentRequests, Rooms, Devices, Analytics)
+            listOf(Settings, Downloads, RecentRequests, Rooms, Devices, Analytics, About)
         }
 
         val allRoutes: List<BockRoute> by lazy {

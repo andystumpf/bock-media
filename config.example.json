@@ -41,8 +41,13 @@
     "allowExternalAccess": true
   },
   "appDownload": {
-    "_comment": "Basic auth for GET /app and /download/bockmedia-console.apk (Android sideload page). Falls back to WebPassword if password omitted.",
+    "_comment": "Basic auth for GET /app and mobile app downloads (Android APK + iPhone IPA). Falls back to WebPassword if password omitted.",
     "username": "morejava",
     "password": "SET_LOCALLY"
+  },
+  "appAbout": {
+    "_comment": "Links shown in mobile app About screen (account menu).",
+    "githubPublic": "https://github.com/andystumpf/ourMedia",
+    "githubPrivate": "https://github.com/andystumpf/ourMedia"
   }
 }

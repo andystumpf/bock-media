@@ -568,19 +568,32 @@ class TestAppDownload:
         }))
         assert client.get('/app').status_code == 401
         assert client.get('/download/bockmedia-console.apk').status_code == 401
+        assert client.get('/download/bockmedia-console.ipa').status_code == 401
+        assert client.get('/download/bockmedia-console-ios.plist').status_code == 401
 
     def test_app_download_with_basic_auth(self, client, isolated_paths):
         import json
         cfg = isolated_paths / 'state' / 'config.json'
         cfg.write_text(json.dumps({
             'appDownload': {'username': 'morejava', 'password': 'test-dl-pass'},
+            'publicUrl': 'https://alexa.example.test',
         }))
         apk = isolated_paths / 'mma' / 'bockmedia-console.apk'
         apk.write_bytes(b'PK\x03\x04fake')
+        ipa = isolated_paths / 'mma' / 'bockmedia-console.ipa'
+        ipa.write_bytes(b'PK\x03\x04fake-ipa')
         auth = ('morejava', 'test-dl-pass')
         rv = client.get('/app', auth=auth)
         assert rv.status_code == 200
         assert b'Download APK' in rv.data
+        assert b'iPhone' in rv.data
+        assert b'Install on iPhone' in rv.data
         dl = client.get('/download/bockmedia-console.apk', auth=auth)
         assert dl.status_code == 200
         assert dl.headers.get('Content-Type', '').startswith('application/vnd.android')
+        ios = client.get('/download/bockmedia-console.ipa', auth=auth)
+        assert ios.status_code == 200
+        manifest = client.get('/download/bockmedia-console-ios.plist', auth=auth)
+        assert manifest.status_code == 200
+        assert b'com.bockmedia.console' in manifest.data
+        assert b'bockmedia-console.ipa' in manifest.data

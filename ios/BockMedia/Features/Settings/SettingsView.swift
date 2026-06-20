@@ -119,8 +119,7 @@ struct SettingsView: View {
                     Text(loginMessage).font(.caption).foregroundStyle(BockColors.muted)
                 }
             }
-            Section("About") {
-                LabeledContent("Version", value: "2.3.0")
+            Section {
                 LabeledContent("Client ID", value: String(ClientIdStore.clientId().prefix(8)) + "…")
             }
         }

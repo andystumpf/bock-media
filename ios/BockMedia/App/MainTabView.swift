@@ -169,6 +169,8 @@ struct MainTabView: View {
             DevicesView(appState: appState)
         case .analytics:
             AnalyticsView(appState: appState)
+        case .about:
+            AboutView(appState: appState)
         }
     }
 

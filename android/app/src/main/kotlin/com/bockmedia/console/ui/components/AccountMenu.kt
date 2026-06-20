@@ -32,6 +32,7 @@ private val accountMenuSections = listOf(
         BockRoute.Devices,
         BockRoute.Analytics,
     )),
+    AccountMenuSection("App", listOf(BockRoute.About)),
 )
 
 @OptIn(ExperimentalMaterial3Api::class)

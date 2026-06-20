@@ -332,7 +332,72 @@ def _app_apk_path():
             return p
     return None
 
-_APP_DOWNLOAD_PATHS = frozenset({'/app', '/download/bockmedia-console.apk'})
+def _app_ipa_path():
+    for p in (
+        os.path.join(DATA_DIR, 'bockmedia-console.ipa'),
+        os.path.join(HERE, 'ios', 'build', 'export', 'BockMedia.ipa'),
+        os.path.join(HERE, 'ios', 'build', 'export', 'bockmedia-console.ipa'),
+    ):
+        if os.path.isfile(p):
+            return p
+    return None
+
+_APP_IOS_BUNDLE_ID = 'com.bockmedia.console'
+_APP_DL_TOKEN_TTL_SEC = 3600
+_app_dl_tokens = {}
+
+def _issue_app_download_token():
+    tok = uuid.uuid4().hex
+    _app_dl_tokens[tok] = time.time() + _APP_DL_TOKEN_TTL_SEC
+    stale = [k for k, exp in _app_dl_tokens.items() if exp <= time.time()]
+    for k in stale:
+        _app_dl_tokens.pop(k, None)
+    return tok
+
+def _app_download_token_ok():
+    tok = (request.args.get('t') or '').strip()
+    if not tok:
+        return False
+    exp = _app_dl_tokens.get(tok)
+    if exp and time.time() < exp:
+        return True
+    _app_dl_tokens.pop(tok, None)
+    return False
+
+def _app_download_auth_ok_or_token():
+    return _app_download_auth_ok() or _app_download_token_ok()
+
+def _android_app_version():
+    try:
+        with open(os.path.join(HERE, 'android', 'app', 'build.gradle.kts')) as f:
+            for line in f:
+                if 'versionName' in line:
+                    return line.split('"')[1]
+    except Exception:
+        pass
+    return 'unknown'
+
+def _ios_app_version():
+    try:
+        with open(os.path.join(HERE, 'ios', 'project.yml')) as f:
+            for line in f:
+                if 'MARKETING_VERSION' in line:
+                    return line.split('"')[1]
+    except Exception:
+        pass
+    return 'unknown'
+
+def _app_download_abs_url(path, token=None):
+    base = get_public_url().rstrip('/')
+    q = f'?t={quote(token)}' if token else ''
+    return f'{base}{path}{q}'
+
+_APP_DOWNLOAD_PATHS = frozenset({
+    '/app',
+    '/download/bockmedia-console.apk',
+    '/download/bockmedia-console.ipa',
+    '/download/bockmedia-console-ios.plist',
+})
 
 @app.before_request
 def check_auth():
@@ -340,7 +405,10 @@ def check_auth():
         return None
 
     if request.path in _APP_DOWNLOAD_PATHS:
-        if _app_download_auth_ok():
+        if request.path == '/app':
+            if _app_download_auth_ok():
+                return None
+        elif _app_download_auth_ok_or_token():
             return None
         return _auth_required()
 
@@ -403,19 +471,27 @@ def static_files(filename):
 @app.route('/app')
 def app_download_page():
     apk = _app_apk_path()
-    version = 'unknown'
-    if apk:
-        try:
-            with open(os.path.join(HERE, 'android', 'app', 'build.gradle.kts')) as f:
-                for line in f:
-                    if 'versionName' in line:
-                        version = line.split('"')[1]
-                        break
-        except Exception:
-            pass
-    size_mb = round(os.path.getsize(apk) / (1024 * 1024), 1) if apk else None
+    ipa = _app_ipa_path()
+    dl_token = _issue_app_download_token()
+    android = {
+        'version': _android_app_version(),
+        'size_mb': round(os.path.getsize(apk) / (1024 * 1024), 1) if apk else None,
+        'available': apk is not None,
+        'download_href': f'/download/bockmedia-console.apk?t={dl_token}',
+    }
+    ios = {
+        'version': _ios_app_version(),
+        'size_mb': round(os.path.getsize(ipa) / (1024 * 1024), 1) if ipa else None,
+        'available': ipa is not None,
+        'download_href': f'/download/bockmedia-console.ipa?t={dl_token}',
+        'manifest_href': f'/download/bockmedia-console-ios.plist?t={dl_token}',
+        'ota_href': None,
+    }
+    if ipa and get_public_url().startswith('https://'):
+        manifest_url = _app_download_abs_url('/download/bockmedia-console-ios.plist', dl_token)
+        ios['ota_href'] = f'itms-services://?action=download-manifest&url={quote(manifest_url, safe="")}'
     return _no_cache(Response(
-        _render_app_download_html(version, size_mb, apk is not None),
+        _render_app_download_html(android, ios),
         mimetype='text/html; charset=utf-8',
     ))
 
@@ -433,43 +509,154 @@ def app_download_apk():
         max_age=0,
     )
 
-def _render_app_download_html(version, size_mb, available):
-    size_line = f'<p class="meta">Build {html.escape(version)} · {size_mb} MB</p>' if available and size_mb else ''
-    btn = (
-        '<a class="btn" href="/download/bockmedia-console.apk">Download APK</a>'
-        if available else
-        '<p class="warn">APK not available on server yet.</p>'
+@app.route('/download/bockmedia-console.ipa')
+def app_download_ipa():
+    ipa = _app_ipa_path()
+    if not ipa:
+        return Response(
+            'iOS IPA not on server yet — archive in Xcode and copy to '
+            f'{os.path.join(DATA_DIR, "bockmedia-console.ipa")}',
+            404,
+            {'Content-Type': 'text/plain; charset=utf-8'},
+        )
+    return send_file(
+        ipa,
+        mimetype='application/octet-stream',
+        as_attachment=True,
+        download_name='bockmedia-console.ipa',
+        max_age=0,
     )
+
+@app.route('/download/bockmedia-console-ios.plist')
+def app_download_ios_manifest():
+    ipa = _app_ipa_path()
+    if not ipa:
+        return Response('iOS IPA not available', 404, {'Content-Type': 'text/plain; charset=utf-8'})
+    token = (request.args.get('t') or '').strip()
+    ipa_url = _app_download_abs_url('/download/bockmedia-console.ipa', token or None)
+    version = _ios_app_version()
+    plist = f'''<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>items</key>
+  <array>
+    <dict>
+      <key>assets</key>
+      <array>
+        <dict>
+          <key>kind</key>
+          <string>software-package</string>
+          <key>url</key>
+          <string>{html.escape(ipa_url)}</string>
+        </dict>
+      </array>
+      <key>metadata</key>
+      <dict>
+        <key>bundle-identifier</key>
+        <string>{_APP_IOS_BUNDLE_ID}</string>
+        <key>bundle-version</key>
+        <string>{html.escape(version)}</string>
+        <key>kind</key>
+        <string>software</string>
+        <key>title</key>
+        <string>Bock Media</string>
+      </dict>
+    </dict>
+  </array>
+</dict>
+</plist>'''
+    return Response(plist, mimetype='application/xml; charset=utf-8')
+
+def _render_app_download_html(android, ios):
+    def platform_section(title, subtitle, version, size_mb, available, primary_btn, secondary_btn, steps_html):
+        meta = (
+            f'<p class="meta">Build {html.escape(version)} · {size_mb} MB</p>'
+            if available and size_mb else ''
+        )
+        if available:
+            actions = primary_btn
+            if secondary_btn:
+                actions += secondary_btn
+        else:
+            actions = f'<p class="warn">{html.escape(subtitle)} not available on server yet.</p>'
+        return f'''
+  <section class="platform">
+    <h2>{html.escape(title)}</h2>
+    {meta}
+    <div class="actions">{actions}</div>
+    <div class="steps">
+      <strong>Install</strong>
+      <ol>{steps_html}</ol>
+    </div>
+  </section>'''
+
+    apk_btn = (
+        f'<a class="btn" href="{html.escape(android["download_href"])}">Download APK</a>'
+        if android['available'] else ''
+    )
+    android_steps = '''
+      <li>Download the APK</li>
+      <li>Allow installs from browser if prompted</li>
+      <li>Open app → enter external URL + Mobile API token</li>'''
+
+    ios_primary = ''
+    ios_secondary = ''
+    if ios['available']:
+        if ios.get('ota_href'):
+            ios_primary = (
+                f'<a class="btn btn-ios" href="{html.escape(ios["ota_href"])}">Install on iPhone</a>'
+            )
+        ios_secondary = (
+            f'<a class="btn btn-secondary" href="{html.escape(ios["download_href"])}">Download IPA</a>'
+        )
+    ios_steps = '''
+      <li>Open this page in <strong>Safari</strong> on your iPhone</li>
+      <li>Tap <strong>Install on iPhone</strong> (or download the IPA for Xcode / AltStore)</li>
+      <li>Trust the developer in Settings → General → VPN &amp; Device Management if prompted</li>
+      <li>Open app → enter external URL + Mobile API token</li>'''
+
+    android_section = platform_section(
+        'Android', 'APK', android['version'], android['size_mb'], android['available'],
+        apk_btn, '', android_steps,
+    )
+    ios_section = platform_section(
+        'iPhone', 'IPA', ios['version'], ios['size_mb'], ios['available'],
+        ios_primary, ios_secondary, ios_steps,
+    )
+
     return f'''<!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Bock Media — Android app</title>
+<title>Bock Media — Mobile apps</title>
 <style>
   body {{ font-family: system-ui, sans-serif; background: #f4f6f9; color: #333; margin: 0; min-height: 100vh;
     display: flex; align-items: center; justify-content: center; padding: 24px; }}
-  .card {{ background: #fff; border-radius: 12px; padding: 32px; max-width: 420px; width: 100%;
+  .card {{ background: #fff; border-radius: 12px; padding: 32px; max-width: 480px; width: 100%;
     box-shadow: 0 4px 24px rgba(0,0,0,.08); text-align: center; }}
   h1 {{ font-size: 1.5rem; margin: 0 0 8px; color: #30426a; }}
-  .meta {{ color: #666; margin: 0 0 20px; font-size: .95rem; }}
+  .lead {{ color: #666; margin: 0 0 24px; font-size: .95rem; }}
+  .platform {{ text-align: center; padding-top: 20px; margin-top: 20px; border-top: 1px solid #e8ecf1; }}
+  .platform:first-of-type {{ border-top: none; margin-top: 0; padding-top: 0; }}
+  h2 {{ font-size: 1.15rem; margin: 0 0 8px; color: #30426a; }}
+  .meta {{ color: #666; margin: 0 0 16px; font-size: .9rem; }}
+  .actions {{ display: flex; flex-direction: column; gap: 10px; align-items: center; }}
   .btn {{ display: inline-block; background: #30426a; color: #fff; padding: 14px 28px;
-    border-radius: 8px; font-weight: 600; text-decoration: none; }}
+    border-radius: 8px; font-weight: 600; text-decoration: none; min-width: 200px; }}
   .btn:hover {{ background: #3d5285; }}
-  .steps {{ text-align: left; margin-top: 24px; font-size: .9rem; color: #555; }}
+  .btn-ios {{ background: #1DB954; }}
+  .btn-ios:hover {{ background: #1ed760; }}
+  .btn-secondary {{ background: #fff; color: #30426a; border: 2px solid #30426a; }}
+  .btn-secondary:hover {{ background: #f0f3f8; }}
+  .warn {{ color: #b45309; margin: 0; font-size: .9rem; }}
+  .steps {{ text-align: left; margin-top: 16px; font-size: .85rem; color: #555; }}
   ol {{ margin: 8px 0 0; padding-left: 20px; }}
 </style></head><body>
 <div class="card">
   <h1>Bock Media Console</h1>
-  <p>Android app for your server</p>
-  {size_line}
-  {btn}
-  <div class="steps">
-    <strong>Install</strong>
-    <ol>
-      <li>Download the APK</li>
-      <li>Allow installs from browser if prompted</li>
-      <li>Open app → enter external URL + Mobile API token</li>
-    </ol>
-  </div>
+  <p class="lead">Mobile apps for your server</p>
+  {android_section}
+  {ios_section}
 </div></body></html>'''
 
 # ── API: Summary ─────────────────────────────────────────────────────────────
@@ -2969,6 +3156,30 @@ def device_friendly_name(device_id):
     primary = _resolve_device_id(device_id, store)
     return (store.get(primary) or {}).get('name') or ''
 
+def _entry_serial(entry, primary, store):
+    """Serial bound to this device (checking its primary too)."""
+    serial = (entry or {}).get('serial')
+    if serial:
+        return serial
+    if primary:
+        return ((store or {}).get(primary) or {}).get('serial')
+    return None
+
+
+def _live_alexa_name(entry, primary, store):
+    """Current Alexa-app room name via the device's bound hardware serial.
+
+    The friendly name ("Emma's Room") lives only in the unofficial-API/serial
+    identity space — the custom-skill `deviceId` never carries it. Resolving
+    through the live roster means Alexa-app renames appear immediately and a
+    correlated device never falls back to "Echo XXXXXX".
+    """
+    serial = _entry_serial(entry, primary, store)
+    if not serial:
+        return ''
+    return _alexa_name_for_serial(serial) or ''
+
+
 def _device_label(device_id):
     """Human-readable device name for now-playing / history."""
     if not device_id or device_id == 'default':
@@ -2976,13 +3187,15 @@ def _device_label(device_id):
     if _is_msp_pseudo(device_id):
         return MSP_DEVICE_NAME
     store = _load_devices()
-    entry = store.get(device_id) or {}
-    if entry.get('aliasOf'):
-        label = device_friendly_name(device_id)
-        if label:
-            return label
+    primary = _resolve_device_id(device_id, store)
+    entry = store.get(primary) or store.get(device_id) or {}
+    live = _live_alexa_name(entry, primary, store)
+    if live:
+        return live
     name = (entry.get('name') or '').strip()
-    if name and name.lower() != f"echo {device_id[-6:]}".lower():
+    auto_primary = f"echo {primary[-6:]}".lower()
+    auto_raw = f"echo {device_id[-6:]}".lower()
+    if name and name.lower() not in (auto_primary, auto_raw):
         return name
     return f"Echo {device_id[-6:]}"
 
@@ -2995,7 +3208,7 @@ def devices():
             continue
         result.append({
             'deviceId':    did,
-            'name':        e.get('name') or did[-6:],
+            'name':        _live_alexa_name(e, did, data) or e.get('name') or did[-6:],
             'lastSeen':    e.get('lastSeen'),
             'firstSeen':   e.get('firstSeen'),
             'fingerprint': e.get('fingerprint') or '',
@@ -3005,6 +3218,46 @@ def devices():
         })
     result.sort(key=lambda x: x.get('lastSeen') or 0, reverse=True)
     return jsonify(result)
+
+
+def _relabel_devices_from_roster():
+    """Persist current Alexa-app room names onto device entries by serial.
+
+    A device's friendly name ("Emma's Room") lives only in the unofficial-API
+    roster, keyed by hardware serial. This backfills it onto any entry whose
+    serial we've correlated, so stale/auto "Echo XXXXXX" names are replaced
+    even if the live roster is later unavailable. Returns entries updated.
+    """
+    try:
+        import alexa_remote
+        if not alexa_remote.is_configured():
+            return 0
+        roster = alexa_remote.list_devices() or []
+    except Exception:
+        return 0
+    by_serial = {d.get('serial'): d.get('name')
+                 for d in roster if d.get('serial') and d.get('name')}
+    if not by_serial:
+        return 0
+    store = _load_devices()
+    updated = 0
+    for _did, e in store.items():
+        serial = e.get('serial')
+        if not serial:
+            continue
+        live = by_serial.get(serial)
+        if live and (e.get('name') or '') != live:
+            e['name'] = live
+            updated += 1
+    if updated:
+        _save_devices(store)
+    return updated
+
+
+@app.route('/api/devices/relabel', methods=['POST'])
+def relabel_devices():
+    """Backfill persisted device names from the live Alexa roster (by serial)."""
+    return jsonify({'ok': True, 'updated': _relabel_devices_from_roster()})
 
 
 @app.route('/api/devices/<device_id>/dismiss_candidate', methods=['POST'])
@@ -3527,7 +3780,8 @@ def analytics():
             primary = _resolve_device_id(did, device_store)
             entry = device_store.get(primary)
             if entry:
-                return entry.get('name') or row.get('device') or primary[-6:]
+                live = _live_alexa_name(entry, primary, device_store)
+                return live or entry.get('name') or row.get('device') or primary[-6:]
         return row.get('device') or 'Unknown'
 
     for r in rows:
@@ -3935,7 +4189,7 @@ def _build_device_breakdown(play_rows, download_rows, device_store):
                 return None
             stats[primary] = {
                 'deviceId': primary,
-                'name': entry.get('name') or _device_label(primary),
+                'name': _live_alexa_name(entry, primary, device_store) or entry.get('name') or _device_label(primary),
                 'platform': entry.get('platform') or ('alexa' if primary.startswith('amzn1.') else 'unknown'),
                 'plays': 0,
                 'downloads': 0,
@@ -5972,6 +6226,19 @@ def remove_np_state():
 
 _clear_nowplaying_on_boot()
 
+# Backfill friendly room names from the live Alexa roster on boot (off-thread so
+# a slow/absent alexapy login never blocks startup).
+def _relabel_devices_on_boot():
+    try:
+        n = _relabel_devices_from_roster()
+        if n:
+            print(f"[DEVICE RELABEL] updated {n} name(s) from Alexa roster", flush=True)
+    except Exception as e:
+        print(f"[DEVICE RELABEL] skipped: {e}", flush=True)
+
+threading.Thread(target=_relabel_devices_on_boot, daemon=True,
+                 name='device-relabel').start()
+
 @app.route('/api/currenttrack')
 def current_track():
     raw = request.args.get('deviceId') or 'default'
@@ -6114,6 +6381,24 @@ def nowplaying_devices():
             'sourceLabel': src.get('sourceLabel'),
             'platform': platform,
         })
+    # Collapse rows that resolve to the same physical Echo (a rotated deviceId
+    # can yield two rows for one speaker). Keep the most recently active.
+    by_serial = {}
+    deduped = []
+    for it in items:
+        primary = _resolve_device_id(it['deviceId'], device_store)
+        serial = _entry_serial(device_store.get(primary), primary, device_store)
+        if not serial:
+            deduped.append(it)
+            continue
+        idx = by_serial.get(serial)
+        if idx is None:
+            by_serial[serial] = len(deduped)
+            deduped.append(it)
+        elif (it.get('timestamp') or 0) > (deduped[idx].get('timestamp') or 0):
+            deduped[idx] = it
+    items = deduped
+
     items.sort(key=lambda x: (x.get('paused'), -(x.get('timestamp') or 0)))
     controls = False
     try:
