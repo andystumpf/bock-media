@@ -753,6 +753,11 @@ def playlists():
         sort_by = 'name'
     reverse = order == 'desc'
 
+    member_filter = (request.args.get('member') or '').strip()
+    if not member_filter and (request.args.get('clientId') or '').strip():
+        member_filter = member_for_client(request.args.get('clientId').strip()) or ''
+    pl_meta = _load_playlist_meta()
+    household = _load_household() if member_filter else None
     try:
         tree = ET.parse(os.path.join(DATA_DIR, 'ServerPlaylists.xml'))
         all_playlists = []
@@ -763,8 +768,12 @@ def playlists():
             name = xml_text(key, 'Name')
             if search and search not in name.lower():
                 continue
+            pid = xml_text(key, 'ID')
+            meta_entry = pl_meta.get(pid)
+            if member_filter and not _playlist_visible_to(meta_entry, member_filter):
+                continue
             all_playlists.append({
-                'id': xml_text(key, 'ID'),
+                'id': pid,
                 'name': name,
                 'trackCount': xml_int(key, 'TrackCount'),
                 'shuffle': xml_text(key, 'Shuffle') == 'true',
@@ -774,6 +783,7 @@ def playlists():
                 'source': xml_text(key, 'SourceID'),
                 'sourceName': xml_text(key, 'SourceName'),
                 'isAudioBook': xml_text(key, 'IsAudioBook') == 'true',
+                **_public_playlist_meta(meta_entry, household),
             })
 
         if sort_by == 'trackCount':
@@ -4221,6 +4231,267 @@ def room_reorder_requests(device_id):
     return jsonify({'ok': True, 'queue': [_request_public(r) for r in q]})
 
 
+# ── Playlist ownership & sharing ─────────────────────────────────────────────
+# A sidecar (so ServerPlaylists.xml stays untouched) records who owns a playlist
+# and who can see it. Legacy playlists with no meta are treated as household-
+# visible so nothing disappears.
+
+PLAYLIST_META_PATH = os.path.join(DATA_DIR, 'playlist_meta.json')
+_PLAYLIST_META_LOCK = threading.Lock()
+
+
+def _load_playlist_meta():
+    try:
+        with open(PLAYLIST_META_PATH) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_playlist_meta(data):
+    _atomic_json_write(PLAYLIST_META_PATH, data)
+
+
+def _playlist_visible_to(meta_entry, member_id):
+    if not meta_entry:
+        return True  # legacy = household-visible
+    owner = meta_entry.get('ownerMemberId')
+    if owner and owner == member_id:
+        return True
+    vis = meta_entry.get('visibility') or 'household'
+    if vis == 'household':
+        return True
+    if vis == 'shared':
+        return member_id in (meta_entry.get('sharedWith') or [])
+    return False  # private, non-owner
+
+
+def _public_playlist_meta(entry, household=None):
+    if not entry:
+        return {'ownerMemberId': None, 'ownerName': '', 'visibility': 'household',
+                'sharedWith': []}
+    return {
+        'ownerMemberId': entry.get('ownerMemberId'),
+        'ownerName': _member_label(entry.get('ownerMemberId'), household),
+        'visibility': entry.get('visibility') or 'household',
+        'sharedWith': entry.get('sharedWith') or [],
+    }
+
+
+def _set_playlist_owner(playlist_id, member_id, visibility='household'):
+    if not playlist_id:
+        return
+    with _PLAYLIST_META_LOCK:
+        meta = _load_playlist_meta()
+        cur = meta.get(playlist_id, {})
+        cur.setdefault('createdAt', time.time())
+        if member_id:
+            cur['ownerMemberId'] = member_id
+        cur.setdefault('visibility', visibility)
+        cur.setdefault('sharedWith', [])
+        meta[playlist_id] = cur
+        _save_playlist_meta(meta)
+
+
+@app.route('/api/playlists/<playlist_id>/share', methods=['POST'])
+def share_playlist(playlist_id):
+    body = request.get_json(silent=True) or {}
+    to_members = body.get('toMemberIds') or []
+    if not isinstance(to_members, list) or not to_members:
+        return jsonify({'error': 'toMemberIds required'}), 400
+    household = _load_household()
+    to_members = [m for m in to_members if _member_by_id(m, household)]
+    with _PLAYLIST_META_LOCK:
+        meta = _load_playlist_meta()
+        cur = meta.get(playlist_id, {})
+        actor = resolve_play_member(client_id=(body.get('clientId') or '').strip(),
+                                    explicit_member=(body.get('memberId') or '').strip(),
+                                    household=household)
+        if actor and not cur.get('ownerMemberId'):
+            cur['ownerMemberId'] = actor
+        shared = set(cur.get('sharedWith') or [])
+        shared.update(to_members)
+        cur['sharedWith'] = sorted(shared)
+        if (cur.get('visibility') or 'household') == 'private':
+            cur['visibility'] = 'shared'
+        cur.setdefault('createdAt', time.time())
+        meta[playlist_id] = cur
+        _save_playlist_meta(meta)
+    # Drop a note in each recipient's message inbox (P5).
+    try:
+        name = _msp_playlist_by_id(playlist_id)[0] or 'a playlist'
+        for m in to_members:
+            _post_message(from_member=cur.get('ownerMemberId'), to_member=m,
+                          scope='direct', text=f'shared "{name}" with you',
+                          attach={'type': 'playlist', 'id': playlist_id})
+    except Exception:
+        pass
+    return jsonify({'ok': True, 'playlistId': playlist_id,
+                    **_public_playlist_meta(meta[playlist_id], household)})
+
+
+@app.route('/api/playlists/<playlist_id>/visibility', methods=['POST'])
+def set_playlist_visibility(playlist_id):
+    body = request.get_json(silent=True) or {}
+    vis = (body.get('visibility') or '').strip().lower()
+    if vis not in ('private', 'household', 'shared'):
+        return jsonify({'error': 'visibility must be private|household|shared'}), 400
+    with _PLAYLIST_META_LOCK:
+        meta = _load_playlist_meta()
+        cur = meta.get(playlist_id, {})
+        cur['visibility'] = vis
+        cur.setdefault('sharedWith', [])
+        cur.setdefault('createdAt', time.time())
+        meta[playlist_id] = cur
+        _save_playlist_meta(meta)
+    return jsonify({'ok': True, **_public_playlist_meta(meta[playlist_id])})
+
+
+@app.route('/api/playlists/<playlist_id>/copy', methods=['POST'])
+def copy_playlist(playlist_id):
+    body = request.get_json(silent=True) or {}
+    name, source = _msp_playlist_by_id(playlist_id)
+    if not source:
+        return jsonify({'error': 'not_found'}), 404
+    tracks = _tracks_from_source(source)
+    if not tracks:
+        return jsonify({'error': 'playlist has no tracks'}), 400
+    actor = resolve_play_member(client_id=(body.get('clientId') or '').strip(),
+                                explicit_member=(body.get('memberId') or '').strip())
+    new_name = (body.get('name') or '').strip() or f'{name} (copy)'
+    new_pid = str(uuid.uuid4())
+    result = _persist_playlist(new_pid, new_name, tracks, create=True)
+    if not result:
+        return jsonify({'error': 'copy_failed'}), 500
+    _set_playlist_owner(new_pid, actor, visibility='private')
+    return jsonify({**result, **_public_playlist_meta(_load_playlist_meta().get(new_pid))}), 201
+
+
+# ── Music messages (family chat about music) ─────────────────────────────────
+# Lightweight, music-anchored messaging between household members. Not a general
+# chat app: each message is text plus an optional track/album/playlist attachment.
+
+MESSAGES_PATH = os.path.join(DATA_DIR, 'messages.jsonl')
+_MESSAGES_LOCK = threading.Lock()
+
+
+def _post_message(*, from_member, to_member=None, scope='household', text='',
+                  attach=None):
+    msg = {
+        'id': 'm-' + uuid.uuid4().hex[:10],
+        'fromMemberId': from_member or None,
+        'toMemberId': to_member or None,
+        'scope': scope or 'household',
+        'text': text or '',
+        'attach': attach or None,
+        'ts': time.time(),
+        'readBy': [],
+    }
+    with _MESSAGES_LOCK:
+        with open(MESSAGES_PATH, 'a') as f:
+            f.write(json.dumps(msg) + '\n')
+    return msg
+
+
+def _read_messages(limit=1000):
+    out = []
+    try:
+        with open(MESSAGES_PATH) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    out.append(json.loads(line))
+                except Exception:
+                    continue
+    except Exception:
+        return []
+    return out[-limit:]
+
+
+def _message_visible_to(m, member_id):
+    scope = m.get('scope') or 'household'
+    if scope == 'household' or scope.startswith('room:'):
+        return True
+    return m.get('toMemberId') == member_id or m.get('fromMemberId') == member_id
+
+
+def _public_message(m, household=None):
+    return {
+        'id': m.get('id'),
+        'fromMemberId': m.get('fromMemberId'),
+        'fromName': _member_label(m.get('fromMemberId'), household),
+        'toMemberId': m.get('toMemberId'),
+        'toName': _member_label(m.get('toMemberId'), household),
+        'scope': m.get('scope'),
+        'text': m.get('text'),
+        'attach': m.get('attach'),
+        'ts': m.get('ts'),
+        'readBy': m.get('readBy') or [],
+    }
+
+
+@app.route('/api/messages')
+def messages_list():
+    member = (request.args.get('member') or '').strip()
+    if not member and (request.args.get('clientId') or '').strip():
+        member = member_for_client(request.args.get('clientId').strip()) or ''
+    household = _load_household()
+    msgs = _read_messages()
+    visible = [m for m in msgs if _message_visible_to(m, member)] if member else msgs
+    unread = sum(1 for m in visible
+                 if member and member not in (m.get('readBy') or [])
+                 and m.get('fromMemberId') != member)
+    return jsonify({
+        'items': [_public_message(m, household) for m in visible],
+        'unread': unread,
+    })
+
+
+@app.route('/api/messages', methods=['POST'])
+def messages_post():
+    body = request.get_json(silent=True) or {}
+    from_member = resolve_play_member(client_id=(body.get('clientId') or '').strip(),
+                                      explicit_member=(body.get('fromMemberId') or '').strip())
+    to_member = (body.get('toMemberId') or '').strip() or None
+    scope = (body.get('scope') or '').strip() or ('direct' if to_member else 'household')
+    text = (body.get('text') or '').strip()
+    attach = body.get('attach') if isinstance(body.get('attach'), dict) else None
+    if not text and not attach:
+        return jsonify({'error': 'text or attach required'}), 400
+    msg = _post_message(from_member=from_member, to_member=to_member,
+                        scope=scope, text=text, attach=attach)
+    return jsonify(_public_message(msg)), 201
+
+
+@app.route('/api/messages/<msg_id>/read', methods=['POST'])
+def messages_mark_read(msg_id):
+    body = request.get_json(silent=True) or {}
+    member = resolve_play_member(client_id=(body.get('clientId') or '').strip(),
+                                 explicit_member=(body.get('memberId') or '').strip())
+    if not member:
+        return jsonify({'error': 'memberId required'}), 400
+    with _MESSAGES_LOCK:
+        msgs = _read_messages(limit=100000)
+        found = False
+        for m in msgs:
+            if m.get('id') == msg_id:
+                rb = set(m.get('readBy') or [])
+                rb.add(member)
+                m['readBy'] = sorted(rb)
+                found = True
+                break
+        if found:
+            tmp = MESSAGES_PATH + '.tmp'
+            with open(tmp, 'w') as f:
+                for m in msgs:
+                    f.write(json.dumps(m) + '\n')
+            os.replace(tmp, MESSAGES_PATH)
+    return jsonify({'ok': found})
+
+
 # ── API: Client analytics (Android / iOS) ────────────────────────────────────
 
 @app.route('/api/clients/report', methods=['POST'])
@@ -4365,6 +4636,61 @@ def analytics_export():
         mimetype='text/csv',
         headers={'Content-Disposition': 'attachment; filename=bock_media_streams.csv'},
     )
+
+
+@app.route('/api/analytics/household')
+def analytics_household():
+    """Family overview: plays per member, per room, platform split, leaderboard."""
+    from collections import Counter
+    from_str = request.args.get('from', '').strip()
+    to_str = request.args.get('to', '').strip()
+    from_dt = to_dt = None
+    try:
+        if from_str:
+            from_dt = datetime.datetime.fromisoformat(from_str)
+        if to_str:
+            to_dt = datetime.datetime.fromisoformat(to_str).replace(hour=23, minute=59, second=59)
+    except Exception:
+        pass
+    rows = _filter_history_rows(_read_stream_history(), from_dt, to_dt)
+    rows = [r for r in rows if not r.get('test')
+            and r.get('deviceId', '') not in ('DEVICE_ALPHA', 'DEVICE_BETA')]
+    household = _load_household()
+    device_store = _load_devices()
+    per_member = Counter()
+    per_room = Counter()
+    per_platform = Counter()
+    for r in rows:
+        mid = _row_member(r, household) or 'unattributed'
+        per_member[mid] += 1
+        did = r.get('deviceId') or ''
+        per_room[_device_label(did) if did else (r.get('device') or 'Unknown')] += 1
+        per_platform[_row_platform(r) or 'unknown'] += 1
+
+    def _named(counter):
+        out = []
+        for k, v in counter.most_common():
+            if k == 'unattributed':
+                out.append({'memberId': None, 'name': 'Unattributed', 'plays': v})
+            else:
+                out.append({'memberId': k, 'name': _member_label(k, household) or k, 'plays': v})
+        return out
+
+    members = [_public_member(m) for m in household.get('members', [])]
+    pl_meta = _load_playlist_meta()
+    shares = [{'playlistId': pid, 'ownerName': _member_label(e.get('ownerMemberId'), household),
+               'sharedWith': [_member_label(x, household) for x in (e.get('sharedWith') or [])]}
+              for pid, e in pl_meta.items() if e.get('sharedWith')]
+    return jsonify({
+        'totalPlays': len(rows),
+        'members': members,
+        'byMember': _named(per_member),
+        'byRoom': [{'room': k, 'plays': v} for k, v in per_room.most_common()],
+        'byPlatform': [{'platform': k, 'plays': v} for k, v in per_platform.most_common()],
+        'leaderboard': _named(per_member)[:10],
+        'shares': shares,
+        'dateRange': {'from': from_str, 'to': to_str},
+    })
 
 
 @app.route('/api/analytics')
@@ -6196,7 +6522,10 @@ def create_playlist():
     result = _persist_playlist(pid, name, tracks, create=True)
     if not result:
         return jsonify({'error': 'create_failed'}), 500
-    return jsonify(result), 201
+    owner = resolve_play_member(client_id=(body.get('clientId') or '').strip(),
+                                explicit_member=(body.get('memberId') or '').strip())
+    _set_playlist_owner(pid, owner, visibility=(body.get('visibility') or 'household'))
+    return jsonify({**result, **_public_playlist_meta(_load_playlist_meta().get(pid))}), 201
 
 
 @app.route('/api/playlists/merge', methods=['POST'])
