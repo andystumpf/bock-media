@@ -4403,6 +4403,308 @@ function dismissBanner() {
   if (el) el.innerHTML = '';
 }
 
+// ── Family (household profiles, room ownership, kid-safe, analytics) ──────────
+
+function activeMemberId() { return localStorage.getItem('bock_active_member') || ''; }
+function setActiveMember(id) {
+  if (id) localStorage.setItem('bock_active_member', id);
+  else localStorage.removeItem('bock_active_member');
+}
+function parentPin() { return sessionStorage.getItem('bock_parent_pin') || ''; }
+
+function memberById(id) {
+  return (window._household?.members || []).find(m => m.id === id) || null;
+}
+
+function memberChip(m, opts = {}) {
+  const color = m.color || '#7c8aa5';
+  const initial = (m.name || '?').trim().charAt(0).toUpperCase();
+  return `<span class="member-chip" style="display:inline-flex;align-items:center;gap:6px">
+    <span style="width:22px;height:22px;border-radius:50%;background:${escHtml(color)};color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:600">${escHtml(initial)}</span>
+    <span>${escHtml(m.name)}</span>${m.role === 'parent' ? ' <i class="fa fa-user-shield" style="color:#9a6520;font-size:11px" title="Parent"></i>' : ''}
+  </span>`;
+}
+
+function memberOptions(selected, includeNone = true) {
+  const members = window._household?.members || [];
+  const none = includeNone ? `<option value="" ${!selected ? 'selected' : ''}>— Unattributed —</option>` : '';
+  return none + members.map(m =>
+    `<option value="${escHtml(m.id)}" ${m.id === selected ? 'selected' : ''}>${escHtml(m.name)}</option>`).join('');
+}
+
+register('family', async () => {
+  loading();
+  const [household, devices, remote] = await Promise.all([
+    API('/api/household'),
+    API('/api/devices'),
+    ensureAlexaRemoteStatus(),
+  ]);
+  window._household = household || { members: [], deviceOwners: [], clientBindings: [] };
+  window._familyDevices = (devices || []).filter(d => !isAppClient(d));
+  window._familyRemote = !!(remote && remote.configured);
+  let alexaList = [];
+  if (window._familyRemote) alexaList = await ensureAlexaDevices().catch(() => []);
+  window._familyAlexa = alexaList || [];
+  const hh = await API('/api/analytics/household');
+  window._familyStats = hh || null;
+  renderFamily();
+});
+
+function renderFamily() {
+  const h = window._household;
+  const members = h.members || [];
+  const owners = {};
+  (h.deviceOwners || []).forEach(o => { owners[o.deviceId] = o.memberId; });
+
+  const acting = activeMemberId();
+  const actingSel = `
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-body" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <span class="hint" style="margin:0"><i class="fa fa-user"></i> Acting as</span>
+        <select class="settings-input" id="acting-member" onchange="onActingChange(this.value)">${memberOptions(acting)}</select>
+        <span class="hint" style="margin:0">— used when sharing playlists, sending messages, or approving requests.</span>
+      </div>
+    </div>`;
+
+  const membersHtml = `
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-header"><h3><i class="fa fa-users"></i> Members (${members.length})</h3></div>
+      <div class="card-body">
+        ${members.length ? `<ul class="device-list" style="margin:0 0 12px">${members.map(m => `
+          <li>
+            <span style="flex:1">${memberChip(m)}</span>
+            <select class="settings-input" style="max-width:110px" onchange="updateMemberRole('${escHtml(m.id)}', this.value)">
+              <option value="kid" ${m.role !== 'parent' ? 'selected' : ''}>Kid</option>
+              <option value="parent" ${m.role === 'parent' ? 'selected' : ''}>Parent</option>
+            </select>
+            ${m.role === 'parent' ? actionBtn({ kind: 'edit', onclick: `setMemberPin('${escHtml(m.id)}')`, title: m.hasPin ? 'Change PIN' : 'Set PIN', icon: 'key' }) : ''}
+            ${actionBtn({ kind: 'delete', onclick: `deleteMember('${escHtml(m.id)}','${escHtml(m.name)}')`, title: 'Remove member', icon: 'trash' })}
+          </li>`).join('')}</ul>` : '<p class="hint" style="margin:0 0 12px">No members yet. Add the people in your household.</p>'}
+        <div class="settings-row" style="gap:8px">
+          <input type="text" id="new-member-name" class="settings-input" placeholder="Name (e.g. Emma)" style="max-width:200px">
+          <select id="new-member-role" class="settings-input" style="max-width:110px">
+            <option value="kid">Kid</option><option value="parent">Parent</option>
+          </select>
+          <button class="btn-sm btn-primary" onclick="addMember()"><i class="fa fa-plus"></i> Add</button>
+        </div>
+      </div>
+    </div>`;
+
+  const rooms = (window._familyDevices || []);
+  const roomsHtml = `
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-header"><h3><i class="fa fa-house"></i> Rooms — owner &amp; kid-safe</h3></div>
+      <div class="card-body">
+        <p class="hint" style="margin:0 0 10px">Assign a room to a person (e.g. Office Show → Andy). Leave community rooms (Kitchen, Living Room, Basement, Garage) <b>Unattributed</b>. Kid-safe settings need a parent PIN.</p>
+        ${rooms.length ? `<ul class="device-list" style="margin:0">${rooms.map(d => `
+          <li style="flex-wrap:wrap;gap:8px">
+            <span class="device-icon-col"><i class="fa fa-headphones"></i></span>
+            <span class="device-name-text" style="flex:1">${escHtml(d.name)}</span>
+            <select class="settings-input" style="max-width:160px" onchange="setRoomOwner('${escHtml(d.deviceId)}', this.value)">${memberOptions(owners[d.deviceId])}</select>
+            <button class="btn-sm btn-default" onclick="openKidSafe('${escHtml(d.deviceId)}','${escHtml(d.name)}')"><i class="fa fa-shield-halved"></i> Kid-safe</button>
+          </li>`).join('')}</ul>` : `<p class="hint" style="margin:0">${window._familyRemote ? 'No Echo devices found.' : 'Connect Alexa (Devices tab) to manage rooms.'}</p>`}
+      </div>
+    </div>`;
+
+  renderPage('Family', actingSel + membersHtml + roomsHtml + renderFamilyStats() + renderFamilyMessages());
+  loadFamilyMessages();
+}
+
+function renderFamilyStats() {
+  const s = window._familyStats;
+  if (!s) return '';
+  const bm = (s.byMember || []).slice(0, 8);
+  const bp = s.byPlatform || [];
+  const maxPlays = Math.max(1, ...bm.map(x => x.plays));
+  return `
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-header"><h3><i class="fa fa-chart-simple"></i> Family activity (${fmtNum(s.totalPlays)} plays)</h3></div>
+      <div class="card-body">
+        ${bm.length ? bm.map(x => `
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+            <span style="width:120px;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(x.name)}</span>
+            <div style="flex:1;background:#eef2f8;border-radius:6px;height:14px;overflow:hidden">
+              <div style="width:${Math.round(x.plays / maxPlays * 100)}%;height:100%;background:#30426a"></div>
+            </div>
+            <span style="width:50px;text-align:right;font-size:12px;color:#556">${fmtNum(x.plays)}</span>
+          </div>`).join('') : '<p class="hint" style="margin:0">No attributed plays yet.</p>'}
+        ${bp.length ? `<p class="hint" style="margin:10px 0 0">By platform: ${bp.map(p => `${escHtml(p.platform)} ${fmtNum(p.plays)}`).join(' · ')}</p>` : ''}
+      </div>
+    </div>`;
+}
+
+function renderFamilyMessages() {
+  return `
+    <div class="card">
+      <div class="card-header"><h3><i class="fa fa-comment-music"></i> Music messages</h3></div>
+      <div class="card-body">
+        <div class="settings-row" style="gap:8px;margin-bottom:12px">
+          <select id="msg-to" class="settings-input" style="max-width:160px"><option value="">Whole household</option>${memberOptions('', false)}</select>
+          <input type="text" id="msg-text" class="settings-input" placeholder="Say something about music…" style="flex:1">
+          <button class="btn-sm btn-primary" onclick="sendFamilyMessage()"><i class="fa fa-paper-plane"></i> Send</button>
+        </div>
+        <div id="family-messages"><div class="spinner-wrap"><div class="spinner"></div></div></div>
+      </div>
+    </div>`;
+}
+
+async function loadFamilyMessages() {
+  const me = activeMemberId();
+  const data = await API(`/api/messages${me ? `?member=${encodeURIComponent(me)}` : ''}`);
+  const el = document.getElementById('family-messages');
+  if (!el) return;
+  const items = (data && data.items) || [];
+  if (!items.length) { el.innerHTML = '<p class="hint" style="margin:0">No messages yet.</p>'; return; }
+  el.innerHTML = items.slice().reverse().slice(0, 30).map(m => {
+    const att = m.attach ? ` <span class="hint" style="margin:0"><i class="fa fa-${m.attach.type === 'playlist' ? 'list' : 'music'}"></i> ${escHtml(m.attach.type)}</span>` : '';
+    const to = m.toName ? ` → ${escHtml(m.toName)}` : (m.scope === 'household' ? ' → all' : '');
+    return `<div style="padding:6px 0;border-bottom:1px solid #f0f3f8">
+      <b style="font-size:13px">${escHtml(m.fromName || 'Someone')}</b><span class="hint" style="margin:0">${to}</span>
+      <span style="font-size:13px;margin-left:6px">${escHtml(m.text || '')}</span>${att}
+      <span class="hint" style="margin:0;float:right">${m.ts ? fmtDateTime(new Date(m.ts * 1000).toISOString()) : ''}</span>
+    </div>`;
+  }).join('');
+}
+
+function onActingChange(id) { setActiveMember(id); loadFamilyMessages(); }
+
+async function addMember() {
+  const name = (document.getElementById('new-member-name') || {}).value?.trim();
+  const role = (document.getElementById('new-member-role') || {}).value || 'kid';
+  if (!name) return showToast('Enter a name', true);
+  const r = await POST('/api/household/members', { name, role });
+  if (r && r.id) { showToast(`Added ${r.name}`); navigate('family'); }
+  else showToast((r && r.error) || 'Failed', true);
+}
+
+async function updateMemberRole(id, role) {
+  const r = await authFetch(`/api/household/members/${encodeURIComponent(id)}`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role }),
+  }).then(x => x.json()).catch(() => null);
+  if (r && r.id) { showToast('Updated'); navigate('family'); }
+  else showToast((r && r.error) || 'Failed', true);
+}
+
+async function deleteMember(id, name) {
+  if (!confirm(`Remove ${name}? Their bindings are cleared (history stays).`)) return;
+  const r = await authFetch(`/api/household/members/${encodeURIComponent(id)}`, { method: 'DELETE' })
+    .then(x => x.json()).catch(() => null);
+  if (r && r.ok) { showToast('Removed'); navigate('family'); }
+  else showToast('Failed', true);
+}
+
+async function setMemberPin(id) {
+  const pin = prompt('Set a 4+ digit parent PIN:');
+  if (!pin) return;
+  const m = memberById(id);
+  const body = { pin };
+  if (m && m.hasPin) { const cur = prompt('Current PIN:'); if (cur) body.currentPin = cur; }
+  const r = await POST(`/api/household/members/${encodeURIComponent(id)}/pin`, body);
+  if (r && r.ok) { sessionStorage.setItem('bock_parent_pin', pin); showToast('PIN set'); navigate('family'); }
+  else showToast((r && r.error) || 'Failed', true);
+}
+
+async function setRoomOwner(deviceId, memberId) {
+  if (memberId) {
+    const r = await POST(`/api/devices/${encodeURIComponent(deviceId)}/owner`, { memberId });
+    showToast(r && r.ok ? 'Owner set' : ((r && r.error) || 'Failed'), !(r && r.ok));
+  } else {
+    const r = await authFetch(`/api/devices/${encodeURIComponent(deviceId)}/owner`, { method: 'DELETE' })
+      .then(x => x.json()).catch(() => null);
+    showToast(r && r.ok ? 'Set to unattributed' : 'Failed', !(r && r.ok));
+  }
+}
+
+async function ensureParentPin() {
+  let pin = parentPin();
+  if (pin) return pin;
+  pin = prompt('Parent PIN (required for kid-safe changes):') || '';
+  if (pin) sessionStorage.setItem('bock_parent_pin', pin);
+  return pin;
+}
+
+async function openKidSafe(deviceId, name) {
+  const me = activeMemberId();
+  if (!me || (memberById(me) || {}).role !== 'parent') {
+    return showToast('Switch "Acting as" to a parent first.', true);
+  }
+  const [pol, pls] = await Promise.all([
+    API(`/api/devices/${encodeURIComponent(deviceId)}/policy`),
+    API('/api/playlists?limit=500'),
+  ]);
+  const playlists = (pls && pls.items) || [];
+  const allow = new Set(pol.allowPlaylistIds || []);
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'kidsafe-overlay';
+  overlay.innerHTML = `
+    <div class="modal-box" style="max-width:520px;max-height:85vh;overflow:auto">
+      <h3 style="margin-top:0"><i class="fa fa-shield-halved"></i> Kid-safe — ${escHtml(name)}</h3>
+      <label style="display:flex;align-items:center;gap:8px;margin:8px 0"><input type="checkbox" id="ks-safe" ${pol.safe ? 'checked' : ''}> Enable kid-safe for this room</label>
+      <label style="display:flex;align-items:center;gap:8px;margin:8px 0"><input type="checkbox" id="ks-explicit" ${pol.allowExplicit === false ? '' : 'checked'}> Allow explicit content</label>
+      <label style="display:flex;align-items:center;gap:8px;margin:8px 0"><input type="checkbox" id="ks-approval" ${pol.requireApproval ? 'checked' : ''}> Require approval for requests</label>
+      <div style="margin:10px 0">
+        <label class="hint" style="margin:0">Max volume: <b id="ks-vol-label">${pol.maxVolume ?? 'none'}</b></label>
+        <input type="range" id="ks-vol" min="0" max="100" value="${pol.maxVolume ?? 100}" style="width:100%" oninput="document.getElementById('ks-vol-label').textContent=this.value">
+        <label style="font-size:12px"><input type="checkbox" id="ks-vol-on" ${typeof pol.maxVolume === 'number' ? 'checked' : ''}> Enforce volume cap</label>
+      </div>
+      <div style="margin:10px 0">
+        <label class="hint" style="margin:0 0 6px;display:block">Quiet hours (optional)</label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input type="time" id="ks-qh-from" class="settings-input" value="${escHtml((pol.quietHours?.[0]?.from) || '20:30')}">
+          <span>to</span>
+          <input type="time" id="ks-qh-to" class="settings-input" value="${escHtml((pol.quietHours?.[0]?.to) || '07:00')}">
+          <label style="font-size:12px"><input type="checkbox" id="ks-qh-on" ${pol.quietHours?.length ? 'checked' : ''}> on</label>
+        </div>
+      </div>
+      <div style="margin:10px 0">
+        <label class="hint" style="margin:0 0 6px;display:block">Allowed playlists (empty = all allowed in safe mode is blocked)</label>
+        <div style="max-height:180px;overflow:auto;border:1px solid #eef2f8;border-radius:6px;padding:8px">
+          ${playlists.map(p => `<label style="display:block;font-size:13px;padding:2px 0"><input type="checkbox" class="ks-pl" value="${escHtml(p.id)}" ${allow.has(p.id) ? 'checked' : ''}> ${escHtml(p.name)}</label>`).join('') || '<span class="hint">No playlists</span>'}
+        </div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">
+        <button class="cancel-btn" onclick="document.getElementById('kidsafe-overlay').remove()">Cancel</button>
+        <button class="save-btn" onclick="saveKidSafe('${escHtml(deviceId)}')">Save</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+}
+
+async function saveKidSafe(deviceId) {
+  const pin = await ensureParentPin();
+  if (!pin) return showToast('PIN required', true);
+  const volOn = document.getElementById('ks-vol-on').checked;
+  const qhOn = document.getElementById('ks-qh-on').checked;
+  const body = {
+    memberId: activeMemberId(),
+    pin,
+    safe: document.getElementById('ks-safe').checked,
+    allowExplicit: document.getElementById('ks-explicit').checked,
+    requireApproval: document.getElementById('ks-approval').checked,
+    maxVolume: volOn ? parseInt(document.getElementById('ks-vol').value, 10) : null,
+    quietHours: qhOn ? [{ days: [0, 1, 2, 3, 4, 5, 6], from: document.getElementById('ks-qh-from').value, to: document.getElementById('ks-qh-to').value }] : [],
+    allowPlaylistIds: Array.from(document.querySelectorAll('.ks-pl:checked')).map(c => c.value),
+  };
+  const r = await POST(`/api/devices/${encodeURIComponent(deviceId)}/policy`, body);
+  if (r && r.deviceId) { showToast('Kid-safe saved'); document.getElementById('kidsafe-overlay')?.remove(); }
+  else if (r && r.error === 'parent_pin_required') { sessionStorage.removeItem('bock_parent_pin'); showToast('Wrong PIN', true); }
+  else showToast((r && r.error) || 'Failed', true);
+}
+
+async function sendFamilyMessage() {
+  const text = (document.getElementById('msg-text') || {}).value?.trim();
+  const to = (document.getElementById('msg-to') || {}).value || '';
+  if (!text) return showToast('Type a message', true);
+  const r = await POST('/api/messages', {
+    fromMemberId: activeMemberId(), toMemberId: to || null,
+    scope: to ? 'direct' : 'household', text,
+  });
+  if (r && r.id) { document.getElementById('msg-text').value = ''; loadFamilyMessages(); }
+  else showToast((r && r.error) || 'Failed', true);
+}
+
 // ── Init ─────────────────────────────────────────────────────────────────────
 function installAuthFetch() {
   if (window._bockAuthFetchInstalled) return;
