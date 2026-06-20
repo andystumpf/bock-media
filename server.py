@@ -1437,10 +1437,12 @@ def alexa_remote_volume():
         return jsonify({'error': 'device required'}), 400
     if not 0 <= volume <= 100:
         return jsonify({'error': 'volume must be 0-100'}), 400
+    # Kid-safe: clamp to the room's volume cap so "Alexa, louder" can't exceed it.
+    volume, capped = _clamp_volume_for(target, volume)
     try:
         import alexa_remote
         result = alexa_remote.set_volume(target, volume)
-        return jsonify({'ok': True, **result})
+        return jsonify({'ok': True, 'capped': capped, **result})
     except ImportError:
         return jsonify({'error': 'alexapy not installed', 'code': 'not_installed'}), 503
     except Exception as e:
@@ -1933,6 +1935,17 @@ def play_on_device():
         targets = _expand_play_targets(device)
     except ValueError as e:
         return jsonify({'error': str(e), 'code': str(e)}), 400
+    # Kid-safe enforcement: block content not permitted in a safe room.
+    blocked = []
+    for serial, member_name in targets:
+        ok, reason = _policy_check_play(_policy_for(serial), kind=kind,
+                                        playlist_id=(pid if kind == 'playlist' else None),
+                                        path=fpath)
+        if not ok:
+            blocked.append({'device': member_name, 'reason': reason})
+    if blocked:
+        return jsonify({'error': 'kid_safe_blocked', 'code': 'kid_safe_blocked',
+                        'blocked': blocked}), 403
     pl_label = name if kind == 'playlist' else None
     ctx_label = None if kind == 'playlist' else (
         f'Artist · {name}' if kind == 'artist' else
@@ -3846,6 +3859,202 @@ def household_device_owner(device_id):
         h['deviceOwners'][primary] = member_id
         _save_household(h)
     return jsonify({'ok': True, 'deviceId': primary, 'memberId': member_id})
+
+
+# ── Kid-safe room policies ───────────────────────────────────────────────────
+# Per-room rules enforced server-side (so they hold for phone, voice and
+# routines alike): allow-list of playlists, explicit-content block, volume cap,
+# and quiet hours. Keyed by the room's canonical id (primary skill deviceId when
+# known, else hardware serial). Policy edits require a parent PIN.
+
+ROOM_POLICY_PATH = os.path.join(DATA_DIR, 'room_policies.json')
+_ROOM_POLICY_LOCK = threading.Lock()
+
+
+def _load_room_policies():
+    try:
+        with open(ROOM_POLICY_PATH) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_room_policies(data):
+    _atomic_json_write(ROOM_POLICY_PATH, data)
+
+
+def _room_key(identifier):
+    """Canonical room key for a serial or deviceId: primary skill deviceId when
+    we've correlated one, otherwise the hardware serial / raw id."""
+    if not identifier:
+        return ''
+    store = _load_devices()
+    prim = _resolve_device_id(identifier, store)
+    if prim in store:
+        return prim
+    by_serial = _primary_by_serial(identifier, store)
+    return by_serial or identifier
+
+
+def _policy_for(identifier):
+    return _load_room_policies().get(_room_key(identifier), {}) or {}
+
+
+def _is_explicit_path(path):
+    """Best-effort explicit flag from songs_cache; False if unknown/unavailable."""
+    if not path:
+        return False
+    try:
+        row = db_one('SELECT explicit FROM songs_cache WHERE path = ?', [path])
+        return bool(row and row.get('explicit'))
+    except Exception:
+        return False
+
+
+def _parse_hhmm(s):
+    try:
+        h, m = (s or '').split(':')
+        return int(h) * 60 + int(m)
+    except Exception:
+        return None
+
+
+def _in_quiet_hours(policy, now=None):
+    """True if `now` falls inside any configured quiet-hours window."""
+    windows = policy.get('quietHours') or []
+    if not windows:
+        return False
+    now = now or datetime.datetime.now()
+    minute_of_day = now.hour * 60 + now.minute
+    weekday = now.weekday()  # Mon=0
+    for w in windows:
+        days = w.get('days')
+        if days and weekday not in days:
+            continue
+        start = _parse_hhmm(w.get('from'))
+        end = _parse_hhmm(w.get('to'))
+        if start is None or end is None:
+            continue
+        if start <= end:
+            if start <= minute_of_day < end:
+                return True
+        else:  # overnight window, e.g. 20:30 -> 07:00
+            if minute_of_day >= start or minute_of_day < end:
+                return True
+    return False
+
+
+def _policy_check_play(policy, *, kind=None, playlist_id=None, path=None,
+                       now=None):
+    """Return (ok, reason) for a play attempt against a room policy."""
+    if not policy or not policy.get('safe'):
+        return True, ''
+    if _in_quiet_hours(policy, now):
+        return False, 'quiet_hours'
+    if policy.get('allowExplicit') is False and _is_explicit_path(path):
+        return False, 'explicit_blocked'
+    allow = policy.get('allowPlaylistIds')
+    if allow:
+        if (kind or 'playlist') != 'playlist' or not playlist_id or playlist_id not in allow:
+            return False, 'not_in_allowlist'
+    return True, ''
+
+
+def _clamp_volume_for(identifier, volume):
+    """Clamp a requested volume to the room's maxVolume (if any)."""
+    policy = _policy_for(identifier)
+    cap = policy.get('maxVolume') if policy.get('safe') else None
+    if isinstance(cap, int) and volume > cap:
+        return cap, True
+    return volume, False
+
+
+def _serial_for_room_key(key):
+    """Hardware serial usable with alexa_remote for a room key, or None."""
+    if not key:
+        return None
+    entry = _load_devices().get(key) or {}
+    if entry.get('serial'):
+        return entry['serial']
+    if not _is_client_device(key) and not str(key).startswith('amzn1.'):
+        return key  # key is itself a serial
+    return None
+
+
+def _volume_cap_loop():
+    """Periodically pull safe-room volumes back under their cap (so a voice
+    'louder' can't exceed it). No-ops unless caps are configured + Alexa is set."""
+    while True:
+        time.sleep(60)
+        try:
+            policies = _load_room_policies()
+            caps = {k: v for k, v in policies.items()
+                    if v.get('safe') and isinstance(v.get('maxVolume'), int)}
+            if not caps:
+                continue
+            import alexa_remote
+            if not alexa_remote.is_configured():
+                continue
+            for key, pol in caps.items():
+                serial = _serial_for_room_key(key)
+                if not serial:
+                    continue
+                try:
+                    cur = alexa_remote.get_volume(serial)
+                    if isinstance(cur, int) and cur > pol['maxVolume']:
+                        alexa_remote.set_volume(serial, pol['maxVolume'])
+                        print(f"[KID-SAFE] clamped {key} volume {cur}->{pol['maxVolume']}", flush=True)
+                except Exception:
+                    continue
+        except Exception:
+            continue
+
+
+def _public_policy(policy):
+    return {
+        'safe': bool(policy.get('safe')),
+        'allowPlaylistIds': policy.get('allowPlaylistIds') or [],
+        'allowExplicit': policy.get('allowExplicit', True),
+        'maxVolume': policy.get('maxVolume'),
+        'quietHours': policy.get('quietHours') or [],
+        'requireApproval': bool(policy.get('requireApproval')),
+    }
+
+
+@app.route('/api/devices/<device_id>/policy', methods=['GET', 'POST', 'DELETE'])
+def device_policy(device_id):
+    key = _room_key(device_id)
+    if request.method == 'GET':
+        return jsonify({'deviceId': key, **_public_policy(_policy_for(device_id))})
+    body = request.get_json(silent=True) or {}
+    # Parent PIN gate for any change.
+    if not _parent_pin_ok(body.get('memberId'), str(body.get('pin') or '')):
+        return jsonify({'error': 'parent_pin_required'}), 403
+    with _ROOM_POLICY_LOCK:
+        policies = _load_room_policies()
+        if request.method == 'DELETE':
+            policies.pop(key, None)
+            _save_room_policies(policies)
+            return jsonify({'ok': True})
+        cur = policies.get(key, {}) or {}
+        if 'safe' in body:
+            cur['safe'] = bool(body['safe'])
+        if 'allowPlaylistIds' in body:
+            ids = body.get('allowPlaylistIds') or []
+            cur['allowPlaylistIds'] = [str(x) for x in ids] if isinstance(ids, list) else []
+        if 'allowExplicit' in body:
+            cur['allowExplicit'] = bool(body['allowExplicit'])
+        if 'maxVolume' in body:
+            mv = body.get('maxVolume')
+            cur['maxVolume'] = max(0, min(100, int(mv))) if mv is not None else None
+        if 'quietHours' in body:
+            cur['quietHours'] = body.get('quietHours') or []
+        if 'requireApproval' in body:
+            cur['requireApproval'] = bool(body['requireApproval'])
+        policies[key] = cur
+        _save_room_policies(policies)
+    return jsonify({'deviceId': key, **_public_policy(policies[key])})
 
 
 # ── API: Client analytics (Android / iOS) ────────────────────────────────────
@@ -6607,6 +6816,10 @@ def _relabel_devices_on_boot():
 
 threading.Thread(target=_relabel_devices_on_boot, daemon=True,
                  name='device-relabel').start()
+
+# Keep kid-safe rooms under their volume cap even after voice "louder".
+threading.Thread(target=_volume_cap_loop, daemon=True,
+                 name='kid-safe-volume').start()
 
 @app.route('/api/currenttrack')
 def current_track():
