@@ -220,7 +220,58 @@ interface BockMediaApi {
         @Query("from") from: String? = null,
         @Query("to") to: String? = null,
         @Query("deviceId") deviceId: String? = null,
+        @Query("member") member: String? = null,
+        @Query("platform") platform: String? = null,
     ): AnalyticsResponse
+
+    // ── Household / Family ──────────────────────────────────────────────────
+    @GET("api/household")
+    suspend fun household(): HouseholdResponse
+
+    @POST("api/household/members")
+    suspend fun createMember(@Body body: JsonObject): HouseholdMember
+
+    @PUT("api/household/members/{id}")
+    suspend fun updateMember(@Path("id") id: String, @Body body: JsonObject): HouseholdMember
+
+    @DELETE("api/household/members/{id}")
+    suspend fun deleteMember(@Path("id") id: String): OkResponse
+
+    @POST("api/household/members/{id}/pin")
+    suspend fun setMemberPin(@Path("id") id: String, @Body body: JsonObject): OkResponse
+
+    @POST("api/clients/bind")
+    suspend fun bindClient(@Body body: JsonObject): OkResponse
+
+    @POST("api/devices/{id}/owner")
+    suspend fun setDeviceOwner(@Path("id") id: String, @Body body: JsonObject): OkResponse
+
+    @DELETE("api/devices/{id}/owner")
+    suspend fun clearDeviceOwner(@Path("id") id: String): OkResponse
+
+    @GET("api/devices/{id}/policy")
+    suspend fun roomPolicy(@Path("id") id: String): RoomPolicy
+
+    @POST("api/devices/{id}/policy")
+    suspend fun setRoomPolicy(@Path("id") id: String, @Body body: JsonObject): RoomPolicy
+
+    @GET("api/analytics/household")
+    suspend fun householdAnalytics(
+        @Query("from") from: String? = null,
+        @Query("to") to: String? = null,
+    ): HouseholdAnalytics
+
+    @GET("api/messages")
+    suspend fun messages(@Query("member") member: String? = null): MessagesResponse
+
+    @POST("api/messages")
+    suspend fun sendMessage(@Body body: JsonObject): FamilyMessage
+
+    @POST("api/playlists/{id}/share")
+    suspend fun sharePlaylist(@Path("id") id: String, @Body body: JsonObject): OkResponse
+
+    @POST("api/rooms/{deviceId}/requests")
+    suspend fun roomRequest(@Path("deviceId") deviceId: String, @Body body: JsonObject): OkResponse
 
     @GET("api/analytics/export")
     @Streaming

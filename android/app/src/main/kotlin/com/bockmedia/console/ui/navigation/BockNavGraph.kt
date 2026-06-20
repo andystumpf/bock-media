@@ -45,6 +45,7 @@ import com.bockmedia.console.ui.favorites.FavoritesScreen
 import com.bockmedia.console.ui.recent.RecentRequestsScreen
 import com.bockmedia.console.ui.routines.RoutinesScreen
 import com.bockmedia.console.ui.devices.DevicesScreen
+import com.bockmedia.console.ui.family.FamilyScreen
 import com.bockmedia.console.ui.home.HomeScreen
 import com.bockmedia.console.ui.library.AlbumsScreen
 import com.bockmedia.console.ui.library.ArtistsScreen
@@ -116,6 +117,10 @@ fun BockApp(repository: BockMediaRepository, deepLinkRoute: String? = null) {
         snackbarHostState,
         onClear = { playTarget = null },
         onPlayStarted = { _, _ -> playbackFocusGeneration = PlaybackFocus.generation },
+        onLocalPlayStarted = {
+            playbackFocusGeneration = PlaybackFocus.generation
+            navController.navigate(BockRoute.NowPlaying.route) { launchSingleTop = true }
+        },
     )
 
     suspend fun runMiniControl(dev: NowPlayingDeviceItem, action: String) {
@@ -406,6 +411,7 @@ private fun BockNavHost(
             )
         }
         composable(BockRoute.Devices.route) { DevicesScreen(repository) }
+        composable(BockRoute.Family.route) { FamilyScreen(repository) }
         composable(BockRoute.Analytics.route) { AnalyticsScreen(repository) }
         composable(BockRoute.Settings.route) {
             SettingsScreen(
