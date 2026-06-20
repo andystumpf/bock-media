@@ -457,7 +457,10 @@ private struct NowPlayingDevicePage: View {
                                 .foregroundStyle(.white.opacity(0.65))
                         }
 
-                        if dev.duration_ms > 0 || progress.durationMs > 0 {
+                        if dev.deviceId == LocalPlaybackIds.localPhoneDeviceId {
+                            LocalSeekBar()
+                                .padding(.horizontal, 20)
+                        } else if dev.duration_ms > 0 || progress.durationMs > 0 {
                             let dur = max(dev.duration_ms, progress.durationMs)
                             VStack(spacing: 4) {
                                 ProgressView(value: progress.fraction)
@@ -545,6 +548,51 @@ private struct NowPlayingDevicePage: View {
                     .background(Color.black.opacity(0.95))
                 }
             }
+        }
+    }
+}
+
+/// Interactive scrubber for local phone playback — drag to seek to any point.
+private struct LocalSeekBar: View {
+    @ObservedObject private var controller = LocalPlaybackController.shared
+    @State private var dragging = false
+    @State private var dragFraction: Double = 0
+
+    var body: some View {
+        let durationMs = controller.state.durationMs
+        let positionMs = controller.state.positionMs
+        let liveFraction = durationMs > 0
+            ? min(max(Double(positionMs) / Double(durationMs), 0), 1)
+            : 0
+        let fraction = dragging ? dragFraction : liveFraction
+        let shownMs = dragging ? Int64(dragFraction * Double(durationMs)) : positionMs
+
+        VStack(spacing: 4) {
+            Slider(
+                value: Binding(
+                    get: { fraction },
+                    set: { dragging = true; dragFraction = $0 }
+                ),
+                in: 0...1,
+                onEditingChanged: { editing in
+                    if !editing {
+                        if durationMs > 0 {
+                            controller.seek(toSeconds: dragFraction * Double(durationMs) / 1000)
+                        }
+                        dragging = false
+                    }
+                }
+            )
+            .tint(BockColors.green)
+            .disabled(durationMs <= 0)
+
+            HStack {
+                Text(formatPlaybackTime(seconds: shownMs / 1000))
+                Spacer()
+                Text(formatPlaybackTime(seconds: durationMs / 1000))
+            }
+            .font(.caption)
+            .foregroundStyle(.white.opacity(0.55))
         }
     }
 }
