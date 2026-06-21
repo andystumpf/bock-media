@@ -1372,7 +1372,7 @@ def _optimistic_np_skip(device_id, delta):
     token = st.get('token') or ''
     if ':' not in token:
         return
-    data = decode_token(token)
+    data = decode_token(token) or {}
     tracks = data.get('tracks') or []
     if not tracks:
         return
@@ -1976,7 +1976,7 @@ def _np_source_fields(token=None, device_id=None):
     """Display label + ids for the active queue (playlist or artist/album context)."""
     playlist, playlist_id, context = None, None, None
     if token:
-        data = decode_token(token) if isinstance(token, str) else (token or {})
+        data = (decode_token(token) if isinstance(token, str) else (token or {})) or {}
         playlist = data.get('playlist')
         playlist_id = data.get('playlist_id')
         context = data.get('context')
@@ -6415,7 +6415,7 @@ def decode_token(token):
             queues = _load_queues()
             entry = queues.get(qid)
             if not entry:
-                return {}
+                return None
             tracks = _resolve_queue_tracks(entry) if entry.get('lazy') else entry.get('tracks', [])
             return {
                 'qid': qid,
@@ -6434,12 +6434,12 @@ def decode_token(token):
         padding = 4 - len(token) % 4
         return json.loads(base64.urlsafe_b64decode(token + '=' * padding))
     except:
-        return {}
+        return None
 
 
 def _upcoming_tracks_for_token(token, limit=5):
     """Next tracks in the active queue for Now Playing UI."""
-    data = decode_token(token)
+    data = decode_token(token) or {}
     tracks = data.get('tracks') or []
     if not tracks:
         return []
@@ -7870,7 +7870,7 @@ def _sleep_info_for_token(token):
     or None. Used to badge the row in the web Now Playing UI."""
     if not token or ':' not in token:
         return None
-    data = decode_token(token)
+    data = decode_token(token) or {}
     stop_at = data.get('stopAt')
     stop_after_idx = data.get('stopAfterIdx')
     if stop_at:
@@ -8165,7 +8165,7 @@ def _np_skip_next(playback_controller=False):
     token = state.get('token', '')
     if not token:
         return alexa_empty() if playback_controller else alexa_speak("Nothing is playing.")
-    data = decode_token(token)
+    data = decode_token(token) or {}
     tracks = data.get('tracks', [])
     idx = data.get('idx', 0)
     if not tracks:
@@ -8181,7 +8181,7 @@ def _np_skip_previous(playback_controller=False):
     token = state.get('token', '')
     if not token:
         return alexa_empty() if playback_controller else alexa_speak("Nothing is playing.")
-    data = decode_token(token)
+    data = decode_token(token) or {}
     tracks = data.get('tracks', [])
     if not tracks:
         return alexa_empty() if playback_controller else alexa_speak("Nothing to go back to.")
@@ -8886,7 +8886,7 @@ def alexa_skill():
         if g.raw_device_id != 'default' and _correlate_play_intent(g.raw_device_id):
             g.device_id = _resolve_device_id(g.raw_device_id)
         token = req.get('token', '')
-        data  = decode_token(token)
+        data  = decode_token(token) or {}
         tracks = data.get('tracks', [])
         idx    = data.get('idx', 0)
         path = track_title = artist = album = None
@@ -8943,7 +8943,7 @@ def alexa_skill():
 
     if rtype == 'AudioPlayer.PlaybackNearlyFinished':
         token = req.get('token', '')
-        data  = decode_token(token)
+        data  = decode_token(token) or {}
         tracks = data.get('tracks', [])
         idx    = data.get('idx', 0)
         next_idx = idx + 1
@@ -8983,7 +8983,7 @@ def alexa_skill():
 
     if rtype == 'AudioPlayer.PlaybackFailed':
         token = req.get('token', '')
-        data  = decode_token(token)
+        data  = decode_token(token) or {}
         tracks = data.get('tracks', [])
         idx    = data.get('idx', 0)
         next_idx = idx + 1
@@ -9515,7 +9515,7 @@ def alexa_skill():
             state = read_np_state() or {}
             current_path = state.get('filepath')
             token = state.get('token', '')
-            data  = decode_token(token)
+            data  = decode_token(token) or {}
             tracks = data.get('tracks', [])
             idx    = data.get('idx', 0)
             if current_path:
@@ -9574,14 +9574,14 @@ def alexa_skill():
         elif iname == 'AMAZON.LoopOnIntent':
             state = read_np_state() or {}
             if state.get('token'):
-                data = decode_token(state['token'])
+                data = decode_token(state['token']) or {}
                 _update_queue_flags(data.get('qid'), loop=True)
             return alexa_speak("Loop mode on.")
 
         elif iname == 'AMAZON.LoopOffIntent':
             state = read_np_state() or {}
             if state.get('token'):
-                data = decode_token(state['token'])
+                data = decode_token(state['token']) or {}
                 _update_queue_flags(data.get('qid'), loop=False)
             return alexa_speak("Loop mode off.")
 
@@ -9590,7 +9590,7 @@ def alexa_skill():
             state = read_np_state() or {}
             token = state.get('token', '')
             if token:
-                data = decode_token(token)
+                data = decode_token(token) or {}
                 # Reshuffle remaining tracks from current position and persist
                 idx = data.get('idx', 0)
                 remaining = data.get('tracks', [])[idx:]
@@ -9603,7 +9603,7 @@ def alexa_skill():
         elif iname == 'AMAZON.ShuffleOffIntent':
             state = read_np_state() or {}
             if state.get('token'):
-                data = decode_token(state['token'])
+                data = decode_token(state['token']) or {}
                 _update_queue_flags(data.get('qid'), shuffle=False)
             return alexa_speak("Shuffle off.")
 

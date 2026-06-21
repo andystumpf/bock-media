@@ -30,7 +30,7 @@ enum AccountRoute: String, Identifiable, Equatable {
         case .devices: return .speaker
         case .family: return .person
         case .analytics: return .analytics
-        case .driving: return .car
+        case .driving: return .phoneAndroid
         case .about: return .settings
         }
     }

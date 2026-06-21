@@ -320,6 +320,8 @@ class TestNewFeatures:
                 return [{'album': 'Mamma Mia', 'artist': 'ABBA', 'art_path': '/c.mp3'}]
             if 'GROUP BY artist' in sql:
                 return []
+            if 'GROUP BY genre' in sql:
+                return []
             if 'FROM songs_cache' in sql:
                 return [
                     {'title': 'Waterloo', 'artist': 'ABBA', 'album': 'Mamma Mia!', 'path': '/a.mp3'},
