@@ -1,0 +1,26 @@
+{
+  "_comment": "Update this file whenever you upload a new APK/IPA to /app. Shown on GET /app.",
+  "releases": [
+    {
+      "version": "2.3.3",
+      "date": "2026-06-21",
+      "items": [
+        {"kind": "feat", "text": "All lyrics use karaoke view: real LRC when available, smooth scroll for the rest"},
+        {"kind": "feat", "text": "Synced lyrics: current line bold, auto-scroll, ±0.5s timing adjust"},
+        {"kind": "feat", "text": "Smarter LRCLIB matching (retries, normalized titles, prefers timed lyrics)"},
+        {"kind": "fix", "text": "Android: pause → skip tracks → play now resumes correctly"},
+        {"kind": "fix", "text": "Android: switching playlists while another is playing works reliably"},
+        {"kind": "fix", "text": "Device picker stays open until you pick a speaker (Android & iOS)"}
+      ]
+    },
+    {
+      "version": "2.3.2",
+      "date": "2026-06-20",
+      "items": [
+        {"kind": "feat", "text": "Household profiles, room policies, and kid song requests"},
+        {"kind": "feat", "text": "Lyrics panel on Android Now Playing (LRCLIB + sidecar .lrc)"},
+        {"kind": "improve", "text": "Unified source/playlist metadata line for local playback"}
+      ]
+    }
+  ]
+}

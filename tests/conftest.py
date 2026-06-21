@@ -80,6 +80,9 @@ def isolated_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(server, 'REQUESTS_PATH', str(state_dir / 'requests.json'))
     monkeypatch.setattr(server, 'PLAYLIST_META_PATH', str(state_dir / 'playlist_meta.json'))
     monkeypatch.setattr(server, 'MESSAGES_PATH', str(state_dir / 'messages.jsonl'))
+    notes_src = os.path.join(REPO_ROOT, 'app-release-notes.json')
+    if os.path.isfile(notes_src):
+        shutil.copy2(notes_src, state_dir / 'app-release-notes.json')
     return tmp_path
 
 

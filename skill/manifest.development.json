@@ -9,6 +9,9 @@
         "interfaces": [
           {
             "type": "AUDIO_PLAYER"
+          },
+          {
+            "type": "ALEXA_PRESENTATION_APL"
           }
         ],
         "locales": {}
