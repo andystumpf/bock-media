@@ -668,4 +668,33 @@ struct AiPlaylistResponse: Codable {
     var preview: [PlaylistTrack] = []
     var name: String?
     var id: String?
+    var tracks: [PlaylistTrack] = []
+    var trackCount: Int?
+    var playlistId: String?
+    var source: String?
+    var prompt: String?
+}
+
+struct MixMuseStatusResponse: Codable {
+    var configured: Bool = false
+    var provider: String?
+    var supportsOpenAi: Bool = false
+    var supportsClaude: Bool = false
+}
+
+struct DiscoveryMixResponse: Codable {
+    var name: String?
+    var tracks: [PlaylistTrack] = []
+    var trackCount: Int?
+    var playlistId: String?
+    var id: String?
+    var source: String?
+    var shuffle: Bool?
+    var seed: DiscoverySeedInfo?
+}
+
+struct DiscoverySeedInfo: Codable {
+    var path: String?
+    var title: String?
+    var artist: String?
 }

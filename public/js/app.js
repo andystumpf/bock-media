@@ -1609,8 +1609,8 @@ function openAiPlaylistModal() {
   overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
   overlay.innerHTML = `
     <div class="modal-box" style="max-width:520px">
-      <h3 style="margin-top:0"><i class="fa fa-wand-magic-sparkles"></i> AI playlist (Claude)</h3>
-      <p class="hint" style="margin:0 0 8px">Describe the vibe — Claude picks tracks from your library. Set <code>claude.apiKey</code> in config.json.</p>
+      <h3 style="margin-top:0"><i class="fa fa-wand-magic-sparkles"></i> Mix Muse</h3>
+      <p class="hint" style="margin:0 0 8px">Describe the vibe — Claude or OpenAI picks tracks from your library. Set <code>claude.apiKey</code> and/or <code>openai.apiKey</code> in config.json.</p>
       <label style="display:block;margin:8px 0 4px;font-size:13px;color:#888">Prompt</label>
       <textarea id="pl-ai-prompt" class="settings-input" rows="3" style="width:100%" placeholder="Upbeat yacht rock for a summer drive…"></textarea>
       <label style="display:block;margin:12px 0 4px;font-size:13px;color:#888">Playlist name (optional)</label>
@@ -1666,7 +1666,7 @@ function openAiPlaylistModal() {
     });
     const data = await res.json().catch(() => ({}));
     overlay.remove();
-    if (!res.ok) return showToast(data.error || data.detail || 'AI failed', true);
+    if (!res.ok) return showToast(data.error || data.detail || 'Mix Muse failed', true);
     showToast(`Created "${data.name}" (${data.trackCount} tracks)`);
     window.location.hash = `playlists/detail/${data.id}`;
   };
@@ -2105,7 +2105,7 @@ function renderPlaylistsPage() {
           </div>
           <button class="btn-sm btn-primary" onclick="openNewPlaylistModal()"><i class="fa fa-plus"></i> New</button>
           <button class="btn-sm btn-default" onclick="openMergePlaylistsModal()"><i class="fa fa-code-merge"></i> Merge</button>
-          <button class="btn-sm btn-default" onclick="openAiPlaylistModal()"><i class="fa fa-wand-magic-sparkles"></i> AI</button>
+          <button class="btn-sm btn-default" onclick="openAiPlaylistModal()"><i class="fa fa-wand-magic-sparkles"></i> Mix Muse</button>
         </div>
       </div>
       ${rows ? `

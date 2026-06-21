@@ -193,6 +193,22 @@ final class BockMediaAPIClient {
         try await post("api/playlists/ai", body: body)
     }
 
+    func mixMuseStatus() async throws -> MixMuseStatusResponse {
+        try await get("api/mix-muse/status")
+    }
+
+    func mixMuseSimilar(body: [String: Any]) async throws -> AiPlaylistResponse {
+        try await post("api/mix-muse/similar", body: body)
+    }
+
+    func resonanceMix(body: [String: Any]) async throws -> DiscoveryMixResponse {
+        try await post("api/resonance/mix", body: body)
+    }
+
+    func resonanceRadio(body: [String: Any]) async throws -> DiscoveryMixResponse {
+        try await post("api/resonance/radio", body: body)
+    }
+
     func plexSyncStatus() async throws -> PlexSyncStatusResponse {
         try await get("api/plex_sync/status")
     }

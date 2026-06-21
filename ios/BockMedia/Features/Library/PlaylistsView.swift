@@ -56,6 +56,8 @@ struct PlaylistDetailView: View {
     @State private var loading = true
     @State private var loadingMore = false
     @State private var loadError: String?
+    @State private var showMixMuse = false
+    @State private var mixMuseSeed: DiscoverySeed?
     private let pageSize = 100
 
     /// Stable, unique identity for each row. `key` = "offset-trackId": the trackId keeps
@@ -109,6 +111,17 @@ struct PlaylistDetailView: View {
                     Button("Ascending") { sortOrder = "asc"; Task { await reload() } }
                     Button("Descending") { sortOrder = "desc"; Task { await reload() } }
                     Divider()
+                    Button {
+                        mixMuseSeed = DiscoverySeed(kind: .playlist, title: name, playlistId: playlistId)
+                        showMixMuse = true
+                    } label: { Label("Mix Muse playlist…", systemImage: "sparkles") }
+                    Button { Task { await runResonanceRadio(seed: playlistSeed) } } label: {
+                        Label("Resonance radio", systemImage: "waveform")
+                    }
+                    Button { Task { await runResonanceMix(seed: playlistSeed) } } label: {
+                        Label("Resonance mix (save)", systemImage: "music.note.list")
+                    }
+                    Divider()
                     Button("Delete playlist", role: .destructive) {
                         Task {
                             try? await appState.repository.deletePlaylist(id: playlistId)
@@ -136,6 +149,42 @@ struct PlaylistDetailView: View {
         }
         .task { await reload() }
         .refreshable { await reload() }
+        .sheet(isPresented: $showMixMuse) {
+            MixMusePromptSheet(appState: appState, seed: mixMuseSeed)
+        }
+    }
+
+    private var playlistSeed: DiscoverySeed {
+        DiscoverySeed(kind: .playlist, title: name, playlistId: playlistId)
+    }
+
+    private func runResonanceRadio(seed: DiscoverySeed) async {
+        do {
+            let resp = try await appState.repository.resonanceRadio(
+                seedKind: seed.kind.rawValue,
+                path: seed.path, album: seed.album, artist: seed.artist,
+                playlistId: seed.playlistId
+            )
+            await appState.repository.playDiscoveryTracksLocally(resp.tracks, title: resp.name ?? seed.title, shuffle: true)
+            appState.showNowPlayingSheet = true
+        } catch {
+            appState.toast = error.localizedDescription
+        }
+    }
+
+    private func runResonanceMix(seed: DiscoverySeed) async {
+        do {
+            let resp = try await appState.repository.resonanceMix(
+                seedKind: seed.kind.rawValue,
+                path: seed.path, album: seed.album, artist: seed.artist,
+                playlistId: seed.playlistId, save: true
+            )
+            if let pid = resp.playlistId ?? resp.id, !pid.isEmpty {
+                appState.pendingPlayTarget = .playlist(id: pid, name: resp.name ?? "Resonance mix")
+            }
+        } catch {
+            appState.toast = error.localizedDescription
+        }
     }
 
     private var playlistHeader: some View {
@@ -198,6 +247,13 @@ struct PlaylistDetailView: View {
         .padding(.vertical, 8)
         .contextMenu {
             if let path = track.path {
+                DiscoveryContextMenuItems(
+                    appState: appState,
+                    seed: DiscoverySeed(kind: .song, title: track.title ?? path, path: path, artist: track.artist, album: track.album),
+                    showMixMuse: $showMixMuse,
+                    mixMuseSeed: $mixMuseSeed
+                )
+                Divider()
                 Button(role: .destructive) {
                     Task {
                         try? await appState.repository.removePlaylistTrack(playlistId: playlistId, path: path)

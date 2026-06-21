@@ -117,6 +117,18 @@ interface BockMediaApi {
     @POST("api/playlists/ai")
     suspend fun aiPlaylist(@Body body: JsonObject): AiPlaylistResponse
 
+    @GET("api/mix-muse/status")
+    suspend fun mixMuseStatus(): MixMuseStatusResponse
+
+    @POST("api/mix-muse/similar")
+    suspend fun mixMuseSimilar(@Body body: JsonObject): AiPlaylistResponse
+
+    @POST("api/resonance/mix")
+    suspend fun resonanceMix(@Body body: JsonObject): DiscoveryMixResponse
+
+    @POST("api/resonance/radio")
+    suspend fun resonanceRadio(@Body body: JsonObject): DiscoveryMixResponse
+
     @GET("api/smart_playlists")
     suspend fun smartPlaylists(): SmartPlaylistsResponse
 

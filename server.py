@@ -225,7 +225,7 @@ def _mobile_api_only():
 
 def _redact_config(cfg):
     redacted = dict(cfg)
-    for key in ('alexaRemote', 'mspOauth', 'claude', 'mobileApi'):
+    for key in ('alexaRemote', 'mspOauth', 'claude', 'openai', 'mobileApi'):
         if key in redacted:
             redacted[key] = {'_redacted': True}
     return redacted
@@ -7310,6 +7310,7 @@ def refresh_smart_playlist(smart_id):
 
 @app.route('/api/playlists/ai', methods=['POST'])
 def ai_playlist():
+    """Legacy alias for Mix Muse."""
     body = request.get_json(silent=True) or {}
     prompt = (body.get('prompt') or '').strip()
     if not prompt:
@@ -7317,12 +7318,13 @@ def ai_playlist():
     max_tracks = min(max(int(body.get('maxTracks') or 25), 1), 80)
     save = bool(body.get('save'))
     try:
-        candidates = _library_candidates_for_prompt(prompt, limit=400)
-        ai_name, paths = _call_claude_pick_tracks(prompt, candidates, max_tracks)
+        import bock_mix_muse
+        candidates = bock_mix_muse.candidates_for_prompt(db_query, prompt, limit=400)
+        ai_name, paths = bock_mix_muse.pick_tracks(prompt, candidates, max_tracks, load_config)
     except ValueError as e:
         code = str(e)
-        status = 503 if code == 'claude_api_key_not_configured' else 400
-        return jsonify({'error': code}), status
+        status = 503 if 'not_configured' in code else 400
+        return jsonify({'error': code.replace('llm_', 'claude_')}), status
     except Exception as e:
         print(f'AI playlist error: {e}', flush=True)
         return jsonify({'error': 'claude_request_failed', 'detail': str(e)}), 502

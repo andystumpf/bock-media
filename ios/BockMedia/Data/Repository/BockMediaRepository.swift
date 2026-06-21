@@ -475,6 +475,55 @@ final class BockMediaRepository: ObservableObject {
         ])
     }
 
+    func mixMuseSimilar(seedKind: String, path: String? = nil, album: String? = nil,
+                        artist: String? = nil, playlistId: String? = nil,
+                        prompt: String? = nil, maxTracks: Int = 25, save: Bool = true) async throws -> AiPlaylistResponse {
+        try await ensureAPI()
+        var body: [String: Any] = ["seedKind": seedKind, "maxTracks": maxTracks, "save": save]
+        if let path { body["path"] = path }
+        if let album { body["album"] = album }
+        if let artist { body["artist"] = artist }
+        if let playlistId { body["playlistId"] = playlistId }
+        if let prompt { body["prompt"] = prompt }
+        return try await api.mixMuseSimilar(body: body)
+    }
+
+    func resonanceRadio(seedKind: String, path: String? = nil, album: String? = nil,
+                        artist: String? = nil, playlistId: String? = nil,
+                        maxTracks: Int = 30) async throws -> DiscoveryMixResponse {
+        try await ensureAPI()
+        var body: [String: Any] = ["seedKind": seedKind, "maxTracks": maxTracks]
+        if let path { body["path"] = path }
+        if let album { body["album"] = album }
+        if let artist { body["artist"] = artist }
+        if let playlistId { body["playlistId"] = playlistId }
+        return try await api.resonanceRadio(body: body)
+    }
+
+    func resonanceMix(seedKind: String, path: String? = nil, album: String? = nil,
+                      artist: String? = nil, playlistId: String? = nil,
+                      maxTracks: Int = 30, save: Bool = true) async throws -> DiscoveryMixResponse {
+        try await ensureAPI()
+        var body: [String: Any] = ["seedKind": seedKind, "maxTracks": maxTracks, "save": save]
+        if let path { body["path"] = path }
+        if let album { body["album"] = album }
+        if let artist { body["artist"] = artist }
+        if let playlistId { body["playlistId"] = playlistId }
+        return try await api.resonanceMix(body: body)
+    }
+
+    func playDiscoveryTracksLocally(_ tracks: [PlaylistTrack], title: String, shuffle: Bool = true) async {
+        var localTracks: [LocalTrack] = []
+        for t in tracks {
+            guard let path = t.path, !path.isEmpty else { continue }
+            let url = await streamURL(for: path)
+            guard let url else { continue }
+            localTracks.append(LocalTrack(path: path, title: t.title ?? path, artist: t.artist, album: t.album, streamURL: url, localFileURL: nil))
+        }
+        guard !localTracks.isEmpty else { return }
+        try? await LocalPlaybackController.shared.playTracks(localTracks, shuffle: shuffle)
+    }
+
     func plexSyncStatus() async throws -> PlexSyncStatusResponse {
         try await ensureAPI()
         return try await api.plexSyncStatus()

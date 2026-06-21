@@ -6,7 +6,9 @@ import bock_discover
 import bock_folders
 import bock_handoff
 import bock_loudness
+import bock_mix_muse
 import bock_play_counts
+import bock_resonance
 import bock_search_ext
 
 
@@ -35,6 +37,11 @@ def register(app, g):
     _refresh_smart_playlist = g['_refresh_smart_playlist']
     _save_smart_playlists = g['_save_smart_playlists']
     _paths_for_smart_rules = g['_paths_for_smart_rules']
+    _persist_playlist = g['_persist_playlist']
+    _enrich_track_paths = g['_enrich_track_paths']
+    _playlist_paths_cached = g['_playlist_paths_cached']
+    load_config = g['load_config']
+    import uuid as _uuid
 
     PLAYLIST_FOLDERS_PATH = g['PLAYLIST_FOLDERS_PATH']
     PLAYBACK_RESUME_PATH = g['PLAYBACK_RESUME_PATH']
@@ -242,6 +249,169 @@ def register(app, g):
             return jsonify(result), 400
         return jsonify(result)
 
+    @app.route('/api/mix-muse/status')
+    def api_mix_muse_status():
+        return jsonify(bock_mix_muse.status(load_config))
+
+    @app.route('/api/mix-muse/playlist', methods=['POST'])
+    def api_mix_muse_playlist():
+        body = request.get_json(silent=True) or {}
+        prompt = (body.get('prompt') or '').strip()
+        if not prompt:
+            return jsonify({'error': 'prompt required'}), 400
+        max_tracks = min(max(int(body.get('maxTracks') or 25), 1), 80)
+        save = bool(body.get('save'))
+        try:
+            candidates = bock_mix_muse.candidates_for_prompt(db_query, prompt)
+            ai_name, paths = bock_mix_muse.pick_tracks(
+                prompt, candidates, max_tracks, load_config, body.get('provider'),
+            )
+        except ValueError as e:
+            code = str(e)
+            status = 503 if 'not_configured' in code else 400
+            return jsonify({'error': code}), status
+        except Exception as e:
+            return jsonify({'error': 'mix_muse_request_failed', 'detail': str(e)}), 502
+        name = (body.get('name') or '').strip() or ai_name
+        tracks = _enrich_track_paths(paths)
+        out = {'name': name, 'tracks': tracks, 'trackCount': len(tracks), 'source': 'mix-muse'}
+        if save:
+            pid = str(_uuid.uuid4())
+            saved = _persist_playlist(pid, name, paths, create=True)
+            out.update(saved or {})
+            out['playlistId'] = pid
+        return jsonify(out)
+
+    @app.route('/api/mix-muse/similar', methods=['POST'])
+    def api_mix_muse_similar():
+        body = request.get_json(silent=True) or {}
+        seed_kind = (body.get('seedKind') or body.get('kind') or 'song').strip().lower()
+        path = (body.get('path') or body.get('filepath') or '').strip()
+        album = (body.get('album') or '').strip()
+        artist = (body.get('artist') or '').strip()
+        playlist_id = (body.get('playlistId') or body.get('playlist_id') or '').strip()
+        user_prompt = (body.get('prompt') or '').strip()
+        max_tracks = min(max(int(body.get('maxTracks') or 25), 1), 80)
+        save = bool(body.get('save'))
+        playlist_paths = None
+        if seed_kind == 'playlist' and playlist_id:
+            for pid, _name, src in _load_playlist_entries():
+                if pid == playlist_id:
+                    playlist_paths = _playlist_paths_cached(pid, src)
+                    break
+            if not playlist_paths:
+                return jsonify({'error': 'playlist_not_found'}), 404
+        try:
+            if seed_kind in ('song', 'album', 'playlist'):
+                pool, prompt, seed_row = bock_mix_muse.candidates_for_seed(
+                    db_query, seed_kind, path=path or None, album=album or None,
+                    artist=artist or None, playlist_paths=playlist_paths,
+                )
+            else:
+                return jsonify({'error': 'invalid seedKind'}), 400
+            if user_prompt:
+                prompt = user_prompt
+            ai_name, paths = bock_mix_muse.pick_tracks(
+                prompt, pool, max_tracks, load_config, body.get('provider'),
+            )
+        except ValueError as e:
+            code = str(e)
+            status = 503 if 'not_configured' in code else 400
+            return jsonify({'error': code}), status
+        except Exception as e:
+            return jsonify({'error': 'mix_muse_request_failed', 'detail': str(e)}), 502
+        default_name = f"Mix Muse · {(seed_row or {}).get('title') or album or 'Similar'}"
+        name = (body.get('name') or '').strip() or ai_name or default_name
+        tracks = _enrich_track_paths(paths)
+        out = {
+            'name': name, 'tracks': tracks, 'trackCount': len(tracks),
+            'source': 'mix-muse', 'prompt': prompt, 'seedKind': seed_kind,
+        }
+        if save:
+            pid = str(_uuid.uuid4())
+            saved = _persist_playlist(pid, name, paths, create=True)
+            out.update(saved or {})
+            out['playlistId'] = pid
+        return jsonify(out)
+
+    def _resonance_body(body):
+        seed_kind = (body.get('seedKind') or body.get('kind') or 'song').strip().lower()
+        path = (body.get('path') or body.get('filepath') or '').strip()
+        album = (body.get('album') or '').strip()
+        artist = (body.get('artist') or '').strip()
+        playlist_id = (body.get('playlistId') or body.get('playlist_id') or '').strip()
+        limit = min(max(int(body.get('maxTracks') or body.get('limit') or 30), 5), 80)
+        playlist_paths = None
+        if seed_kind == 'playlist' and playlist_id:
+            for pid, _name, src in _load_playlist_entries():
+                if pid == playlist_id:
+                    playlist_paths = _playlist_paths_cached(pid, src)
+                    break
+            if not playlist_paths:
+                raise ValueError('playlist_not_found')
+        seed, rows = bock_resonance.build_mix(
+            db_query, db_one, seed_kind, path=path or None, album=album or None,
+            artist=artist or None, playlist_paths=playlist_paths, limit=limit,
+        )
+        paths = [r['path'] for r in rows if r.get('path')]
+        title = bock_resonance.mix_title(seed, seed_kind)
+        return seed_kind, seed, paths, rows, title
+
+    @app.route('/api/resonance/mix', methods=['POST'])
+    def api_resonance_mix():
+        body = request.get_json(silent=True) or {}
+        save = bool(body.get('save', True))
+        try:
+            seed_kind, seed, paths, rows, title = _resonance_body(body)
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 404 if str(e) == 'playlist_not_found' else 400
+        name = (body.get('name') or '').strip() or title
+        tracks = _enrich_track_paths(paths)
+        out = {
+            'name': name, 'tracks': tracks, 'trackCount': len(tracks),
+            'source': 'resonance', 'seedKind': seed_kind,
+            'seed': {'path': seed.get('path'), 'title': seed.get('title'), 'artist': seed.get('artist')},
+        }
+        if save:
+            pid = str(_uuid.uuid4())
+            saved = _persist_playlist(pid, name, paths, create=True)
+            out.update(saved or {})
+            out['playlistId'] = pid
+        return jsonify(out)
+
+    @app.route('/api/resonance/radio', methods=['POST'])
+    def api_resonance_radio():
+        body = request.get_json(silent=True) or {}
+        try:
+            seed_kind, seed, paths, rows, title = _resonance_body(body)
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 404 if str(e) == 'playlist_not_found' else 400
+        tracks = _enrich_track_paths(paths)
+        return jsonify({
+            'name': title,
+            'tracks': tracks,
+            'trackCount': len(tracks),
+            'source': 'resonance',
+            'shuffle': True,
+            'seedKind': seed_kind,
+            'seed': {'path': seed.get('path'), 'title': seed.get('title'), 'artist': seed.get('artist')},
+        })
+
+    @app.route('/api/resonance/similar')
+    def api_resonance_similar():
+        path = (request.args.get('path') or '').strip()
+        if not path:
+            return jsonify({'error': 'path required'}), 400
+        limit = min(max(int(request.args.get('limit') or 20), 1), 50)
+        seed = bock_resonance.fetch_seed_row(db_one, db_query, 'song', path=path)
+        if not seed:
+            return jsonify({'error': 'not_found'}), 404
+        rows = bock_resonance.similar_tracks(db_query, seed, limit=limit)
+        return jsonify({
+            'seed': {'path': seed.get('path'), 'title': seed.get('title'), 'artist': seed.get('artist')},
+            'tracks': _enrich_track_paths([r['path'] for r in rows if r.get('path')]),
+        })
+
     @app.route('/api/config/features')
     def api_feature_flags():
         return jsonify({
@@ -252,4 +422,6 @@ def register(app, g):
             'continueListening': True,
             'unifiedSearch': True,
             'drivingMode': True,
+            'mixMuse': bock_mix_muse.status(load_config).get('configured', False),
+            'resonance': True,
         })

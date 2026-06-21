@@ -90,7 +90,7 @@ struct AiPlaylistSheet: View {
     let onSaved: () -> Void
 
     @State private var prompt = ""
-    @State private var name = "AI Playlist"
+    @State private var name = "Mix Muse"
     @State private var preview: [PlaylistTrack] = []
     @State private var loading = false
     @State private var saving = false
@@ -112,7 +112,7 @@ struct AiPlaylistSheet: View {
                     }
                 }
             }
-            .navigationTitle("AI playlist")
+            .navigationTitle("Mix Muse")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel", action: onDismiss) }
                 ToolbarItem(placement: .topBarTrailing) {

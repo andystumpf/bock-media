@@ -3,6 +3,7 @@ package com.bockmedia.console.ui.playlists
 import androidx.compose.foundation.background
 import com.bockmedia.console.ui.theme.BockGreen
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -35,6 +36,12 @@ import com.bockmedia.console.local.DownloadState
 import com.bockmedia.console.local.OfflineDownloadManager
 import com.bockmedia.console.local.downloadId
 import com.bockmedia.console.ui.components.*
+import com.bockmedia.console.ui.discovery.DiscoveryActionsDialog
+import com.bockmedia.console.ui.discovery.DiscoverySeed
+import com.bockmedia.console.ui.discovery.DiscoverySeedKind
+import com.bockmedia.console.ui.discovery.MixMuseDialog
+import com.bockmedia.console.ui.discovery.runResonanceMix
+import com.bockmedia.console.ui.discovery.runResonanceRadio
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -132,7 +139,7 @@ fun PlaylistsScreen(
             SearchActionRow {
                 IconButton(onClick = { showNew = true }) { Icon(Icons.Default.Add, "New") }
                 IconButton(onClick = { showSmart = true }) { Icon(Icons.Default.AutoAwesome, "Smart") }
-                IconButton(onClick = { showAi = true }) { Icon(Icons.Default.Psychology, "AI") }
+                IconButton(onClick = { showAi = true }) { Icon(Icons.Default.Psychology, "Mix Muse") }
                 IconButton(
                     onClick = {
                         if (mergeMode && selectedMerge.size >= 2) {
@@ -291,6 +298,9 @@ fun PlaylistDetailScreen(
     var refreshing by remember { mutableStateOf(false) }
     var loadError by remember { mutableStateOf<String?>(null) }
     var showRename by remember { mutableStateOf(false) }
+    var showMixMuse by remember { mutableStateOf(false) }
+    var mixMuseSeed by remember { mutableStateOf<DiscoverySeed?>(null) }
+    var discoverySeed by remember { mutableStateOf<DiscoverySeed?>(null) }
     val listState = rememberLazyListState()
     val pageSize = 100
     val playTarget = remember(name, playlistId) { PlayTarget.Playlist(playlistId, name) }
@@ -376,6 +386,33 @@ fun PlaylistDetailScreen(
             dismissButton = { TextButton(onClick = { showRename = false }) { Text("Cancel") } },
         )
     }
+    mixMuseSeed?.let { seed ->
+        if (showMixMuse) {
+            MixMuseDialog(
+                repository = repository,
+                seed = seed,
+                onDismiss = { showMixMuse = false; mixMuseSeed = null },
+                onPlaylistCreated = { id, plName -> onPlay(PlayTarget.Playlist(id, plName)) },
+            )
+        }
+    }
+    discoverySeed?.let { seed ->
+        DiscoveryActionsDialog(
+            seed = seed,
+            onDismiss = { discoverySeed = null },
+            onMixMuse = { mixMuseSeed = seed; showMixMuse = true },
+            onResonanceRadio = {
+                scope.launch {
+                    repository.runResonanceRadio(context, seed)
+                }
+            },
+            onResonanceMix = {
+                scope.launch {
+                    repository.runResonanceMix(seed) { id, plName -> onPlay(PlayTarget.Playlist(id, plName)) }
+                }
+            },
+        )
+    }
 
     Column(Modifier.fillMaxSize()) {
         when {
@@ -411,6 +448,13 @@ fun PlaylistDetailScreen(
                             onDelete = {
                                 scope.launch { repository.deletePlaylist(playlistId); onBack() }
                             },
+                            onDiscover = {
+                                discoverySeed = DiscoverySeed(
+                                    kind = DiscoverySeedKind.playlist,
+                                    title = name,
+                                    playlistId = playlistId,
+                                )
+                            },
                         )
                     }
                     item {
@@ -441,6 +485,17 @@ fun PlaylistDetailScreen(
                                 scope.launch {
                                     t.path?.let { repository.removePlaylistTrack(playlistId, it) }
                                     loadPage(page = 1, append = false)
+                                }
+                            },
+                            onDiscover = {
+                                t.path?.let { path ->
+                                    discoverySeed = DiscoverySeed(
+                                        kind = DiscoverySeedKind.song,
+                                        title = t.title ?: path,
+                                        path = path,
+                                        artist = t.artist,
+                                        album = t.album,
+                                    )
                                 }
                             },
                         )
@@ -477,6 +532,7 @@ private fun SpotifyPlaylistHeader(
     onDownload: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
+    onDiscover: () -> Unit = {},
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     val artUrl by produceState<String?>(initialValue = null, playlistId) {
@@ -568,6 +624,11 @@ private fun SpotifyPlaylistHeader(
                 }
                 DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
                     DropdownMenuItem(
+                        text = { Text("Mix Muse / Resonance") },
+                        onClick = { menuExpanded = false; onDiscover() },
+                        leadingIcon = { Icon(Icons.Default.AutoAwesome, null) },
+                    )
+                    DropdownMenuItem(
                         text = { Text("Rename") },
                         onClick = { menuExpanded = false; onRename() },
                         leadingIcon = { Icon(Icons.Default.Edit, null) },
@@ -638,11 +699,16 @@ private fun SpotifyTrackRow(
     track: PlaylistTrack,
     onClick: () -> Unit,
     onRemove: () -> Unit,
+    onDiscover: () -> Unit = {},
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick, enabled = track.path != null)
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onDiscover,
+                enabled = track.path != null,
+            )
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -782,10 +848,10 @@ private fun AiPlaylistDialog(repository: BockMediaRepository, onDismiss: () -> U
     var preview by remember { mutableStateOf<List<PlaylistTrack>>(emptyList()) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("AI playlist") },
+        title = { Text("Mix Muse") },
         text = {
             Column {
-                OutlinedTextField(prompt, { prompt = it }, label = { Text("Prompt") })
+                OutlinedTextField(prompt, { prompt = it }, label = { Text("Describe the vibe") }, minLines = 3)
                 OutlinedTextField(name, { name = it }, label = { Text("Playlist name") })
                 if (preview.isNotEmpty()) Text("${preview.size} tracks preview")
             }
@@ -794,12 +860,12 @@ private fun AiPlaylistDialog(repository: BockMediaRepository, onDismiss: () -> U
             Row {
                 TextButton(onClick = {
                     scope.launch {
-                        preview = repository.aiPlaylist(prompt, name.ifBlank { "AI Playlist" }, 30, false).preview
+                        preview = repository.aiPlaylist(prompt, name.ifBlank { "Mix Muse" }, 30, false).preview
                     }
                 }) { Text("Preview") }
                 TextButton(onClick = {
                     scope.launch {
-                        repository.aiPlaylist(prompt, name, 30, true)
+                        repository.aiPlaylist(prompt, name.ifBlank { "Mix Muse" }, 30, true)
                         onDismiss()
                     }
                 }) { Text("Create") }

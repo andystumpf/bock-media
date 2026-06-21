@@ -731,3 +731,59 @@ class TestParityFeatures:
     def test_smart_refresh_all(self, client):
         data = client.post('/api/smart_playlists/refresh_all').get_json()
         assert data.get('ok') is True
+
+
+class TestDiscoveryFeatures:
+    def test_mix_muse_status(self, client):
+        data = client.get('/api/mix-muse/status').get_json()
+        assert 'configured' in data
+        assert 'provider' in data
+
+    def test_feature_flags_discovery(self, client):
+        data = client.get('/api/config/features').get_json()
+        assert data.get('resonance') is True
+        assert 'mixMuse' in data
+
+    def test_resonance_similar_requires_path(self, client):
+        rv = client.get('/api/resonance/similar')
+        assert rv.status_code == 400
+
+    def test_resonance_mix_invalid_seed(self, client):
+        rv = client.post('/api/resonance/mix', json={'seedKind': 'song', 'path': '/nonexistent/track.mp3', 'save': False})
+        assert rv.status_code in (400, 404)
+
+    def test_resonance_radio_invalid_seed(self, client):
+        rv = client.post('/api/resonance/radio', json={'seedKind': 'song', 'path': '/nonexistent/track.mp3'})
+        assert rv.status_code in (400, 404)
+
+    def test_resonance_similar(self, client, sample_track):
+        from urllib.parse import quote
+        path = quote(sample_track['path'], safe='')
+        rv = client.get(f'/api/resonance/similar?path={path}')
+        assert rv.status_code == 200
+        data = rv.get_json()
+        assert 'tracks' in data
+        assert 'seed' in data
+
+    def test_resonance_mix(self, client, sample_track):
+        rv = client.post('/api/resonance/mix', json={
+            'seedKind': 'song',
+            'path': sample_track['path'],
+            'save': False,
+            'maxTracks': 10,
+        })
+        assert rv.status_code == 200
+        data = rv.get_json()
+        assert data.get('source') == 'resonance'
+        assert 'tracks' in data
+
+    def test_resonance_radio(self, client, sample_track):
+        rv = client.post('/api/resonance/radio', json={
+            'seedKind': 'song',
+            'path': sample_track['path'],
+            'maxTracks': 10,
+        })
+        assert rv.status_code == 200
+        data = rv.get_json()
+        assert data.get('shuffle') is True
+        assert 'tracks' in data

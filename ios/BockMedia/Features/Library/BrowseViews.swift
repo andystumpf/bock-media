@@ -38,6 +38,8 @@ struct AlbumsView: View {
     @State private var total = 0
     @State private var loading = true
     @State private var loadingMore = false
+    @State private var showMixMuse = false
+    @State private var mixMuseSeed: DiscoverySeed?
 
     var body: some View {
         browseList(loading: loading && items.isEmpty, empty: "No albums") {
@@ -57,6 +59,14 @@ struct AlbumsView: View {
                     }
                 }
                 .listRowBackground(BockColors.surfaceVariant.opacity(0.4))
+                .contextMenu {
+                    DiscoveryContextMenuItems(
+                        appState: appState,
+                        seed: DiscoverySeed(kind: .album, title: album.name, album: album.name, artist: album.artist),
+                        showMixMuse: $showMixMuse,
+                        mixMuseSeed: $mixMuseSeed
+                    )
+                }
             }
             if loadingMore {
                 HStack { Spacer(); ProgressView(); Spacer() }
@@ -71,6 +81,9 @@ struct AlbumsView: View {
         .navigationTitle(artist.map { "Albums · \($0)" } ?? "Albums")
         .task { await reload() }
         .refreshable { await reload() }
+        .sheet(isPresented: $showMixMuse) {
+            MixMusePromptSheet(appState: appState, seed: mixMuseSeed)
+        }
     }
 
     private func reload() async {
@@ -108,6 +121,8 @@ struct SongsView: View {
     @State private var total = 0
     @State private var loading = true
     @State private var loadingMore = false
+    @State private var showMixMuse = false
+    @State private var mixMuseSeed: DiscoverySeed?
 
     var body: some View {
         browseList(loading: loading && items.isEmpty, empty: "No songs") {
@@ -126,6 +141,22 @@ struct SongsView: View {
                         )
                     }
                 }
+                .contextMenu {
+                    if let path = song.path {
+                        DiscoveryContextMenuItems(
+                            appState: appState,
+                            seed: DiscoverySeed(
+                                kind: .song,
+                                title: song.title ?? path,
+                                path: path,
+                                artist: song.artist,
+                                album: song.album
+                            ),
+                            showMixMuse: $showMixMuse,
+                            mixMuseSeed: $mixMuseSeed
+                        )
+                    }
+                }
                 .listRowBackground(BockColors.surfaceVariant.opacity(0.4))
             }
             if loadingMore {
@@ -137,6 +168,9 @@ struct SongsView: View {
         .navigationTitle(album ?? artist ?? "Songs")
         .task { await reload() }
         .refreshable { await reload() }
+        .sheet(isPresented: $showMixMuse) {
+            MixMusePromptSheet(appState: appState, seed: mixMuseSeed)
+        }
     }
 
     private func reload() async {

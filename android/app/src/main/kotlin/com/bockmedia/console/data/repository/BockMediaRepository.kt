@@ -572,6 +572,60 @@ class BockMediaRepository(
             put("save", save)
         })
 
+    suspend fun mixMuseSimilar(
+        seedKind: String,
+        path: String? = null,
+        album: String? = null,
+        artist: String? = null,
+        playlistId: String? = null,
+        prompt: String,
+        save: Boolean = true,
+        maxTracks: Int = 25,
+    ) = api().mixMuseSimilar(buildJsonObject {
+        put("seedKind", seedKind)
+        path?.let { put("path", it) }
+        album?.let { put("album", it) }
+        artist?.let { put("artist", it) }
+        playlistId?.let { put("playlistId", it) }
+        put("prompt", prompt)
+        put("save", save)
+        put("maxTracks", maxTracks)
+    })
+
+    suspend fun resonanceRadio(
+        seedKind: String,
+        path: String? = null,
+        album: String? = null,
+        artist: String? = null,
+        playlistId: String? = null,
+        maxTracks: Int = 30,
+    ) = api().resonanceRadio(buildJsonObject {
+        put("seedKind", seedKind)
+        path?.let { put("path", it) }
+        album?.let { put("album", it) }
+        artist?.let { put("artist", it) }
+        playlistId?.let { put("playlistId", it) }
+        put("maxTracks", maxTracks)
+    })
+
+    suspend fun resonanceMix(
+        seedKind: String,
+        path: String? = null,
+        album: String? = null,
+        artist: String? = null,
+        playlistId: String? = null,
+        maxTracks: Int = 30,
+        save: Boolean = true,
+    ) = api().resonanceMix(buildJsonObject {
+        put("seedKind", seedKind)
+        path?.let { put("path", it) }
+        album?.let { put("album", it) }
+        artist?.let { put("artist", it) }
+        playlistId?.let { put("playlistId", it) }
+        put("maxTracks", maxTracks)
+        put("save", save)
+    })
+
     suspend fun createSmartPlaylist(name: String, genre: String?, artist: String?, maxTracks: Int) {
         val rules = buildJsonArray {
             genre?.takeIf { it.isNotBlank() }?.let {

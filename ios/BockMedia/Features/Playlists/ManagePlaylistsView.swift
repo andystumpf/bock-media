@@ -55,7 +55,7 @@ struct ManagePlaylistsView: View {
                 Menu {
                     Button { showCreate = true } label: { Label("New playlist", icon: .add) }
                     Button { showMerge = true } label: { Label("Merge playlists", icon: .merge) }
-                    Button { showAI = true } label: { Label("AI playlist", icon: .psychology) }
+                    Button { showAI = true } label: { Label("Mix Muse playlist", icon: .psychology) }
                 } label: {
                     BockIcon(icon: .add, size: 22)
                 }
@@ -88,10 +88,8 @@ struct ManagePlaylistsView: View {
             })
         }
         .sheet(isPresented: $showAI) {
-            AiPlaylistSheet(appState: appState, onDismiss: { showAI = false }, onSaved: {
-                showAI = false
-                Task { await load() }
-            })
+            MixMusePromptSheet(appState: appState, seed: nil)
+                .onDisappear { Task { await load() } }
         }
     }
 

@@ -555,6 +555,38 @@ data class AiPlaylistResponse(
     val preview: List<PlaylistTrack> = emptyList(),
     val name: String? = null,
     val id: String? = null,
+    val tracks: List<PlaylistTrack> = emptyList(),
+    val trackCount: Int? = null,
+    val playlistId: String? = null,
+    val source: String? = null,
+    val prompt: String? = null,
+)
+
+@Serializable
+data class MixMuseStatusResponse(
+    val configured: Boolean = false,
+    val provider: String? = null,
+    val supportsOpenAi: Boolean = false,
+    val supportsClaude: Boolean = false,
+)
+
+@Serializable
+data class DiscoveryMixResponse(
+    val name: String? = null,
+    val tracks: List<PlaylistTrack> = emptyList(),
+    val trackCount: Int? = null,
+    val playlistId: String? = null,
+    val id: String? = null,
+    val source: String? = null,
+    val shuffle: Boolean? = null,
+    val seed: DiscoverySeedInfo? = null,
+)
+
+@Serializable
+data class DiscoverySeedInfo(
+    val path: String? = null,
+    val title: String? = null,
+    val artist: String? = null,
 )
 
 @Serializable

@@ -1,6 +1,7 @@
 package com.bockmedia.console.ui.library
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import com.bockmedia.console.ui.components.BockLazyColumn
 import androidx.compose.foundation.lazy.items
@@ -15,6 +16,14 @@ import com.bockmedia.console.ui.components.LoadingBox
 import com.bockmedia.console.ui.components.PaginationBar
 import com.bockmedia.console.ui.components.PlayButton
 import com.bockmedia.console.ui.components.SearchField
+import com.bockmedia.console.ui.discovery.DiscoveryActionsDialog
+import com.bockmedia.console.ui.discovery.DiscoverySeed
+import com.bockmedia.console.ui.discovery.DiscoverySeedKind
+import com.bockmedia.console.ui.discovery.MixMuseDialog
+import com.bockmedia.console.ui.discovery.runResonanceMix
+import com.bockmedia.console.ui.discovery.runResonanceRadio
+import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 
 @Composable
@@ -59,6 +68,14 @@ fun AlbumsScreen(
         artPath = { null },
         albumName = { it.name },
         artistName = { it.artist },
+        discoverySeed = { album ->
+            DiscoverySeed(
+                kind = DiscoverySeedKind.album,
+                title = album.name,
+                album = album.name,
+                artist = album.artist,
+            )
+        },
     )
 }
 
@@ -83,6 +100,17 @@ fun SongsScreen(
         onPlayItem = { item -> item.path?.let { p -> onPlay(PlayTarget.Song(p, item.title ?: "")) } },
         onOpen = null,
         artPath = { it.path },
+        discoverySeed = { song ->
+            song.path?.let { path ->
+                DiscoverySeed(
+                    kind = DiscoverySeedKind.song,
+                    title = song.title ?: path,
+                    path = path,
+                    artist = song.artist,
+                    album = song.album,
+                )
+            }
+        },
     )
 }
 
@@ -100,7 +128,13 @@ private fun <T> LibraryListScreen(
     artPath: ((T) -> String?)? = null,
     artistName: ((T) -> String?)? = null,
     albumName: ((T) -> String?)? = null,
+    discoverySeed: ((T) -> DiscoverySeed?)? = null,
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var showMixMuse by remember { mutableStateOf(false) }
+    var mixMuseSeed by remember { mutableStateOf<DiscoverySeed?>(null) }
+    var discoveryDialogSeed by remember { mutableStateOf<DiscoverySeed?>(null) }
     var search by remember { mutableStateOf("") }
     var page by remember { mutableIntStateOf(1) }
     var items by remember { mutableStateOf<List<T>>(emptyList()) }
@@ -119,6 +153,30 @@ private fun <T> LibraryListScreen(
         loading = false
     }
 
+    mixMuseSeed?.let { seed ->
+        if (showMixMuse) {
+            MixMuseDialog(
+                repository = repository,
+                seed = seed,
+                onDismiss = { showMixMuse = false; mixMuseSeed = null },
+                onPlaylistCreated = { _, _ -> },
+            )
+        }
+    }
+    discoveryDialogSeed?.let { seed ->
+        DiscoveryActionsDialog(
+            seed = seed,
+            onDismiss = { discoveryDialogSeed = null },
+            onMixMuse = { mixMuseSeed = seed; showMixMuse = true },
+            onResonanceRadio = {
+                scope.launch { repository.runResonanceRadio(context, seed) }
+            },
+            onResonanceMix = {
+                scope.launch { repository.runResonanceMix(seed) { _, _ -> } }
+            },
+        )
+    }
+
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
         if (showSearch) {
             SearchField(search, { search = it; page = 1 }, "Search")
@@ -127,6 +185,15 @@ private fun <T> LibraryListScreen(
         if (loading) LoadingBox(Modifier.weight(1f)) else {
             BockLazyColumn(Modifier.weight(1f)) {
                 items(items) { item ->
+                    val seed = discoverySeed?.invoke(item)
+                    val rowModifier = when {
+                        seed != null -> Modifier.combinedClickable(
+                            onClick = { onOpen?.invoke(item) },
+                            onLongClick = { discoveryDialogSeed = seed },
+                        )
+                        onOpen != null -> Modifier.clickable { onOpen(item) }
+                        else -> Modifier
+                    }
                     if (artPath != null || artistName != null || albumName != null) {
                         LibraryArtListItem(
                             repository = repository,
@@ -135,7 +202,7 @@ private fun <T> LibraryListScreen(
                             artPath = artPath?.invoke(item),
                             artistName = artistName?.invoke(item),
                             albumName = albumName?.invoke(item),
-                            modifier = if (onOpen != null) Modifier.clickable { onOpen(item) } else Modifier,
+                            modifier = rowModifier,
                             trailing = {
                                 if (remoteOk) PlayButton(onClick = { onPlayItem(item) })
                             },
@@ -144,7 +211,7 @@ private fun <T> LibraryListScreen(
                         ListItem(
                             headlineContent = { Text(label(item)) },
                             supportingContent = { Text(sub(item)) },
-                            modifier = if (onOpen != null) Modifier.clickable { onOpen(item) } else Modifier,
+                            modifier = rowModifier,
                             trailingContent = {
                                 if (remoteOk) PlayButton(onClick = { onPlayItem(item) })
                             },

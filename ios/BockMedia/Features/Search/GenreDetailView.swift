@@ -159,6 +159,12 @@ struct AlbumDetailView: View {
     let albumName: String
     let artist: String?
 
+    @State private var showMixMuse = false
+
+    private var seed: DiscoverySeed {
+        DiscoverySeed(kind: .album, title: albumName, album: albumName, artist: artist)
+    }
+
     var body: some View {
         List {
             Button {
@@ -172,5 +178,52 @@ struct AlbumDetailView: View {
             }
         }
         .navigationTitle(albumName)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button {
+                        showMixMuse = true
+                    } label: { Label("Mix Muse playlist…", systemImage: "sparkles") }
+                    Button { Task { await runResonanceRadio() } } label: {
+                        Label("Resonance radio", systemImage: "waveform")
+                    }
+                    Button { Task { await runResonanceMix() } } label: {
+                        Label("Resonance mix (save)", systemImage: "music.note.list")
+                    }
+                } label: {
+                    BockIcon(icon: .moreVert, size: 22)
+                }
+            }
+        }
+        .sheet(isPresented: $showMixMuse) {
+            MixMusePromptSheet(appState: appState, seed: seed)
+        }
+    }
+
+    private func runResonanceRadio() async {
+        do {
+            let resp = try await appState.repository.resonanceRadio(
+                seedKind: seed.kind.rawValue,
+                album: seed.album, artist: seed.artist
+            )
+            await appState.repository.playDiscoveryTracksLocally(resp.tracks, title: resp.name ?? seed.title, shuffle: true)
+            appState.showNowPlayingSheet = true
+        } catch {
+            appState.toast = error.localizedDescription
+        }
+    }
+
+    private func runResonanceMix() async {
+        do {
+            let resp = try await appState.repository.resonanceMix(
+                seedKind: seed.kind.rawValue,
+                album: seed.album, artist: seed.artist, save: true
+            )
+            if let pid = resp.playlistId ?? resp.id, !pid.isEmpty {
+                appState.pendingPlayTarget = .playlist(id: pid, name: resp.name ?? "Resonance mix")
+            }
+        } catch {
+            appState.toast = error.localizedDescription
+        }
     }
 }
