@@ -53,6 +53,7 @@ struct RoomPolicy: Codable, Equatable {
     var maxVolume: Int?
     var quietHours: [QuietWindow] = []
     var requireApproval: Bool = false
+    var normalizeLoudness: Bool = true
 }
 
 struct MemberPlayCount: Codable, Identifiable, Equatable {

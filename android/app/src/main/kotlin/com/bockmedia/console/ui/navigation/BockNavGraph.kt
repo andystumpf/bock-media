@@ -45,6 +45,7 @@ import com.bockmedia.console.ui.favorites.FavoritesScreen
 import com.bockmedia.console.ui.recent.RecentRequestsScreen
 import com.bockmedia.console.ui.routines.RoutinesScreen
 import com.bockmedia.console.ui.devices.DevicesScreen
+import com.bockmedia.console.ui.driving.DrivingModeScreen
 import com.bockmedia.console.ui.family.FamilyScreen
 import com.bockmedia.console.ui.home.HomeScreen
 import com.bockmedia.console.ui.library.AlbumsScreen
@@ -68,6 +69,7 @@ fun BockApp(repository: BockMediaRepository, deepLinkRoute: String? = null) {
     val navController = rememberNavController()
     val snackbarHostState = remember { SnackbarHostState() }
     var playTarget by remember { mutableStateOf<PlayTarget?>(null) }
+    var pendingOpenNowPlaying by remember { mutableStateOf(false) }
     var playbackFocusGeneration by remember { mutableIntStateOf(PlaybackFocus.generation) }
     var remoteOk by remember { mutableStateOf(false) }
     var alexaDevices by remember { mutableStateOf(emptyList<com.bockmedia.console.data.api.dto.AlexaDevice>()) }
@@ -108,6 +110,12 @@ fun BockApp(repository: BockMediaRepository, deepLinkRoute: String? = null) {
         runCatching { navController.navigate(dest) { launchSingleTop = true } }
     }
 
+    LaunchedEffect(playTarget, pendingOpenNowPlaying) {
+        if (!pendingOpenNowPlaying || playTarget != null) return@LaunchedEffect
+        pendingOpenNowPlaying = false
+        navController.navigate(BockRoute.NowPlaying.route) { launchSingleTop = true }
+    }
+
     AlexaAuthMonitor(repository, snackbarHostState)
 
     PlayTargetLauncher(
@@ -116,10 +124,13 @@ fun BockApp(repository: BockMediaRepository, deepLinkRoute: String? = null) {
         remoteOk,
         snackbarHostState,
         onClear = { playTarget = null },
-        onPlayStarted = { _, _ -> playbackFocusGeneration = PlaybackFocus.generation },
+        onPlayStarted = { _, _ ->
+            playbackFocusGeneration = PlaybackFocus.generation
+            pendingOpenNowPlaying = true
+        },
         onLocalPlayStarted = {
             playbackFocusGeneration = PlaybackFocus.generation
-            navController.navigate(BockRoute.NowPlaying.route) { launchSingleTop = true }
+            pendingOpenNowPlaying = true
         },
     )
 
@@ -412,6 +423,14 @@ private fun BockNavHost(
         }
         composable(BockRoute.Devices.route) { DevicesScreen(repository) }
         composable(BockRoute.Family.route) { FamilyScreen(repository) }
+        composable(BockRoute.Driving.route) {
+            DrivingModeScreen(
+                repository = repository,
+                onOpenNowPlaying = {
+                    navController.navigate(BockRoute.NowPlaying.route) { launchSingleTop = true }
+                },
+            )
+        }
         composable(BockRoute.Analytics.route) { AnalyticsScreen(repository) }
         composable(BockRoute.Settings.route) {
             SettingsScreen(

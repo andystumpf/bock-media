@@ -99,10 +99,10 @@ fun PlayTargetLauncher(
                         snackbarHostState.showSnackbar(err)
                     } else {
                         PlaybackFocus.notePlayStarted(LOCAL_PHONE_DEVICE_ID, "This phone")
-                        onLocalPlayStarted()
                         snackbarHostState.showSnackbar("Playing \"${target.label}\" on this phone")
                         showPicker = false
                         onClear()
+                        onLocalPlayStarted()
                     }
                 }
             },

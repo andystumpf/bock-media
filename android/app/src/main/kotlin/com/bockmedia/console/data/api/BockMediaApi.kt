@@ -47,6 +47,24 @@ interface BockMediaApi {
     @GET("api/search")
     suspend fun search(@Query("q") q: String, @Query("limit") limit: Int = 30): SearchResponse
 
+    @GET("api/search/suggest")
+    suspend fun searchSuggest(@Query("q") q: String): SearchResponse
+
+    @GET("api/continue")
+    suspend fun continueListening(@Query("member") member: String? = null): ContinueResponse
+
+    @GET("api/library/new")
+    suspend fun libraryNew(@Query("since") since: String = "7d", @Query("limit") limit: Int = 50): LibraryNewResponse
+
+    @GET("api/recommendations/discover-weekly")
+    suspend fun discoverWeekly(@Query("member") member: String? = null): DiscoverWeeklyResponse
+
+    @GET("api/playlist_folders")
+    suspend fun playlistFolders(): PlaylistFoldersResponse
+
+    @POST("api/playback/handoff")
+    suspend fun playbackHandoff(@Body body: JsonObject): HandoffResponse
+
     @GET("api/playlists")
     suspend fun playlists(
         @Query("page") page: Int = 1,

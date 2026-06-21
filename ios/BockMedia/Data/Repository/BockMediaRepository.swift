@@ -209,6 +209,41 @@ final class BockMediaRepository: ObservableObject {
         return try await api.smartPlaylists().items
     }
 
+    func searchSuggest(q: String) async throws -> SearchResponse {
+        try await ensureAPI()
+        return try await api.searchSuggest(q: q)
+    }
+
+    func continueListening(member: String? = nil) async throws -> ContinueResponse {
+        try await ensureAPI()
+        return try await api.continueListening(member: member)
+    }
+
+    func libraryNew(since: String = "7d") async throws -> LibraryNewResponse {
+        try await ensureAPI()
+        return try await api.libraryNew(since: since)
+    }
+
+    func discoverWeekly(member: String? = nil) async throws -> DiscoverWeeklyResponse {
+        try await ensureAPI()
+        return try await api.discoverWeekly(member: member)
+    }
+
+    func playlistFolders() async throws -> PlaylistFoldersResponse {
+        try await ensureAPI()
+        return try await api.playlistFolders()
+    }
+
+    func playbackHandoff(fromDeviceId: String, toDeviceId: String, offsetMs: Int, context: [String: Any]) async throws -> HandoffResponse {
+        try await ensureAPI()
+        return try await api.playbackHandoff(body: [
+            "fromDeviceId": fromDeviceId,
+            "toDeviceId": toDeviceId,
+            "offsetMs": offsetMs,
+            "context": context,
+        ])
+    }
+
     func createSmartPlaylist(name: String, genre: String?, artist: String?, maxTracks: Int) async throws {
         try await ensureAPI()
         var rules: [[String: Any]] = []

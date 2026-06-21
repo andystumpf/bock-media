@@ -89,6 +89,46 @@ final class BockMediaAPIClient {
         try await get("api/search", query: ["q": q, "limit": "\(limit)"])
     }
 
+    func searchSuggest(q: String) async throws -> SearchResponse {
+        try await get("api/search/suggest", query: ["q": q])
+    }
+
+    func continueListening(member: String? = nil) async throws -> ContinueResponse {
+        var query: [String: String] = [:]
+        if let member { query["member"] = member }
+        return try await get("api/continue", query: query)
+    }
+
+    func libraryNew(since: String = "7d", limit: Int = 50) async throws -> LibraryNewResponse {
+        try await get("api/library/new", query: ["since": since, "limit": "\(limit)"])
+    }
+
+    func discoverWeekly(member: String? = nil) async throws -> DiscoverWeeklyResponse {
+        var query: [String: String] = [:]
+        if let member { query["member"] = member }
+        return try await get("api/recommendations/discover-weekly", query: query)
+    }
+
+    func playlistFolders() async throws -> PlaylistFoldersResponse {
+        try await get("api/playlist_folders")
+    }
+
+    func assignPlaylistFolder(playlistId: String, folderId: String?) async throws -> OkResponse {
+        try await post("api/playlists/\(playlistId)/folder", body: ["folderId": folderId as Any])
+    }
+
+    func playbackHandoff(body: [String: Any]) async throws -> HandoffResponse {
+        try await post("api/playback/handoff", body: body)
+    }
+
+    func loudnessAnalyzeStatus() async throws -> LoudnessAnalyzeStatus {
+        try await get("api/library/analyze-loudness/status")
+    }
+
+    func startLoudnessAnalyze(force: Bool = false) async throws -> OkResponse {
+        try await post("api/library/analyze-loudness", body: ["force": force])
+    }
+
     func artists(page: Int = 1, limit: Int = 50, search: String = "") async throws -> ArtistsResponse {
         try await get("api/artists", query: ["page": "\(page)", "limit": "\(limit)", "search": search])
     }

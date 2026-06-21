@@ -109,7 +109,7 @@ class LocalPlaybackService : MediaSessionService() {
                 paths = intent.getStringArrayListExtra(EXTRA_PATHS).orEmpty()
                 crossfadeMs = intent.getLongExtra(EXTRA_CROSSFADE_MS, 0L).coerceAtLeast(0)
                 lastReportedIndex = -1
-                cancelCrossfade(releaseIncoming = true)
+                releasePlayers()
                 val start = intent.getIntExtra(EXTRA_START_INDEX, 0).coerceAtLeast(0)
                 val shuffle = intent.getBooleanExtra(EXTRA_SHUFFLE, false)
                 startPlayback(urls, start, shuffle)
@@ -121,19 +121,12 @@ class LocalPlaybackService : MediaSessionService() {
                         incomingPlayer?.pause()
                         player?.pause()
                     } else {
-                        requestAudioFocus()
-                        incomingPlayer?.play()
-                        player?.play()
+                        resumePlayback()
                     }
+                } else if (player?.isPlaying == true) {
+                    player?.pause()
                 } else {
-                    player?.let {
-                        if (it.isPlaying) {
-                            it.pause()
-                        } else {
-                            requestAudioFocus()
-                            it.play()
-                        }
-                    }
+                    resumePlayback()
                 }
             }
             ACTION_NEXT -> skip(forward = true)
@@ -152,6 +145,20 @@ class LocalPlaybackService : MediaSessionService() {
             ACTION_STOP -> stopPlayback()
         }
         return START_STICKY
+    }
+
+    /** Drop ExoPlayer instances so a new queue never inherits ENDED/ crossfade state. */
+    private fun releasePlayers() {
+        crossfadeHandler.removeCallbacks(crossfadeVolumeRunnable)
+        crossfading = false
+        crossfadeTargetIndex = -1
+        stopProgressUpdates()
+        incomingPlayer?.release()
+        incomingPlayer = null
+        player?.release()
+        player = null
+        mediaSession?.release()
+        mediaSession = null
     }
 
     private fun startPlayback(urlList: List<String>, startIndex: Int, shuffle: Boolean = false) {
@@ -250,23 +257,36 @@ class LocalPlaybackService : MediaSessionService() {
     private fun skip(forward: Boolean) {
         cancelCrossfade(releaseIncoming = true)
         val exo = player ?: return
+        val stayPaused = !exo.isPlaying
         if (forward) exo.seekToNextMediaItem() else exo.seekToPreviousMediaItem()
         exo.volume = 1f
+        if (stayPaused) exo.pause()
         reportPlayIfNeeded(exo.currentMediaItemIndex)
         syncState(exo)
         startForeground(NOTIFICATION_ID, buildNotification())
     }
 
-    private fun stopPlayback() {
+    /** Resume after pause or skip-while-paused; handles IDLE/ENDED so play() actually starts. */
+    private fun resumePlayback() {
         cancelCrossfade(releaseIncoming = true)
+        val exo = leadPlayer() ?: player ?: return
+        requestAudioFocus()
+        when (exo.playbackState) {
+            Player.STATE_ENDED -> exo.seekToDefaultPosition()
+            Player.STATE_IDLE -> exo.prepare()
+        }
+        exo.play()
+        if (crossfading) incomingPlayer?.play()
+        syncState(leadPlayer() ?: exo)
+        startProgressUpdates()
+        startForeground(NOTIFICATION_ID, buildNotification())
+    }
+
+    private fun stopPlayback() {
+        releasePlayers()
         abandonAudioFocus()
         DeviceAnalyticsReporter.clearPlayback(this)
-        stopProgressUpdates()
         stopForeground(STOP_FOREGROUND_REMOVE)
-        player?.release()
-        player = null
-        mediaSession?.release()
-        mediaSession = null
         LocalPlaybackController.update { LocalPlaybackState() }
         stopSelf()
     }
@@ -394,6 +414,9 @@ class LocalPlaybackService : MediaSessionService() {
             syncState(exo)
             startForeground(NOTIFICATION_ID, buildNotification())
             if (playbackState == Player.STATE_ENDED) {
+                // Skip-while-paused can surface ENDED on the outgoing item; don't tear down
+                // the service while the user still expects to resume or keep skipping.
+                if (!exo.playWhenReady) return
                 if (exo.hasNextMediaItem()) return
                 stopPlayback()
             }

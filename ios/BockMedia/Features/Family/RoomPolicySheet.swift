@@ -41,6 +41,7 @@ struct RoomPolicySheet: View {
                     }
 
                     Section("Volume") {
+                        Toggle("Normalize loudness", isOn: $policy.normalizeLoudness)
                         Toggle("Enforce volume cap", isOn: $enforceVolume)
                         if enforceVolume {
                             VStack(alignment: .leading) {
@@ -129,6 +130,7 @@ struct RoomPolicySheet: View {
             "allowExplicit": policy.allowExplicit,
             "requireApproval": policy.requireApproval,
             "allowPlaylistIds": Array(allowSet),
+            "normalizeLoudness": policy.normalizeLoudness,
         ]
         body["maxVolume"] = enforceVolume ? Int(volume) : NSNull()
         if quietOn {

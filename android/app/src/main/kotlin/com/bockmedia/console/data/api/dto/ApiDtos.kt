@@ -207,6 +207,10 @@ data class SearchResponse(
     val artists: List<SearchHit> = emptyList(),
     val albums: List<SearchHit> = emptyList(),
     val songs: List<SearchHit> = emptyList(),
+    val genres: List<SearchHit> = emptyList(),
+    val smartPlaylists: List<SearchHit> = emptyList(),
+    val rooms: List<SearchHit> = emptyList(),
+    val messages: List<SearchHit> = emptyList(),
 )
 
 @Serializable
@@ -235,6 +239,7 @@ data class PlaylistSummary(
     val sourceName: String? = null,
     val createDate: String? = null,
     val lastUsed: String? = null,
+    val folderId: String? = null,
 )
 
 @Serializable
@@ -264,7 +269,9 @@ data class SmartPlaylist(
     val id: String = "",
     val name: String = "",
     val enabled: Boolean = true,
-    val playlistId: String? = null,
+    @SerialName("linkedPlaylistId") val playlistId: String? = null,
+    val trackCount: Int? = null,
+    val lastRefresh: String? = null,
     val rules: JsonObject? = null,
 )
 
@@ -548,4 +555,71 @@ data class AiPlaylistResponse(
     val preview: List<PlaylistTrack> = emptyList(),
     val name: String? = null,
     val id: String? = null,
+)
+
+@Serializable
+data class ContinueResponse(val resume: ResumeEntry? = null, val recent: List<ResumeEntry> = emptyList())
+
+@Serializable
+data class ResumeEntry(
+    val id: String? = null,
+    val filepath: String? = null,
+    val track: String? = null,
+    val artist: String? = null,
+    val album: String? = null,
+    val offsetMs: Int = 0,
+    val durationMs: Int = 0,
+    val progress: Double = 0.0,
+    val context: ResumeContext? = null,
+)
+
+@Serializable
+data class ResumeContext(val kind: String? = null, val id: String? = null, val name: String? = null)
+
+@Serializable
+data class LibraryNewResponse(
+    val since: String? = null,
+    val albums: List<LibraryNewAlbum> = emptyList(),
+    val tracks: List<LibraryNewTrack> = emptyList(),
+)
+
+@Serializable
+data class LibraryNewAlbum(
+    val album: String? = null,
+    val artist: String? = null,
+    val path: String? = null,
+    @SerialName("first_seen_at") val firstSeenAt: String? = null,
+)
+
+@Serializable
+data class LibraryNewTrack(val title: String? = null, val artist: String? = null, val album: String? = null, val path: String? = null)
+
+@Serializable
+data class DiscoverWeeklyResponse(
+    val memberId: String? = null,
+    val generatedAt: String? = null,
+    val sections: List<DiscoverSection> = emptyList(),
+)
+
+@Serializable
+data class DiscoverSection(val id: String? = null, val title: String? = null, val reason: String? = null, val tracks: List<DiscoverTrack> = emptyList())
+
+@Serializable
+data class DiscoverTrack(val path: String? = null, val title: String? = null, val artist: String? = null, val album: String? = null)
+
+@Serializable
+data class PlaylistFoldersResponse(val folders: List<PlaylistFolder> = emptyList(), val assignments: Map<String, String> = emptyMap())
+
+@Serializable
+data class PlaylistFolder(val id: String = "", val name: String = "", val parentId: String? = null, val order: Int = 0)
+
+@Serializable
+data class HandoffResponse(
+    val ok: Boolean = false,
+    val method: String? = null,
+    val filepath: String? = null,
+    val offsetMs: Int? = null,
+    val streamUrl: String? = null,
+    val warning: String? = null,
+    val error: String? = null,
 )

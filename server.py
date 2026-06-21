@@ -31,6 +31,11 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding as rsa_padding
 from flask import Flask, jsonify, request, send_from_directory, send_file, Response
 
+import bock_loudness
+import bock_continue
+import bock_folders
+from bock_routes import register as register_bock_routes
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 app = Flask(__name__, static_folder=os.path.join(HERE, 'public'))
 
@@ -47,11 +52,20 @@ _LAST_ALEXA_HIT = 0.0
 DB_PATH = os.environ.get('OURMEDIA_DB_PATH', '/mnt/bock/Music/music_organizer.db')
 DATA_DIR = os.environ.get('OURMEDIA_DATA_DIR', '/home/plex/.bockmedia')
 HEALTH_STATE_PATH = os.path.join(DATA_DIR, 'health_state.json')
+PLAYLIST_FOLDERS_PATH = os.path.join(DATA_DIR, 'playlist_folders.json')
+PLAYBACK_RESUME_PATH = os.path.join(DATA_DIR, 'playback_resume.json')
+RECOMMENDATIONS_CACHE_PATH = os.path.join(DATA_DIR, 'recommendations_cache.json')
+PLAY_COUNTS_PATH = os.path.join(DATA_DIR, 'play_counts.json')
 
 # ── DB helper ────────────────────────────────────────────────────────────────
 
 def get_db():
     conn = sqlite3.connect(f'file:{DB_PATH}?mode=ro', uri=True)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def get_db_rw():
+    conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -846,6 +860,9 @@ def playlists():
     member_filter = (request.args.get('member') or '').strip()
     if not member_filter and (request.args.get('clientId') or '').strip():
         member_filter = member_for_client(request.args.get('clientId').strip()) or ''
+    folder_filter = (request.args.get('folder') or '').strip()
+    pl_folders = bock_folders.load_folders(PLAYLIST_FOLDERS_PATH)
+    assignments = pl_folders.get('assignments') or {}
     pl_meta = _load_playlist_meta()
     household = _load_household() if member_filter else None
     try:
@@ -859,10 +876,15 @@ def playlists():
             if search and search not in name.lower():
                 continue
             pid = xml_text(key, 'ID')
+            if folder_filter == 'root':
+                if assignments.get(pid):
+                    continue
+            elif folder_filter and assignments.get(pid) != folder_filter:
+                continue
             meta_entry = pl_meta.get(pid)
             if member_filter and not _playlist_visible_to(meta_entry, member_filter):
                 continue
-            all_playlists.append({
+            all_playlists.append(bock_folders.enrich_playlist_item({
                 'id': pid,
                 'name': name,
                 'trackCount': xml_int(key, 'TrackCount'),
@@ -874,7 +896,7 @@ def playlists():
                 'sourceName': xml_text(key, 'SourceName'),
                 'isAudioBook': xml_text(key, 'IsAudioBook') == 'true',
                 **_public_playlist_meta(meta_entry, household),
-            })
+            }, assignments))
 
         if sort_by == 'trackCount':
             all_playlists.sort(key=lambda x: (x.get('trackCount') or 0, (x.get('name') or '').lower()),
@@ -1239,12 +1261,17 @@ def _library_search_song_match(q, title, album):
 
 @app.route('/api/search')
 def library_search():
+    import bock_search_ext
     q = (request.args.get('q') or '').strip()
     limit = min(max(int(request.args.get('limit', 15) or 15), 1), 30)
     if len(q) < 2:
-        return jsonify({'query': q, 'playlists': [], 'artists': [], 'albums': [], 'songs': []})
+        return jsonify({
+            'query': q, 'playlists': [], 'artists': [], 'albums': [], 'songs': [],
+            'genres': [], 'smartPlaylists': [], 'rooms': [], 'messages': [],
+        })
+    bock_search_ext.ensure_fts(get_db_rw, db_query)
     like = f'%{q.lower()}%'
-    raw_songs = db_query(
+    raw_songs = bock_search_ext.fts_songs(db_query, q, limit * 2) or db_query(
         'SELECT title, artist, album, path FROM songs_cache '
         'WHERE LOWER(title) LIKE ? '
         'AND path IS NOT NULL LIMIT ?',
@@ -1273,12 +1300,56 @@ def library_search():
         if len(playlists) >= limit:
             break
     playlists.sort(key=lambda x: _score_playlist(q, x['name']), reverse=True)
+    genres = db_query(
+        'SELECT genre, MIN(path) as path FROM songs_cache WHERE LOWER(genre) LIKE ? '
+        'AND genre IS NOT NULL AND genre != "" GROUP BY genre LIMIT ?',
+        [like, limit],
+    ) or []
+    smart_pl = []
+    for sp in _load_smart_playlists():
+        name = sp.get('name') or ''
+        if q.lower() in name.lower():
+            smart_pl.append({'id': sp.get('id'), 'name': name})
+        if len(smart_pl) >= limit:
+            break
+    rooms = []
+    if request.args.get('includeRooms', '1') != '0':
+        try:
+            import alexa_remote
+            for d in alexa_remote.list_devices() or []:
+                nm = d.get('name') or ''
+                if q.lower() in nm.lower():
+                    rooms.append({'name': nm, 'serial': d.get('serialNumber')})
+                if len(rooms) >= limit:
+                    break
+        except Exception:
+            pass
+    messages = []
+    if request.args.get('includeMessages') == '1' and os.path.isfile(MESSAGES_PATH):
+        try:
+            with open(MESSAGES_PATH) as f:
+                for line in f:
+                    try:
+                        m = json.loads(line)
+                    except Exception:
+                        continue
+                    text = (m.get('text') or m.get('body') or '')
+                    if q.lower() in text.lower():
+                        messages.append({'id': m.get('id'), 'text': text[:120]})
+                    if len(messages) >= limit:
+                        break
+        except Exception:
+            pass
     return jsonify({
         'query': q,
         'playlists': playlists[:limit],
         'artists': [{'name': r['artist'], 'path': r.get('art_path')} for r in artists],
         'albums': [{'name': r['album'], 'artist': r.get('artist'), 'path': r.get('art_path')} for r in albums],
         'songs': [{'title': r['title'], 'artist': r['artist'], 'album': r['album'], 'path': r['path']} for r in songs],
+        'genres': [{'name': r['genre'], 'path': r.get('path')} for r in genres],
+        'smartPlaylists': smart_pl,
+        'rooms': rooms,
+        'messages': messages,
     })
 
 @app.route('/api/alexa_remote/devices')
@@ -4350,6 +4421,7 @@ def _public_policy(policy):
         'maxVolume': policy.get('maxVolume'),
         'quietHours': policy.get('quietHours') or [],
         'requireApproval': bool(policy.get('requireApproval')),
+        'normalizeLoudness': policy.get('normalizeLoudness', True),
     }
 
 
@@ -4383,6 +4455,8 @@ def device_policy(device_id):
             cur['quietHours'] = body.get('quietHours') or []
         if 'requireApproval' in body:
             cur['requireApproval'] = bool(body['requireApproval'])
+        if 'normalizeLoudness' in body:
+            cur['normalizeLoudness'] = bool(body['normalizeLoudness'])
         policies[key] = cur
         _save_room_policies(policies)
     return jsonify({'deviceId': key, **_public_policy(policies[key])})
@@ -4877,6 +4951,9 @@ def client_report():
 
     if event == 'playback':
         _write_client_np_state(did, body, platform=platform)
+        bock_continue.update_from_playback(
+            PLAYBACK_RESUME_PATH, member_id, body,
+        )
         return jsonify({'ok': True, 'deviceId': did})
 
     # download
@@ -5984,6 +6061,42 @@ def _xaccel_send(abs_path, mime, max_age=None):
         resp.headers['Cache-Control'] = f'public, max-age={max_age}'
     return resp
 
+def _stream_loudness_mode():
+    """Effective loudness mode for this /stream request."""
+    mode = bock_loudness.normalize_mode_from_pref(get_pref('ReplayGain', 'off'))
+    norm_q = (request.args.get('normalize') or '').strip()
+    if norm_q == '1':
+        return mode if mode != 'off' else 'loudnorm'
+    if norm_q == '0':
+        return None
+    return mode if mode != 'off' else None
+
+
+def _db_path_keys(full_path):
+    """Lookup keys for songs_cache (absolute or relative)."""
+    rel = full_path.lstrip('/')
+    return [full_path, rel, '/' + rel]
+
+
+def _stream_audio_filters(full_path, ffmpeg_bin):
+    mode = _stream_loudness_mode()
+    if not mode:
+        return None, None
+    row = None
+    for key in _db_path_keys(full_path):
+        row = db_one(
+            'SELECT path, replaygain_track_db, replaygain_album_db, loudness_lufs '
+            'FROM songs_cache WHERE path = ?',
+            [key],
+        )
+        if row:
+            break
+    db_path = (row or {}).get('path') or full_path
+    gain = bock_loudness.gain_db_for_path(db_one, db_path, mode)
+    af = bock_loudness.ffmpeg_af_filter(mode, gain, use_loudnorm_fallback=(gain is None))
+    return af, mode
+
+
 @app.route('/stream/<path:filepath>')
 def stream_audio(filepath):
     full_path = '/' + filepath
@@ -6001,6 +6114,9 @@ def stream_audio(filepath):
 
     is_flac_ext = ext in TRANSCODE_EXTS
     transcode = req_bitrate is not None or is_flac_ext
+    af_filter, _norm_mode = _stream_audio_filters(full_path, get_pref('FFmpegLocation', '').strip() or 'ffmpeg')
+    if af_filter and not transcode:
+        transcode = True
     # Non-native formats still require FlacSupport unless the client explicitly
     # asked for a bitrate (an intentional download/transcode request).
     if transcode and is_flac_ext and req_bitrate is None and get_pref('FlacSupport', '').lower() != 'true':
@@ -6014,10 +6130,13 @@ def stream_audio(filepath):
         ffmpeg_bin = get_pref('FFmpegLocation', '').strip() or 'ffmpeg'
         bitrate    = str(req_bitrate) if req_bitrate is not None \
             else (get_pref('TranscodeBitrate', '128').strip() or '128')
+        cmd = [ffmpeg_bin, '-i', full_path, '-ar', '44100', '-ac', '2']
+        if af_filter:
+            cmd += ['-af', af_filter]
+        cmd += ['-b:a', f'{bitrate}k', '-f', 'mp3', '-']
         def _generate():
             proc = subprocess.Popen(
-                [ffmpeg_bin, '-i', full_path, '-ar', '44100', '-ac', '2',
-                 '-b:a', f'{bitrate}k', '-f', 'mp3', '-'],
+                cmd,
                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
             )
             try:
@@ -7006,10 +7125,15 @@ def _save_smart_playlists(items):
 
 def _paths_for_smart_rules(rules):
     """Build a track list from declarative rules against songs_cache."""
+    import bock_play_counts
     rules = rules if isinstance(rules, list) else []
     clauses, params = ['path IS NOT NULL'], []
     order = 'RANDOM()'
     limit = 50
+    play_min = play_max = None
+    stale_days = None
+    member_top = None
+    album_like = path_contains = decade = None
     for rule in rules:
         if not isinstance(rule, dict):
             continue
@@ -7021,28 +7145,78 @@ def _paths_for_smart_rules(rules):
         elif rtype == 'artist' and val:
             clauses.append('LOWER(COALESCE(artist,"")) LIKE ?')
             params.append(f'%{str(val).lower()}%')
+        elif rtype == 'album' and val:
+            album_like = str(val).lower()
+        elif rtype == 'path_contains' and val:
+            path_contains = str(val).lower()
         elif rtype == 'year_min' and val is not None:
             clauses.append('CAST(year AS INTEGER) >= ?')
             params.append(int(val))
         elif rtype == 'year_max' and val is not None:
             clauses.append('CAST(year AS INTEGER) <= ?')
             params.append(int(val))
+        elif rtype == 'decade' and val is not None:
+            decade = int(val)
+        elif rtype == 'play_count_min' and val is not None:
+            play_min = int(val)
+        elif rtype == 'play_count_max' and val is not None:
+            play_max = int(val)
+        elif rtype == 'not_played_since_days' and val is not None:
+            stale_days = int(val)
+        elif rtype == 'member_top' and val:
+            member_top = str(val)
         elif rtype == 'limit' and val:
             limit = min(max(int(val), 1), 500)
-        elif rtype == 'order' and str(val).lower() == 'title':
-            order = 'title COLLATE NOCASE'
+        elif rtype == 'order':
+            ov = str(val).lower()
+            if ov == 'title':
+                order = 'title COLLATE NOCASE'
+            elif ov == 'artist':
+                order = 'artist COLLATE NOCASE'
+            elif ov == 'random':
+                order = 'RANDOM()'
+            elif ov == 'date_added':
+                order = 'first_seen_at DESC'
+    if album_like:
+        clauses.append('LOWER(COALESCE(album,"")) LIKE ?')
+        params.append(f'%{album_like}%')
+    if path_contains:
+        clauses.append('LOWER(path) LIKE ?')
+        params.append(f'%{path_contains}%')
+    if decade is not None:
+        y0, y1 = decade, decade + 9
+        clauses.append('CAST(year AS INTEGER) BETWEEN ? AND ?')
+        params.extend([y0, y1])
     sql = (
         'SELECT path FROM songs_cache WHERE ' + ' AND '.join(clauses) +
         f' ORDER BY {order} LIMIT ?'
     )
-    params.append(limit)
+    params.append(limit * 4)
     rows = db_query(sql, params) or []
+    counts_data = bock_play_counts.load_counts(PLAY_COUNTS_PATH)
+    path_counts = counts_data.get('paths') or {}
+    if member_top:
+        path_counts = (counts_data.get('byMember') or {}).get(member_top) or path_counts
     seen, paths = set(), []
+    stale_cutoff = None
+    if stale_days:
+        import datetime
+        stale_cutoff = time.time() - stale_days * 86400
     for r in rows:
         p = r.get('path')
-        if p and os.path.isfile(p) and p not in seen:
-            seen.add(p)
-            paths.append(p)
+        if not p or not os.path.isfile(p) or p in seen:
+            continue
+        pc = int(path_counts.get(p, 0))
+        if play_min is not None and pc < play_min:
+            continue
+        if play_max is not None and pc > play_max:
+            continue
+        if stale_days is not None and pc > 0:
+            continue
+        seen.add(p)
+        paths.append(p)
+        if len(paths) >= limit:
+            break
     return paths
 
 
@@ -9453,6 +9627,30 @@ def alexa_skill():
     )
 
 # ── Run ──────────────────────────────────────────────────────────────────────
+
+try:
+    bock_loudness.ensure_songs_cache_columns(get_db_rw, db_query)
+    import bock_search_ext
+    bock_search_ext.ensure_fts(get_db_rw, db_query)
+    # Backfill first_seen_at from file mtime where missing.
+    rows = db_query(
+        'SELECT path FROM songs_cache WHERE first_seen_at IS NULL AND path IS NOT NULL LIMIT 5000'
+    ) or []
+    if rows:
+        conn = get_db_rw()
+        try:
+            for r in rows:
+                p = r.get('path')
+                if p and os.path.isfile(p):
+                    ts = datetime.datetime.fromtimestamp(os.path.getmtime(p)).strftime('%Y-%m-%d')
+                    conn.execute('UPDATE songs_cache SET first_seen_at=? WHERE path=?', [ts, p])
+            conn.commit()
+        finally:
+            conn.close()
+except Exception as e:
+    print(f'[startup] schema init: {e}', flush=True)
+
+register_bock_routes(app, globals())
 
 _start_automation_scheduler()
 

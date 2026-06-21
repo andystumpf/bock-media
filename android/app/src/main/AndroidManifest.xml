@@ -85,6 +85,14 @@
             android:foregroundServiceType="mediaPlayback" />
 
         <service
+            android:name=".media.auto.BockMediaBrowserService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.media.browse.MediaBrowserService" />
+            </intent-filter>
+        </service>
+
+        <service
             android:name=".local.OfflineDownloadForegroundService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />

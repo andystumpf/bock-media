@@ -90,6 +90,9 @@ enum HomeFeedLoader {
         async let favoritesTask = try? await repository.favorites()
         async let dashboardTask = try? await repository.dashboardQuick()
         async let genresTask = try? await repository.genres(limit: 40)
+        async let continueTask = try? await repository.continueListening()
+        async let newTask = try? await repository.libraryNew()
+        async let discoverTask = try? await repository.discoverWeekly()
 
         let history = await historyTask?.items ?? []
         let analytics = await analyticsTask
@@ -99,6 +102,27 @@ enum HomeFeedLoader {
         let favoritesFallback = await favoritesTask ?? []
         let favorites = dashboard?.favorites.nilIfEmpty ?? favoritesFallback
         let libraryGenres = await genresTask ?? []
+        let continueData = await continueTask
+        let libraryNew = await newTask
+        let discoverData = await discoverTask
+
+        let releaseLabel: String? = {
+            let n = libraryNew?.albums.count ?? 0
+            guard n > 0 else { return nil }
+            return "Added this week · \(n) album\(n == 1 ? "" : "s")"
+        }()
+        let discoverCards: [HomeCard] = (discoverData?.sections.first?.tracks ?? []).prefix(12).compactMap { t in
+            guard let path = t.path else { return nil }
+            return HomeCard(
+                id: "dw-\(path)",
+                title: t.title ?? path,
+                subtitle: discoverData?.sections.first?.reason ?? "Discover Weekly",
+                artPath: path,
+                playlistId: nil,
+                playTarget: .song(path: path, title: t.title ?? path),
+                kind: .discover
+            )
+        }
 
         let shuffleSeed = UInt64(Calendar.current.ordinality(of: .day, in: .year, for: Date()) ?? 1)
         let input = HomeFeedInput(
@@ -109,7 +133,11 @@ enum HomeFeedLoader {
             favorites: favorites,
             dashboard: dashboard,
             libraryGenres: libraryGenres,
-            shuffleSeed: shuffleSeed
+            shuffleSeed: shuffleSeed,
+            continueResume: continueData?.resume,
+            releaseRadarLabel: releaseLabel,
+            releaseRadarArtPath: libraryNew?.albums.first?.path,
+            discoverWeeklyCards: discoverCards
         )
         let composed = HomeFeedComposer.compose(input)
         return HomeTileRotation.apply(composed, input: input)

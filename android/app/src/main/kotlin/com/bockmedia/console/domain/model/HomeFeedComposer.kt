@@ -33,6 +33,10 @@ data class HomeFeedInput(
     val dashboard: DashboardQuickResponse?,
     val libraryGenres: List<GenreItem> = emptyList(),
     val shuffleSeed: Long,
+    val continueResume: ResumeEntry? = null,
+    val releaseRadarLabel: String? = null,
+    val releaseRadarArtPath: String? = null,
+    val discoverWeeklyCards: List<HomeCard> = emptyList(),
 )
 
 private class HomeFeedRegistry {
@@ -158,6 +162,23 @@ object HomeFeedComposer {
         registry.reserveMoodPlaylists(moodSections.flatMap { it.cards })
 
         val jumpBackIn = buildList {
+            input.continueResume?.filepath?.let { path ->
+                val resume = input.continueResume
+                val pct = if ((resume?.durationMs ?: 0) > 0) {
+                    ((resume?.offsetMs ?: 0) * 100 / resume!!.durationMs)
+                } else 0
+                val card = HomeCard(
+                    id = "continue-$path",
+                    title = resume?.track ?: "Continue listening",
+                    subtitle = "$pct% · ${resume?.artist ?: resume?.context?.name ?: "Pick up where you left off"}",
+                    artPath = path,
+                    playlistId = resume?.context?.id,
+                    playTarget = PlayTarget.Song(path, resume?.track ?: path),
+                    kind = HomeSectionKind.JumpBackIn,
+                )
+                registry.registerCard(card)
+                add(card)
+            }
             for (card in dashboardJumpCards(input.dashboard, playlistByName, artByPlaylist)) {
                 if (size >= HomeFeedLimits.JUMP_BACK_IN) break
                 if (!registry.hasCard(card.id)) {
@@ -349,11 +370,30 @@ object HomeFeedComposer {
             HomeSectionKind.RecentPlaylists,
         ) { "${it.tracks} tracks · Suggested for you" }
 
+        val releaseRadar = buildList {
+            input.releaseRadarLabel?.let { label ->
+                val card = HomeCard(
+                    id = "release-radar",
+                    title = "Release Radar",
+                    subtitle = label,
+                    artPath = input.releaseRadarArtPath,
+                    playTarget = PlayTarget.Radio("New in library", PlayTarget.RadioSeedKind.Genre, "Library", input.releaseRadarArtPath),
+                    kind = HomeSectionKind.Discover,
+                )
+                if (!registry.hasCard(card.id)) {
+                    registry.registerCard(card)
+                    add(card)
+                }
+            }
+        }
+
         val sections = listOfNotNull(
             section("jump-back-in", "Jump back in", HomeSectionKind.JumpBackIn, jumpBackIn),
             section("favorites", "Your favorites", HomeSectionKind.Favorites, favoriteCards),
             section("top-mixes", "Your top mixes", HomeSectionKind.TopMixes, genreMixes),
         ) + moodSections + listOfNotNull(
+            section("release-radar", "Release Radar", HomeSectionKind.Discover, releaseRadar),
+            section("discover-weekly", "Discover Weekly", HomeSectionKind.Discover, input.discoverWeeklyCards),
             section("explore-themes", "Explore genres & worlds", HomeSectionKind.ExploreThemes, exploreThemes),
             section("daily-mixes", "Daily mixes", HomeSectionKind.DailyMixes, dailyMixes),
             section("recent-playlists", "Recent playlists", HomeSectionKind.RecentPlaylists, recentPlaylists),

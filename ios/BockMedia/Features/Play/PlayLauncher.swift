@@ -26,6 +26,7 @@ struct PlayLauncherModifier: ViewModifier {
                                 appState.playbackFocusGeneration = PlaybackFocus.generation
                                 appState.toast = "Playing \"\(target.label)\" on \(response.device ?? label ?? device)"
                                 appState.pendingPlayTarget = nil
+                                appState.showNowPlayingSheet = true
                             } else {
                                 appState.toast = response.error ?? "Play failed"
                             }
@@ -47,6 +48,7 @@ struct PlayLauncherModifier: ViewModifier {
                             appState.playbackFocusGeneration = PlaybackFocus.generation
                             appState.toast = "Playing \"\(target.label)\" on this iPhone"
                             appState.pendingPlayTarget = nil
+                            appState.showNowPlayingSheet = true
                         }
                     },
                     onPlayError: { error in

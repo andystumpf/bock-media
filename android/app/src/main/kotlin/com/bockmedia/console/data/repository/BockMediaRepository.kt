@@ -225,6 +225,25 @@ class BockMediaRepository(
         }
         return filtered
     }
+
+    suspend fun searchSuggest(q: String): SearchResponse = api().searchSuggest(q)
+
+    suspend fun continueListening(member: String? = null): ContinueResponse = api().continueListening(member)
+
+    suspend fun libraryNew(since: String = "7d"): LibraryNewResponse = api().libraryNew(since = since)
+
+    suspend fun discoverWeekly(member: String? = null): DiscoverWeeklyResponse = api().discoverWeekly(member)
+
+    suspend fun playlistFolders(): PlaylistFoldersResponse = api().playlistFolders()
+
+    suspend fun playbackHandoff(fromDeviceId: String, toDeviceId: String, offsetMs: Int, context: JsonObject): HandoffResponse =
+        api().playbackHandoff(buildJsonObject {
+            put("fromDeviceId", fromDeviceId)
+            put("toDeviceId", toDeviceId)
+            put("offsetMs", offsetMs)
+            put("context", context)
+        })
+
     suspend fun playlists(search: String = "", page: Int = 1, limit: Int = 500): PlaylistsResponse {
         // Only the default full listing (no search, first page) is shared — that's the
         // payload Home/Library/Search all request. Searches/paging always hit the API.
@@ -345,7 +364,7 @@ class BockMediaRepository(
         val resp = runCatching {
             api().lyrics(path, durationSec, title, artist, album)
         }.getOrNull() ?: return null
-        if (resp.plain.isNotBlank() || resp.lines.isNotEmpty()) {
+        if (resp.lines.isNotEmpty()) {
             lyricsCache[cacheKey] = resp
         }
         return resp

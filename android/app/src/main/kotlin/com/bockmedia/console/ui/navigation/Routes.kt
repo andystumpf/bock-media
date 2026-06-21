@@ -5,7 +5,7 @@ import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.Analytics
 import androidx.compose.material.icons.filled.Bolt
-import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
@@ -38,6 +38,7 @@ sealed class BockRoute(val route: String, val title: String, val icon: ImageVect
     data object Rooms : BockRoute("rooms", "Rooms", Icons.Default.Home)
     data object Devices : BockRoute("devices", "Alexa Devices", Icons.Default.Speaker)
     data object Family : BockRoute("family", "Family", Icons.Default.Group)
+    data object Driving : BockRoute("driving", "Driving Mode", Icons.Default.DirectionsCar)
     data object Analytics : BockRoute("analytics", "Analytics", Icons.Default.Analytics)
     data object Settings : BockRoute("settings", "Settings", Icons.Default.Settings)
     data object About : BockRoute("about", "About", Icons.Default.Info)

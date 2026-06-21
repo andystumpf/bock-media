@@ -672,3 +672,60 @@ class TestAppDownload:
         assert manifest.status_code == 200
         assert b'com.bockmedia.console' in manifest.data
         assert b'bockmedia-console.ipa' in manifest.data
+
+
+class TestParityFeatures:
+    def test_feature_flags(self, client):
+        data = client.get('/api/config/features').get_json()
+        assert data.get('handoff') is True
+        assert data.get('loudnessNormalization') is not None
+
+    def test_playlist_folders_crud(self, client):
+        rv = client.post('/api/playlist_folders', json={'name': 'Kids'})
+        assert rv.status_code == 201
+        fid = rv.get_json()['id']
+        tree = client.get('/api/playlist_folders').get_json()
+        assert any(f['id'] == fid for f in tree.get('folders', []))
+        rv = client.delete(f'/api/playlist_folders/{fid}')
+        assert rv.status_code == 200
+
+    def test_continue_empty(self, client):
+        data = client.get('/api/continue').get_json()
+        assert 'resume' in data
+        assert 'recent' in data
+
+    def test_library_new(self, client):
+        data = client.get('/api/library/new?since=7d&limit=5').get_json()
+        assert 'albums' in data
+        assert 'tracks' in data
+
+    def test_discover_weekly(self, client):
+        data = client.get('/api/recommendations/discover-weekly').get_json()
+        assert 'sections' in data
+
+    def test_search_suggest(self, client):
+        data = client.get('/api/search/suggest?q=a').get_json()
+        assert 'songs' in data
+        assert 'playlists' in data
+
+    def test_search_extended_buckets(self, client):
+        data = client.get('/api/search?q=ab').get_json()
+        assert 'genres' in data
+        assert 'smartPlaylists' in data
+
+    def test_analyze_loudness_status(self, client):
+        data = client.get('/api/library/analyze-loudness/status').get_json()
+        assert 'running' in data
+
+    def test_handoff_missing_track(self, client):
+        rv = client.post('/api/playback/handoff', json={
+            'fromDeviceId': 'local-phone',
+            'toDeviceId': 'local-phone',
+            'offsetMs': 0,
+            'context': {},
+        })
+        assert rv.status_code == 400
+
+    def test_smart_refresh_all(self, client):
+        data = client.post('/api/smart_playlists/refresh_all').get_json()
+        assert data.get('ok') is True

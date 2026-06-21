@@ -546,7 +546,6 @@ private fun SpotifyNowPlayingPage(
     favoritePaths: Set<String>,
     onFavorite: (NowPlayingDeviceItem) -> Unit,
 ) {
-    @Suppress("UNUSED_VARIABLE") val _t = tick
     val isLocal = isLocalPhoneDevice(dev.deviceId)
     val liveLocal by LocalPlaybackController.state.collectAsState()
     val prog = if (isLocal) {
@@ -568,6 +567,9 @@ private fun SpotifyNowPlayingPage(
     val durationSec = prog.durationMs / 1000
     var showUpNext by remember { mutableStateOf(false) }
     var showLyrics by remember { mutableStateOf(false) }
+    var lyricsOffsetMs by remember { mutableIntStateOf(0) }
+    var lyricsPositionMs by remember { mutableLongStateOf(0L) }
+    @Suppress("UNUSED_VARIABLE") val _t = tick
     var lyrics by remember { mutableStateOf<com.bockmedia.console.data.api.dto.LyricsResponse?>(null) }
     var lyricsLoading by remember { mutableStateOf(false) }
     var lyricsError by remember { mutableStateOf<String?>(null) }
@@ -590,10 +592,10 @@ private fun SpotifyNowPlayingPage(
         showLyrics = false
         lyrics = null
         lyricsError = null
+        lyricsOffsetMs = 0
     }
 
-    LaunchedEffect(showLyrics, displayDev.filepath, displayDev.track, displayDev.artist, displayDev.album, durationSec) {
-        if (!showLyrics) return@LaunchedEffect
+    LaunchedEffect(displayDev.filepath, displayDev.track, displayDev.artist, displayDev.album, durationSec) {
         val path = displayDev.filepath?.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
         lyricsLoading = true
         lyricsError = null
@@ -609,7 +611,36 @@ private fun SpotifyNowPlayingPage(
         lyrics = fetched
         lyricsLoading = false
         if (fetched == null || (fetched.lines.isEmpty() && fetched.plain.isBlank())) {
-            lyricsError = "No lyrics found for this track"
+            if (showLyrics) lyricsError = "No lyrics found for this track"
+        }
+    }
+
+    LaunchedEffect(showLyrics, isLocal, liveLocal.isPlaying, liveLocal.positionMs, displayDev.paused, dev.timestamp, dev.offset_ms, dev.duration_ms) {
+        if (!showLyrics) return@LaunchedEffect
+        var anchorPos = if (isLocal) liveLocal.positionMs else dev.offset_ms
+        var anchorAt = System.currentTimeMillis()
+        while (true) {
+            if (isLocal) {
+                val s = LocalPlaybackController.state.value
+                if (s.positionMs != anchorPos) {
+                    anchorPos = s.positionMs
+                    anchorAt = System.currentTimeMillis()
+                }
+                val cap = s.durationMs.takeIf { it > 0 }
+                lyricsPositionMs = if (s.isPlaying && !displayDev.paused) {
+                    val live = anchorPos + (System.currentTimeMillis() - anchorAt)
+                    if (cap != null) live.coerceAtMost(cap) else live
+                } else {
+                    s.positionMs
+                }
+            } else if (displayDev.paused) {
+                lyricsPositionMs = dev.offset_ms
+            } else {
+                lyricsPositionMs = computeNowPlayingProgress(
+                    dev.timestamp, dev.duration_ms, dev.offset_ms, false,
+                ).elapsedMs
+            }
+            delay(50)
         }
     }
 
@@ -628,7 +659,6 @@ private fun SpotifyNowPlayingPage(
         ) {
             SpotifyPlayerTopBar(
                 deviceName = displayDev.deviceName,
-                paused = displayDev.paused,
                 isLocal = isLocal,
                 playContext = (displayDev.sourceLabel ?: displayDev.playlist)?.takeIf { isLocal },
                 onBack = onBack,
@@ -658,7 +688,9 @@ private fun SpotifyNowPlayingPage(
                             lyrics = lyrics,
                             loading = lyricsLoading,
                             error = lyricsError,
-                            positionMs = prog.elapsedMs,
+                            positionMs = if (showLyrics) lyricsPositionMs else prog.elapsedMs,
+                            offsetMs = lyricsOffsetMs,
+                            onOffsetChange = { lyricsOffsetMs = it },
                             modifier = Modifier.fillMaxSize(),
                         )
                     } else {
@@ -708,11 +740,10 @@ private fun SpotifyNowPlayingPage(
                         modifier = Modifier.padding(horizontal = 24.dp),
                     )
 
-                    if (displayDev.sleep != null || displayDev.paused) {
+                    if (displayDev.sleep != null) {
                         SpotifyStatusChips(
                             dev = displayDev,
                             onSleep = onSleep,
-                            showPausedBadge = true,
                             modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp),
                         )
                     }
@@ -849,7 +880,6 @@ private fun ArtBackdrop(artUrl: String?) {
 @Composable
 private fun SpotifyPlayerTopBar(
     deviceName: String?,
-    paused: Boolean,
     isLocal: Boolean = false,
     playContext: String? = null,
     onBack: () -> Unit,
@@ -883,10 +913,9 @@ private fun SpotifyPlayerTopBar(
             )
             Text(
                 when {
-                    paused -> "Paused"
                     isLocal && !playContext.isNullOrBlank() -> playContext
-                    isLocal -> "Playing on this phone"
-                    else -> "Playing on Alexa"
+                    isLocal -> "This phone"
+                    else -> "Alexa"
                 },
                 style = MaterialTheme.typography.labelSmall,
                 color = Color.White.copy(alpha = 0.65f),
@@ -961,21 +990,9 @@ private fun SpotifyTrackInfoRow(
 private fun SpotifyStatusChips(
     dev: NowPlayingDeviceItem,
     onSleep: (NowPlayingDeviceItem) -> Unit,
-    showPausedBadge: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     Row(modifier, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (dev.paused && showPausedBadge) {
-            AssistChip(
-                onClick = {},
-                label = { Text("Paused") },
-                enabled = false,
-                colors = AssistChipDefaults.assistChipColors(
-                    disabledContainerColor = Color.White.copy(alpha = 0.12f),
-                    disabledLabelColor = Color.White.copy(alpha = 0.85f),
-                ),
-            )
-        }
         dev.sleep?.let { sleep ->
             val sleepLabel = when (sleep.type) {
                 "time" -> "Sleep ${sleep.remainingMin ?: "?"}m"

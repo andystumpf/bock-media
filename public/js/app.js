@@ -433,6 +433,13 @@ async function dashReplayRecent(i) {
   if (opts) return playOnDevice(opts);
 }
 
+async function dashContinuePlay() {
+  const r = window._dashContinue;
+  if (!r || !r.filepath) return;
+  const opts = songPlayOpts({ title: r.track, artist: r.artist, path: r.filepath, track: r.track });
+  if (opts) return playOnDevice(opts);
+}
+
 async function dashPlayFavorite(i) {
   const r = (window._dashQuickFavs || [])[i];
   if (!r || !r.path) return;
@@ -455,11 +462,12 @@ register('dashboard', async () => {
 });
 
 async function loadDashboard() {
-  const [summary, recentData, quick, plexSync] = await Promise.all([
+  const [summary, recentData, quick, plexSync, continueData] = await Promise.all([
     API('/api/summary'),
     API(`/api/recent?page=${_dashPage}&limit=10`),
     API('/api/dashboard/quick').catch(() => ({ recent: [], favorites: [] })),
     API('/api/plex_sync/status').catch(() => null),
+    API('/api/continue').catch(() => null),
   ]);
 
   const s = summary || {};
@@ -520,6 +528,23 @@ async function loadDashboard() {
   window._dashQuickRecent = quickRecent;
   window._dashQuickFavs = quickFavs;
 
+  const resume = continueData && continueData.resume;
+  const continueHtml = resume && resume.filepath ? (() => {
+    const pct = resume.durationMs ? Math.round((resume.offsetMs || 0) * 100 / resume.durationMs) : 0;
+    window._dashContinue = resume;
+    return `<div class="card" style="margin-bottom:20px">
+      <div class="card-header"><h3><i class="fa fa-play-circle"></i> Continue listening</h3></div>
+      <div class="card-body">
+        <strong>${escHtml(resume.track || 'Track')}</strong>
+        <div class="auto-list-meta">${escHtml(resume.artist || '')}</div>
+        <div style="height:6px;background:#2a3348;border-radius:3px;margin:10px 0;overflow:hidden">
+          <div style="height:100%;width:${pct}%;background:#1db954"></div>
+        </div>
+        <button class="btn-sm btn-primary" onclick="dashContinuePlay()"><i class="fa fa-play"></i> Continue (${pct}%)</button>
+      </div>
+    </div>`;
+  })() : '';
+
   const plexUpdated = plexSync && plexSync.stateUpdatedAt
     ? fmtDateTime(new Date(plexSync.stateUpdatedAt * 1000).toISOString()) : '—';
   const plexLog = (plexSync && plexSync.logTail && plexSync.logTail.length)
@@ -570,6 +595,7 @@ async function loadDashboard() {
     <div id="health-card-wrap"></div>
     <div id="playback-card-wrap"></div>
     ${plexCard}
+    ${continueHtml}
     <div class="dash-quick-grid">
       <div class="card">
         <div class="card-header"><h3><i class="fa fa-clock-rotate-left"></i> Quick replay</h3></div>
@@ -925,7 +951,6 @@ function buildDeviceRow(d, controlsAvailable = false) {
       ${d.filepath ? actionBtn({ kind: 'muted', onclick: 'npNeverAgainEl(this)', title: 'Never play this song again', icon: 'ban', dataAttrs: devAttr }) : ''}
       ${actionBtn({ kind: 'delete', onclick: "npControlEl(this,'stop')", title: 'Stop', icon: 'stop', dataAttrs: devAttr })}
     </div>` : '';
-  const pausedBadge = d.paused ? '<span class="np-paused-badge">Paused</span>' : '';
   const sleepBadge = d.sleep ? `<span class="np-sleep-badge" title="Sleep timer armed"><i class="fa fa-moon"></i> ${
     d.sleep.type === 'time' ? `${d.sleep.remainingMin}m` : `${d.sleep.remaining} left`}</span>` : '';
   const canControl = npCanControl(d, controlsAvailable);
@@ -944,7 +969,7 @@ function buildDeviceRow(d, controlsAvailable = false) {
       <div class="np-device-main">
         ${npArtworkHtml(d.filepath)}
         <div class="np-device-meta">
-          <div class="np-track">${escHtml(d.track || '—')} ${pausedBadge} ${sleepBadge}</div>
+          <div class="np-track">${escHtml(d.track || '—')} ${sleepBadge}</div>
           ${d.artist ? `<div class="np-artist">${escHtml(d.artist)}</div>` : ''}
           ${d.album ? `<div class="np-album">${escHtml(d.album)}</div>` : ''}
           ${(d.sourceLabel || d.playlist) ? `<div class="np-playlist"><i class="fa fa-list"></i> ${escHtml(d.sourceLabel || d.playlist)}</div>` : ''}
@@ -1316,7 +1341,7 @@ async function refreshCurrentTrack() {
 
 
 // ── Playlists ────────────────────────────────────────────────────────────────
-let _plPage = 1, _plSearch = '', _plMergeSel = new Set(), _plDetailId = null;
+let _plPage = 1, _plSearch = '', _plMergeSel = new Set(), _plDetailId = null, _plFolderFilter = '';
 let _plDetailSort = { by: 'title', order: 'asc' };
 let _plDetailPage = 1;
 let _plDetailQ = '';
@@ -1964,13 +1989,16 @@ async function loadPlaylists(showSpinner) {
   }
   const searchKey = (_plSearch || '').trim().toLowerCase();
   const needFetch = !_plAllCache || _plAllCacheSearch !== searchKey;
-  const [listData, remoteStatus, smartData] = await Promise.all([
+  const [listData, remoteStatus, smartData, folderData] = await Promise.all([
     needFetch
       ? API(`/api/playlists?page=1&limit=10000&search=${encodeURIComponent(_plSearch)}`)
       : Promise.resolve(null),
     ensureAlexaRemoteStatus(),
     API('/api/smart_playlists').catch(() => ({ items: [] })),
+    API('/api/playlist_folders').catch(() => ({ folders: [], assignments: {} })),
   ]);
+  window._plFolders = (folderData && folderData.folders) || [];
+  window._plFolderAssignments = (folderData && folderData.assignments) || {};
   window._smartPlaylists = (smartData && smartData.items) || [];
   if (needFetch) {
     _plAllCache = (listData && listData.items) || [];
@@ -1983,7 +2011,12 @@ async function loadPlaylists(showSpinner) {
 function renderPlaylistsPage() {
   const remote = window._plRemote || {};
   const canPlay = !!(remote.configured);
-  const sorted = plSortPlaylistsInMemory(_plAllCache || [], _plListSort.by, _plListSort.order);
+  const sorted = plSortPlaylistsInMemory(_plAllCache || [], _plListSort.by, _plListSort.order)
+    .filter(p => {
+      if (!_plFolderFilter) return true;
+      const assignments = window._plFolderAssignments || {};
+      return assignments[p.id] === _plFolderFilter;
+    });
   const total = sorted.length;
   const start = (_plPage - 1) * _plPageSize;
   const items = sorted.slice(start, start + _plPageSize);
@@ -2041,9 +2074,14 @@ function renderPlaylistsPage() {
     </tr>`).join('');
 
   document.getElementById('page-title').textContent = 'Playlists';
+  const folderChips = (window._plFolders || []).map(f =>
+    `<button class="btn-sm btn-default" onclick="_plFolderFilter='${escHtml(f.id)}';renderPlaylistsPage()">${escHtml(f.name)}</button>`
+  ).join(' ');
   document.getElementById('main-content').innerHTML = `
     <div class="page-desc">
       ${fmtNum(total)} playlists — sorted by <b>${sortLabel}</b> ${sortArrow} (all pages).
+      ${folderChips ? `<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">${folderChips}
+        <button class="btn-sm btn-default" onclick="_plFolderFilter='';renderPlaylistsPage()">All</button></div>` : ''}
       Click column headers to re-sort. Page ${_plPage} of ${Math.max(1, Math.ceil(total / _plPageSize))}.
     </div>
     <div class="card" style="margin-bottom:20px">
@@ -3406,6 +3444,25 @@ register('settings', async () => {
         </div>
 
         <div class="settings-section">
+          <h4>Loudness normalization</h4>
+          <p class="hint">Analyze your library once, then normalize playback on streams and phone downloads.</p>
+          <div class="settings-row">
+            <label style="font-size:12px;color:#667;min-width:140px">Mode</label>
+            <select id="s-replay-gain" class="settings-input">
+              <option value="off" ${(settings.replayGain || 'off') === 'off' ? 'selected' : ''}>Off</option>
+              <option value="track" ${settings.replayGain === 'track' || settings.replayGain === 'true' ? 'selected' : ''}>Track</option>
+              <option value="album" ${settings.replayGain === 'album' ? 'selected' : ''}>Album</option>
+              <option value="loudnorm" ${settings.replayGain === 'loudnorm' ? 'selected' : ''}>EBU −14 LUFS</option>
+            </select>
+            <button class="btn-sm btn-primary" onclick="saveSetting('replayGain', document.getElementById('s-replay-gain').value)">Set</button>
+          </div>
+          <div class="settings-row" style="margin-top:8px">
+            <button class="btn-sm btn-default" onclick="startLoudnessAnalyze()"><i class="fa fa-wave-square"></i> Analyze library</button>
+            <span id="loudness-status" class="hint" style="margin-left:8px"></span>
+          </div>
+        </div>
+
+        <div class="settings-section">
           <h4>Alexa Artwork and Metadata</h4>
           <p class="hint">Enables rich display on Echo Show and Echo Spot devices.</p>
           ${toggle('s-art', 'Send Album Artwork (Echo Show / Spot)', chk(settings.sendAlbumArt))}
@@ -3526,6 +3583,25 @@ async function saveSetting(key, value) {
   const result = await POST('/api/settings', { [key]: value });
   if (result && result.ok) showToast('Setting saved');
   else showToast('Save failed', true);
+}
+
+async function startLoudnessAnalyze() {
+  const el = document.getElementById('loudness-status');
+  if (el) el.textContent = 'Starting…';
+  const r = await POST('/api/library/analyze-loudness', {});
+  if (!r || r.error) {
+    if (el) el.textContent = r?.error || 'Failed';
+    showToast('Analyze failed', true);
+    return;
+  }
+  const poll = async () => {
+    const st = await API('/api/library/analyze-loudness/status') || {};
+    if (el) el.textContent = st.running
+      ? `Analyzing ${st.processed || 0}/${st.total || 0}…`
+      : `Done · ${st.processed || 0} processed`;
+    if (st.running) setTimeout(poll, 2000);
+  };
+  poll();
 }
 
 async function saveAllSettings() {

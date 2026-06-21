@@ -24,6 +24,10 @@ struct HomeFeedInput {
     let dashboard: DashboardQuickResponse?
     let libraryGenres: [GenreItem]
     let shuffleSeed: UInt64
+    var continueResume: ResumeEntry? = nil
+    var releaseRadarLabel: String? = nil
+    var releaseRadarArtPath: String? = nil
+    var discoverWeeklyCards: [HomeCard] = []
 }
 
 private struct HomeFeedRegistry {
@@ -174,6 +178,20 @@ enum HomeFeedComposer {
         // MARK: Jump back in
 
         var jumpBackIn: [HomeCard] = []
+        if let resume = input.continueResume, let path = resume.filepath {
+            let pct = resume.durationMs > 0 ? Int((resume.offsetMs * 100) / resume.durationMs) : 0
+            let card = HomeCard(
+                id: "continue-\(path)",
+                title: resume.track ?? "Continue listening",
+                subtitle: "\(pct)% · \(resume.artist ?? resume.context?.name ?? "Pick up where you left off")",
+                artPath: path,
+                playlistId: resume.context?.id,
+                playTarget: .song(path: path, title: resume.track ?? path),
+                kind: .jumpBackIn
+            )
+            registry.registerCard(card)
+            jumpBackIn.append(card)
+        }
         for card in dashboardJumpCards(input.dashboard, playlistByName: playlistByName, artByPlaylist: artByPlaylist) {
             guard jumpBackIn.count < HomeFeedLimits.jumpBackIn else { break }
             guard !registry.hasCard(id: card.id) else { continue }
@@ -397,6 +415,25 @@ enum HomeFeedComposer {
         ))
         discoverCandidates = discoverCandidates.uniqued(by: \.id).prefix(HomeFeedLimits.discover).map { $0 }
 
+        // MARK: Release radar
+
+        var releaseRadar: [HomeCard] = []
+        if let label = input.releaseRadarLabel {
+            let card = HomeCard(
+                id: "release-radar",
+                title: "Release Radar",
+                subtitle: label,
+                artPath: input.releaseRadarArtPath,
+                playlistId: nil,
+                playTarget: .radio(displayTitle: "New in library", seedKind: .genre, name: "Library", path: input.releaseRadarArtPath),
+                kind: .discover
+            )
+            if !registry.hasCard(id: card.id) {
+                registry.registerCard(card)
+                releaseRadar.append(card)
+            }
+        }
+
         // MARK: More playlists
 
         let morePlaylists = fillPlaylists(
@@ -411,6 +448,13 @@ enum HomeFeedComposer {
             section("favorites", "Your favorites", .favorites, favoriteCards),
             section("top-mixes", "Your top mixes", .topMixes, genreMixes),
         ].compactMap { $0 }
+        if let rr = section("release-radar", "Release Radar", .discover, releaseRadar) {
+            sections.append(rr)
+        }
+        if !input.discoverWeeklyCards.isEmpty,
+           let dw = section("discover-weekly", "Discover Weekly", .discover, input.discoverWeeklyCards) {
+            sections.append(dw)
+        }
         sections.append(contentsOf: moodSections)
         sections.append(contentsOf: [
             section("explore-themes", "Explore genres & worlds", .exploreThemes, exploreThemes),

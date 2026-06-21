@@ -164,6 +164,10 @@ struct SearchResponse: Codable {
     var artists: [SearchHit] = []
     var albums: [SearchHit] = []
     var songs: [SearchHit] = []
+    var genres: [SearchHit] = []
+    var smartPlaylists: [SearchHit] = []
+    var rooms: [SearchHit] = []
+    var messages: [SearchHit] = []
 }
 
 struct SearchHit: Codable, Identifiable {
@@ -191,6 +195,7 @@ struct PlaylistSummary: Codable, Identifiable {
     var sourceName: String?
     var createDate: String?
     var lastUsed: String?
+    var folderId: String?
 
     var tracks: Int { trackCount }
 }
@@ -366,6 +371,13 @@ struct SmartPlaylist: Codable, Identifiable, Hashable {
     var name: String = ""
     var enabled: Bool = true
     var playlistId: String?
+    var trackCount: Int?
+    var lastRefresh: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, enabled, trackCount, lastRefresh
+        case playlistId = "linkedPlaylistId"
+    }
 }
 
 struct DeviceGroupsResponse: Codable {
@@ -558,6 +570,98 @@ struct IdentifyStatusResponse: Codable {
     var current: String?
     var done: Int = 0
     var total: Int = 0
+}
+
+struct ContinueResponse: Codable {
+    var resume: ResumeEntry?
+    var recent: [ResumeEntry] = []
+}
+
+struct ResumeEntry: Codable, Identifiable {
+    var id: String?
+    var filepath: String?
+    var track: String?
+    var artist: String?
+    var album: String?
+    var offsetMs: Int = 0
+    var durationMs: Int = 0
+    var progress: Double = 0
+    var context: ResumeContext?
+}
+
+struct ResumeContext: Codable {
+    var kind: String?
+    var id: String?
+    var name: String?
+}
+
+struct LibraryNewResponse: Codable {
+    var since: String?
+    var albums: [LibraryNewAlbum] = []
+    var tracks: [LibraryNewTrack] = []
+}
+
+struct LibraryNewAlbum: Codable {
+    var album: String?
+    var artist: String?
+    var path: String?
+    var first_seen_at: String?
+}
+
+struct LibraryNewTrack: Codable {
+    var title: String?
+    var artist: String?
+    var album: String?
+    var path: String?
+}
+
+struct DiscoverWeeklyResponse: Codable {
+    var memberId: String?
+    var generatedAt: String?
+    var sections: [DiscoverSection] = []
+}
+
+struct DiscoverSection: Codable, Identifiable {
+    var id: String?
+    var title: String?
+    var reason: String?
+    var tracks: [DiscoverTrack] = []
+}
+
+struct DiscoverTrack: Codable {
+    var path: String?
+    var title: String?
+    var artist: String?
+    var album: String?
+}
+
+struct PlaylistFoldersResponse: Codable {
+    var folders: [PlaylistFolder] = []
+    var assignments: [String: String] = [:]
+}
+
+struct PlaylistFolder: Codable, Identifiable {
+    var id: String = ""
+    var name: String = ""
+    var parentId: String?
+    var order: Int = 0
+}
+
+struct HandoffResponse: Codable {
+    var ok: Bool = false
+    var method: String?
+    var filepath: String?
+    var offsetMs: Int?
+    var streamUrl: String?
+    var warning: String?
+    var error: String?
+}
+
+struct LoudnessAnalyzeStatus: Codable {
+    var running: Bool = false
+    var processed: Int = 0
+    var total: Int = 0
+    var lastError: String?
 }
 
 struct AiPlaylistResponse: Codable {

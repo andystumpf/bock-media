@@ -111,6 +111,9 @@ object HomeFeedLoader {
         val favoritesDef = async { runCatching { repository.favorites() }.getOrNull().orEmpty() }
         val dashboardDef = async { runCatching { repository.dashboardQuick() }.getOrNull() }
         val genresDef = async { runCatching { repository.genres(limit = 40) }.getOrNull() }
+        val continueDef = async { runCatching { repository.continueListening() }.getOrNull() }
+        val newDef = async { runCatching { repository.libraryNew() }.getOrNull() }
+        val discoverDef = async { runCatching { repository.discoverWeekly() }.getOrNull() }
 
         val history = historyDef.await()?.items.orEmpty()
         val analytics = analyticsDef.await()
@@ -119,6 +122,24 @@ object HomeFeedLoader {
         val dashboard = dashboardDef.await()
         val favorites = dashboard?.favorites?.takeIf { it.isNotEmpty() } ?: favoritesDef.await()
         val libraryGenres = genresDef.await()?.items.orEmpty()
+        val continueData = continueDef.await()
+        val libraryNew = newDef.await()
+        val discoverData = discoverDef.await()
+
+        val releaseLabel = libraryNew?.albums?.size?.takeIf { it > 0 }?.let { n ->
+            "Added this week · $n album${if (n == 1) "" else "s"}"
+        }
+        val discoverCards = discoverData?.sections?.firstOrNull()?.tracks.orEmpty().take(12).mapNotNull { t ->
+            val path = t.path ?: return@mapNotNull null
+            HomeCard(
+                id = "dw-$path",
+                title = t.title ?: path,
+                subtitle = discoverData?.sections?.firstOrNull()?.reason ?: "Discover Weekly",
+                artPath = path,
+                playTarget = PlayTarget.Song(path, t.title ?: path),
+                kind = HomeSectionKind.Discover,
+            )
+        }
 
         val shuffleSeed = LocalDate.now().dayOfYear.toLong()
         val input = HomeFeedInput(
@@ -130,6 +151,10 @@ object HomeFeedLoader {
             dashboard = dashboard,
             libraryGenres = libraryGenres,
             shuffleSeed = shuffleSeed,
+            continueResume = continueData?.resume,
+            releaseRadarLabel = releaseLabel,
+            releaseRadarArtPath = libraryNew?.albums?.firstOrNull()?.path,
+            discoverWeeklyCards = discoverCards,
         )
         val composed = HomeFeedComposer.compose(input)
         HomeTileRotation.apply(composed, input)

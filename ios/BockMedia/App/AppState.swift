@@ -84,6 +84,7 @@ final class AppState: ObservableObject {
                     PlaybackFocus.notePlayStarted(LocalPlaybackIds.localPhoneDeviceId, label: "This iPhone")
                     playbackFocusGeneration = PlaybackFocus.generation
                     toast = "Playing \"\(target.label)\" on this iPhone"
+                    showNowPlayingSheet = true
                 } else if let err = LocalPlaybackController.shared.state.error {
                     toast = err
                 }

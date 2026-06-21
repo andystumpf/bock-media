@@ -112,7 +112,7 @@ struct DevicePickerSheet: View {
                 await loadDevices()
             }
         }
-        .presentationDetents([.medium, .large])
+        .presentationDetents([.large])
     }
 
     @ViewBuilder

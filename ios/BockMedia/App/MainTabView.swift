@@ -171,6 +171,8 @@ struct MainTabView: View {
             FamilyView(appState: appState)
         case .analytics:
             AnalyticsView(appState: appState)
+        case .driving:
+            DrivingModeView(appState: appState)
         case .about:
             AboutView(appState: appState)
         }

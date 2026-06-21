@@ -80,6 +80,10 @@ def isolated_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(server, 'REQUESTS_PATH', str(state_dir / 'requests.json'))
     monkeypatch.setattr(server, 'PLAYLIST_META_PATH', str(state_dir / 'playlist_meta.json'))
     monkeypatch.setattr(server, 'MESSAGES_PATH', str(state_dir / 'messages.jsonl'))
+    monkeypatch.setattr(server, 'PLAYLIST_FOLDERS_PATH', str(state_dir / 'playlist_folders.json'))
+    monkeypatch.setattr(server, 'PLAYBACK_RESUME_PATH', str(state_dir / 'playback_resume.json'))
+    monkeypatch.setattr(server, 'RECOMMENDATIONS_CACHE_PATH', str(state_dir / 'recommendations_cache.json'))
+    monkeypatch.setattr(server, 'PLAY_COUNTS_PATH', str(state_dir / 'play_counts.json'))
     notes_src = os.path.join(REPO_ROOT, 'app-release-notes.json')
     if os.path.isfile(notes_src):
         shutil.copy2(notes_src, state_dir / 'app-release-notes.json')
