@@ -542,6 +542,41 @@ class TestLyricsApi:
         data = rv.get_json()
         assert 'Line one' in data['plain']
         assert data['source'] == 'lrclib'
+        assert len(data['lines']) >= 2
+        assert data['estimated'] is True
+
+    def test_plain_lyrics_get_estimated_karaoke_lines(self, client, isolated_paths, monkeypatch):
+        import server
+        monkeypatch.setattr(server, '_fetch_lrclib', lambda *a, **k: {
+            'plainLyrics': 'First line\nSecond line',
+            'syncedLyrics': '',
+        })
+        rv = client.get('/api/lyrics', query_string={
+            'path': '/music/track.mp3',
+            'title': 'Track',
+            'artist': 'Artist',
+            'duration': '120',
+        })
+        assert rv.status_code == 200
+        data = rv.get_json()
+        assert len(data['lines']) == 2
+        assert data['estimated'] is True
+
+    def test_real_sync_beats_estimated(self, client, isolated_paths, monkeypatch):
+        import server
+        monkeypatch.setattr(server, '_fetch_lrclib', lambda *a, **k: {
+            'syncedLyrics': '[00:05.00]Real line',
+            'plainLyrics': 'Real line',
+        })
+        rv = client.get('/api/lyrics', query_string={
+            'path': '/music/track.mp3',
+            'title': 'Track',
+            'artist': 'Artist',
+            'duration': '180',
+        })
+        data = rv.get_json()
+        assert data['lines'][0]['timeMs'] == 5000
+        assert not data.get('estimated')
 
     def test_lyrics_does_not_require_file_on_disk(self, client, isolated_paths, monkeypatch):
         import server
@@ -557,6 +592,44 @@ class TestLyricsApi:
         })
         assert rv.status_code == 200
         assert rv.get_json()['plain'] == 'Remote lyrics'
+
+    def test_lrclib_synced_preferred_over_plain_embedded(self, client, isolated_paths, monkeypatch, tmp_path):
+        import server
+        audio = tmp_path / 'song.mp3'
+        audio.write_bytes(b'ID3')
+        monkeypatch.setattr(server, '_embedded_lyrics', lambda _p: 'Plain embedded only')
+        monkeypatch.setattr(server, '_fetch_lrclib', lambda *a, **k: {
+            'syncedLyrics': '[00:05.00]Synced line\n[00:10.00]Next line',
+            'plainLyrics': 'Synced line\nNext line',
+        })
+        rv = client.get('/api/lyrics', query_string={'path': str(audio)})
+        assert rv.status_code == 200
+        data = rv.get_json()
+        assert data['synced'] is True
+        assert len(data['lines']) == 2
+        assert data['lines'][0]['text'] == 'Synced line'
+        assert data['source'] == 'lrclib'
+
+    def test_lyrics_cache_persists(self, client, isolated_paths, monkeypatch, tmp_path):
+        import server
+        monkeypatch.setattr(server, 'LYRICS_CACHE_DIR', str(tmp_path / 'lyrics_cache'))
+        monkeypatch.setattr(server, '_fetch_lrclib', lambda *a, **k: {
+            'syncedLyrics': '[00:01.00]Hello',
+            'plainLyrics': 'Hello',
+        })
+        path = '/music/cached/song.mp3'
+        rv = client.get('/api/lyrics', query_string={
+            'path': path,
+            'title': 'Hello',
+            'artist': 'Artist',
+            'duration': '120',
+        })
+        assert rv.status_code == 200
+        assert rv.get_json()['synced'] is True
+        cached = server._lyrics_cache_read(path)
+        assert cached is not None
+        assert cached['synced'] is True
+        assert cached['lines'][0]['text'] == 'Hello'
 
 
 class TestAppDownload:
@@ -586,8 +659,10 @@ class TestAppDownload:
         rv = client.get('/app', auth=auth)
         assert rv.status_code == 200
         assert b'Download APK' in rv.data
-        assert b'iPhone' in rv.data
+        assert b"iPhone" in rv.data
         assert b'Install on iPhone' in rv.data
+        assert b'release-notes' in rv.data
+        assert b'tag-feat' in rv.data or b'tag-fix' in rv.data
         dl = client.get('/download/bockmedia-console.apk', auth=auth)
         assert dl.status_code == 200
         assert dl.headers.get('Content-Type', '').startswith('application/vnd.android')

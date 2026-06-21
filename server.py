@@ -20,6 +20,7 @@ import threading
 import uuid
 import hashlib
 import hmac
+import alexa_apl
 import ipaddress
 from logging.handlers import RotatingFileHandler
 from urllib.parse import quote, urlparse
@@ -389,6 +390,80 @@ def _ios_app_version():
         pass
     return 'unknown'
 
+
+def _load_app_release_notes():
+    """Release notes for GET /app — edit app-release-notes.json on each mobile deploy."""
+    path = os.path.join(HERE, 'app-release-notes.json')
+    try:
+        with open(path, encoding='utf-8') as fh:
+            data = json.load(fh)
+        releases = data.get('releases') if isinstance(data, dict) else None
+        if not isinstance(releases, list):
+            return []
+        out = []
+        for rel in releases:
+            if not isinstance(rel, dict):
+                continue
+            version = (rel.get('version') or '').strip()
+            if not version:
+                continue
+            items = []
+            for item in rel.get('items') or []:
+                if not isinstance(item, dict):
+                    continue
+                text = (item.get('text') or '').strip()
+                if not text:
+                    continue
+                kind = (item.get('kind') or 'improve').strip().lower()
+                items.append({'kind': kind, 'text': text})
+            out.append({
+                'version': version,
+                'date': (rel.get('date') or '').strip(),
+                'items': items,
+            })
+        return out
+    except Exception as e:
+        print(f'app release notes read {path}: {e}', flush=True)
+        return []
+
+
+def _release_note_kind_label(kind):
+    return {
+        'feat': 'New',
+        'fix': 'Fixed',
+        'improve': 'Improved',
+        'chore': 'Update',
+    }.get(kind, 'Update')
+
+
+def _render_app_release_notes_html(releases):
+    if not releases:
+        return ''
+    blocks = []
+    for i, rel in enumerate(releases):
+        version = html.escape(rel['version'])
+        date = html.escape(rel['date']) if rel.get('date') else ''
+        heading = f'Version {version}' + (f' · {date}' if date else '')
+        cls = 'release release-latest' if i == 0 else 'release release-older'
+        items_html = ''
+        for item in rel.get('items') or []:
+            label = html.escape(_release_note_kind_label(item.get('kind')))
+            text = html.escape(item['text'])
+            items_html += f'<li><span class="tag tag-{html.escape(item.get("kind") or "improve")}">{label}</span> {text}</li>'
+        if not items_html:
+            continue
+        blocks.append(
+            f'<div class="{cls}"><h3>{heading}</h3><ul>{items_html}</ul></div>'
+        )
+    if not blocks:
+        return ''
+    return (
+        '<section class="release-notes">'
+        '<h2>What\u2019s new</h2>'
+        + ''.join(blocks)
+        + '</section>'
+    )
+
 def _app_download_abs_url(path, token=None):
     base = get_public_url().rstrip('/')
     q = f'?t={quote(token)}' if token else ''
@@ -626,6 +701,7 @@ def _render_app_download_html(android, ios):
         'iPhone', 'IPA', ios['version'], ios['size_mb'], ios['available'],
         ios_primary, ios_secondary, ios_steps,
     )
+    release_notes = _render_app_release_notes_html(_load_app_release_notes())
 
     return f'''<!DOCTYPE html>
 <html lang="en"><head>
@@ -634,7 +710,7 @@ def _render_app_download_html(android, ios):
 <style>
   body {{ font-family: system-ui, sans-serif; background: #f4f6f9; color: #333; margin: 0; min-height: 100vh;
     display: flex; align-items: center; justify-content: center; padding: 24px; }}
-  .card {{ background: #fff; border-radius: 12px; padding: 32px; max-width: 480px; width: 100%;
+  .card {{ background: #fff; border-radius: 12px; padding: 32px; max-width: 520px; width: 100%;
     box-shadow: 0 4px 24px rgba(0,0,0,.08); text-align: center; }}
   h1 {{ font-size: 1.5rem; margin: 0 0 8px; color: #30426a; }}
   .lead {{ color: #666; margin: 0 0 24px; font-size: .95rem; }}
@@ -653,10 +729,24 @@ def _render_app_download_html(android, ios):
   .warn {{ color: #b45309; margin: 0; font-size: .9rem; }}
   .steps {{ text-align: left; margin-top: 16px; font-size: .85rem; color: #555; }}
   ol {{ margin: 8px 0 0; padding-left: 20px; }}
+  .release-notes {{ text-align: left; margin-top: 24px; padding-top: 20px; border-top: 1px solid #e8ecf1; }}
+  .release-notes > h2 {{ text-align: center; margin-bottom: 16px; }}
+  .release {{ margin-bottom: 16px; }}
+  .release-latest h3 {{ font-size: 1rem; color: #30426a; margin: 0 0 8px; }}
+  .release-older h3 {{ font-size: .9rem; color: #666; margin: 0 0 6px; font-weight: 600; }}
+  .release ul {{ margin: 0; padding: 0; list-style: none; }}
+  .release li {{ font-size: .85rem; color: #444; margin-bottom: 8px; line-height: 1.45; }}
+  .tag {{ display: inline-block; font-size: .7rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .03em; padding: 2px 6px; border-radius: 4px; margin-right: 6px; vertical-align: baseline; }}
+  .tag-feat {{ background: #e8f5e9; color: #2e7d32; }}
+  .tag-fix {{ background: #fff3e0; color: #e65100; }}
+  .tag-improve {{ background: #e3f2fd; color: #1565c0; }}
+  .tag-chore {{ background: #f3e5f5; color: #6a1b9a; }}
 </style></head><body>
 <div class="card">
   <h1>Bock Media Console</h1>
   <p class="lead">Mobile apps for your server</p>
+  {release_notes}
   {android_section}
   {ios_section}
 </div></body></html>'''
@@ -2610,12 +2700,19 @@ def track_meta():
     })
 
 
-# ── Lyrics (sidecar .lrc, embedded tags, LRCLIB fallback) ─────────────────────
+# ── Lyrics (sidecar .lrc → disk cache → LRCLIB → embedded plain) ──────────────
 
 _LRC_TIMESTAMP = re.compile(r'\[(\d{1,2}):(\d{2}(?:\.\d{1,3})?)\]')
 _LRC_META = re.compile(r'^\[[a-z]+:', re.I)
+_LRC_TITLE_NOISE = re.compile(
+    r'[\(\[]?\s*(?:remaster(?:ed)?(?:\s*\d{4})?|live(?:\s+at|\s+from|\s+version)?|'
+    r'radio\s+edit|single\s+version|album\s+version|extended|mono|stereo|'
+    r'\d+\s*-?\s*bit|digital\s+master)[\)\]]?',
+    re.I,
+)
 _LYRICS_CACHE: dict = {}
 _LYRICS_TTL = 3600
+LYRICS_CACHE_DIR = os.path.join(DATA_DIR, 'lyrics_cache')
 
 
 def _looks_like_lrc(text):
@@ -2682,36 +2779,70 @@ def _embedded_lyrics(audio_path):
     return None
 
 
-def _lrclib_http_json(url, timeout=10):
-    from urllib.error import HTTPError
+def _lrclib_http_json(url, timeout=18, retries=3):
+    from urllib.error import HTTPError, URLError
     from urllib.request import Request, urlopen
+    last_err = None
+    for attempt in range(retries):
+        try:
+            req = Request(url, headers={'User-Agent': 'BockMedia/1.0 (https://github.com/ourMedia)'})
+            with urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode('utf-8', errors='replace'))
+        except HTTPError as e:
+            if e.code in (404, 400):
+                return None
+            last_err = e
+            print(f'lrclib http {e.code} {url}: {e}', flush=True)
+        except (URLError, TimeoutError, OSError) as e:
+            last_err = e
+            if attempt + 1 < retries:
+                time.sleep(0.6 * (attempt + 1))
+                continue
+            print(f'lrclib error {url}: {e}', flush=True)
+        except Exception as e:
+            last_err = e
+            print(f'lrclib error {url}: {e}', flush=True)
+            break
+    if last_err:
+        pass
+    return None
+
+
+def _normalize_lrclib_query(title, artist):
+    title = re.sub(r'\s+', ' ', (title or '').strip())
+    artist = re.sub(r'\s+', ' ', (artist or '').strip())
+    if artist:
+        artist = re.split(r'\s+(?:feat\.?|ft\.?|featuring|with)\s+', artist, maxsplit=1, flags=re.I)[0]
+        artist = artist.split(',')[0].strip()
+    title = _LRC_TITLE_NOISE.sub('', title).strip(' -')
+    return title, artist
+
+
+def _lrclib_has_synced(item):
+    text = (item.get('syncedLyrics') or '').strip()
+    return bool(text and _looks_like_lrc(text))
+
+
+def _lrclib_duration_delta(item, duration_sec):
     try:
-        req = Request(url, headers={'User-Agent': 'BockMedia/1.0 (https://github.com/ourMedia)'})
-        with urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode('utf-8', errors='replace'))
-    except HTTPError as e:
-        if e.code in (404, 400):
-            return None
-        print(f'lrclib http {e.code} {url}: {e}', flush=True)
-        return None
-    except Exception as e:
-        print(f'lrclib error {url}: {e}', flush=True)
-        return None
+        return abs(float(item.get('duration') or 0) - float(duration_sec))
+    except (TypeError, ValueError):
+        return 9999.0
 
 
 def _lrclib_pick_best(results, duration_sec=None):
     if not results:
         return None
+    items = [r for r in results if isinstance(r, dict)]
+    if not items:
+        return None
+    synced = [r for r in items if _lrclib_has_synced(r)]
+    pool = synced or items
     if duration_sec and duration_sec > 0:
-        def _delta(item):
-            try:
-                return abs(float(item.get('duration') or 0) - float(duration_sec))
-            except (TypeError, ValueError):
-                return 9999.0
-        best = min(results, key=_delta)
-        if _delta(best) <= 5:
+        best = min(pool, key=lambda r: _lrclib_duration_delta(r, duration_sec))
+        if synced or _lrclib_duration_delta(best, duration_sec) <= 12:
             return best
-    return results[0]
+    return pool[0]
 
 
 def _fetch_lrclib(title, artist, album, duration_sec):
@@ -2721,32 +2852,59 @@ def _fetch_lrclib(title, artist, album, duration_sec):
     album = (album or '').strip()
     if not title:
         return None
-    cache_key = (title, artist, album, int(duration_sec or 0))
+    norm_title, norm_artist = _normalize_lrclib_query(title, artist)
+    cache_key = (norm_title, norm_artist, album, int(duration_sec or 0))
     cached = _LYRICS_CACHE.get(cache_key)
     if cached and (time.time() - cached['ts']) < _LYRICS_TTL:
         return cached['data']
 
-    data = None
-    if artist and duration_sec and duration_sec > 0:
-        params = {
+    attempts = []
+    if norm_artist and duration_sec and duration_sec > 0:
+        attempts.append({
+            'track_name': norm_title,
+            'artist_name': norm_artist,
+            'album_name': album or 'Unknown Album',
+            'duration': int(duration_sec),
+        })
+    if artist and duration_sec and duration_sec > 0 and (norm_title != title or norm_artist != artist):
+        attempts.append({
             'track_name': title,
             'artist_name': artist,
             'album_name': album or 'Unknown Album',
             'duration': int(duration_sec),
-        }
-        url = 'https://lrclib.net/api/get?' + urlencode(params)
-        data = _lrclib_http_json(url)
+        })
+    if norm_artist:
+        attempts.append({'track_name': norm_title, 'artist_name': norm_artist})
+    if artist and artist != norm_artist:
+        attempts.append({'track_name': title, 'artist_name': artist})
+    attempts.append({'track_name': norm_title or title})
 
-    if not data:
-        search_params = {'track_name': title}
-        if artist:
-            search_params['artist_name'] = artist
-        if album:
-            search_params['album_name'] = album
-        url = 'https://lrclib.net/api/search?' + urlencode(search_params)
-        results = _lrclib_http_json(url) or []
-        if isinstance(results, list):
-            data = _lrclib_pick_best(results, duration_sec)
+    data = None
+    seen_urls = set()
+    for params in attempts:
+        url = 'https://lrclib.net/api/get?' + urlencode(params)
+        if url in seen_urls:
+            continue
+        seen_urls.add(url)
+        hit = _lrclib_http_json(url)
+        if hit and (_lrclib_has_synced(hit) or hit.get('plainLyrics')):
+            data = hit
+            if _lrclib_has_synced(hit):
+                break
+
+    if not data or not _lrclib_has_synced(data):
+        for params in attempts[:4]:
+            url = 'https://lrclib.net/api/search?' + urlencode(params)
+            if url in seen_urls:
+                continue
+            seen_urls.add(url)
+            results = _lrclib_http_json(url) or []
+            if isinstance(results, list):
+                pick = _lrclib_pick_best(results, duration_sec)
+                if pick and (_lrclib_has_synced(pick) or not data):
+                    data = pick
+                    if _lrclib_has_synced(pick):
+                        break
 
     if data:
         _LYRICS_CACHE[cache_key] = {'data': data, 'ts': time.time()}
@@ -2771,24 +2929,131 @@ def _lyrics_from_lrclib(remote):
     return None
 
 
-def _lyrics_payload(path, duration_sec=None, title=None, artist=None, album=None):
-    if path and os.path.isfile(path):
-        raw = _sidecar_lyrics(path)
-        source = 'lrc' if raw else None
-        if not raw:
-            raw = _embedded_lyrics(path)
-            source = 'embedded' if raw else None
-        if raw:
-            if _looks_like_lrc(raw):
-                lines, plain = _parse_lrc(raw)
-                return {
-                    'synced': bool(lines),
-                    'lines': lines,
-                    'plain': plain or raw.strip(),
-                    'source': source or 'lrc',
-                }
-            return {'synced': False, 'lines': [], 'plain': raw.strip(), 'source': source or 'embedded'}
+def _lyrics_from_raw(raw, source):
+    if not raw or not str(raw).strip():
+        return None
+    text = str(raw).strip()
+    if _looks_like_lrc(text):
+        lines, plain = _parse_lrc(text)
+        return {
+            'synced': bool(lines),
+            'lines': lines,
+            'plain': plain or text,
+            'source': source,
+        }
+    return {'synced': False, 'lines': [], 'plain': text, 'source': source}
 
+
+def _estimate_synced_lines(plain_text, duration_sec):
+    """Evenly space plain lyric lines across the track so the karaoke UI always works."""
+    raw_lines = [ln.strip() for ln in (plain_text or '').splitlines() if ln.strip()]
+    if not raw_lines:
+        return []
+    if len(raw_lines) == 1 and len(raw_lines[0]) > 120:
+        raw_lines = [s.strip() for s in re.split(r'(?<=[.!?])\s+', raw_lines[0]) if s.strip()]
+    if not raw_lines or not duration_sec or duration_sec <= 0:
+        return []
+    duration_ms = int(duration_sec) * 1000
+    lead_ms = min(int(duration_ms * 0.04), 8000)
+    tail_ms = min(int(duration_ms * 0.06), 12000)
+    usable = max(duration_ms - lead_ms - tail_ms, duration_ms // 2)
+    step = max(usable // max(len(raw_lines), 1), 1200)
+    return [
+        {'timeMs': lead_ms + (idx * step), 'text': line}
+        for idx, line in enumerate(raw_lines)
+    ]
+
+
+def _lyrics_finalize(payload, duration_sec):
+    """Ensure every lyrics payload with text uses the synced karaoke shape when possible."""
+    if not payload:
+        return payload
+    if payload.get('lines'):
+        return payload
+    plain = (payload.get('plain') or '').strip()
+    lines = _estimate_synced_lines(plain, duration_sec)
+    if not lines:
+        return payload
+    out = dict(payload)
+    out['lines'] = lines
+    out['synced'] = True
+    out['estimated'] = True
+    return out
+
+
+def _lyrics_quality(payload):
+    """Higher = better. Real LRC beats estimated spacing beats plain block."""
+    if not payload:
+        return -1
+    if payload.get('lines'):
+        if payload.get('estimated'):
+            return 2
+        return 3
+    if (payload.get('plain') or '').strip():
+        return 1
+    return 0
+
+
+def _lyrics_pick_best(*candidates):
+    best = None
+    best_q = -1
+    for item in candidates:
+        if not item:
+            continue
+        q = _lyrics_quality(item)
+        if q > best_q:
+            best = item
+            best_q = q
+    return best
+
+
+def _lyrics_cache_file(path):
+    key = hashlib.sha256((path or '').encode('utf-8')).hexdigest()
+    return os.path.join(LYRICS_CACHE_DIR, f'{key}.json')
+
+
+def _lyrics_cache_read(path):
+    if not path:
+        return None
+    fp = _lyrics_cache_file(path)
+    if not os.path.isfile(fp):
+        return None
+    try:
+        with open(fp, encoding='utf-8') as fh:
+            data = json.load(fh)
+        if not isinstance(data, dict):
+            return None
+        if data.get('path') and data.get('path') != path:
+            return None
+        return data
+    except Exception as e:
+        print(f'lyrics cache read {fp}: {e}', flush=True)
+        return None
+
+
+def _lyrics_cache_write(path, payload):
+    if not path or not payload:
+        return
+    try:
+        os.makedirs(LYRICS_CACHE_DIR, exist_ok=True)
+        record = {
+            'path': path,
+            'synced': bool(payload.get('synced')),
+            'lines': payload.get('lines') or [],
+            'plain': payload.get('plain') or '',
+            'source': payload.get('source'),
+            'estimated': bool(payload.get('estimated')),
+            'fetchedAt': int(time.time()),
+        }
+        tmp = _lyrics_cache_file(path) + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as fh:
+            json.dump(record, fh, ensure_ascii=False)
+        os.replace(tmp, _lyrics_cache_file(path))
+    except Exception as e:
+        print(f'lyrics cache write {path}: {e}', flush=True)
+
+
+def _lyrics_track_meta(path, duration_sec=None, title=None, artist=None, album=None):
     row = {}
     if path:
         row = db_one(
@@ -2799,20 +3064,76 @@ def _lyrics_payload(path, duration_sec=None, title=None, artist=None, album=None
     title = (title or row.get('title') or fname).strip()
     artist = (artist or row.get('artist') or '').strip()
     album = (album or row.get('album') or '').strip()
-    dur = duration_sec or row.get('duration_seconds')
+    dur = duration_sec if duration_sec is not None else row.get('duration_seconds')
     try:
         dur = int(float(dur)) if dur else None
     except (TypeError, ValueError):
         dur = None
+    if not dur and path:
+        ms = _duration_ms_for_path(path)
+        if ms > 0:
+            dur = max(ms // 1000, 1)
+    return title, artist, album, dur
 
-    return _lyrics_from_lrclib(_fetch_lrclib(title, artist, album, dur)) or {
-        'synced': False, 'lines': [], 'plain': '', 'source': None,
-    }
+
+def _lyrics_payload(path, duration_sec=None, title=None, artist=None, album=None):
+    """Resolve lyrics with a single karaoke shape; prefer real LRC, estimate plain as fallback."""
+    title, artist, album, dur = _lyrics_track_meta(path, duration_sec, title, artist, album)
+
+    sidecar = _lyrics_from_raw(_sidecar_lyrics(path), 'lrc') if path and os.path.isfile(path) else None
+    cached = _lyrics_cache_read(path)
+    has_real_sync = lambda p: p and p.get('lines') and not p.get('estimated')
+
+    lrclib = None
+    if not has_real_sync(sidecar) and not has_real_sync(cached):
+        lrclib = _lyrics_from_lrclib(_fetch_lrclib(title, artist, album, dur))
+
+    embedded = None
+    if path and os.path.isfile(path):
+        embedded = _lyrics_from_raw(_embedded_lyrics(path), 'embedded')
+
+    best = _lyrics_pick_best(sidecar, lrclib, cached, embedded)
+    result = _lyrics_finalize(best, dur) if best else None
+    if result and result.get('lines'):
+        prev = _lyrics_finalize(cached, dur) if cached else None
+        if _lyrics_quality(result) >= _lyrics_quality(prev):
+            _lyrics_cache_write(path, result)
+        return result
+
+    if cached:
+        upgraded = _lyrics_finalize(cached, dur)
+        if upgraded.get('lines'):
+            if _lyrics_quality(upgraded) > _lyrics_quality(cached):
+                _lyrics_cache_write(path, upgraded)
+            return upgraded
+
+    return {'synced': False, 'lines': [], 'plain': '', 'source': None}
+
+
+def _lyrics_cache_has_karaoke(path):
+    cached = _lyrics_cache_read(path)
+    return bool(cached and cached.get('lines'))
+
+
+def prefetch_lyrics_for_path(path, duration_sec=None, title=None, artist=None, album=None, force=False):
+    """Fetch and persist lyrics for one track; returns payload and whether cache changed."""
+    if force and path:
+        fp = _lyrics_cache_file(path)
+        if os.path.isfile(fp):
+            try:
+                os.remove(fp)
+            except OSError:
+                pass
+    before = _lyrics_cache_read(path)
+    payload = _lyrics_payload(path, duration_sec, title=title, artist=artist, album=album)
+    after = _lyrics_cache_read(path)
+    changed = after != before
+    return payload, changed
 
 
 @app.route('/api/lyrics')
 def lyrics():
-    """Lyrics for a track: sidecar .lrc, embedded tags, then LRCLIB lookup."""
+    """Lyrics for a track: sidecar .lrc, disk cache, LRCLIB, then embedded."""
     path = (request.args.get('path') or '').strip()
     if not path:
         return jsonify({'error': 'path required'}), 400
@@ -7578,7 +7899,8 @@ def alexa_speak(text, end_session=True, reprompt=None):
 
 def alexa_play(stream_url, token, offset_ms=0, previous_token=None,
                play_behavior='REPLACE_ALL', speech=None,
-               title=None, subtitle=None, artwork_url=None):
+               title=None, subtitle=None, artwork_url=None,
+               filepath=None, supported_interfaces=None, device_id=None):
     audio_item = {
         'stream': {
             'url': stream_url,
@@ -7609,14 +7931,27 @@ def alexa_play(stream_url, token, offset_ms=0, previous_token=None,
         if meta:
             audio_item['metadata'] = meta
 
+    ifaces = supported_interfaces
+    if ifaces is None:
+        ifaces = getattr(g, 'supported_interfaces', None) or {}
+    dev_id = device_id if device_id is not None else getattr(g, 'device_id', None)
+    apl_directives, apl_on = alexa_apl.play_apl_directives(
+        filepath, offset_ms, title, subtitle, ifaces, dev_id,
+    )
+    if apl_on:
+        audio_item['stream']['progressReportingIntervalInMilliseconds'] = alexa_apl.PROGRESS_REPORT_MS
+
+    directives = list(apl_directives) + [{
+        'type': 'AudioPlayer.Play',
+        'playBehavior': play_behavior,
+        'audioItem': audio_item,
+    }]
     resp = {
         'version': '1.0',
         'response': {
-            'directives': [{'type': 'AudioPlayer.Play',
-                            'playBehavior': play_behavior,
-                            'audioItem': audio_item}],
-            'shouldEndSession': True
-        }
+            'directives': directives,
+            'shouldEndSession': True,
+        },
     }
     if speech:
         resp['response']['outputSpeech'] = {'type': 'PlainText', 'text': speech}
@@ -7647,7 +7982,8 @@ def _np_play_path(path, token, *, offset_ms=0, previous_token=None,
                       previous_token=previous_token,
                       play_behavior=play_behavior,
                       speech=speech,
-                      title=title, subtitle=subtitle, artwork_url=artwork_url)
+                      title=title, subtitle=subtitle, artwork_url=artwork_url,
+                      filepath=path)
 
 def _np_skip_next(playback_controller=False):
     """Advance to the next track in the active device queue."""
@@ -7746,7 +8082,8 @@ def _np_resume_playback(playback_controller=False):
     return alexa_play(file_to_stream_url(path), token,
                       offset_ms=state.get('offset_ms', 0),
                       speech=speech,
-                      title=title, subtitle=subtitle, artwork_url=artwork_url)
+                      title=title, subtitle=subtitle, artwork_url=artwork_url,
+                      filepath=path)
 
 def alexa_can_fulfill(slots=None, can_fulfill='MAYBE'):
     """Respond to Alexa's preflight capability check with a valid schema."""
@@ -8351,6 +8688,7 @@ def alexa_skill():
     ctx_device = ((body.get('context', {}) or {}).get('System', {}) or {}).get('device', {}) or {}
     raw_device_id = ctx_device.get('deviceId') or 'default'
     supported_ifaces = ctx_device.get('supportedInterfaces') or {}
+    g.supported_interfaces = supported_ifaces
     if raw_device_id and raw_device_id != 'default':
         register_device(raw_device_id, supported_interfaces=supported_ifaces)
     g.raw_device_id = raw_device_id if raw_device_id != 'default' else 'default'
@@ -8377,6 +8715,7 @@ def alexa_skill():
         data  = decode_token(token)
         tracks = data.get('tracks', [])
         idx    = data.get('idx', 0)
+        path = track_title = artist = album = None
         if 0 <= idx < len(tracks):
             path = tracks[idx]
             fname = os.path.splitext(os.path.basename(path))[0]
@@ -8416,7 +8755,17 @@ def alexa_skill():
             if _is_test_serial(dev_serial):
                 entry['test'] = True
             append_stream_history(entry)
+        apl_dirs = alexa_apl.playback_started_directives(
+            path, track_title, artist, album,
+            supported_ifaces, g.device_id,
+            offset_ms=int(req.get('offsetInMilliseconds') or 0),
+        )
+        if apl_dirs:
+            return jsonify({'version': '1.0', 'response': {'directives': apl_dirs}})
         return alexa_empty()
+
+    if rtype == 'AudioPlayer.PlaybackProgressReport':
+        return alexa_apl.progress_report_response(req, supported_ifaces, g.device_id)
 
     if rtype == 'AudioPlayer.PlaybackNearlyFinished':
         token = req.get('token', '')
