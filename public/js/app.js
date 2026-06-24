@@ -68,6 +68,9 @@ function showLoginModal() {
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
     <div class="modal-box" style="max-width:380px">
+      <div style="text-align:center;margin-bottom:12px">
+        <img src="img/bock-logo-mark.png?v=2" alt="" width="48" height="48" style="border-radius:50%">
+      </div>
       <h3 style="margin-top:0"><i class="fa fa-lock"></i> Sign in</h3>
       <p class="hint" style="margin:0 0 12px">Bock Media console login</p>
       <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px">
@@ -146,11 +149,134 @@ function signOut() {
 // Format helpers
 function fmtNum(n) { return Number(n || 0).toLocaleString(); }
 
-function artworkUrl(filepath) {
+function artworkUrl(filepath, sizePx) {
   if (!filepath) return null;
   const rel = String(filepath).replace(/^\/+/, '');
   const encoded = rel.split('/').map(seg => encodeURIComponent(seg)).join('/');
-  return `/artwork/${encoded}`;
+  const q = sizePx ? `?size=${sizePx}` : '';
+  return `/artwork/${encoded}${q}`;
+}
+
+function spotifyCardArtHtml(artPath, seed, icon, sizePx = 384, opts) {
+  const unplayed = opts && opts.unplayed;
+  const url = artPath ? artworkUrl(artPath, sizePx) : null;
+  const grad = spotifyGradient(seed || '');
+  const ic = icon || 'fa-music';
+  const badge = unplayed ? '<span class="unplayed-album-badge" aria-label="Unplayed"></span>' : '';
+  if (!url) {
+    return `<div class="spotify-card-art" style="background:${grad}"><i class="fa ${ic}"></i>${badge}</div>`;
+  }
+  return `<div class="spotify-card-art spotify-card-art-img" style="background:${grad}">
+    <img src="${escHtml(url)}" alt="" loading="lazy"
+      onerror="this.closest('.spotify-card-art').classList.add('spotify-card-art-fallback');this.remove();">
+    ${badge}
+  </div>`;
+}
+
+function spotifyShortcutArtHtml(artPath, seed, icon) {
+  const url = artPath ? artworkUrl(artPath, 128) : null;
+  const grad = spotifyGradient(seed || '');
+  const ic = icon || 'fa-music';
+  if (!url) {
+    return `<span class="spotify-shortcut-art" style="background:${grad}"><i class="fa ${ic}"></i></span>`;
+  }
+  return `<span class="spotify-shortcut-art spotify-shortcut-art-img" style="background:${grad}">
+    <img src="${escHtml(url)}" alt="" loading="lazy"
+      onerror="this.closest('.spotify-shortcut-art').classList.add('spotify-shortcut-art-fallback');this.remove();">
+  </span>`;
+}
+
+function playlistRowArtHtml(playlistId, coverPath, seed, isAudiobook) {
+  const icon = isAudiobook ? 'fa-book' : 'fa-list';
+  const url = coverPath ? artworkUrl(coverPath, 96) : null;
+  const grad = spotifyGradient(seed || playlistId || '');
+  if (!url) {
+    return `<div class="pl-row-art" style="background:${grad}"><i class="fa ${icon}"></i></div>`;
+  }
+  return `<div class="pl-row-art pl-row-art-img" style="background:${grad}">
+    <img src="${escHtml(url)}" alt="" loading="lazy"
+      onerror="this.closest('.pl-row-art').classList.add('pl-row-art-fallback');this.remove();">
+  </div>`;
+}
+
+async function fetchPlaylistCovers(ids) {
+  const unique = [...new Set((ids || []).filter(Boolean))];
+  if (!unique.length) return {};
+  const out = {};
+  for (let i = 0; i < unique.length; i += 200) {
+    const chunk = unique.slice(i, i + 200);
+    try {
+      const r = await authFetch('/api/playlists/covers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: chunk }),
+      });
+      if (!r.ok) continue;
+      const data = await r.json().catch(() => ({}));
+      Object.assign(out, (data && data.covers) || {});
+    } catch { /* try next chunk */ }
+  }
+  return out;
+}
+
+async function fetchPlaylistsCached(search = '') {
+  const q = (search || '').trim().toLowerCase();
+  if (!q && typeof WebCache !== 'undefined') {
+    const cached = WebCache.getPlaylistsIfFresh();
+    if (cached) return cached;
+  }
+  const data = await API(`/api/playlists?page=1&limit=2000&search=${encodeURIComponent(search)}`).catch(() => ({ items: [] }));
+  const items = (data && data.items) || [];
+  if (!q && typeof WebCache !== 'undefined' && items.length) WebCache.setPlaylists(items);
+  return items;
+}
+
+async function refreshHomeCovers(feed, existingCovers = {}) {
+  const ids = typeof WebCache !== 'undefined'
+    ? WebCache.visibleHomeCoverIds(feed, 32)
+    : [...new Set((feed.sections || []).flatMap((s) => s.cards.slice(0, 8).map((c) => c.playlistId).filter(Boolean)))].slice(0, 32);
+  const missing = ids.filter((id) => !existingCovers[id]);
+  if (!missing.length) return existingCovers;
+  const fetched = await fetchPlaylistCovers(missing);
+  return { ...existingCovers, ...fetched };
+}
+
+function prefetchCriticalApis() {
+  if (authRequired() && !getStoredAuth()) return;
+  setTimeout(() => {
+    API('/api/dashboard/quick').catch(() => {});
+    fetchPlaylistsCached('').catch(() => {});
+    ensureAlexaRemoteStatus().catch(() => {});
+  }, 50);
+}
+
+let _chartJsPromise = null;
+function ensureChartJs() {
+  if (typeof Chart !== 'undefined') return Promise.resolve(true);
+  if (_chartJsPromise) return _chartJsPromise;
+  _chartJsPromise = new Promise((resolve) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js';
+    s.crossOrigin = 'anonymous';
+    s.onload = () => resolve(true);
+    s.onerror = () => resolve(false);
+    document.head.appendChild(s);
+  });
+  return _chartJsPromise;
+}
+
+function warmBackgroundCaches() {
+  if (typeof WebCache === 'undefined' || WebCache.peekSearchBrowse()) return;
+  setTimeout(() => {
+    Promise.all([
+      API('/api/dashboard/quick').catch(() => ({ recent: [], favorites: [] })),
+      API('/api/genres?limit=16').catch(() => ({ items: [] })),
+      fetchPlaylistsCached('').catch(() => []),
+      API('/api/library/new?since=30d&limit=12').catch(() => ({ albums: [] })),
+    ]).then(([quick, genres, playlists, newAlbums]) => {
+      WebCache.putSearchBrowse({ quick, genres, playlists, newAlbums });
+    }).catch(() => {});
+  }, 1500);
 }
 
 function npArtworkHtml(filepath) {
@@ -248,23 +374,621 @@ let currentRoute = '';
 
 function register(name, fn) { routes[name] = fn; }
 
+const BOTTOM_TAB_ROUTES = {
+  home: ['dashboard', 'rooms', 'analytics', 'routines'],
+  nowplaying: ['nowplaying'],
+  search: ['search'],
+  library: ['library', 'playlists', 'artists', 'albums', 'songs', 'watchfolders', 'genres'],
+  automations: ['automation'],
+};
+
+function bottomTabForRoute(route) {
+  const root = (route || 'dashboard').split('/')[0];
+  for (const [tab, names] of Object.entries(BOTTOM_TAB_ROUTES)) {
+    if (names.includes(root)) return tab;
+  }
+  return null;
+}
+
+function greeting() {
+  const h = new Date().getHours();
+  if (h < 12) return 'Good morning';
+  if (h < 17) return 'Good afternoon';
+  return 'Good evening';
+}
+
+function updateShellForRoute(route) {
+  const root = (route || 'dashboard').split('/')[0];
+  document.body.classList.toggle('route-nowplaying', root === 'nowplaying');
+  document.body.classList.toggle('route-home', root === 'dashboard');
+  document.body.classList.toggle('route-search', root === 'search');
+  const tab = bottomTabForRoute(root);
+  document.querySelectorAll('.bottom-nav-link').forEach((a) => {
+    a.classList.toggle('active', tab && a.dataset.tab === tab);
+  });
+  document.querySelectorAll('.sidebar-nav-item').forEach((a) => {
+    const href = (a.getAttribute('href') || '').replace('#', '').split('/')[0];
+    const libRoutes = ['library', 'playlists', 'artists', 'albums', 'songs', 'genres', 'watchfolders'];
+    const active = href === root
+      || (a.dataset.tab === tab && tab !== null)
+      || (a.dataset.tab === 'library' && libRoutes.includes(root));
+    a.classList.toggle('active', active);
+  });
+  updateTopbarNavButtons();
+  if (root !== 'search') syncTopbarSearch('');
+  closeAppDrawer();
+}
+
+function spotifyGradient(seed) {
+  const g = [
+    'linear-gradient(135deg,#5038a0,#283248)',
+    'linear-gradient(135deg,#1db954,#148a08)',
+    'linear-gradient(135deg,#509bf5,#1e3264)',
+    'linear-gradient(135deg,#e91429,#8c1932)',
+    'linear-gradient(135deg,#8d67ab,#5038a0)',
+    'linear-gradient(135deg,#d84000,#8c331a)',
+  ];
+  let h = 0;
+  for (let i = 0; i < (seed || '').length; i++) h = (h + seed.charCodeAt(i)) % g.length;
+  return g[h];
+}
+
+function spotifyShortcut(title, href, icon, seed, artPath) {
+  return `<a href="${href}" class="spotify-shortcut">
+    ${spotifyShortcutArtHtml(artPath, seed || title, icon)}
+    <span class="spotify-shortcut-title">${escHtml(title)}</span>
+  </a>`;
+}
+
+function homeCardIndex(feed, cardId) {
+  for (let si = 0; si < (feed.sections || []).length; si++) {
+    const ci = feed.sections[si].cards.findIndex((c) => c.id === cardId);
+    if (ci >= 0) return { si, ci };
+  }
+  return null;
+}
+
+function homeSectionFilterGroups(kind) {
+  if (kind === 'Radio') return 'all radio';
+  if (kind === 'DailyMixes' || kind === 'TopMixes') return 'all radio music';
+  if (kind === 'RecentPlaylists' || kind === 'MorePlaylists' || kind === 'ExploreThemes') return 'all playlists';
+  if (kind === 'JumpBackIn' || kind === 'Favorites' || kind === 'Discover') return 'all music';
+  if (kind === 'Mood') return 'all music playlists';
+  return 'all';
+}
+
+function tileDownloadOnclick(playTarget) {
+  if (!playTarget || !['playlist', 'album', 'artist'].includes(playTarget.kind)) return null;
+  const enc = encodeURIComponent(JSON.stringify(playTarget));
+  return `openOfflineDownloadHint('${enc}')`;
+}
+
+function openOfflineDownloadHint(encoded) {
+  let target = null;
+  try { target = JSON.parse(decodeURIComponent(encoded)); } catch (_) { /* ignore */ }
+  const name = (target && target.name) || 'this collection';
+  showToast(`Save “${name}” offline in the Android or iOS app.`);
+  if (window.location.hash !== '#download') window.location.hash = 'download';
+}
+window.openOfflineDownloadHint = openOfflineDownloadHint;
+
+function spotifyHomeQuickCard(card, artPath, playOnclick) {
+  const attrs = playOnclick
+    ? `href="#" role="button" onclick="event.preventDefault();${playOnclick}"`
+    : 'href="#search"';
+  return `<a ${attrs} class="home-quick-card">
+    ${spotifyShortcutArtHtml(artPath, card.title, HomeFeed.cardIcon(card))}
+    <span class="home-quick-title">${escHtml(card.title)}</span>
+  </a>`;
+}
+
+function spotifyHomeRadioCard(card, si, ci, artPath) {
+  const grad = spotifyGradient(card.title);
+  const url = artPath ? artworkUrl(artPath, 256) : null;
+  const play = HomeFeed.cardPlayOpts(card) ? `homeFeedPlay(${si}, ${ci})` : null;
+  const download = tileDownloadOnclick(card.playTarget);
+  const playFab = play
+    ? `<button type="button" class="spotify-play-fab" onclick="event.preventDefault();event.stopPropagation();${play}" aria-label="Play"><i class="fa fa-play"></i></button>`
+    : '';
+  const downloadFab = download
+    ? `<button type="button" class="spotify-download-fab" onclick="event.preventDefault();event.stopPropagation();${download}" aria-label="Download for offline"><i class="fa fa-download"></i></button>`
+    : '';
+  const discInner = url
+    ? `<img src="${escHtml(url)}" alt="" loading="lazy" onerror="this.parentElement.classList.add('home-radio-disc-fallback');this.remove();">`
+    : `<i class="fa ${HomeFeed.cardIcon(card)}"></i>`;
+  return `<a href="${HomeFeed.cardHref(card)}" class="spotify-card home-radio-card">
+    <div class="spotify-card-media">
+      <div class="home-radio-stage" style="background:${grad}">
+        <span class="home-radio-badge">RADIO</span>
+        <div class="home-radio-disc">${discInner}</div>
+        ${downloadFab}
+        ${playFab}
+      </div>
+    </div>
+    <div class="spotify-card-title">${escHtml(card.title)}</div>
+    <div class="spotify-card-sub">${escHtml(card.subtitle || '')}</div>
+  </a>`;
+}
+
+function spotifyHomeDailyMixCard(card, si, ci, artPath) {
+  const play = HomeFeed.cardPlayOpts(card) ? `homeFeedPlay(${si}, ${ci})` : null;
+  const download = tileDownloadOnclick(card.playTarget);
+  return spotifyMediaCard(
+    card.title,
+    card.subtitle || '',
+    HomeFeed.cardHref(card),
+    HomeFeed.cardIcon(card),
+    card.title,
+    play,
+    artPath,
+    { downloadOnclick: download, dailyMix: true },
+  );
+}
+
+function spotifyHomeSectionCard(card, secKind, si, ci, artPath) {
+  if (secKind === 'Radio' || card.playTarget?.kind === 'radio') {
+    return spotifyHomeRadioCard(card, si, ci, artPath);
+  }
+  if (secKind === 'DailyMixes') {
+    return spotifyHomeDailyMixCard(card, si, ci, artPath);
+  }
+  const play = HomeFeed.cardPlayOpts(card) ? `homeFeedPlay(${si}, ${ci})` : null;
+  const download = tileDownloadOnclick(card.playTarget);
+  return spotifyMediaCard(
+    card.title,
+    card.subtitle || '',
+    HomeFeed.cardHref(card),
+    HomeFeed.cardIcon(card),
+    card.title,
+    play,
+    artPath,
+    { downloadOnclick: download },
+  );
+}
+
+function spotifyHomeSection(title, showAllHref, innerHtml, filterGroups) {
+  const link = showAllHref
+    ? `<a href="${showAllHref}" class="spotify-section-link">Show all</a>` : '';
+  return `<section class="spotify-section spotify-home-section" data-home-groups="${filterGroups}">
+    <div class="spotify-section-header">
+      <h2 class="spotify-section-title home-greeting">${escHtml(title)}</h2>${link}
+    </div>
+    <div class="spotify-carousel library-playlist-grid home-tile-grid">${innerHtml}</div>
+  </section>`;
+}
+
+function setupHomeFilterDelegation() {
+  if (window._homeFilterDelegation) return;
+  window._homeFilterDelegation = true;
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('.home-filter[data-home-filter]');
+    if (!btn) return;
+    const filter = btn.getAttribute('data-home-filter') || 'all';
+    document.querySelectorAll('.home-filter').forEach((b) => {
+      b.classList.toggle('active', b === btn);
+    });
+    document.querySelectorAll('[data-home-groups]').forEach((sec) => {
+      const groups = (sec.getAttribute('data-home-groups') || '').split(/\s+/);
+      if (filter === 'podcasts' || filter === 'audiobooks') {
+        sec.hidden = true;
+        return;
+      }
+      sec.hidden = filter !== 'all' && !groups.includes(filter);
+    });
+    const quick = document.querySelector('.home-quick-grid');
+    if (quick) {
+      quick.hidden = filter !== 'all' && filter !== 'music' && filter !== 'playlists'
+        && filter !== 'podcasts' && filter !== 'audiobooks';
+    }
+  });
+}
+
+function spotifyMediaCard(title, subtitle, href, icon, seed, playOnclick, artPath, opts) {
+  const o = opts || {};
+  const play = playOnclick
+    ? `<button type="button" class="spotify-play-fab" onclick="event.preventDefault();event.stopPropagation();${playOnclick}" aria-label="Play"><i class="fa fa-play"></i></button>`
+    : '';
+  const download = o.downloadOnclick
+    ? `<button type="button" class="spotify-download-fab" onclick="event.preventDefault();event.stopPropagation();${o.downloadOnclick}" aria-label="Download for offline"><i class="fa fa-download"></i></button>`
+    : '';
+  let artHtml = spotifyCardArtHtml(artPath, seed || title, icon || 'fa-music', 384, o);
+  if (o.dailyMix) {
+    const mixBadge = (title || '').replace(/^daily mix/i, 'Daily Mix').slice(0, 24);
+    artHtml = artHtml.replace('class="spotify-card-art', `class="spotify-card-art home-daily-art" data-mix="${escHtml(mixBadge)}"`);
+  }
+  return `<a href="${href}" class="spotify-card">
+    <div class="spotify-card-media">
+      ${artHtml}
+      ${download}
+      ${play}
+    </div>
+    <div class="spotify-card-title">${escHtml(title)}</div>
+    <div class="spotify-card-sub">${escHtml(subtitle || '')}</div>
+  </a>`;
+}
+
+function spotifySection(title, showAllHref, innerHtml, opts) {
+  const home = opts && opts.home;
+  const link = showAllHref
+    ? `<a href="${showAllHref}" class="spotify-section-link">Show all</a>` : '';
+  return `<section class="spotify-section${home ? ' spotify-home-section' : ''}">
+    <div class="spotify-section-header">
+      <h2 class="spotify-section-title">${escHtml(title)}</h2>${link}
+    </div>
+    <div class="spotify-carousel">${innerHtml}</div>
+  </section>`;
+}
+
+function openAppDrawer() {
+  document.getElementById('app-drawer')?.classList.add('open');
+  document.getElementById('app-backdrop')?.classList.remove('hidden');
+}
+
+function closeAppDrawer() {
+  document.getElementById('app-drawer')?.classList.remove('open');
+  document.getElementById('app-backdrop')?.classList.add('hidden');
+}
+
+function libraryFiltersHtml(active) {
+  const tabs = [
+    ['library', '#library', 'Playlists'],
+    ['artists', '#artists', 'Artists'],
+    ['albums', '#albums', 'Albums'],
+    ['songs', '#songs', 'Songs'],
+    ['genres', '#genres', 'Genres'],
+    ['watchfolders', '#watchfolders', 'Sources'],
+  ];
+  return `<div class="library-filters">${tabs.map(([id, href, label]) =>
+    `<a href="${href}" class="library-filter${active === id ? ' active' : ''}">${escHtml(label)}</a>`).join('')}</div>`;
+}
+
+function folderCardHtml(f) {
+  const statusClass = (f.status || '').toLowerCase() === 'scanning' ? 'scanning'
+    : (f.status || '').toLowerCase() === 'queued' ? 'queued'
+    : (f.status || '').toLowerCase() === 'done' ? 'done' : 'gray';
+  return `
+    <div class="folder-card folder-card-compact">
+      <div class="folder-icon"><i class="fa fa-folder-open"></i></div>
+      <div class="folder-info">
+        ${f.label ? `<span class="folder-label">${escHtml(f.label)}</span>` : ''}
+        <div class="folder-path">${escHtml(f.path)}</div>
+        <div class="folder-meta">
+          ${f.identifiedFiles > 0 ? `<span><i class="fa fa-music"></i> ${fmtNum(f.identifiedFiles)} tracks</span>` : ''}
+          ${f.playlists > 0 ? `<span><i class="fa fa-list"></i> ${fmtNum(f.playlists)} playlists</span>` : ''}
+          ${f.errors > 0 ? `<span style="color:#e91429"><i class="fa fa-triangle-exclamation"></i> ${f.errors} errors</span>` : ''}
+          <span><i class="fa fa-layer-group"></i> ${escHtml(f.type || 'folder')}</span>
+        </div>
+      </div>
+      <div><span class="status-dot ${statusClass}">${escHtml(f.status || '—')}</span></div>
+    </div>`;
+}
+
+async function loadLibrary(opts = {}) {
+  if (typeof WebCache !== 'undefined' && WebCache.shouldSkipLibraryReload()) return;
+  const [plItems, smartData, folders, genres, remote] = await Promise.all([
+    fetchPlaylistsCached(''),
+    API('/api/smart_playlists').catch(() => ({ items: [] })),
+    API('/api/watchfolders').catch(() => []),
+    API('/api/genres?limit=12').catch(() => ({ items: [] })),
+    ensureAlexaRemoteStatus().catch(() => ({})),
+  ]);
+  window._libPlaylists = plItems || [];
+  window._libSmart = (smartData && smartData.items) || [];
+  window._libFolders = Array.isArray(folders) ? folders : [];
+  window._libGenres = (genres && genres.items) || [];
+  window._libRemote = remote || {};
+  const coverIds = [
+    ...window._libPlaylists.map((p) => p.id),
+    ...window._libSmart.map((s) => s.linkedPlaylistId),
+  ].filter(Boolean);
+  window._libCovers = coverIds.length ? await fetchPlaylistCovers(coverIds) : {};
+  if (typeof WebCache !== 'undefined') {
+    WebCache.putLibrary({
+      playlists: window._libPlaylists,
+      smart: window._libSmart,
+      folders: window._libFolders,
+      genres: window._libGenres,
+    });
+    WebCache.markLibraryLoaded();
+  }
+  renderLibraryPage();
+}
+
+function renderLibraryPage() {
+  const playlists = window._libPlaylists || [];
+  const smart = window._libSmart || [];
+  const folders = window._libFolders || [];
+  const genres = window._libGenres || [];
+  const remote = window._libRemote || {};
+  const covers = window._libCovers || {};
+  const canPlay = true;
+
+  const cards = playlists.map((p, i) => spotifyMediaCard(
+    p.name,
+    `${fmtNum(p.trackCount || 0)} tracks`,
+    `#playlists/detail/${encodeURIComponent(p.id)}`,
+    'fa-list',
+    p.name,
+    canPlay ? `libPlayPlaylist(${i})` : null,
+    covers[p.id],
+    { downloadOnclick: tileDownloadOnclick({ kind: 'playlist', id: p.id, name: p.name }) },
+  )).join('');
+
+  const smartCards = smart.map((s) => {
+    const href = s.linkedPlaylistId
+      ? `#playlists/detail/${encodeURIComponent(s.linkedPlaylistId)}`
+      : '#playlists';
+    const art = s.linkedPlaylistId ? covers[s.linkedPlaylistId] : null;
+    return spotifyMediaCard(
+      s.name,
+      `${fmtNum(s.trackCount || 0)} tracks · smart`,
+      href,
+      'fa-wand-magic-sparkles',
+      s.name,
+      null,
+      art,
+    );
+  }).join('');
+
+  const genreCards = genres.map((g) =>
+    spotifyMediaCard(
+      g.name,
+      `${fmtNum(g.track_count || 0)} tracks`,
+      '#search',
+      'fa-tag',
+      g.name,
+      null,
+    ).replace('class="spotify-card"', `class="spotify-card genre-tile" data-genre="${escHtml(g.name)}"`)).join('');
+
+  const folderCards = folders.map((f) => folderCardHtml(f)).join('');
+
+  const sections = [];
+  if (playlists.length) {
+    sections.push(`<section class="spotify-section">
+      <div class="spotify-section-header">
+        <h2 class="spotify-section-title home-greeting">Playlists (${fmtNum(playlists.length)})</h2>
+        <a href="#playlists" class="spotify-section-link">Manage</a>
+      </div>
+      <div class="spotify-carousel library-playlist-grid">${cards}</div>
+    </section>`);
+  }
+  if (smart.length) {
+    sections.push(`<section class="spotify-section">
+      <div class="spotify-section-header">
+        <h2 class="spotify-section-title home-greeting">Smart playlists (${fmtNum(smart.length)})</h2>
+        <a href="#playlists" class="spotify-section-link">Manage rules</a>
+      </div>
+      <div class="spotify-carousel library-playlist-grid">${smartCards}</div>
+    </section>`);
+  }
+  if (genres.length) {
+    sections.push(`<section class="spotify-section">
+      <div class="spotify-section-header">
+        <h2 class="spotify-section-title home-greeting">Top genres</h2>
+        <a href="#genres" class="spotify-section-link">Show all</a>
+      </div>
+      <div class="spotify-carousel library-playlist-grid">${genreCards}</div>
+    </section>`);
+  }
+  if (folders.length) {
+    sections.push(`<section class="spotify-section">
+      <div class="spotify-section-header">
+        <h2 class="spotify-section-title home-greeting">Library sources (${fmtNum(folders.length)})</h2>
+        <a href="#watchfolders" class="spotify-section-link">Details</a>
+      </div>
+      <div class="folder-card-list">${folderCards}</div>
+    </section>`);
+  }
+  if (!sections.length) {
+    sections.push(`<div class="empty-state"><i class="fa fa-book"></i><p>Your library is empty — add watch folders or import playlists.</p></div>`);
+  }
+
+  renderPage('Your Library', spotifyBrowsePage('Your Library', libraryFiltersHtml('library'), sections.join('')), { header: false });
+}
+
+async function libPlayPlaylist(i) {
+  const p = (window._libPlaylists || [])[i];
+  if (!p) return;
+  try {
+    await startPlayback({ kind: 'playlist', name: p.name, id: p.id });
+  } catch (e) {
+    showToast(e.message || 'Play failed', true);
+  }
+}
+window.libPlayPlaylist = libPlayPlaylist;
+
+async function loadGenresPage() {
+  loading();
+  const data = await API('/api/genres?limit=200');
+  const genres = (data && data.items) || [];
+  const tiles = genres.length
+    ? genres.map((g) =>
+      spotifyMediaCard(
+        g.name,
+        `${fmtNum(g.track_count || 0)} tracks`,
+        '#search',
+        'fa-tag',
+        g.name,
+        null,
+      ).replace('class="spotify-card"', `class="spotify-card genre-tile" data-genre="${escHtml(g.name)}"`)).join('')
+    : '<div class="empty-state"><i class="fa fa-tag"></i><p>No genres indexed yet.</p></div>';
+  renderPage('Genres', `${libraryFiltersHtml('genres')}<div class="library-playlist-grid">${tiles}</div>`);
+}
+
 function navigate(hash) {
   const [route, ...rest] = (hash || 'dashboard').split('/');
   const params = rest.join('/');
   currentRoute = route;
+  updateShellForRoute(route);
+  if (route === 'playlists' || route === 'library') refreshSidebarPlaylists();
 
-  document.querySelectorAll('.nav-link').forEach(a => {
-    a.classList.toggle('active', a.getAttribute('href') === `#${route}`);
+  document.querySelectorAll('.drawer-link').forEach((a) => {
+    const href = (a.getAttribute('href') || '').replace('#', '').split('/')[0];
+    a.classList.toggle('active', href === route);
   });
 
   const fn = routes[route];
-  if (fn) fn(params);
-  else renderPage('Not Found', '<div class="empty-state"><i class="fa fa-question-circle"></i><p>Page not found.</p></div>');
+  if (fn) {
+    Promise.resolve(fn(params)).catch((err) => routeErrorPage(route, err));
+  } else {
+    renderPage('Not Found', '<div class="empty-state"><i class="fa fa-question-circle"></i><p>Page not found.</p></div>');
+  }
 }
 
-function renderPage(title, html) {
-  document.getElementById('page-title').textContent = title;
-  document.getElementById('main-content').innerHTML = html;
+function setPageTitle(title) {
+  const pt = document.getElementById('page-title');
+  if (pt) pt.textContent = title || '';
+}
+
+function syncTopbarSearch(q) {
+  const inp = document.getElementById('topbar-search-q');
+  if (inp && document.activeElement !== inp) inp.value = q || '';
+}
+
+function updateTopbarNavButtons() {
+  const back = document.getElementById('topbar-back');
+  const fwd = document.getElementById('topbar-forward');
+  if (back) back.disabled = !(window.history && window.history.length > 1);
+  if (fwd) fwd.disabled = true;
+}
+
+async function refreshSidebarPlaylists() {
+  const el = document.getElementById('sidebar-playlist-list');
+  if (!el) return;
+  try {
+    const items = await fetchPlaylistsCached('');
+    const slice = items || [];
+    const ids = slice.map((p) => p.id).filter(Boolean);
+    const covers = ids.length ? await fetchPlaylistCovers(ids) : {};
+    const route = (window.location.hash || '').replace('#', '');
+    el.innerHTML = slice.map((p) => {
+      const href = `#playlists/detail/${encodeURIComponent(p.id)}`;
+      const active = route === `playlists/detail/${p.id}` ? ' active' : '';
+      const cover = covers[p.id];
+      const art = cover
+        ? `<img src="${escHtml(artworkUrl(cover, 96))}" alt="" loading="lazy">`
+        : `<i class="fa fa-list"></i>`;
+      return `<a href="${href}" class="sidebar-pl-item${active}"><span class="sidebar-pl-art">${art}</span><span>${escHtml(p.name)}</span></a>`;
+    }).join('') || '<p class="hint" style="padding:8px;font-size:12px;color:var(--text-muted)">No playlists yet</p>';
+  } catch {
+    el.innerHTML = '';
+  }
+}
+
+function toggleQueuePanel(force) {
+  const panel = document.getElementById('spotify-queue');
+  if (!panel) return;
+  const open = force != null ? !!force : panel.classList.contains('hidden');
+  panel.classList.toggle('hidden', !open);
+  document.body.classList.toggle('queue-open', open);
+  const btn = document.getElementById('np-bar-queue');
+  if (btn) btn.classList.toggle('active', open);
+  if (open) renderQueuePanel();
+}
+
+function renderQueuePanel() {
+  const body = document.getElementById('spotify-queue-body');
+  if (!body) return;
+  if (typeof WebPlayback !== 'undefined' && WebPlayback.active) {
+    const st = WebPlayback.getState();
+    const t = st.current;
+    if (!t) {
+      body.innerHTML = '<p class="hint" style="padding:12px;color:var(--text-muted)">Nothing playing</p>';
+      return;
+    }
+    const nowArt = artworkUrl(t.path);
+    const nowHtml = `<div class="queue-now-playing">
+      <div class="queue-track now">
+        <div class="queue-track-art">${nowArt ? `<img src="${escHtml(nowArt)}" alt="">` : ''}</div>
+        <div class="queue-track-meta">
+          <div class="queue-track-title">${escHtml(t.title || '—')}</div>
+          <div class="queue-track-artist">${escHtml(t.artist || '')}</div>
+        </div>
+      </div>
+    </div>`;
+    const upcoming = WebPlayback.upcoming(20);
+    const src = st.sourceLabel || st.playlist || '';
+    const nextLabel = src ? `Next from: ${src}` : 'Next up';
+    const nextHtml = upcoming.length
+      ? `<div class="queue-section-label">${escHtml(nextLabel)}</div>${upcoming.map((tr) => {
+        const url = tr.path ? artworkUrl(tr.path) : null;
+        return `<div class="queue-track">
+          <div class="queue-track-art">${url ? `<img src="${escHtml(url)}" alt="" loading="lazy">` : ''}</div>
+          <div class="queue-track-meta">
+            <div class="queue-track-title">${escHtml(tr.title || 'Track')}</div>
+            <div class="queue-track-artist">${escHtml(tr.artist || '')}</div>
+          </div>
+        </div>`;
+      }).join('')}`
+      : '<p class="hint" style="padding:8px;font-size:12px;color:var(--text-muted)">Queue ends after this track</p>';
+    body.innerHTML = nowHtml + nextHtml;
+    return;
+  }
+  const items = window._npItems || [];
+  const d = npPrimaryDevice(items, window._npControlsAvailable);
+  if (!d) {
+    body.innerHTML = '<p class="hint" style="padding:12px;color:var(--text-muted)">Nothing playing</p>';
+    return;
+  }
+  const nowArt = artworkUrl(d.filepath);
+  const nowHtml = `<div class="queue-now-playing">
+    <div class="queue-track now">
+      <div class="queue-track-art">${nowArt ? `<img src="${escHtml(nowArt)}" alt="">` : ''}</div>
+      <div class="queue-track-meta">
+        <div class="queue-track-title">${escHtml(d.track || '—')}</div>
+        <div class="queue-track-artist">${escHtml(d.artist || '')}</div>
+      </div>
+    </div>
+  </div>`;
+  const upcoming = d.upcoming || [];
+  const src = d.sourceLabel || d.playlist || d.context || '';
+  const nextLabel = src ? `Next from: ${src}` : 'Next up';
+  const nextHtml = upcoming.length
+    ? `<div class="queue-section-label">${escHtml(nextLabel)}</div>${upcoming.map((t) => {
+      const url = t.path ? artworkUrl(t.path) : null;
+      return `<div class="queue-track">
+        <div class="queue-track-art">${url ? `<img src="${escHtml(url)}" alt="" loading="lazy">` : ''}</div>
+        <div class="queue-track-meta">
+          <div class="queue-track-title">${escHtml(t.title || 'Track')}</div>
+          <div class="queue-track-artist">${escHtml(t.artist || '')}</div>
+        </div>
+      </div>`;
+    }).join('')}`
+    : '<p class="hint" style="padding:8px;font-size:12px;color:var(--text-muted)">Queue ends after this track</p>';
+  body.innerHTML = nowHtml + nextHtml;
+}
+
+function spotifyBrowsePage(title, filtersHtml, innerHtml) {
+  return `<div class="spotify-browse-page">
+    ${pageHeaderHtml(title)}
+    ${filtersHtml || ''}
+    ${innerHtml}
+  </div>`;
+}
+
+function pageHeaderHtml(title) {
+  if (!title) return '';
+  return `<div class="spotify-page-header"><h1 class="home-greeting">${escHtml(title)}</h1></div>`;
+}
+
+function renderPage(title, html, opts = {}) {
+  setPageTitle(title);
+  const mc = document.getElementById('main-content');
+  if (mc) mc.classList.remove('home-active');
+  const body = opts.header === false ? (html || '') : pageHeaderHtml(title) + (html || '');
+  if (mc) mc.innerHTML = body;
+}
+
+function routeErrorPage(route, err) {
+  console.error(`Route failed: ${route}`, err);
+  renderPage('Something went wrong', `
+    <div class="empty-state">
+      <i class="fa fa-triangle-exclamation"></i>
+      <p>Could not load this page.</p>
+      <p class="hint">${escHtml((err && err.message) || 'Unknown error')}</p>
+      <button class="btn-sm btn-primary" onclick="navigate('dashboard')">Go home</button>
+    </div>`);
+  showToast('Failed to load page', true);
 }
 
 function loading() {
@@ -430,21 +1154,21 @@ async function dashReplayRecent(i) {
   const r = (window._dashQuickRecent || [])[i];
   if (!r) return;
   const opts = songPlayOpts({ title: r.track, artist: r.artist, path: r.filepath, track: r.track });
-  if (opts) return playOnDevice(opts);
+  if (opts) return startPlayback(opts);
 }
 
 async function dashContinuePlay() {
   const r = window._dashContinue;
   if (!r || !r.filepath) return;
   const opts = songPlayOpts({ title: r.track, artist: r.artist, path: r.filepath, track: r.track });
-  if (opts) return playOnDevice(opts);
+  if (opts) return startPlayback(opts);
 }
 
 async function dashPlayFavorite(i) {
   const r = (window._dashQuickFavs || [])[i];
   if (!r || !r.path) return;
   const opts = songPlayOpts(r);
-  if (opts) return playOnDevice(opts);
+  if (opts) return startPlayback(opts);
 }
 
 async function dashRemoveFavorite(i) {
@@ -455,195 +1179,272 @@ async function dashRemoveFavorite(i) {
   loadDashboard();
 }
 
+async function homePlayTrack(path, title, artist) {
+  const opts = songPlayOpts({ path, title, artist, track: title });
+  if (opts) return startPlayback(opts);
+}
+
+async function homePlayAlbum(album, artist) {
+  if (!album) return;
+  return startPlayback({ kind: 'album', name: album, artist: artist || '' });
+}
+
+async function homePlayNewAlbum(i) {
+  const a = (window._homeNewAlbums || [])[i];
+  if (!a || !a.album) return;
+  return homePlayAlbum(a.album, a.artist || '');
+}
+
+window.homePlayNewAlbum = homePlayNewAlbum;
+
+async function homePlayPlaylist(i) {
+  const p = (window._homePlaylists || [])[i];
+  if (!p) return;
+  return startPlayback({ kind: 'playlist', name: p.name, id: p.id });
+}
+
+async function homePlayDiscover(sectionIdx, trackIdx) {
+  const sec = (window._homeDiscover || [])[sectionIdx];
+  const t = sec && sec.tracks && sec.tracks[trackIdx];
+  if (!t || !t.path) return;
+  return homePlayTrack(t.path, t.title || t.track, t.artist);
+}
+
+window.homePlayTrack = homePlayTrack;
+window.homePlayAlbum = homePlayAlbum;
+window.homePlayPlaylist = homePlayPlaylist;
+window.homePlayDiscover = homePlayDiscover;
+
+function homeTrackCard(track, playOnclick) {
+  const title = track.title || track.track || 'Track';
+  const sub = track.artist || track.album || '';
+  const art = track.path || track.filepath || null;
+  return spotifyMediaCard(title, sub, '#search', 'fa-music', title, playOnclick, art);
+}
+
+function homeAlbumCard(album, artist, path, playOnclick) {
+  return spotifyMediaCard(album, artist || 'Album', '#albums', 'fa-compact-disc', album, playOnclick, path);
+}
+
+async function homeFeedPlay(sectionIdx, cardIdx) {
+  const card = window._homeFeed?.sections?.[sectionIdx]?.cards?.[cardIdx];
+  if (!card) return;
+  const opts = HomeFeed.cardPlayOpts(card);
+  if (opts) return startPlayback(opts);
+}
+window.homeFeedPlay = homeFeedPlay;
+
+async function homeQuickPlay(cardId) {
+  const feed = window._homeFeed;
+  if (!feed || !cardId) return;
+  for (const sec of feed.sections) {
+    const card = sec.cards.find((c) => c.id === cardId);
+    if (!card) continue;
+    const opts = HomeFeed.cardPlayOpts(card);
+    if (opts) return startPlayback(opts);
+    return;
+  }
+}
+window.homeQuickPlay = homeQuickPlay;
+
+function homeSectionShowAll(kind) {
+  if (kind === 'JumpBackIn') return '#nowplaying';
+  if (kind === 'Favorites') return '#search';
+  if (kind === 'ExploreThemes') return '#genres';
+  if (kind === 'Discover') return '#search';
+  return '#playlists';
+}
+
 register('dashboard', async () => {
   _dashPage = 1;
-  loading();
-  await loadDashboard();
+  let painted = !!window.__BOOT_HOME_PAINTED__;
+  if (typeof WebCache !== 'undefined') {
+    const mem = WebCache.peekHome();
+    if (mem) {
+      renderDashboardUI(mem.feed, mem.covers || {}, window._plRemote || {});
+      painted = true;
+    } else if (!painted) {
+      const disk = WebCache.loadHomeFromDisk();
+      if (disk) {
+        WebCache.putHome(disk.feed, disk.covers);
+        renderDashboardUI(disk.feed, disk.covers || {}, window._plRemote || {});
+        painted = true;
+      }
+    }
+  }
+  if (!painted) loading();
+  await loadDashboard({ hadCache: painted });
 });
 
-async function loadDashboard() {
-  const [summary, recentData, quick, plexSync, continueData] = await Promise.all([
-    API('/api/summary'),
-    API(`/api/recent?page=${_dashPage}&limit=10`),
-    API('/api/dashboard/quick').catch(() => ({ recent: [], favorites: [] })),
-    API('/api/plex_sync/status').catch(() => null),
-    API('/api/continue').catch(() => null),
+function discoverWeeklyCardsFromApi(discover) {
+  const discoverTracks = (discover && discover.sections && discover.sections[0] && discover.sections[0].tracks) || [];
+  return discoverTracks.slice(0, 12).map((t) => {
+    const path = t.path;
+    if (!path) return null;
+    return {
+      id: `dw-${path}`,
+      title: t.title || path,
+      subtitle: (discover.sections[0] && discover.sections[0].reason) || 'Discover Weekly',
+      artPath: path,
+      playTarget: { kind: 'song', path, title: t.title || path },
+      kind: 'Discover',
+    };
+  }).filter(Boolean);
+}
+
+function renderDashboardUI(feed, covers, remote, opts = {}) {
+  window._homeFeed = feed;
+  const coverFor = (id) => (id && covers[id]) || null;
+  const artForCard = (card) => card.artPath || (card.playlistId && coverFor(card.playlistId)) || null;
+
+  const shortcutCards = HomeFeed.homeShortcutCards(feed, 8)
+    .filter(HomeFeed.eligibleForHomeShortcut);
+  const quickHtml = shortcutCards.map((card) => {
+    const play = HomeFeed.cardPlayOpts(card)
+      ? `homeQuickPlay(${JSON.stringify(card.id)})`
+      : null;
+    return spotifyHomeQuickCard(card, artForCard(card), play);
+  }).join('');
+
+  const sectionsHtml = feed.sections.map((sec, si) => {
+    const cards = sec.cards.slice(0, 12).map((card, ci) =>
+      spotifyHomeSectionCard(card, sec.kind, si, ci, artForCard(card))).join('');
+    if (!cards) return '';
+    return spotifyHomeSection(
+      sec.title,
+      homeSectionShowAll(sec.kind),
+      cards,
+      homeSectionFilterGroups(sec.kind),
+    );
+  }).filter(Boolean);
+
+  const refreshHint = opts.refreshing
+    ? '<span class="home-refresh-indicator" aria-live="polite">Updating…</span>'
+    : '';
+
+  setPageTitle('Home');
+  const mc = document.getElementById('main-content');
+  if (mc) mc.classList.add('home-active');
+  mc.innerHTML = `
+    <div class="home-page">
+      <div class="home-top">
+        <div class="home-filters" role="tablist" aria-label="Filter home feed">
+          <button type="button" class="home-filter active" data-home-filter="all">All</button>
+          <button type="button" class="home-filter" data-home-filter="music">Music</button>
+          <button type="button" class="home-filter" data-home-filter="playlists">Playlists</button>
+          <button type="button" class="home-filter" data-home-filter="podcasts">Podcasts</button>
+          <button type="button" class="home-filter" data-home-filter="audiobooks">Audiobooks</button>
+          <button type="button" class="home-filter" data-home-filter="radio">Radio</button>
+          ${refreshHint}
+        </div>
+        ${quickHtml ? `<div class="home-quick-grid">${quickHtml}</div>` : ''}
+      </div>
+      <div class="home-sections">${sectionsHtml.length
+    ? sectionsHtml.join('')
+    : '<div class="home-empty"><p>Play something from Search or Library to personalize your home feed.</p></div>'}</div>
+    </div>`;
+}
+
+async function loadDashboard(opts = {}) {
+  if (typeof WebCache !== 'undefined' && WebCache.shouldSkipHomeReload()) {
+    warmBackgroundCaches();
+    return;
+  }
+
+  const shuffleSeed = HomeFeed.dayOfYear();
+  const hadCache = !!(opts && opts.hadCache);
+  if (hadCache && typeof WebCache !== 'undefined') {
+    const peek = WebCache.peekHome();
+    if (peek) renderDashboardUI(peek.feed, peek.covers || {}, window._plRemote || {}, { refreshing: true });
+  }
+
+  const analyticsP = Promise.race([
+    API('/api/analytics').catch(() => null),
+    new Promise((resolve) => setTimeout(() => resolve(null), 4000)),
   ]);
 
-  const s = summary || {};
-  const { items: recentItems = [], total: recentTotal = 0 } = recentData || {};
+  const [
+    historyData,
+    allPlaylists,
+    smartData,
+    dashboard,
+    continueData,
+    remote,
+  ] = await Promise.all([
+    API('/api/nowplaying?page=1&limit=150').catch(() => ({ items: [] })),
+    fetchPlaylistsCached(''),
+    API('/api/smart_playlists').catch(() => ({ items: [] })),
+    API('/api/dashboard/quick').catch(() => ({ recent: [], favorites: [] })),
+    API('/api/continue').catch(() => null),
+    ensureAlexaRemoteStatus().catch(() => ({})),
+  ]);
+  window._plRemote = remote;
 
-  const recentRows = recentItems.map(r => `
-    <tr>
-      <td style="color:#555">${escHtml(r.heard)}</td>
-      <td style="color:${r.success ? '#2eaa5a' : '#e44'}">${escHtml(r.found)}</td>
-    </tr>`).join('');
+  const history = (historyData && historyData.items) || [];
+  let covers = (typeof WebCache !== 'undefined' && WebCache.peekHome()?.covers) || {};
+  const partialFeed = HomeFeed.compose({
+    history,
+    analytics: null,
+    allPlaylists,
+    smartPlaylists: (smartData && smartData.items) || [],
+    favorites: (dashboard && dashboard.favorites) || [],
+    dashboard,
+    libraryGenres: [],
+    shuffleSeed,
+    continueResume: continueData && continueData.resume,
+    releaseRadarLabel: null,
+    releaseRadarArtPath: null,
+    discoverWeeklyCards: [],
+  });
+  renderDashboardUI(partialFeed, covers, remote, { refreshing: true });
 
-  const cmdRow = (s, icon, color) =>
-    `<tr><td><i class="fa ${icon}" style="color:${color};margin-right:8px;font-size:11px"></i>${escHtml(s)}</td></tr>`;
-  const sectionRow = (label) =>
-    `<tr><td style="padding-top:10px;font-size:11px;font-weight:600;color:#7a8aa8;text-transform:uppercase;letter-spacing:.04em">${escHtml(label)}</td></tr>`;
+  const needFavorites = !(dashboard && dashboard.favorites && dashboard.favorites.length);
+  const [analytics, genres, libraryNew, discover, favData] = await Promise.all([
+    analyticsP,
+    API('/api/genres?limit=40').catch(() => ({ items: [] })),
+    API('/api/library/new?since=7d&limit=50').catch(() => ({ albums: [] })),
+    API('/api/recommendations/discover-weekly').catch(() => ({ sections: [] })),
+    needFavorites ? API('/api/favorites').catch(() => []) : Promise.resolve([]),
+  ]);
 
-  const voiceRows = [
-    sectionRow('Start playback'),
-    ...VOICE_SUGGESTIONS.map(s => cmdRow(s, 'fa-microphone', '#e99d1a')),
-    sectionRow('While music is playing'),
-    ...PLAYBACK_CONTROLS.map(s => cmdRow(s, 'fa-sliders', '#30426a')),
-  ].join('');
+  const newAlbums = (libraryNew && libraryNew.albums) || [];
+  const releaseLabel = newAlbums.length
+    ? `Added this week · ${newAlbums.length} album${newAlbums.length === 1 ? '' : 's'}`
+    : null;
+  const favorites = (dashboard && dashboard.favorites && dashboard.favorites.length)
+    ? dashboard.favorites
+    : (Array.isArray(favData) ? favData : []);
 
-  const routineRows = ROUTINE_SUGGESTIONS.map(s =>
-    cmdRow(s, 'fa-bolt', '#7c4dbd')
-  ).join('');
+  const feed = HomeFeed.compose({
+    history,
+    analytics,
+    allPlaylists,
+    smartPlaylists: (smartData && smartData.items) || [],
+    favorites,
+    dashboard,
+    libraryGenres: (genres && genres.items) || [],
+    shuffleSeed,
+    continueResume: continueData && continueData.resume,
+    releaseRadarLabel: releaseLabel,
+    releaseRadarArtPath: newAlbums[0]?.path || null,
+    discoverWeeklyCards: discoverWeeklyCardsFromApi(discover),
+  });
 
-  const recentPager = buildPagination(recentTotal, _dashPage, 10, (p) => { _dashPage = p; loadDashboard(); });
+  renderDashboardUI(feed, covers, remote);
+  if (typeof WebCache !== 'undefined') {
+    WebCache.putHome(feed, covers);
+    WebCache.markHomeLoaded();
+  }
 
-  loadHealth();
-  loadPlaybackCard();
+  refreshHomeCovers(feed, covers).then((newCovers) => {
+    if (typeof WebCache !== 'undefined') {
+      WebCache.putHome(feed, newCovers);
+      WebCache.saveHomeToDisk(feed, newCovers);
+    }
+    if (currentRoute === 'dashboard') renderDashboardUI(feed, newCovers, remote);
+  }).catch(() => {});
 
-  const quickRecent = (quick && quick.recent) || [];
-  const quickFavs = (quick && quick.favorites) || [];
-  const recentQuickHtml = quickRecent.length
-    ? quickRecent.map((r, i) => `
-      <div class="dash-quick-item">
-        <div>
-          <strong>${escHtml(r.track || '—')}</strong>
-          <div class="auto-list-meta">${escHtml(r.artist || '')}${r.device ? ' · ' + escHtml(r.device) : ''}</div>
-        </div>
-        ${actionBtn({ kind: 'play', onclick: `dashReplayRecent(${i})`, title: 'Play again', icon: 'play' })}
-      </div>`).join('')
-    : '<p class="hint" style="margin:0">No recent plays yet.</p>';
-  const favQuickHtml = quickFavs.length
-    ? quickFavs.map((r, i) => `
-      <div class="dash-quick-item">
-        <div>
-          <strong>${escHtml(r.title || '—')}</strong>
-          <div class="auto-list-meta">${escHtml(r.artist || '')}</div>
-        </div>
-        <div style="display:flex;gap:4px">
-          ${actionBtn({ kind: 'play', onclick: `dashPlayFavorite(${i})`, title: 'Play', icon: 'play' })}
-          ${actionBtn({ kind: 'delete', onclick: `dashRemoveFavorite(${i})`, title: 'Remove star', icon: 'star' })}
-        </div>
-      </div>`).join('')
-    : '<p class="hint" style="margin:0">Star tracks from Now Playing (★) or Search.</p>';
-  window._dashQuickRecent = quickRecent;
-  window._dashQuickFavs = quickFavs;
-
-  const resume = continueData && continueData.resume;
-  const continueHtml = resume && resume.filepath ? (() => {
-    const pct = resume.durationMs ? Math.round((resume.offsetMs || 0) * 100 / resume.durationMs) : 0;
-    window._dashContinue = resume;
-    return `<div class="card" style="margin-bottom:20px">
-      <div class="card-header"><h3><i class="fa fa-play-circle"></i> Continue listening</h3></div>
-      <div class="card-body">
-        <strong>${escHtml(resume.track || 'Track')}</strong>
-        <div class="auto-list-meta">${escHtml(resume.artist || '')}</div>
-        <div style="height:6px;background:#2a3348;border-radius:3px;margin:10px 0;overflow:hidden">
-          <div style="height:100%;width:${pct}%;background:#1db954"></div>
-        </div>
-        <button class="btn-sm btn-primary" onclick="dashContinuePlay()"><i class="fa fa-play"></i> Continue (${pct}%)</button>
-      </div>
-    </div>`;
-  })() : '';
-
-  const plexUpdated = plexSync && plexSync.stateUpdatedAt
-    ? fmtDateTime(new Date(plexSync.stateUpdatedAt * 1000).toISOString()) : '—';
-  const plexLog = (plexSync && plexSync.logTail && plexSync.logTail.length)
-    ? `<div class="plex-log-tail">${plexSync.logTail.map(l => escHtml(l)).join('<br>')}</div>` : '';
-  const plexCard = plexSync ? `
-    <div class="card" style="margin-bottom:20px">
-      <div class="card-header"><h3><i class="fa fa-arrows-rotate"></i> Plex playlist sync</h3></div>
-      <div class="card-body">
-        <p style="margin:0 0 6px"><b>${fmtNum(plexSync.playlistCount)}</b> playlists tracked · state updated ${plexUpdated}</p>
-        <p class="hint" style="margin:0">Cron: <code>${escHtml(plexSync.cronHint || '')}</code> · log: <code>plex-sync.log</code></p>
-        ${plexLog}
-      </div>
-    </div>` : '';
-
-  document.getElementById('page-title').textContent = 'Dashboard';
-  document.getElementById('main-content').innerHTML = `
-    <div class="stats-grid">
-      <div class="stat-card">
-        <div class="stat-icon blue"><i class="fa fa-music"></i></div>
-        <div>
-          <div class="stat-value">${fmtNum(s.songs)}</div>
-          <div class="stat-label">Songs</div>
-        </div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-icon teal"><i class="fa fa-folder-open"></i></div>
-        <div>
-          <div class="stat-value">${fmtNum(s.watchFolders)}</div>
-          <div class="stat-label">Watch Folders</div>
-        </div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-icon purple"><i class="fa fa-compact-disc"></i></div>
-        <div>
-          <div class="stat-value">${fmtNum(s.albums)}</div>
-          <div class="stat-label">Albums</div>
-        </div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-icon orange"><i class="fa fa-microphone"></i></div>
-        <div>
-          <div class="stat-value">${fmtNum(s.artists)}</div>
-          <div class="stat-label">Artists</div>
-        </div>
-      </div>
-    </div>
-
-    <div id="health-card-wrap"></div>
-    <div id="playback-card-wrap"></div>
-    ${plexCard}
-    ${continueHtml}
-    <div class="dash-quick-grid">
-      <div class="card">
-        <div class="card-header"><h3><i class="fa fa-clock-rotate-left"></i> Quick replay</h3></div>
-        <div class="card-body">${recentQuickHtml}</div>
-      </div>
-      <div class="card">
-        <div class="card-header"><h3><i class="fa fa-star"></i> Favorites</h3></div>
-        <div class="card-body">${favQuickHtml}</div>
-      </div>
-    </div>
-
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
-      <div class="card">
-        <div class="card-header">
-          <h3><i class="fa fa-microphone"></i> Voice Commands</h3>
-        </div>
-        <table class="data-table">
-          <tbody>${voiceRows}</tbody>
-        </table>
-      </div>
-
-      <div class="card">
-        <div class="card-header">
-          <h3><i class="fa fa-bolt"></i> Hands-free (Alexa Routines)</h3>
-        </div>
-        <div class="page-desc" style="margin:0 0 6px">
-          No "ask" prefix needed. Set up in the Alexa app: <b>Routines → When you say [phrase] → Music → Bock Media</b>. Routines bypass the music-provider arbitration that otherwise sends "play" to Amazon Music or Spotify.
-        </div>
-        <table class="data-table">
-          <tbody>${routineRows}</tbody>
-        </table>
-      </div>
-    </div>
-
-    <div class="card" style="margin-top:20px">
-      <div class="card-header">
-        <h3><i class="fa fa-history"></i> Recent Alexa Play Requests</h3>
-        <button onclick="loadDashboard()" style="background:none;border:none;color:#30426a;cursor:pointer;font-size:12px">
-          <i class="fa fa-rotate-right"></i> Refresh
-        </button>
-      </div>
-      ${recentRows ? `
-      <table class="data-table">
-        <thead><tr><th>Heard</th><th>Found</th></tr></thead>
-        <tbody>${recentRows}</tbody>
-      </table>
-      ${recentPager}` : `<div class="empty-state"><i class="fa fa-history"></i><p>No recent play requests.</p></div>`}
-    </div>`;
+  warmBackgroundCaches();
 }
 
 // ── Service health card ──────────────────────────────────────────────────────
@@ -752,6 +1553,7 @@ async function loadPlaybackCard() {
 let _npPage = 1;
 let _npPollTimer = null;
 let _npTickTimer = null;
+let _npGlobalTickTimer = null;
 
 register('rooms', async () => {
   loading();
@@ -770,7 +1572,6 @@ async function loadRooms(quiet) {
   ]);
   const rooms = (data && data.rooms) || [];
   const canPlay = !!(data && data.controlsAvailable) && !!(remote && remote.configured);
-  if (!quiet) document.getElementById('page-title').textContent = 'Rooms';
   const cards = rooms.map(r => {
     const np = r.nowPlaying;
     const npHtml = np
@@ -803,14 +1604,13 @@ async function loadRooms(quiet) {
         </div>
       </div>`;
   }).join('');
-  const inner = cards || '<div class="empty-state"><p>No Echo devices found — configure alexaRemote and run alexa_login.py.</p></div>';
+  const inner = cards || '<div class="empty-state"><p>No Echo devices found — sign in via Settings &amp; more → Alexa Remote.</p></div>';
   if (quiet) {
     const grid = document.querySelector('.rooms-grid');
     if (grid) grid.outerHTML = `<div class="rooms-grid">${inner}</div>`;
   } else {
-    document.getElementById('main-content').innerHTML = `
-      <p class="page-desc">Per-speaker view: what’s playing, scheduled playlists, and quick play (when Alexa remote is logged in).</p>
-      <div class="rooms-grid">${inner}</div>`;
+    renderPage('Rooms', `
+      <div class="rooms-grid">${inner}</div>`);
   }
 }
 
@@ -825,9 +1625,11 @@ async function roomQuickPlay(serial, name) {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      const msg = /not_authenticated/.test(data.error || '')
-        ? 'Alexa session expired — re-run scripts/alexa_login.py'
-        : (data.error || 'Play failed');
+      if (isAlexaAuthError(data.error || '')) {
+        handleAlexaAuthFailure();
+        return showToast('Alexa session expired — sign in to continue', true);
+      }
+      const msg = data.error || 'Play failed';
       return showToast(msg, true);
     }
     showToast(`Playing on ${data.device || name}`);
@@ -844,15 +1646,11 @@ register('nowplaying', async () => {
   clearInterval(_npTickTimer);
   await loadNowPlaying();
   _npPollTimer = setInterval(async () => {
-    const data = await API('/api/nowplaying_devices');
-    window._npItems = (data && data.items) || [];
-    window._npControlsAvailable = !!(data && data.controlsAvailable);
-    const card = document.getElementById('np-current-card');
-    if (card) card.outerHTML = buildCurrentCard(window._npItems, window._npControlsAvailable);
-    refreshCurrentTrack();
-    npLoadVolumes();
+    await refreshCurrentTrack();
   }, 2000);
-  _npTickTimer = setInterval(npTickTimes, 1000);
+  if (!_npGlobalTickTimer) {
+    _npGlobalTickTimer = setInterval(npTickTimes, 1000);
+  }
 });
 
 function npResolveSerial(d) {
@@ -923,6 +1721,10 @@ function npUpcomingHtml(d) {
 
 // Tick the time displays in place (smooth) between the 5s data polls.
 function npTickTimes() {
+  if (typeof WebPlayback !== 'undefined' && WebPlayback.active) {
+    updateWebPlayerBarProgress(WebPlayback.getState());
+    return;
+  }
   const items = window._npItems || [];
   document.querySelectorAll('.np-time').forEach(el => {
     const d = items.find(x => x.deviceId === el.dataset.deviceId);
@@ -934,6 +1736,251 @@ function npTickTimes() {
     const fill = el.querySelector('.np-progress-fill');
     if (fill) fill.style.width = `${npProgressPct(d).toFixed(1)}%`;
   });
+  const primary = npPrimaryDevice(items, window._npControlsAvailable);
+  if (primary && !primary.paused) updatePlayerBarProgress(primary);
+}
+
+function npPrimaryDevice(items, controlsAvailable) {
+  const list = items || [];
+  const controllable = list.find(d => npCanControl(d, controlsAvailable));
+  return controllable || list[0] || null;
+}
+
+function npRefreshNowPlayingUI() {
+  const card = document.getElementById('np-current-card');
+  if (card) card.outerHTML = buildCurrentCard(window._npItems, window._npControlsAvailable);
+  renderPlayerBar();
+  if (!document.getElementById('spotify-queue')?.classList.contains('hidden')) renderQueuePanel();
+  npLoadVolumes();
+}
+
+function updatePlayerBarProgress(d) {
+  if (!d) return;
+  const cur = document.getElementById('np-bar-time-curr');
+  const dur = document.getElementById('np-bar-time-dur');
+  const fill = document.getElementById('np-bar-progress-fill');
+  const elapsed = npElapsedSec(d);
+  const durSec = (d.duration_ms || 0) / 1000;
+  if (cur) cur.textContent = npFmtSec(elapsed);
+  if (dur) dur.textContent = durSec ? npFmtSec(durSec) : '0:00';
+  if (fill) fill.style.width = `${npProgressPct(d).toFixed(1)}%`;
+}
+
+function updateWebPlayerBarProgress(st) {
+  if (!st) return;
+  const cur = document.getElementById('np-bar-time-curr');
+  const dur = document.getElementById('np-bar-time-dur');
+  const fill = document.getElementById('np-bar-progress-fill');
+  const posSec = (st.positionMs || 0) / 1000;
+  const durSec = (st.durationMs || 0) / 1000;
+  if (cur) cur.textContent = npFmtSec(posSec);
+  if (dur) dur.textContent = durSec ? npFmtSec(durSec) : '0:00';
+  if (fill) fill.style.width = durSec ? `${Math.min(100, (posSec / durSec) * 100).toFixed(1)}%` : '0%';
+}
+
+function renderWebPlayerBar(st) {
+  const bar = document.getElementById('now-playing-bar');
+  if (!bar) return;
+  st = st || (typeof WebPlayback !== 'undefined' ? WebPlayback.getState() : null);
+  if (!st || !st.active || !st.current) return;
+  const t = st.current;
+  bar.classList.remove('hidden');
+  bar.dataset.mode = 'web';
+  bar.dataset.deviceId = '';
+
+  const txt = document.getElementById('np-track-text');
+  const sub = document.getElementById('np-artist-text');
+  if (txt) txt.textContent = t.title || '—';
+  if (sub) {
+    const src = st.sourceLabel ? ` · ${st.sourceLabel}` : '';
+    sub.textContent = (t.artist || '') + src;
+  }
+
+  const artImg = document.getElementById('np-art');
+  const artFallback = bar.querySelector('.player-art-fallback');
+  const url = artworkUrl(t.path);
+  if (artImg) {
+    if (url) {
+      artImg.src = url;
+      artImg.hidden = false;
+      if (artFallback) artFallback.style.display = 'none';
+      artImg.onerror = () => {
+        artImg.hidden = true;
+        if (artFallback) artFallback.style.display = '';
+      };
+    } else {
+      artImg.removeAttribute('src');
+      artImg.hidden = true;
+      if (artFallback) artFallback.style.display = '';
+    }
+  }
+
+  const playBtn = document.getElementById('np-mini-play');
+  if (playBtn) {
+    playBtn.disabled = false;
+    const icon = playBtn.querySelector('i');
+    if (icon) icon.className = st.playing ? 'fa fa-pause' : 'fa fa-play';
+    playBtn.setAttribute('aria-label', st.playing ? 'Pause' : 'Play');
+  }
+
+  bar.querySelectorAll('#np-bar-shuffle, #np-bar-prev, #np-bar-next').forEach((btn) => {
+    btn.disabled = false;
+    btn.classList.remove('disabled');
+  });
+  const shuffleBtn = document.getElementById('np-bar-shuffle');
+  if (shuffleBtn) shuffleBtn.classList.toggle('active', !!st.shuffle);
+
+  updateWebPlayerBarProgress(st);
+
+  const volWrap = document.getElementById('np-bar-volume-wrap');
+  const volSlider = document.getElementById('np-bar-volume');
+  const volBtn = document.getElementById('np-bar-volume-btn');
+  if (volWrap) volWrap.classList.remove('hidden');
+  if (volSlider) {
+    volSlider.disabled = false;
+    if (!window._playerBarVolumeDragging) {
+      volSlider.value = Math.round((st.volume ?? 0.85) * 100);
+    }
+  }
+  if (volBtn) volBtn.disabled = false;
+
+  const favBtn = document.getElementById('np-bar-favorite');
+  if (favBtn) {
+    favBtn.disabled = !t.path;
+    favBtn.dataset.favPath = t.path || '';
+    favBtn.dataset.favTitle = t.title || '';
+    favBtn.dataset.favArtist = t.artist || '';
+    favBtn.style.visibility = t.path ? '' : 'hidden';
+  }
+
+  ['np-bar-repeat', 'np-bar-sleep'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  });
+}
+
+function renderPlayerBar() {
+  const bar = document.getElementById('now-playing-bar');
+  if (!bar) return;
+  if (typeof WebPlayback !== 'undefined' && WebPlayback.active) {
+    renderWebPlayerBar(WebPlayback.getState());
+    return;
+  }
+  bar.dataset.mode = 'alexa';
+  ['np-bar-repeat', 'np-bar-sleep'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = '';
+  });
+  const items = window._npItems || [];
+  const controlsAvailable = window._npControlsAvailable;
+  const d = npPrimaryDevice(items, controlsAvailable);
+
+  if (!items.length || !d) {
+    bar.classList.add('hidden');
+    bar.dataset.deviceId = '';
+    return;
+  }
+  bar.classList.remove('hidden');
+  bar.dataset.deviceId = d.deviceId || '';
+
+  const txt = document.getElementById('np-track-text');
+  const sub = document.getElementById('np-artist-text');
+  const track = d.track || '—';
+  const artist = d.artist || '';
+  if (txt) {
+    txt.textContent = items.length === 1 ? track : `${track} (+${items.length - 1} more)`;
+  }
+  if (sub) {
+    const devLabel = items.length > 1
+      ? ` · ${items.length} devices`
+      : (d.deviceName ? ` · ${d.deviceName}` : '');
+    sub.textContent = artist ? `${artist}${devLabel}` : devLabel.replace(/^ · /, '');
+  }
+
+  const artImg = document.getElementById('np-art');
+  const artFallback = bar.querySelector('.player-art-fallback');
+  const url = artworkUrl(d.filepath);
+  if (artImg) {
+    if (url) {
+      artImg.src = url;
+      artImg.hidden = false;
+      if (artFallback) artFallback.style.display = 'none';
+      artImg.onerror = () => {
+        artImg.hidden = true;
+        if (artFallback) artFallback.style.display = '';
+      };
+    } else {
+      artImg.removeAttribute('src');
+      artImg.hidden = true;
+      if (artFallback) artFallback.style.display = '';
+    }
+  }
+
+  const canControl = npCanControl(d, controlsAvailable);
+  const setDeviceId = (sel) => {
+    bar.querySelectorAll(sel).forEach((btn) => {
+      btn.dataset.deviceId = d.deviceId || '';
+      btn.disabled = !canControl;
+      btn.classList.toggle('disabled', !canControl);
+    });
+  };
+  setDeviceId('#np-bar-shuffle, #np-bar-prev, #np-bar-next, #np-bar-repeat, #np-bar-sleep');
+
+  const playBtn = document.getElementById('np-mini-play');
+  if (playBtn) {
+    playBtn.dataset.deviceId = d.deviceId || '';
+    playBtn.disabled = !canControl;
+    const icon = playBtn.querySelector('i');
+    if (icon) icon.className = d.paused ? 'fa fa-play' : 'fa fa-pause';
+    playBtn.setAttribute('aria-label', d.paused ? 'Play' : 'Pause');
+  }
+
+  const shuffleBtn = document.getElementById('np-bar-shuffle');
+  if (shuffleBtn) {
+    window._npShuffle = window._npShuffle || {};
+    shuffleBtn.classList.toggle('active', !!window._npShuffle[d.deviceId]);
+  }
+
+  updatePlayerBarProgress(d);
+
+  const volWrap = document.getElementById('np-bar-volume-wrap');
+  const volSlider = document.getElementById('np-bar-volume');
+  const volBtn = document.getElementById('np-bar-volume-btn');
+  if (volWrap) volWrap.classList.toggle('hidden', !canControl);
+  if (volSlider) {
+    volSlider.dataset.deviceId = d.deviceId || '';
+    volSlider.disabled = !canControl;
+    if (!window._playerBarVolumeDragging) {
+      window._npVolume = window._npVolume || {};
+      const knownVol = window._npVolume[d.deviceId];
+      volSlider.value = knownVol == null ? 50 : knownVol;
+    }
+  }
+  if (volBtn) volBtn.disabled = !canControl;
+
+  const favBtn = document.getElementById('np-bar-favorite');
+  if (favBtn) {
+    favBtn.dataset.deviceId = d.deviceId || '';
+    favBtn.disabled = !d.filepath;
+    favBtn.style.visibility = d.filepath ? '' : 'hidden';
+  }
+}
+
+async function refreshCurrentTrack() {
+  const [data, remote] = await Promise.all([
+    API('/api/nowplaying_devices'),
+    ensureAlexaRemoteStatus().catch(() => ({})),
+  ]);
+  window._npItems = (data && data.items) || [];
+  window._npControlsAvailable = !!(data && data.controlsAvailable) && !!(remote && remote.configured);
+  if (window._npControlsAvailable && window._npItems.length) {
+    await ensureAlexaDevices().catch(() => []);
+  }
+  renderPlayerBar();
+  const card = document.getElementById('np-current-card');
+  if (card) card.outerHTML = buildCurrentCard(window._npItems, window._npControlsAvailable);
+  if (!document.getElementById('spotify-queue')?.classList.contains('hidden')) renderQueuePanel();
+  npLoadVolumes();
 }
 
 function buildDeviceRow(d, controlsAvailable = false) {
@@ -1085,16 +2132,15 @@ async function npControl(deviceId, action) {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      const msg = /not_authenticated/.test(data.error || '')
-        ? 'Alexa session expired — re-run scripts/alexa_login.py'
-        : (data.error || 'Control failed');
-      return showToast(msg, true);
+      if (isAlexaAuthError(data.error || '')) {
+        handleAlexaAuthFailure();
+        return showToast('Alexa session expired — sign in to continue', true);
+      }
+      return showToast(data.error || 'Control failed', true);
     }
     const fresh = await API('/api/nowplaying_devices');
     window._npItems = (fresh && fresh.items) || window._npItems;
-    const card = document.getElementById('np-current-card');
-    if (card) card.outerHTML = buildCurrentCard(window._npItems, window._npControlsAvailable);
-    npLoadVolumes();
+    npRefreshNowPlayingUI();
   } catch (e) {
     showToast(e.message || 'Control failed', true);
   }
@@ -1169,8 +2215,7 @@ async function npSetSleep(deviceId, payload, overlay) {
     : 'Sleep timer cancelled');
   const fresh = await API('/api/nowplaying_devices');
   window._npItems = (fresh && fresh.items) || window._npItems;
-  const card = document.getElementById('np-current-card');
-  if (card) card.outerHTML = buildCurrentCard(window._npItems, window._npControlsAvailable);
+  npRefreshNowPlayingUI();
 }
 
 async function npToggleShuffleEl(btn) {
@@ -1182,7 +2227,8 @@ async function npToggleShuffleEl(btn) {
   const on = !window._npShuffle[deviceId];
   window._npShuffle[deviceId] = on;
   await npControl(deviceId, on ? 'shuffle_on' : 'shuffle_off');
-  btn.classList.toggle('shuffle-on', on);
+  btn.classList.toggle('active', on);
+  renderPlayerBar();
 }
 
 // Map a now-playing row to the device group it belongs to (by serial), so
@@ -1297,8 +2343,7 @@ async function loadNowPlaying() {
       <td class="text-muted" style="font-size:11px">${fmtDateTime(e.date)}</td>
     </tr>`).join('');
 
-  document.getElementById('page-title').textContent = 'Now Playing';
-  document.getElementById('main-content').innerHTML = `
+  renderPage('Now Playing', `
     ${currentCard}
     <div class="card">
       <div class="card-header">
@@ -1314,31 +2359,33 @@ async function loadNowPlaying() {
       </table>
       ${buildPagination(total, _npPage, 25, (p) => { _npPage = p; loadNowPlaying(); })}
       ` : `<div class="empty-state"><i class="fa fa-play"></i><p>No streaming history found.</p></div>`}
-    </div>`;
+    </div>`);
   npLoadVolumes();
+  renderPlayerBar();
 }
 
-async function refreshCurrentTrack() {
-  const data = await API('/api/nowplaying_devices');
-  const bar = document.getElementById('now-playing-bar');
-  const txt = document.getElementById('np-track-text');
-  if (!bar || !txt) return;
-  const items = (data && data.items) || [];
-  if (items.length) {
-    const labels = items.map(c => {
-      const base = c.artist ? `${c.track} — ${c.artist}` : c.track;
-      const pl = c.sourceLabel || c.playlist;
-      return pl ? `${base} (${pl})` : base;
-    });
-    txt.textContent = labels.length === 1
-      ? labels[0]
-      : `${labels[0]} (+${labels.length - 1} more)`;
-    bar.style.display = 'flex';
-  } else {
-    bar.style.display = 'none';
+
+register('library', async () => {
+  let painted = false;
+  if (typeof WebCache !== 'undefined') {
+    const snap = WebCache.peekLibrary() || WebCache.hydrateLibraryFromDisk();
+    if (snap) {
+      window._libPlaylists = snap.playlists || [];
+      window._libSmart = snap.smart || [];
+      window._libFolders = snap.folders || [];
+      window._libGenres = snap.genres || [];
+      window._libRemote = window._plRemote || window._libRemote || {};
+      renderLibraryPage();
+      painted = true;
+    }
   }
-}
+  if (!painted) loading();
+  await loadLibrary({ hadCache: painted });
+});
 
+register('genres', async () => {
+  await loadGenresPage();
+});
 
 // ── Playlists ────────────────────────────────────────────────────────────────
 let _plPage = 1, _plSearch = '', _plMergeSel = new Set(), _plDetailId = null, _plFolderFilter = '';
@@ -1672,6 +2719,74 @@ function openAiPlaylistModal() {
   };
 }
 
+async function openAcquireIdeasModal(opts = {}) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  const seedLabel = opts.artist || opts.album || opts.title || 'your library';
+  overlay.innerHTML = `
+    <div class="modal-box" style="max-width:640px">
+      <h3 style="margin-top:0"><i class="fa fa-binoculars"></i> Music to seek out</h3>
+      <p class="hint" style="margin:0 0 12px">Artists similar to <b>${escHtml(seedLabel)}</b> that are <em>not</em> in your library — via MusicBrainz tags and relationships.</p>
+      <div id="acquire-loading" class="spinner-wrap"><div class="spinner"></div></div>
+      <div id="acquire-results" style="max-height:420px;overflow:auto"></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+        <button class="cancel-btn" onclick="this.closest('.modal-overlay').remove()">Close</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const results = overlay.querySelector('#acquire-results');
+  const loading = overlay.querySelector('#acquire-loading');
+  let url = '/api/acquire/explore';
+  let fetchOpts = { method: 'GET' };
+  if (opts.explore === false || opts.seedKind || opts.artist || opts.path || opts.album) {
+    fetchOpts = {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        seedKind: opts.seedKind || (opts.artist ? 'artist' : 'album'),
+        path: opts.path || undefined,
+        album: opts.album || undefined,
+        artist: opts.artist || undefined,
+        limit: opts.limit || 24,
+      }),
+    };
+    url = '/api/acquire/suggest';
+  }
+  try {
+    const res = await fetch(url, fetchOpts);
+    const data = await res.json().catch(() => ({}));
+    loading.style.display = 'none';
+    if (!res.ok) {
+      results.innerHTML = `<p class="hint" style="color:#c66">${escHtml(data.error || data.detail || 'Lookup failed')}</p>`;
+      return;
+    }
+    const items = data.suggestions || [];
+    if (!items.length) {
+      results.innerHTML = `<p class="hint">${escHtml(data.note || 'No new artists found — your library may already cover this niche.')}</p>`;
+      return;
+    }
+    results.innerHTML = `<ul class="acquire-list" style="list-style:none;margin:0;padding:0">${items.map((a) => {
+      const reasons = (a.reasons || []).slice(0, 2).join(' · ');
+      const tags = (a.tags || []).slice(0, 4).map(t => `<span class="badge">${escHtml(t)}</span>`).join(' ');
+      const link = a.musicbrainzUrl
+        ? `<a href="${escHtml(a.musicbrainzUrl)}" target="_blank" rel="noopener" class="btn-sm btn-default" style="margin-left:8px">MusicBrainz</a>`
+        : '';
+      return `<li style="padding:10px 0;border-bottom:1px solid rgba(255,255,255,.06)">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
+          <div><strong>${escHtml(a.name)}</strong>
+            ${reasons ? `<div class="hint" style="margin-top:4px">${escHtml(reasons)}</div>` : ''}
+            ${tags ? `<div style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap">${tags}</div>` : ''}
+          </div>${link}
+        </div></li>`;
+    }).join('')}</ul>`;
+  } catch (e) {
+    loading.style.display = 'none';
+    results.innerHTML = '<p class="hint" style="color:#c66">Could not reach MusicBrainz — try again later.</p>';
+  }
+}
+window.openAcquireIdeasModal = openAcquireIdeasModal;
+
 async function loadPlaylistDetail(id) {
   _plDetailId = id;
   const remote = await ensureAlexaRemoteStatus();
@@ -1702,7 +2817,7 @@ function renderPlaylistDetailBody() {
   const data = window._plDetail;
   if (!data) return;
   const remote = window._plRemote || {};
-  const canPlay = !!(remote.configured);
+  const canPlay = true;
   const tracks = data.tracks || [];
   const total = data.total != null ? data.total : tracks.length;
   const pageSize = data.limit || _plDetailPageSize;
@@ -1720,22 +2835,26 @@ function renderPlaylistDetailBody() {
   const trackRows = pageTracks.map((t, i) => {
     const globalIdx = start + i;
     const pathArg = JSON.stringify(t.path || '');
+    const canReorder = !_plDetailQ && _plDetailSort.by === 'title' && _plDetailSort.order === 'asc';
+    const reorderBtns = canReorder ? `
+      <button class="btn-sm btn-default" onclick="plMoveTrackAt(${pathArg}, ${globalIdx - 1})" ${globalIdx <= 0 ? 'disabled' : ''} title="Move up">↑</button>
+      <button class="btn-sm btn-default" onclick="plMoveTrackAt(${pathArg}, ${globalIdx + 1})" ${globalIdx >= total - 1 ? 'disabled' : ''} title="Move down">↓</button>` : '';
     return `
-    <tr data-idx="${globalIdx}">
+    <tr data-idx="${globalIdx}" data-path="${escHtml(t.path || '')}" ${canReorder ? 'draggable="true"' : ''}
+      ondragstart="plDragStart(event)" ondragover="plDragOver(event)" ondrop="plDropTrack(event)">
       <td class="text-muted" style="width:36px">${globalIdx + 1}</td>
       <td>${escHtml(t.title || '—')}</td>
       <td class="text-muted">${escHtml(t.artist || '—')}</td>
       <td class="text-muted">${escHtml(t.album || '—')}</td>
       <td class="text-muted">${fmtDuration(t.duration_seconds)}</td>
-      <td>${rowActions(
-        canPlay ? actionBtn({ kind: 'play', onclick: `plPlayTrackAt(${pathArg})`, title: 'Play on device', icon: 'play' }) : '',
+      <td>${reorderBtns}${rowActions(
+        canPlay ? actionBtn({ kind: 'play', onclick: `plPlayTrackAt(${pathArg})`, title: 'Play', icon: 'play' }) : '',
         data.editable !== false ? actionBtn({ kind: 'delete', onclick: `plRemoveTrackAt(${pathArg})`, title: 'Remove from playlist', icon: 'trash' }) : ''
       )}</td>
     </tr>`;
   }).join('');
 
-  document.getElementById('page-title').textContent = data.name || 'Playlist';
-  document.getElementById('main-content').innerHTML = `
+  renderPage(data.name || 'Playlist', `
     <div class="pl-detail-header">
       <div>
         <a href="#playlists" class="btn-sm btn-default" style="margin-right:8px"><i class="fa fa-arrow-left"></i> All playlists</a>
@@ -1753,9 +2872,11 @@ function renderPlaylistDetailBody() {
       (showing ${start + 1}–${Math.min(start + pageSize, total)}). Click column headers to re-sort.
     </p>
     <div class="search-bar" style="margin-bottom:12px">
-      <input type="text" placeholder="Filter tracks in this playlist…" value="${escHtml(_plDetailQ)}"
+      <input type="search" placeholder="Search in playlist…" value="${escHtml(_plDetailQ)}"
         oninput="clearTimeout(window._pldq);window._pldq=setTimeout(()=>{plDetailFilter(this.value)},400)">
     </div>
+    ${!_plDetailQ && _plDetailSort.by === 'title' && _plDetailSort.order === 'asc' ? `
+    <p class="hint" style="margin:0 0 8px">Drag rows or use ↑↓ to reorder. Sorting saves to the playlist file.</p>` : ''}
     <div class="card">
       <div class="card-header"><h3><i class="fa fa-sort"></i> Sort tracks</h3></div>
       <div class="card-body pl-sort-bar">
@@ -1780,7 +2901,7 @@ function renderPlaylistDetailBody() {
         <tbody>${trackRows || '<tr><td colspan="6" class="text-muted">No tracks</td></tr>'}</tbody>
       </table>
       ${buildPagination(total, _plDetailPage, _plDetailPageSize, (p) => { _plDetailPage = p; loadPlaylistDetailPage(true); })}
-    </div>`;
+    </div>`, { header: false });
 }
 
 function plDetailFilter(val) {
@@ -1789,20 +2910,62 @@ function plDetailFilter(val) {
   loadPlaylistDetailPage(true);
 }
 
+let _plDragPath = null;
+function plDragStart(e) {
+  _plDragPath = e.currentTarget.getAttribute('data-path');
+  e.dataTransfer.effectAllowed = 'move';
+}
+function plDragOver(e) {
+  if (!_plDragPath) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+}
+async function plDropTrack(e) {
+  e.preventDefault();
+  const toIdx = parseInt(e.currentTarget.getAttribute('data-idx'), 10);
+  const path = _plDragPath;
+  _plDragPath = null;
+  if (!path || Number.isNaN(toIdx)) return;
+  await plMoveTrackAt(path, toIdx);
+}
+window.plDragStart = plDragStart;
+window.plDragOver = plDragOver;
+window.plDropTrack = plDropTrack;
+
+async function plMoveTrackAt(path, toIndex) {
+  const d = window._plDetail;
+  if (!d || !path) return;
+  try {
+    const res = await fetch(`/api/playlists/${encodeURIComponent(d.id)}/tracks/move`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path, toIndex }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      showToast(data.error || 'Could not reorder track', true);
+      return;
+    }
+    await loadPlaylistDetailPage(true);
+  } catch (e) {
+    showToast(e.message || 'Could not reorder track', true);
+  }
+}
+window.plMoveTrackAt = plMoveTrackAt;
+
 async function plSortDetail(by, order) {
   plApplyDetailSort(by, order);
 }
 
 function plPlayPlaylist() {
   const d = window._plDetail;
-  if (d) playOnDevice({ kind: 'playlist', name: d.name, id: d.id });
+  if (d) startPlayback({ kind: 'playlist', name: d.name, id: d.id });
 }
 
 function plPlayTrackAt(path) {
-  const t = (window._plDetail && window._plDetail.tracks || []).find(x => x.path === path);
-  if (!t) return;
-  const opts = songPlayOpts(t);
-  if (opts) playOnDevice(opts);
+  const d = window._plDetail;
+  if (!d) return;
+  startPlayback({ kind: 'playlist', name: d.name, id: d.id }, { fromPath: path });
 }
 
 async function plRemoveTrackAt(path) {
@@ -1855,6 +3018,47 @@ function invalidateAlexaRemoteStatus() {
   window._alexaRemote = null;
 }
 
+function isAlexaAuthError(err) {
+  const msg = typeof err === 'string' ? err : (err && (err.message || err.error || err.code)) || '';
+  return /not_authenticated|session expired|alexa session/i.test(String(msg));
+}
+
+function handleAlexaAuthFailure() {
+  invalidateAlexaRemoteStatus();
+  _bannerDismissed = false;
+  refreshGlobalBanner();
+  openAlexaReLoginModal(true);
+}
+
+function closeAlexaReLoginModal() {
+  clearInterval(_alexaLoginPoll);
+  const overlay = document.getElementById('alexa-relogin-overlay');
+  if (overlay) overlay.remove();
+}
+
+async function openAlexaReLoginModal(autoStart = false) {
+  closeAlexaReLoginModal();
+  const overlay = document.createElement('div');
+  overlay.id = 'alexa-relogin-overlay';
+  overlay.className = 'modal-overlay alexa-relogin-overlay';
+  overlay.onclick = (e) => { if (e.target === overlay) closeAlexaReLoginModal(); };
+  overlay.innerHTML = `
+    <div class="modal-box alexa-relogin-box">
+      <h3 style="margin-top:0"><i class="fa fa-key"></i> Sign in to Amazon Alexa</h3>
+      <p class="hint" style="margin:0 0 12px">Your Alexa session expired. Sign in so Play on device, Now Playing, and automations work again.</p>
+      <div id="alexa-login-panel"><p class="hint" style="margin:0">Starting login…</p></div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px">
+        <button type="button" class="cancel-btn" onclick="closeAlexaReLoginModal()">Close</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const remote = await ensureAlexaRemoteStatus().catch(() => ({}));
+  updateAlexaLoginPanel({ ...remote, status: remote.authenticated ? 'success' : 'idle' });
+  if (autoStart && remote.authenticated !== true) await startAlexaLogin();
+}
+window.openAlexaReLoginModal = openAlexaReLoginModal;
+window.closeAlexaReLoginModal = closeAlexaReLoginModal;
+
 let _alexaLoginPoll = null;
 
 function alexaLoginStatusLabel(st) {
@@ -1901,7 +3105,10 @@ async function pollAlexaLogin() {
     if (st.authenticated === true) {
       clearInterval(_alexaLoginPoll);
       invalidateAlexaRemoteStatus();
+      _bannerDismissed = false;
       showToast('Alexa login successful');
+      closeAlexaReLoginModal();
+      refreshGlobalBanner();
       if (document.getElementById('alexa-login-panel')) {
         const remote = await ensureAlexaRemoteStatus();
         updateAlexaLoginPanel({ ...remote, ...st, authenticated: true });
@@ -1912,7 +3119,10 @@ async function pollAlexaLogin() {
     if (st.status === 'success') {
       clearInterval(_alexaLoginPoll);
       invalidateAlexaRemoteStatus();
+      _bannerDismissed = false;
       showToast('Alexa login successful');
+      closeAlexaReLoginModal();
+      refreshGlobalBanner();
       return;
     }
     if (st.status === 'error' || st.status === 'stopped') {
@@ -2006,11 +3216,19 @@ async function loadPlaylists(showSpinner) {
   }
   window._plRemote = remoteStatus || window._plRemote || {};
   renderPlaylistsPage();
+  const pageIds = (window._playlists || []).map((p) => p.id).filter(Boolean);
+  const smartIds = (window._smartPlaylists || []).map((s) => s.linkedPlaylistId).filter(Boolean);
+  const coverIds = [...new Set(pageIds.concat(smartIds))];
+  if (coverIds.length) {
+    const covers = await fetchPlaylistCovers(coverIds);
+    window._plCovers = { ...(window._plCovers || {}), ...covers };
+    renderPlaylistsPage();
+  }
 }
 
 function renderPlaylistsPage() {
   const remote = window._plRemote || {};
-  const canPlay = !!(remote.configured);
+  const canPlay = true;
   const sorted = plSortPlaylistsInMemory(_plAllCache || [], _plListSort.by, _plListSort.order)
     .filter(p => {
       if (!_plFolderFilter) return true;
@@ -2021,12 +3239,11 @@ function renderPlaylistsPage() {
   const start = (_plPage - 1) * _plPageSize;
   const items = sorted.slice(start, start + _plPageSize);
   window._playlists = items;
+  const covers = window._plCovers || {};
 
   const rows = items.map((p, i) => {
     const isLibraryPlaylist = !p.source || p.source.includes('MyMedia');
-    const typeIcon = p.isAudioBook
-      ? `<i class="fa fa-book" title="Audiobook" style="color:#7c4dbd"></i>`
-      : `<i class="fa fa-music" title="Music" style="color:#e99d1a"></i>`;
+    const art = playlistRowArtHtml(p.id, covers[p.id], p.name, p.isAudioBook);
     const srcDisplay = p.sourceName === 'bockmedia'
       ? '<span class="badge green">Custom</span>'
       : (p.source && p.source.includes('plex') ? '<span class="badge">Plex</span>' : (
@@ -2042,7 +3259,7 @@ function renderPlaylistsPage() {
       ? actionBtn({ kind: 'muted', onclick: `window.location.hash='playlists/detail/${escHtml(p.id)}'`, title: 'View tracks', icon: 'list' })
       : '';
     const playBtn = canPlay
-      ? actionBtn({ kind: 'play', onclick: `openPlayMenu(${i})`, title: 'Play on a device', icon: 'play' })
+      ? actionBtn({ kind: 'play', onclick: `openPlayMenu(${i})`, title: 'Play', icon: 'play' })
       : '';
     const nameCell = p.id
       ? `<a href="#playlists/detail/${escHtml(p.id)}" class="pl-name-link">${escHtml(p.name)}</a>`
@@ -2050,7 +3267,7 @@ function renderPlaylistsPage() {
     return `
     <tr id="pl-row-${i}">
       <td class="pl-col-merge" style="width:28px">${mergeCb}</td>
-      <td class="pl-col-icon" style="width:32px;text-align:center">${typeIcon}</td>
+      <td class="pl-col-art">${art}</td>
       <td class="pl-col-name">${nameCell}</td>
       <td class="pl-col-source">${srcDisplay}</td>
       <td class="pl-col-tracks"><span class="badge orange">${fmtNum(p.trackCount)}</span></td>
@@ -2063,6 +3280,9 @@ function renderPlaylistsPage() {
   const smart = window._smartPlaylists || [];
   const smartRows = smart.map(s => `
     <tr>
+      <td class="pl-col-art">${s.linkedPlaylistId
+    ? playlistRowArtHtml(s.linkedPlaylistId, covers[s.linkedPlaylistId], s.name, false)
+    : playlistRowArtHtml(s.id, null, s.name, false)}</td>
       <td><strong>${escHtml(s.name)}</strong></td>
       <td class="text-muted">${fmtNum(s.trackCount || 0)}</td>
       <td class="text-muted" style="font-size:11px">${s.lastRefresh ? fmtDateTime(s.lastRefresh) : '—'}</td>
@@ -2073,56 +3293,55 @@ function renderPlaylistsPage() {
       )}</td>
     </tr>`).join('');
 
-  document.getElementById('page-title').textContent = 'Playlists';
   const folderChips = (window._plFolders || []).map(f =>
     `<button class="btn-sm btn-default" onclick="_plFolderFilter='${escHtml(f.id)}';renderPlaylistsPage()">${escHtml(f.name)}</button>`
   ).join(' ');
-  document.getElementById('main-content').innerHTML = `
-    <div class="page-desc">
-      ${fmtNum(total)} playlists — sorted by <b>${sortLabel}</b> ${sortArrow} (all pages).
-      ${folderChips ? `<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">${folderChips}
-        <button class="btn-sm btn-default" onclick="_plFolderFilter='';renderPlaylistsPage()">All</button></div>` : ''}
-      Click column headers to re-sort. Page ${_plPage} of ${Math.max(1, Math.ceil(total / _plPageSize))}.
+  const plCards = items.map((p, i) => {
+    const art = covers[p.id] || null;
+    const play = canPlay && p.id ? `openPlayMenu(${i})` : null;
+    return spotifyMediaCard(
+      p.name,
+      `${fmtNum(p.trackCount || 0)} tracks`,
+      p.id ? `#playlists/detail/${encodeURIComponent(p.id)}` : '#playlists',
+      'fa-list',
+      p.name,
+      play,
+      art,
+      { downloadOnclick: p.id ? tileDownloadOnclick({ kind: 'playlist', id: p.id, name: p.name }) : null },
+    );
+  }).join('');
+
+  const smartCards = smart.map((s) => {
+    const href = s.linkedPlaylistId
+      ? `#playlists/detail/${encodeURIComponent(s.linkedPlaylistId)}`
+      : '#playlists';
+    const art = s.linkedPlaylistId ? covers[s.linkedPlaylistId] : null;
+    return spotifyMediaCard(
+      s.name,
+      `${fmtNum(s.trackCount || 0)} tracks · Smart`,
+      href,
+      'fa-wand-magic-sparkles',
+      s.name,
+      null,
+      art,
+    );
+  }).join('');
+
+  renderPage('Playlists', spotifyBrowsePage('Playlists', libraryFiltersHtml('library'), `
+    <div class="spotify-browse-toolbar">
+      <input type="search" class="spotify-browse-search" placeholder="Search playlists…" value="${escHtml(_plSearch)}"
+        oninput="clearTimeout(window._sd);window._sd=setTimeout(()=>{_plSearch=this.value;_plPage=1;_plAllCache=null;loadPlaylists()},350)">
+      <button class="btn-sm btn-primary" onclick="openNewPlaylistModal()"><i class="fa fa-plus"></i> Create</button>
+      <button class="btn-sm btn-default" onclick="openMergePlaylistsModal()">Merge</button>
+      <button class="btn-sm btn-default" onclick="openAiPlaylistModal()">Mix Muse</button>
+      <button class="btn-sm btn-default" onclick="openSmartPlaylistModal()">Smart playlist</button>
     </div>
-    <div class="card" style="margin-bottom:20px">
-      <div class="card-header" style="flex-wrap:wrap;gap:8px">
-        <h3><i class="fa fa-wand-magic-sparkles"></i> Smart playlists</h3>
-        <button class="btn-sm btn-primary" onclick="openSmartPlaylistModal()"><i class="fa fa-plus"></i> New rule set</button>
-      </div>
-      <div class="card-body">
-        <p class="hint" style="margin:0 0 10px">Auto-builds a Bock Media playlist from genre, artist, year, and limit rules. Refresh to update tracks.</p>
-        ${smartRows ? `<table class="data-table"><thead><tr><th>Name</th><th>Tracks</th><th>Refreshed</th><th></th></tr></thead><tbody>${smartRows}</tbody></table>`
-          : '<p class="hint" style="margin:0">No smart playlists yet.</p>'}
-      </div>
-    </div>
-    <div class="card">
-      <div class="card-header" style="flex-wrap:wrap;gap:10px">
-        <h3><i class="fa fa-list"></i> Playlists (${fmtNum(total)})</h3>
-        <div class="pl-toolbar">
-          <div class="search-bar" style="margin:0">
-            <input type="text" placeholder="Search playlists…" value="${escHtml(_plSearch)}"
-              oninput="clearTimeout(window._sd);window._sd=setTimeout(()=>{_plSearch=this.value;_plPage=1;_plAllCache=null;loadPlaylists()},350)">
-          </div>
-          <button class="btn-sm btn-primary" onclick="openNewPlaylistModal()"><i class="fa fa-plus"></i> New</button>
-          <button class="btn-sm btn-default" onclick="openMergePlaylistsModal()"><i class="fa fa-code-merge"></i> Merge</button>
-          <button class="btn-sm btn-default" onclick="openAiPlaylistModal()"><i class="fa fa-wand-magic-sparkles"></i> Mix Muse</button>
-        </div>
-      </div>
-      ${rows ? `
-      <table class="data-table playlists-table">
-        <thead><tr>
-          <th class="pl-col-merge"></th><th class="pl-col-icon"></th>
-          <th class="pl-sort-th pl-col-name" data-pl-sort="name" title="Sort by name">Name ${plSortIndicator(_plListSort.by === 'name', _plListSort.order)}</th>
-          <th class="pl-col-source">Source</th>
-          <th class="pl-sort-th pl-col-tracks" data-pl-sort="trackCount" title="Sort by track count">Tracks ${plSortIndicator(_plListSort.by === 'trackCount', _plListSort.order)}</th>
-          <th></th>
-        </tr></thead>
-        <tbody>${rows}</tbody>
-      </table>` : `<div class="empty-state"><i class="fa fa-list"></i><p>No playlists found.</p></div>`}
-      ${buildPagination(total, _plPage, _plPageSize, (p) => { _plPage = p; renderPlaylistsPage(); })}
-    </div>`;
-  const tbl = document.querySelector('.playlists-table');
-  if (tbl) tbl.style.opacity = '1';
+    ${folderChips ? `<div class="home-filters" style="margin-bottom:16px">${folderChips}
+      <button type="button" class="home-filter${_plFolderFilter ? '' : ' active'}" onclick="_plFolderFilter='';renderPlaylistsPage()">All</button></div>` : ''}
+    ${smartCards ? spotifySection('Smart playlists', '#playlists', smartCards) : ''}
+    ${plCards ? `<section class="spotify-section"><div class="spotify-section-header"><h2 class="spotify-section-title">Your playlists</h2><span class="hint">${fmtNum(total)} total · sorted by ${sortLabel} ${sortArrow}</span></div><div class="spotify-carousel library-playlist-grid">${plCards}</div></section>` : '<div class="empty-state"><i class="fa fa-list"></i><p>No playlists found.</p></div>'}
+    ${buildPagination(total, _plPage, _plPageSize, (p) => { _plPage = p; renderPlaylistsPage(); })}
+  `), { header: false });
 }
 
 function startEditPlaylist(i) {
@@ -2178,7 +3397,7 @@ async function ensureDeviceGroups(force) {
 
 function openPlayMenu(i) {
   const p = (window._playlists || [])[i];
-  if (p) playOnDevice({ kind: 'playlist', name: p.name, id: p.id });
+  if (p) startPlayback({ kind: 'playlist', name: p.name, id: p.id });
 }
 
 // Generic "Play on a device" picker. opts: {kind, name, id?, shuffle?(bool, default allowed)}
@@ -2190,6 +3409,68 @@ function songPlayOpts(s) {
   return { kind: 'song', name: title, artist: s.artist || '', path };
 }
 
+async function playMedia(opts, playOpts = {}) {
+  if (playOpts.target === 'speaker') return playOnDevice(opts);
+  if (typeof WebPlayback === 'undefined') {
+    return playOnDevice(opts);
+  }
+  try {
+    await WebPlayback.play(opts, playOpts);
+  } catch (e) {
+    if (e && e.name === 'AbortError') return;
+    if (/interrupted by a new load/i.test(String(e.message || ''))) return;
+    showToast(e.message || 'Playback failed', true);
+    throw e;
+  }
+}
+window.playMedia = playMedia;
+
+async function showPlayChooser(opts, playOpts = {}) {
+  if (playOpts.target === 'speaker') return playOnDevice(opts);
+  if (playOpts.target === 'browser') return playMedia(opts, playOpts);
+  const remote = await ensureAlexaRemoteStatus().catch(() => ({}));
+  const hasAlexa = !!(remote && remote.configured);
+  const hasBrowser = typeof WebPlayback !== 'undefined';
+  if (!hasBrowser) return playOnDevice(opts);
+  if (!hasAlexa) return playMedia(opts, playOpts);
+
+  const label = escHtml(opts.name || 'media');
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = `
+    <div class="modal-box">
+      <h3 style="margin-top:0"><i class="fa fa-play"></i> Play "${label}"</h3>
+      <p class="hint" style="margin:0 0 14px">Listen on this device or send to a speaker.</p>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <button class="save-btn" id="play-here" style="width:100%;justify-content:center;display:flex;align-items:center;gap:8px">
+          <i class="fa fa-laptop"></i> Play here
+        </button>
+        <button class="cancel-btn" id="play-speaker" style="width:100%;justify-content:center;display:flex;align-items:center;gap:8px">
+          <i class="fa fa-volume-high"></i> Play on speaker…
+        </button>
+      </div>
+      <div style="display:flex;justify-content:flex-end;margin-top:14px">
+        <button class="cancel-btn" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#play-here').onclick = () => {
+    overlay.remove();
+    playMedia(opts, playOpts).catch((err) => showToast(err.message || 'Playback failed', true));
+  };
+  overlay.querySelector('#play-speaker').onclick = () => {
+    overlay.remove();
+    playOnDevice(opts).catch((err) => showToast(err.message || 'Failed to start playback', true));
+  };
+}
+window.showPlayChooser = showPlayChooser;
+
+async function startPlayback(opts, playOpts = {}) {
+  return showPlayChooser(opts, playOpts);
+}
+window.startPlayback = startPlayback;
+
 async function playOnDevice(opts) {
   const { kind, name, id, artist, path } = opts;
   const allowShuffle = opts.shuffle !== false && kind !== 'song';
@@ -2197,10 +3478,11 @@ async function playOnDevice(opts) {
   try {
     [devices] = await Promise.all([ensureAlexaDevices(), ensureDeviceGroups()]);
   } catch (e) {
-    const msg = /not_authenticated/.test(e.message)
-      ? 'Alexa session expired — re-run scripts/alexa_login.py'
-      : (e.message || 'Failed to load devices');
-    return showToast(msg, true);
+    if (isAlexaAuthError(e)) {
+      handleAlexaAuthFailure();
+      return showToast('Alexa session expired — sign in to continue', true);
+    }
+    return showToast(e.message || 'Failed to load devices', true);
   }
   if (!devices.length) return showToast('No Alexa devices found', true);
 
@@ -2246,15 +3528,15 @@ async function playOnDevice(opts) {
 
 function playArtistAt(i) {
   const a = (window._artists || [])[i];
-  if (a) playOnDevice({ kind: 'artist', name: a.artist });
+  if (a) startPlayback({ kind: 'artist', name: a.artist });
 }
 function playAlbumAt(i) {
   const a = (window._albums || [])[i];
-  if (a) playOnDevice({ kind: 'album', name: a.album, artist: a.artist || '' });
+  if (a) startPlayback({ kind: 'album', name: a.album, artist: a.artist || '' });
 }
 function playSongAt(i) {
   const opts = songPlayOpts((window._songs || [])[i]);
-  if (opts) playOnDevice(opts);
+  if (opts) startPlayback(opts);
 }
 
 // ── Artists ──────────────────────────────────────────────────────────────────
@@ -2272,36 +3554,32 @@ async function loadArtists() {
   ]);
   const { items = [], total = 0 } = data || {};
   window._artists = items;
-  const canPlay = !!(remote && remote.configured);
+  const canPlay = true;
 
-  const rows = items.map((a, i) => `
-    <tr class="clickable" onclick="window.location='#songs/artist/${encodeURIComponent(a.artist)}'">
-      <td><i class="fa fa-microphone" style="color:#e99d1a;margin-right:8px"></i>${escHtml(a.artist)}</td>
-      <td><span class="badge">${fmtNum(a.album_count)}</span></td>
-      <td><span class="badge orange">${fmtNum(a.track_count)}</span></td>
-      ${rowActions(canPlay ? actionBtn({ kind: 'play', onclick: `event.stopPropagation();playArtistAt(${i})`, title: 'Play on a device', icon: 'play' }) : '')}
-    </tr>`).join('');
+  const cards = items.map((a, i) => {
+    const artPath = a.art_path || null;
+    const play = canPlay ? `event.stopPropagation();playArtistAt(${i})` : null;
+    const playFab = play
+      ? `<button type="button" class="spotify-play-fab" onclick="${play}" aria-label="Play"><i class="fa fa-play"></i></button>`
+      : '';
+    const art = spotifyCardArtHtml(artPath, a.artist, 'fa-microphone', 256)
+      .replace('class="spotify-card-art', 'class="spotify-card-art spotify-card-art-round');
+    return `<a href="#songs/artist/${encodeURIComponent(a.artist)}" class="spotify-artist-card">
+      <div class="spotify-card-media">${art}${playFab}</div>
+      <div class="spotify-card-title">${escHtml(a.artist)}</div>
+      <div class="spotify-card-sub">Artist · ${fmtNum(a.track_count)} songs</div>
+    </a>`;
+  }).join('');
 
-  document.getElementById('page-title').textContent = 'Artists';
-  document.getElementById('main-content').innerHTML = `
-    <div class="card">
-      <div class="card-header">
-        <h3><i class="fa fa-microphone"></i> Artists (${fmtNum(total)})</h3>
-      </div>
-      <div class="card-body" style="padding-bottom:8px">
-        <div class="search-bar">
-          <input type="text" placeholder="Search artists…" value="${escHtml(_arSearch)}"
-            oninput="clearTimeout(window._sd);window._sd=setTimeout(()=>{_arSearch=this.value;_arPage=1;loadArtists()},350)">
-          <span class="result-count">${fmtNum(total)} artists</span>
-        </div>
-      </div>
-      ${rows ? `
-      <table class="data-table artists-table">
-        <thead><tr><th>Artist</th><th>Albums</th><th>Songs</th><th></th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>` : `<div class="empty-state"><i class="fa fa-microphone"></i><p>No artists found.</p></div>`}
-      ${buildPagination(total, _arPage, 50, (p) => { _arPage = p; loadArtists(); })}
-    </div>`;
+  renderPage('Artists', spotifyBrowsePage('Artists', libraryFiltersHtml('artists'), `
+    <div class="spotify-browse-toolbar">
+      <input type="search" class="spotify-browse-search" placeholder="Search artists…" value="${escHtml(_arSearch)}"
+        oninput="clearTimeout(window._sd);window._sd=setTimeout(()=>{_arSearch=this.value;_arPage=1;loadArtists()},350)">
+      <span class="hint">${fmtNum(total)} artists</span>
+    </div>
+    ${cards ? `<div class="spotify-browse-grid artists">${cards}</div>` : '<div class="empty-state"><i class="fa fa-microphone"></i><p>No artists found.</p></div>'}
+    ${buildPagination(total, _arPage, 50, (p) => { _arPage = p; loadArtists(); })}
+  `), { header: false });
 }
 
 // ── Albums ───────────────────────────────────────────────────────────────────
@@ -2315,49 +3593,64 @@ register('albums', async (params) => {
 });
 
 async function loadAlbums() {
-  const data = await API(`/api/albums?page=${_alPage}&limit=50&search=${encodeURIComponent(_alSearch)}&artist=${encodeURIComponent(_alArtist)}`);
+  const url = `/api/albums?page=${_alPage}&limit=50&search=${encodeURIComponent(_alSearch)}&artist=${encodeURIComponent(_alArtist)}`;
+  let res;
+  try {
+    res = await authFetch(url);
+  } catch {
+    res = null;
+  }
+  if (!res || !res.ok) {
+    if (res && res.status === 503) {
+      renderPage('Albums', `
+        ${libraryFiltersHtml('albums')}
+        <div class="empty-state">
+          <div class="spinner-wrap"><div class="spinner"></div></div>
+          <p>Indexing albums for the first time… this usually takes under a minute.</p>
+        </div>`);
+      setTimeout(() => loadAlbums(), 4000);
+      return;
+    }
+    renderPage('Albums', `${libraryFiltersHtml('albums')}<div class="empty-state"><i class="fa fa-compact-disc"></i><p>Could not load albums — try again in a moment.</p><button class="btn-sm btn-primary" onclick="loadAlbums()">Retry</button></div>`);
+    return;
+  }
+  const data = await res.json().catch(() => null);
   if (!data) {
-    document.getElementById('page-title').textContent = 'Albums';
-    document.getElementById('main-content').innerHTML =
-      '<div class="empty-state"><i class="fa fa-compact-disc"></i><p>Could not load albums — the library query timed out. Try again.</p></div>';
+    renderPage('Albums', `${libraryFiltersHtml('albums')}<div class="empty-state"><i class="fa fa-compact-disc"></i><p>Could not load albums.</p></div>`);
     return;
   }
   const remote = await ensureAlexaRemoteStatus().catch(() => ({}));
   const { items = [], total = 0 } = data;
   window._albums = items;
-  const canPlay = !!(remote && remote.configured);
+  const canPlay = true;
 
-  const rows = items.map((a, i) => `
-    <tr class="clickable" onclick="window.location='#songs/album/${encodeURIComponent(a.album)}'">
-      <td><i class="fa fa-compact-disc" style="color:#e99d1a;margin-right:8px"></i>${escHtml(a.album)}</td>
-      <td class="text-muted">${escHtml(a.artist || '—')}</td>
-      <td><span class="badge orange">${fmtNum(a.track_count)}</span></td>
-      ${rowActions(canPlay ? actionBtn({ kind: 'play', onclick: `event.stopPropagation();playAlbumAt(${i})`, title: 'Play on a device', icon: 'play' }) : '')}
-    </tr>`).join('');
+  const cards = items.map((a, i) => {
+    const unplayed = a.played === false;
+    const play = canPlay ? `event.stopPropagation();playAlbumAt(${i})` : null;
+    return spotifyMediaCard(
+      a.album + (unplayed ? ' · New' : ''),
+      `${a.artist || 'Unknown'} · ${fmtNum(a.track_count)} songs`,
+      `#songs/album/${encodeURIComponent(a.album)}`,
+      'fa-compact-disc',
+      a.album,
+      play,
+      a.art_path,
+      { unplayed },
+    );
+  }).join('');
 
-  const backLink = _alArtist ? `<span class="back-link" onclick="window.location='#artists'"><i class="fa fa-arrow-left"></i> Back to Artists</span><br>` : '';
-
-  document.getElementById('page-title').textContent = _alArtist ? `Albums · ${_alArtist}` : 'Albums';
-  document.getElementById('main-content').innerHTML = `
+  const backLink = _alArtist ? `<a href="#artists" class="spotify-section-link" style="display:inline-block;margin-bottom:12px"><i class="fa fa-arrow-left"></i> Back to Artists</a>` : '';
+  const pageTitle = _alArtist ? `Albums · ${_alArtist}` : 'Albums';
+  renderPage(pageTitle, spotifyBrowsePage(pageTitle, libraryFiltersHtml('albums'), `
     ${backLink}
-    <div class="card">
-      <div class="card-header">
-        <h3><i class="fa fa-compact-disc"></i> ${_alArtist ? escHtml(_alArtist) + ' — ' : ''}Albums (${fmtNum(total)})</h3>
-      </div>
-      <div class="card-body" style="padding-bottom:8px">
-        <div class="search-bar">
-          <input type="text" placeholder="Search albums…" value="${escHtml(_alSearch)}"
-            oninput="clearTimeout(window._sd);window._sd=setTimeout(()=>{_alSearch=this.value;_alPage=1;loadAlbums()},350)">
-          <span class="result-count">${fmtNum(total)} albums</span>
-        </div>
-      </div>
-      ${rows ? `
-      <table class="data-table albums-table">
-        <thead><tr><th>Album</th><th>Artist</th><th>Songs</th><th></th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>` : `<div class="empty-state"><i class="fa fa-compact-disc"></i><p>No albums found.</p></div>`}
-      ${buildPagination(total, _alPage, 50, (p) => { _alPage = p; loadAlbums(); })}
-    </div>`;
+    <div class="spotify-browse-toolbar">
+      <input type="search" class="spotify-browse-search" placeholder="Search albums…" value="${escHtml(_alSearch)}"
+        oninput="clearTimeout(window._sd);window._sd=setTimeout(()=>{_alSearch=this.value;_alPage=1;loadAlbums()},350)">
+      <span class="hint">${fmtNum(total)} albums</span>
+    </div>
+    ${cards ? `<div class="spotify-browse-grid">${cards}</div>` : '<div class="empty-state"><i class="fa fa-compact-disc"></i><p>No albums found.</p></div>'}
+    ${buildPagination(total, _alPage, 50, (p) => { _alPage = p; loadAlbums(); })}
+  `), { header: false });
 }
 
 // ── Songs ────────────────────────────────────────────────────────────────────
@@ -2383,49 +3676,42 @@ async function loadSongs() {
   ]);
   const { items = [], total = 0 } = data || {};
   window._songs = items;
-  const canPlay = !!(remote && remote.configured);
+  const canPlay = true;
 
-  const rows = items.map((s, i) => `
-    <tr>
-      <td class="text-muted" style="width:40px;text-align:right">${s.track_number || ''}</td>
-      <td>${escHtml(s.title || path2name(s.path))}</td>
-      <td class="text-muted">${escHtml(s.artist || '—')}</td>
-      <td class="text-muted">${escHtml(s.album || '—')}</td>
-      <td class="text-muted">${escHtml(s.genre || '—')}</td>
-      <td class="text-muted">${s.year || '—'}</td>
-      <td class="text-muted">${fmtDuration(s.duration_seconds)}</td>
-      ${rowActions(canPlay ? actionBtn({ kind: 'play', onclick: `playSongAt(${i})`, title: 'Play on a device', icon: 'play' }) : '')}
-    </tr>`).join('');
+  const rows = items.map((s, i) => {
+    const title = s.title || path2name(s.path);
+    const playBtn = canPlay
+      ? `<button type="button" class="spotify-play-fab" style="position:static;opacity:1;width:32px;height:32px" onclick="playSongAt(${i})" aria-label="Play"><i class="fa fa-play"></i></button>`
+      : '';
+    return `<div class="spotify-track-row">
+      <span class="text-muted">${s.track_number || i + 1}</span>
+      <span class="track-title">${escHtml(title)}</span>
+      <span>${escHtml(s.album || '—')}</span>
+      <span>${playBtn}</span>
+    </div>`;
+  }).join('');
 
   let backLink = '';
-  if (_soAlbum) backLink = `<span class="back-link" onclick="window.location='#albums'"><i class="fa fa-arrow-left"></i> Back to Albums</span><br>`;
-  else if (_soArtist) backLink = `<span class="back-link" onclick="window.location='#artists'"><i class="fa fa-arrow-left"></i> Back to Artists</span><br>`;
+  if (_soAlbum) backLink = `<a href="#albums" class="spotify-section-link" style="display:inline-block;margin-bottom:12px"><i class="fa fa-arrow-left"></i> Back to Albums</a>`;
+  else if (_soArtist) backLink = `<a href="#artists" class="spotify-section-link" style="display:inline-block;margin-bottom:12px"><i class="fa fa-arrow-left"></i> Back to Artists</a>`;
 
   let pageTitle = 'Songs';
-  if (_soAlbum) pageTitle = `Songs · ${_soAlbum}`;
-  else if (_soArtist) pageTitle = `Songs · ${_soArtist}`;
-  document.getElementById('page-title').textContent = pageTitle;
+  if (_soAlbum) pageTitle = _soAlbum;
+  else if (_soArtist) pageTitle = _soArtist;
 
-  document.getElementById('main-content').innerHTML = `
+  renderPage(pageTitle, spotifyBrowsePage(pageTitle, libraryFiltersHtml('songs'), `
     ${backLink}
-    <div class="card">
-      <div class="card-header">
-        <h3><i class="fa fa-music"></i> ${_soAlbum ? escHtml(_soAlbum) + ' — ' : _soArtist ? escHtml(_soArtist) + ' — ' : ''}Songs (${fmtNum(total)})</h3>
-      </div>
-      <div class="card-body" style="padding-bottom:8px">
-        <div class="search-bar">
-          <input type="text" placeholder="Search songs, artists, albums…" value="${escHtml(_soSearch)}"
-            oninput="clearTimeout(window._sd);window._sd=setTimeout(()=>{_soSearch=this.value;_soPage=1;loadSongs()},350)">
-          <span class="result-count">${fmtNum(total)} tracks</span>
-        </div>
-      </div>
-      ${rows ? `
-      <table class="data-table songs-table">
-        <thead><tr><th>#</th><th>Title</th><th>Artist</th><th>Album</th><th>Genre</th><th>Year</th><th>Duration</th><th></th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>` : `<div class="empty-state"><i class="fa fa-music"></i><p>No songs found.</p></div>`}
-      ${buildPagination(total, _soPage, 100, (p) => { _soPage = p; loadSongs(); })}
-    </div>`;
+    <div class="spotify-browse-toolbar">
+      <input type="search" class="spotify-browse-search" placeholder="Search in list…" value="${escHtml(_soSearch)}"
+        oninput="clearTimeout(window._sd);window._sd=setTimeout(()=>{_soSearch=this.value;_soPage=1;loadSongs()},350)">
+      <span class="hint">${fmtNum(total)} tracks · ${escHtml(_soArtist || _soAlbum || 'All songs')}</span>
+    </div>
+    ${rows ? `<div class="spotify-track-list">
+      <div class="spotify-track-row-head"><span>#</span><span>Title</span><span>Album</span><span></span></div>
+      ${rows}
+    </div>` : '<div class="empty-state"><i class="fa fa-music"></i><p>No songs found.</p></div>'}
+    ${buildPagination(total, _soPage, 100, (p) => { _soPage = p; loadSongs(); })}
+  `), { header: false });
 }
 
 function path2name(p) {
@@ -2438,35 +3724,15 @@ register('watchfolders', async () => {
   loading();
   const folders = await API('/api/watchfolders') || [];
 
-  const cards = folders.map(f => {
-    const statusClass = (f.status || '').toLowerCase() === 'scanning' ? 'scanning'
-      : (f.status || '').toLowerCase() === 'queued' ? 'queued'
-      : (f.status || '').toLowerCase() === 'done' ? 'done' : 'gray';
-
-    return `
-    <div class="folder-card">
-      <div class="folder-icon"><i class="fa fa-folder-open"></i></div>
-      <div class="folder-info">
-        ${f.label ? `<span class="folder-label">${escHtml(f.label)}</span>` : ''}
-        <div class="folder-path">${escHtml(f.path)}</div>
-        <div class="folder-meta">
-          ${f.identifiedFiles > 0 ? `<span><i class="fa fa-music"></i> ${fmtNum(f.identifiedFiles)} tracks</span>` : ''}
-          ${f.playlists > 0 ? `<span><i class="fa fa-list"></i> ${fmtNum(f.playlists)} playlists</span>` : ''}
-          ${f.identifiedFiles === 0 && f.playlists === 0 ? `<span style="color:#999"><i class="fa fa-music"></i> 0 identified</span>` : ''}
-          <span><i class="fa fa-layer-group"></i> ${escHtml(f.type)}</span>
-          ${f.errors > 0 ? `<span style="color:#e44"><i class="fa fa-triangle-exclamation"></i> ${f.errors} errors</span>` : ''}
-        </div>
-      </div>
-      <div><span class="status-dot ${statusClass}">${escHtml(f.status)}</span></div>
-    </div>`;
-  }).join('');
+  const cards = folders.map(f => folderCardHtml(f)).join('');
 
   renderPage('Watch Folders', `
+    ${libraryFiltersHtml('watchfolders')}
     <div class="card">
       <div class="card-header">
-        <h3><i class="fa fa-folder-open"></i> Watch Folders</h3>
+        <h3><i class="fa fa-folder-open"></i> Watch Folders (${fmtNum(folders.length)})</h3>
       </div>
-      <div class="card-body">
+      <div class="card-body folder-card-list">
         ${cards || '<div class="empty-state"><i class="fa fa-folder"></i><p>No watch folders configured.</p></div>'}
       </div>
     </div>`);
@@ -2740,7 +4006,7 @@ function renderDeviceGroupsCard() {
     <div class="card" style="margin-bottom:16px">
       <div class="card-header"><h3><i class="fa fa-layer-group"></i> Device Groups</h3></div>
       <div class="card-body">
-        <p class="hint" style="margin:0">Alexa remote control is not configured. Add <code>alexaRemote</code> credentials in <code>config.json</code> and run <code>scripts/alexa_login.py --proxy</code> to create groups.</p>
+        <p class="hint" style="margin:0">Alexa remote control is not configured. Add <code>alexaRemote</code> credentials in <code>config.json</code>, then sign in from Settings.</p>
       </div>
     </div>`;
   }
@@ -3158,7 +4424,7 @@ function renderAutomation(remote) {
     </div>` : `
     <div class="card" style="margin-bottom:16px;border-left:3px solid #e6a14e">
       <div class="card-body">
-        <p class="hint" style="margin:0">Alexa remote control is not configured. Add <code>alexaRemote</code> credentials in <code>config.json</code> and run <code>scripts/alexa_login.py --proxy</code> to enable scheduled playback.</p>
+        <p class="hint" style="margin:0">Alexa remote control is not configured. Add <code>alexaRemote</code> credentials in <code>config.json</code>, then sign in from Settings.</p>
       </div>
     </div>`;
 
@@ -3191,8 +4457,7 @@ function renderAutomation(remote) {
     </tr>`;
   }).join('');
 
-  document.getElementById('page-title').textContent = 'Automation';
-  document.getElementById('main-content').innerHTML = `
+  renderPage('Automation', `
     <div class="page-desc">
       Schedule playlists to start on a specific Echo at a set time. Uses the same remote-control path as the Playlists page (<code>start</code>/<code>mix</code> commands via alexapy).
     </div>
@@ -3204,7 +4469,7 @@ function renderAutomation(remote) {
         <thead><tr><th>Automation</th><th>Time</th><th>Schedule</th><th>Last run</th><th>Status</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
       </table>` : `<div class="empty-state"><i class="fa fa-clock"></i><p>No automations yet.</p></div>`}
-    </div>`;
+    </div>`);
 
   if (editing && editing.device) {
     const sel = document.getElementById('auto-device');
@@ -3325,6 +4590,7 @@ async function saveAutomation() {
       : null,
   };
   if (!body.playlistName) return showToast('Select a playlist', true);
+  if (!body.playlistId) return showToast('Pick a playlist from search results', true);
   if (!body.device) return showToast('Select a device', true);
   if (!body.days.length) return showToast('Select at least one day', true);
 
@@ -3386,6 +4652,84 @@ async function runAutomationNow(id) {
 }
 
 // ── Settings ─────────────────────────────────────────────────────────────────
+function releaseKindLabel(kind) {
+  return { feat: 'New', fix: 'Fixed', improve: 'Improved', chore: 'Update' }[kind] || 'Update';
+}
+
+function renderReleaseNotesHtml(releases) {
+  if (!releases || !releases.length) return '<p class="hint">No release notes yet.</p>';
+  return releases.map((rel, i) => {
+    const items = (rel.items || []).filter(it => it.text).map(it =>
+      `<li><span class="release-tag release-tag-${escHtml(it.kind || 'improve')}">${escHtml(releaseKindLabel(it.kind))}</span> ${escHtml(it.text)}</li>`
+    ).join('');
+    if (!items) return '';
+    const date = rel.date ? ` · ${escHtml(rel.date)}` : '';
+    const cls = i === 0 ? 'release-block release-latest' : 'release-block release-older';
+    return `<div class="${cls}"><h4>Version ${escHtml(rel.version)}${date}</h4><ul class="release-list">${items}</ul></div>`;
+  }).join('');
+}
+
+register('download', async () => {
+  const info = await API('/api/app/info') || {};
+  const android = info.android || {};
+  const ios = info.ios || {};
+  const releases = info.releases || [];
+  const latest = releases[0];
+  const highlightItems = (latest?.items || []).slice(0, 6).filter(it => it.text);
+  const androidMeta = android.available
+    ? `Build ${escHtml(android.version)}${android.sizeMb != null ? ` · ${android.sizeMb} MB` : ''}`
+    : 'APK not on server yet';
+  const iosMeta = ios.available
+    ? `Build ${escHtml(ios.version)}${ios.sizeMb != null ? ` · ${ios.sizeMb} MB` : ''}`
+    : 'IPA not on server yet';
+  setPage(`
+    <div class="card">
+      <div class="card-header"><h3><i class="fa fa-mobile-screen"></i> Mobile app</h3></div>
+      <div class="card-body app-download-page">
+        <p class="hint">Install Bock Media on your phone. Use your server URL and Mobile API token from Settings.</p>
+        ${highlightItems.length ? `
+        <div class="release-highlights">
+          <h4>Latest${latest?.version ? ` (v${escHtml(latest.version)})` : ''}</h4>
+          <ul>${highlightItems.map(it => `<li>${escHtml(it.text)}</li>`).join('')}</ul>
+        </div>` : ''}
+        <div class="app-download-grid">
+          <section class="app-download-platform">
+            <h4><i class="fa fa-android"></i> Android</h4>
+            <p class="hint">${androidMeta}</p>
+            ${android.available && android.downloadHref
+              ? `<a class="btn-sm btn-primary" href="${escHtml(android.downloadHref)}"><i class="fa fa-download"></i> Download APK</a>`
+              : '<p class="hint">Build with <code>./gradlew assembleRelease</code> and copy to <code>.bockmedia/bockmedia-console.apk</code>.</p>'}
+            <ol class="hint app-install-steps">
+              <li>Download and install the APK</li>
+              <li>Allow installs from browser if prompted</li>
+              <li>Open app → enter server URL + Mobile API token</li>
+            </ol>
+          </section>
+          <section class="app-download-platform">
+            <h4><i class="fa fa-apple"></i> iPhone</h4>
+            <p class="hint">${iosMeta}</p>
+            ${ios.available && ios.otaHref
+              ? `<a class="btn-sm btn-primary" href="${escHtml(ios.otaHref)}"><i class="fa fa-download"></i> Install on iPhone</a>`
+              : ''}
+            ${ios.available && ios.downloadHref
+              ? `<a class="btn-sm btn-default" href="${escHtml(ios.downloadHref)}" style="margin-left:8px"><i class="fa fa-download"></i> Download IPA</a>`
+              : '<p class="hint">Archive in Xcode and copy IPA to <code>.bockmedia/bockmedia-console.ipa</code>.</p>'}
+            <ol class="hint app-install-steps">
+              <li>Use Safari for over-the-air install, or sideload the IPA</li>
+              <li>Trust the developer in Settings if prompted</li>
+              <li>Open app → enter server URL + Mobile API token</li>
+            </ol>
+          </section>
+        </div>
+        <div class="release-notes-panel">
+          <h4>Release notes</h4>
+          ${renderReleaseNotesHtml(releases)}
+        </div>
+        <p class="hint" style="margin-top:16px">Standalone download page: <a href="/app" target="_blank" rel="noopener">/app</a> (may require app-download password).</p>
+      </div>
+    </div>`);
+});
+
 register('settings', async () => {
   loading();
   const [s, cfg, ipData, health, remote] = await Promise.all([
@@ -3425,6 +4769,19 @@ register('settings', async () => {
             <button class="btn-sm btn-primary" onclick="saveSetting('defaultPlaylist', document.getElementById('s-default-pl').value)">Set</button>
           </div>
           ${toggle('s-default-pl-shuffle', 'Shuffle default playlist', chk(settings.defaultPlaylistShuffle))}
+        </div>
+
+        <div class="settings-section">
+          <h4>Continue listening</h4>
+          <p class="hint">When an album, playlist, or queue finishes on Alexa (and local apps), start similar songs or artist radio.</p>
+          <div class="settings-row">
+            <select id="s-continue-queue" class="settings-input">
+              <option value="off" ${(settings.continueAfterQueue || 'off') === 'off' ? 'selected' : ''}>Stop</option>
+              <option value="similar" ${settings.continueAfterQueue === 'similar' ? 'selected' : ''}>Similar songs</option>
+              <option value="artist_radio" ${settings.continueAfterQueue === 'artist_radio' ? 'selected' : ''}>Artist radio</option>
+            </select>
+            <button class="btn-sm btn-primary" onclick="saveSetting('continueAfterQueue', document.getElementById('s-continue-queue').value)">Set</button>
+          </div>
         </div>
 
         <div class="settings-section">
@@ -3741,6 +5098,7 @@ async function _loadAnalytics() {
   renderPage('Analytics', _buildAnalyticsHTML(data));
   _restoreDateInputs();
   try {
+    await ensureChartJs();
     _initAnalyticsCharts(data);
     if (Object.keys(data.playsPerDay || {}).length >= 7) _initEntityActivityCharts(data);
   } catch (e) {
@@ -3783,25 +5141,292 @@ register('analytics', async () => { _anFrom = ''; _anTo = ''; await _loadAnalyti
 let _searchTimer = null;
 
 register('search', async () => {
-  loading();
-  document.getElementById('page-title').textContent = 'Search';
-  document.getElementById('main-content').innerHTML = `
-    <div class="card">
-      <div class="card-body">
-        <input type="search" id="lib-search-q" class="settings-input" style="width:100%;max-width:480px"
-          placeholder="Search songs, artists, albums, playlists…" autofocus
-          oninput="libSearchDebounced(this.value)">
-      </div>
-    </div>
-    <div id="lib-search-results"></div>`;
+  const cached = typeof WebCache !== 'undefined'
+    ? (WebCache.peekSearchBrowse() || WebCache.hydrateSearchFromDisk())
+    : null;
+  if (!cached) loading();
+  renderPage('Search', `
+    <div class="search-page search-page-topbar">
+      <div id="lib-search-results" class="search-results"></div>
+    </div>`, { header: false });
+  syncTopbarSearch(window._lastSearchQ || '');
   const q = (window._lastSearchQ || '').trim();
-  if (q.length >= 2) libSearchDebounced(q);
+  if (q.length >= 2) {
+    libSearchDebounced(q);
+  } else if (q.length === 1) {
+    libSearchDebounced(q);
+  } else if (cached) {
+    const el = document.getElementById('lib-search-results');
+    if (el) renderSearchBrowseUI(el, cached, window._plRemote || {});
+    loadSearchBrowse();
+  } else {
+    await loadSearchBrowse();
+  }
 });
+
+function searchThumbHtml(kind, artPath, seed, icon, unplayed) {
+  const round = kind === 'artist';
+  const cls = `search-hit-art${round ? ' search-hit-art-round' : ''}`;
+  const url = artPath ? artworkUrl(artPath, 96) : null;
+  const grad = spotifyGradient(seed || '');
+  const ic = icon || 'fa-music';
+  const badge = unplayed ? '<span class="unplayed-album-badge" aria-label="Unplayed"></span>' : '';
+  if (!url) {
+    return `<span class="${cls}" style="background:${grad}"><i class="fa ${ic}"></i>${badge}</span>`;
+  }
+  return `<span class="${cls} search-hit-art-img" style="background:${grad}">
+    <img src="${escHtml(url)}" alt="" loading="lazy"
+      onerror="this.closest('.search-hit-art').classList.add('search-hit-art-fallback');this.remove();">
+    ${badge}
+  </span>`;
+}
+
+function searchGenreTileHtml(genre) {
+  const name = genre.name || '';
+  const artPath = genre.art_path || genre.path;
+  const url = artPath ? artworkUrl(artPath, 256) : null;
+  const grad = spotifyGradient(name);
+  const style = url
+    ? `background-image:url('${escHtml(url)}');background-size:cover;background-position:center;`
+    : `background:${grad};`;
+  return `<button type="button" class="search-genre-tile" style="${style}" data-genre="${escHtml(name)}">
+    <span class="search-genre-tile-label home-greeting">${escHtml(name)}</span>
+  </button>`;
+}
+
+function searchNewReleasesTile(albums) {
+  const first = (albums && albums[0]) || null;
+  const artPath = first?.path || first?.art_path;
+  const url = artPath ? artworkUrl(artPath, 256) : null;
+  const grad = spotifyGradient(first?.name || 'New');
+  const style = url
+    ? `background-image:url('${escHtml(url)}');background-size:cover;background-position:center;`
+    : `background:${grad};`;
+  return `<a href="#albums" class="search-browse-tile search-new-releases-tile" style="${style}">
+    <span class="search-browse-tile-icon"><i class="fa fa-bolt"></i></span>
+    <span class="search-browse-tile-label home-greeting">New Releases</span>
+  </a>`;
+}
+
+async function searchPlayPlaylist(id, name) {
+  return startPlayback({ kind: 'playlist', id, name });
+}
+window.searchPlayPlaylist = searchPlayPlaylist;
+
+function libSearchHit(opts) {
+  if (typeof opts === 'string') {
+    opts = {
+      kind: 'song',
+      titleHtml: opts,
+      playOpts: arguments[2],
+      extraActions: arguments[3] || '',
+      showPlay: !!arguments[4],
+    };
+  }
+  const {
+    kind = 'song',
+    titleHtml = '',
+    subtitle = '',
+    artPath = null,
+    seed = '',
+    icon = null,
+    playOpts = null,
+    extraActions = '',
+    showPlay = false,
+    href = null,
+    unplayed = false,
+  } = opts;
+  const kindIcons = {
+    playlist: 'fa-list',
+    artist: 'fa-microphone',
+    album: 'fa-compact-disc',
+    song: 'fa-music',
+    genre: 'fa-tag',
+    room: 'fa-volume-high',
+  };
+  const thumb = searchThumbHtml(kind, artPath, seed || (playOpts && playOpts.name) || titleHtml, icon || kindIcons[kind] || 'fa-music', kind === 'album' && unplayed);
+  let playBtn = '';
+  if (showPlay && playOpts) {
+    const idAttr = playOpts.id ? ` data-play-id="${escHtml(playOpts.id)}"` : '';
+    const artistAttr = playOpts.artist ? ` data-play-artist="${escHtml(playOpts.artist)}"` : '';
+    const pathAttr = playOpts.path ? ` data-play-path="${escHtml(playOpts.path)}"` : '';
+    playBtn = `<button type="button" class="action-btn action-play lib-search-play" data-play-kind="${escHtml(playOpts.kind)}" data-play-name="${escHtml(playOpts.name)}"${idAttr}${artistAttr}${pathAttr} title="Play" aria-label="Play"><i class="fa fa-play"></i></button>`;
+  }
+  const subHtml = subtitle ? `<span class="search-hit-sub">${subtitle}</span>` : '';
+  const mainInner = `<span class="search-hit-title home-greeting">${titleHtml}</span>${subHtml}`;
+  const main = href
+    ? `<a href="${href}" class="search-hit-main">${mainInner}</a>`
+    : `<div class="search-hit-main">${mainInner}</div>`;
+  return `<div class="search-hit search-hit-${kind}">${thumb}${main}<div class="search-hit-actions row-actions">${extraActions}${playBtn}</div></div>`;
+}
+
+function renderSearchBrowseUI(el, data, remote) {
+  const recent = (data.quick && data.quick.recent) || [];
+  const favs = (data.quick && data.quick.favorites) || [];
+  const genreItems = (data.genres && data.genres.items) || (Array.isArray(data.genres) ? data.genres : []);
+  const plItems = data.playlists || [];
+  const covers = data.playlistCovers || {};
+  const newAlbums = (data.newAlbums && data.newAlbums.albums) || data.newAlbums || [];
+
+  const sec = (title, body) => body
+    ? `<section class="spotify-section search-browse-section"><div class="spotify-section-header"><h2 class="spotify-section-title home-greeting">${escHtml(title)}</h2></div>${body}</section>`
+    : '';
+
+  const recentHtml = recent.length
+    ? `<div class="search-browse-list">${recent.slice(0, 8).map((r) => libSearchHit({
+      kind: 'song',
+      titleHtml: escHtml(r.track || 'Track'),
+      subtitle: r.artist ? escHtml(r.artist) : '',
+      artPath: r.filepath,
+      seed: r.track,
+      playOpts: songPlayOpts({ title: r.track, artist: r.artist, path: r.filepath, track: r.track }),
+      showPlay: !!(r.filepath),
+    })).join('')}</div>`
+    : '';
+
+  const favHtml = favs.length
+    ? `<div class="search-browse-list">${favs.slice(0, 8).map((r) => libSearchHit({
+      kind: 'song',
+      titleHtml: escHtml(r.title || 'Track'),
+      subtitle: r.artist ? escHtml(r.artist) : '',
+      artPath: r.path,
+      seed: r.title,
+      playOpts: songPlayOpts(r),
+      showPlay: !!(r.path),
+    })).join('')}</div>`
+    : '';
+
+  const plHtml = plItems.length
+    ? `<div class="spotify-carousel search-playlist-carousel">${plItems.slice(0, 12).map((p) => {
+      const art = covers[p.id] || null;
+      const play = p.id
+        ? `searchPlayPlaylist('${String(p.id).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}','${String(p.name).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}')`
+        : null;
+      return spotifyMediaCard(
+        p.name,
+        `${fmtNum(p.trackCount || 0)} tracks`,
+        `#playlists/detail/${encodeURIComponent(p.id)}`,
+        'fa-list',
+        p.name,
+        play,
+        art,
+        { home: true },
+      );
+    }).join('')}</div>`
+    : '';
+
+  const browseTiles = (newAlbums.length || genreItems.length)
+    ? `<div class="search-browse-tiles-row">
+        ${newAlbums.length ? searchNewReleasesTile(newAlbums) : ''}
+        ${genreItems.slice(0, 1).map((g) => searchGenreTileHtml(g)).join('')}
+      </div>
+      ${genreItems.length > 1 ? `<div class="search-genre-grid">${genreItems.slice(1, 13).map((g) => searchGenreTileHtml(g)).join('')}</div>` : ''}`
+    : '';
+
+  el.innerHTML = [
+    `<section class="spotify-section search-browse-section">
+      <div class="spotify-section-header" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+        <h2 class="spotify-section-title home-greeting">Music to seek out</h2>
+        <button class="btn-sm btn-default" onclick="openAcquireIdeasModal({explore:true})"><i class="fa fa-binoculars"></i> Explore</button>
+      </div>
+      <p class="hint" style="margin:0 0 8px;padding:0 4px">Discover artists you don&apos;t own yet — based on your library via MusicBrainz.</p>
+    </section>`,
+    browseTiles ? sec('Browse all', browseTiles) : '',
+    sec('Recent listens', recentHtml),
+    sec('Favorites', favHtml),
+    sec('Playlists', plHtml),
+  ].filter(Boolean).join('') || '<div class="empty-state"><p>Nothing in your library yet.</p></div>';
+}
+
+async function loadSearchBrowse() {
+  const el = document.getElementById('lib-search-results');
+  if (!el) return;
+  const cached = typeof WebCache !== 'undefined' ? WebCache.peekSearchBrowse() : null;
+  if (cached) {
+    renderSearchBrowseUI(el, cached, window._plRemote || {});
+  } else {
+    el.innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
+  }
+  const [quick, genres, plItems, newAlbums, remote] = await Promise.all([
+    cached?.quick ? Promise.resolve(cached.quick) : API('/api/dashboard/quick').catch(() => ({ recent: [], favorites: [] })),
+    cached?.genres ? Promise.resolve(cached.genres) : API('/api/genres?limit=16').catch(() => ({ items: [] })),
+    cached?.playlists ? Promise.resolve(cached.playlists) : fetchPlaylistsCached('').catch(() => []),
+    cached?.newAlbums ? Promise.resolve(cached.newAlbums) : API('/api/library/new?since=30d&limit=12').catch(() => ({ albums: [] })),
+    ensureAlexaRemoteStatus().catch(() => ({})),
+  ]);
+  const plIds = plItems.slice(0, 12).map((p) => p.id).filter(Boolean);
+  const playlistCovers = plIds.length ? await fetchPlaylistCovers(plIds) : {};
+  const data = { quick, genres, playlists: plItems, newAlbums, playlistCovers };
+  if (typeof WebCache !== 'undefined') WebCache.putSearchBrowse(data);
+  renderSearchBrowseUI(el, data, remote);
+}
+window.loadSearchBrowse = loadSearchBrowse;
 
 function libSearchDebounced(q) {
   window._lastSearchQ = q;
   clearTimeout(_searchTimer);
-  _searchTimer = setTimeout(() => libSearchRun(q), 280);
+  _searchTimer = setTimeout(() => {
+    const trimmed = (q || '').trim();
+    if (trimmed.length === 1) libSearchSuggest(trimmed);
+    else libSearchRun(trimmed);
+  }, 280);
+}
+
+async function libSearchSuggest(q) {
+  const el = document.getElementById('lib-search-results');
+  if (!el) return;
+  el.innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
+  const data = await API(`/api/search/suggest?q=${encodeURIComponent(q)}`).catch(() => null);
+  if (!data) {
+    el.innerHTML = '<p class="hint">Suggestions unavailable.</p>';
+    return;
+  }
+  const rows = [];
+  const pushRows = (kind, items, mapFn) => {
+    for (const item of items || []) {
+      rows.push(mapFn(item));
+      if (rows.length >= 12) return;
+    }
+  };
+  pushRows('playlist', data.playlists, (p) => libSearchHit({
+    kind: 'playlist',
+    titleHtml: escHtml(p.name),
+    href: p.id ? `#playlists/detail/${encodeURIComponent(p.id)}` : null,
+    playOpts: p.id ? { kind: 'playlist', name: p.name, id: p.id } : null,
+    showPlay: !!p.id,
+  }));
+  pushRows('artist', data.artists, (a) => libSearchHit({
+    kind: 'artist',
+    titleHtml: escHtml(a.name),
+    artPath: a.path,
+    seed: a.name,
+    href: `#songs/artist/${encodeURIComponent(a.name)}`,
+    playOpts: { kind: 'artist', name: a.name },
+    showPlay: true,
+  }));
+  pushRows('album', data.albums, (a) => libSearchHit({
+    kind: 'album',
+    titleHtml: escHtml(a.name),
+    subtitle: a.artist ? escHtml(a.artist) : '',
+    artPath: a.path,
+    seed: a.name,
+    unplayed: a.played === false,
+    href: `#songs/album/${encodeURIComponent(a.name)}`,
+    playOpts: { kind: 'album', name: a.name, artist: a.artist || '' },
+    showPlay: true,
+  }));
+  pushRows('song', data.songs, (s) => libSearchHit({
+    kind: 'song',
+    titleHtml: escHtml(s.title || 'Track'),
+    subtitle: s.artist ? escHtml(s.artist) : '',
+    artPath: s.path,
+    seed: s.title,
+    playOpts: { kind: 'song', name: s.title, artist: s.artist || '', path: s.path || '' },
+    showPlay: !!(s.path),
+  }));
+  el.innerHTML = rows.length
+    ? `<section class="search-suggest-section"><h2 class="search-section-title home-greeting">Suggestions</h2><div class="search-browse-list">${rows.join('')}</div></section>`
+    : '<p class="hint">Keep typing to search your library.</p>';
 }
 
 function libSearchPlayOptsFromBtn(btn) {
@@ -3818,20 +5443,6 @@ function libSearchPlayOptsFromBtn(btn) {
   return opts;
 }
 
-function libSearchHit(icon, labelHtml, playOpts, extraActions, canPlay) {
-  let playBtn = '';
-  if (canPlay && playOpts) {
-    const idAttr = playOpts.id ? ` data-play-id="${escHtml(playOpts.id)}"` : '';
-    const artistAttr = playOpts.artist ? ` data-play-artist="${escHtml(playOpts.artist)}"` : '';
-    const pathAttr = playOpts.path ? ` data-play-path="${escHtml(playOpts.path)}"` : '';
-    playBtn = `<button type="button" class="action-btn action-play lib-search-play" data-play-kind="${escHtml(playOpts.kind)}" data-play-name="${escHtml(playOpts.name)}"${idAttr}${artistAttr}${pathAttr} title="Play on a device" aria-label="Play on a device"><i class="fa fa-play"></i></button>`;
-  }
-  return `<div class="search-hit">
-    <span class="search-hit-label">${icon} ${labelHtml}</span>
-    <div class="search-hit-actions row-actions">${extraActions || ''}${playBtn}</div>
-  </div>`;
-}
-
 function libSearchLink(href, text) {
   return `<a href="${href}" class="search-hit-link">${escHtml(text)}</a>`;
 }
@@ -3846,7 +5457,7 @@ function setupSearchDelegation() {
       e.stopPropagation();
       const opts = libSearchPlayOptsFromBtn(playBtn);
       if (!opts) return showToast('Invalid search result', true);
-      playOnDevice(opts).catch((err) => showToast(err.message || 'Failed to open player', true));
+      startPlayback(opts).catch((err) => showToast(err.message || 'Playback failed', true));
       return;
     }
     const starBtn = e.target.closest('.lib-search-star');
@@ -3867,44 +5478,101 @@ async function libSearchRun(q) {
   if (!el) return;
   q = (q || '').trim();
   if (q.length < 2) {
-    el.innerHTML = '<p class="hint" style="padding:12px">Type at least 2 characters.</p>';
+    loadSearchBrowse();
     return;
   }
   el.innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
-  const [data, remote] = await Promise.all([
-    API(`/api/search?q=${encodeURIComponent(q)}`),
-    ensureAlexaRemoteStatus(),
-  ]);
+  const data = await API(`/api/search?q=${encodeURIComponent(q)}&limit=20`).catch(() => null);
   if (!data) {
     el.innerHTML = '<p class="hint" style="padding:12px">Search failed — try again.</p>';
     return;
   }
-  const canPlay = !!(remote && remote.configured);
-  const sec = (title, rows) => rows.length
-    ? `<div class="search-section"><h3 style="font-size:13px;color:#7a8aa8;margin:0 0 8px">${title}</h3>${rows}</div>`
+  const plIds = (data.playlists || []).map((p) => p.id).filter(Boolean);
+  const smartIds = (data.smartPlaylists || []).map((s) => s.id).filter(Boolean);
+  const covers = plIds.length || smartIds.length
+    ? await fetchPlaylistCovers([...new Set(plIds.concat(smartIds))])
+    : {};
+
+  const sec = (title, rows) => rows
+    ? `<section class="search-results-section"><h2 class="search-section-title home-greeting">${escHtml(title)}</h2><div class="search-browse-list">${rows}</div></section>`
     : '';
+
   const pl = (data.playlists || []).map((p) => {
-    const href = p.id ? `#playlists/detail/${encodeURIComponent(p.id)}` : '';
-    const label = href ? libSearchLink(href, p.name) : escHtml(p.name);
-    return libSearchHit('<i class="fa fa-list"></i>', label, { kind: 'playlist', name: p.name, id: p.id }, '', canPlay);
+    const href = p.id ? `#playlists/detail/${encodeURIComponent(p.id)}` : null;
+    return libSearchHit({
+      kind: 'playlist',
+      titleHtml: escHtml(p.name),
+      artPath: p.id ? covers[p.id] : null,
+      seed: p.name,
+      href,
+      playOpts: p.id ? { kind: 'playlist', name: p.name, id: p.id } : null,
+      showPlay: !!p.id,
+    });
   }).join('');
-  const ar = (data.artists || []).map((a) => {
-    const href = `#songs/artist/${encodeURIComponent(a.name)}`;
-    return libSearchHit('<i class="fa fa-microphone"></i>', libSearchLink(href, a.name), { kind: 'artist', name: a.name }, '', canPlay);
-  }).join('');
-  const al = (data.albums || []).map((a) => {
-    const href = `#songs/album/${encodeURIComponent(a.name)}`;
-    const label = `${libSearchLink(href, a.name)}${a.artist ? ` <span class="text-muted">— ${escHtml(a.artist)}</span>` : ''}`;
-    return libSearchHit('<i class="fa fa-compact-disc"></i>', label, { kind: 'album', name: a.name, artist: a.artist || '' }, '', canPlay);
-  }).join('');
+
+  const smart = (data.smartPlaylists || []).map((s) => libSearchHit({
+    kind: 'playlist',
+    titleHtml: `${escHtml(s.name)} <span class="text-muted">· smart</span>`,
+    artPath: s.id ? covers[s.id] : null,
+    seed: s.name,
+    href: s.id ? `#playlists/detail/${encodeURIComponent(s.id)}` : null,
+    playOpts: s.id ? { kind: 'playlist', name: s.name, id: s.id } : null,
+    showPlay: !!s.id,
+  })).join('');
+
+  const ar = (data.artists || []).map((a) => libSearchHit({
+    kind: 'artist',
+    titleHtml: escHtml(a.name),
+    artPath: a.path,
+    seed: a.name,
+    href: `#songs/artist/${encodeURIComponent(a.name)}`,
+    playOpts: { kind: 'artist', name: a.name },
+    showPlay: true,
+  })).join('');
+
+  const al = (data.albums || []).map((a) => libSearchHit({
+    kind: 'album',
+    titleHtml: escHtml(a.name),
+    subtitle: a.artist ? escHtml(a.artist) : '',
+    artPath: a.path,
+    seed: a.name,
+    href: `#songs/album/${encodeURIComponent(a.name)}`,
+    playOpts: { kind: 'album', name: a.name, artist: a.artist || '' },
+    showPlay: true,
+  })).join('');
+
+  const gn = (data.genres || []).map((g) => libSearchHit({
+    kind: 'genre',
+    titleHtml: escHtml(g.name),
+    artPath: g.path,
+    seed: g.name,
+    href: '#genres',
+    showPlay: false,
+  })).join('');
+
   const sg = (data.songs || []).map((s) => {
-    const label = `${escHtml(s.title)}${s.artist ? ` <span class="text-muted">— ${escHtml(s.artist)}</span>` : ''}`;
     const star = `<button type="button" class="action-btn action-muted lib-search-star" data-fav-path="${escHtml(s.path || '')}" data-fav-title="${escHtml(s.title || '')}" data-fav-artist="${escHtml(s.artist || '')}" title="Star" aria-label="Star"><i class="fa fa-star"></i></button>`;
-    return libSearchHit('<i class="fa fa-music"></i>', label, { kind: 'song', name: s.title, artist: s.artist || '', path: s.path || '' }, star, canPlay);
+    return libSearchHit({
+      kind: 'song',
+      titleHtml: escHtml(s.title),
+      subtitle: s.artist ? escHtml(s.artist) : (s.album ? escHtml(s.album) : ''),
+      artPath: s.path,
+      seed: s.title,
+      playOpts: { kind: 'song', name: s.title, artist: s.artist || '', path: s.path || '' },
+      extraActions: star,
+      showPlay: !!(s.path),
+    });
   }).join('');
-  const body = sec('Playlists', pl) + sec('Artists', ar) + sec('Albums', al) + sec('Songs', sg);
-  const noPlayHint = canPlay ? '' : '<p class="hint" style="padding:0 12px 12px">Configure Alexa remote in Settings to play on a device.</p>';
-  el.innerHTML = (body || '<p class="hint" style="padding:12px">No matches.</p>') + noPlayHint;
+
+  const body = [
+    sec('Playlists', pl),
+    sec('Smart playlists', smart),
+    sec('Artists', ar),
+    sec('Albums', al),
+    sec('Genres', gn),
+    sec('Songs', sg),
+  ].filter(Boolean).join('');
+  el.innerHTML = body || '<p class="hint" style="padding:12px">No matches.</p>';
 }
 
 async function libFavorite(path, title, artist) {
@@ -4172,7 +5840,7 @@ function _buildHeatmapHTML(matrix) {
     for (let d = 0; d < 7; d++) {
       const v     = (matrix[h] || [])[d] || 0;
       const alpha = v > 0 ? (0.1 + (v / maxVal) * 0.85).toFixed(2) : 0;
-      const bg    = v > 0 ? `rgba(48,66,106,${alpha})` : '#f0f3f8';
+      const bg    = v > 0 ? `rgba(80,155,245,${alpha})` : '#282828';
       html += `<div class="an-hm-cell" style="background:${bg}" title="${lbl} ${days[d]}: ${v} play${v !== 1 ? 's' : ''}"></div>`;
     }
   }
@@ -4185,12 +5853,13 @@ function _initAnalyticsCharts(d) {
     console.error('Chart.js is not loaded — analytics charts skipped');
     return;
   }
+  const gridColor = '#282828';
   const C = {
-    navy: '#30426a', orange: '#e99d1a', green: '#2eaa5a',
-    purple: '#7c4dbd', teal: '#1a9ba1',
+    navy: '#509bf5', orange: '#e99d1a', green: '#1db954',
+    purple: '#b49bc8', teal: '#1db954',
   };
-  const xTick = { color: '#778', font: { size: 11 } };
-  const yTick = { color: '#778', font: { size: 11 } };
+  const xTick = { color: '#b3b3b3', font: { size: 11 } };
+  const yTick = { color: '#b3b3b3', font: { size: 11 } };
   const noLegend = { legend: { display: false } };
 
   // Activity line chart with hover tooltip
@@ -4205,7 +5874,7 @@ function _initAnalyticsCharts(d) {
           label: 'Plays',
           data: actSeries.map(r => r.count),
           borderColor: C.navy,
-          backgroundColor: 'rgba(48,66,106,0.08)',
+          backgroundColor: 'rgba(80,155,245,0.15)',
           fill: true, tension: 0.3,
           pointRadius: actSeries.length > 60 ? 0 : 3,
           pointHoverRadius: 5,
@@ -4216,7 +5885,7 @@ function _initAnalyticsCharts(d) {
         interaction: { mode: 'index', intersect: false },
         scales: {
           x: { grid: { display: false }, ticks: xTick },
-          y: { grid: { color: '#f0f3f8' }, ticks: yTick, beginAtZero: true },
+          y: { grid: { color: gridColor }, ticks: yTick, beginAtZero: true },
         },
       },
     });
@@ -4238,7 +5907,7 @@ function _initAnalyticsCharts(d) {
         plugins: noLegend,
         scales: {
           x: { grid: { display: false }, ticks: xTick },
-          y: { grid: { color: '#f0f3f8' }, ticks: yTick, beginAtZero: true },
+          y: { grid: { color: gridColor }, ticks: yTick, beginAtZero: true },
         },
       },
     });
@@ -4257,7 +5926,7 @@ function _initAnalyticsCharts(d) {
         plugins: noLegend,
         scales: {
           x: { grid: { display: false }, ticks: xTick },
-          y: { grid: { color: '#f0f3f8' }, ticks: yTick, beginAtZero: true },
+          y: { grid: { color: gridColor }, ticks: yTick, beginAtZero: true },
         },
       },
     });
@@ -4297,7 +5966,7 @@ function _initAnalyticsCharts(d) {
           },
         },
         scales: {
-          x: { grid: { color: '#f0f3f8' }, ticks: xTick, beginAtZero: true },
+          x: { grid: { color: gridColor }, ticks: xTick, beginAtZero: true },
           y: { grid: { display: false }, ticks: { color: '#333', font: { size: 11 } } },
         },
       },
@@ -4348,7 +6017,7 @@ function _initAnalyticsCharts(d) {
           plugins: noLegend,
           scales: {
             x: { grid: { display: false }, ticks: xTick },
-            y: { grid: { color: '#f0f3f8' }, ticks: yTick, beginAtZero: true },
+            y: { grid: { color: gridColor }, ticks: yTick, beginAtZero: true },
           },
         },
       });
@@ -4416,49 +6085,173 @@ function showToast(msg, isError = false) {
     document.body.appendChild(t);
   }
   t.textContent = msg;
-  t.style.background = isError ? '#c02020' : '#30426a';
+  t.style.background = isError ? '#e91429' : '#282828';
   t.style.color = '#fff';
   t.style.opacity = '1';
   clearTimeout(t._timer);
   t._timer = setTimeout(() => { t.style.opacity = '0'; }, 3000);
 }
 
-// ── Sidebar toggle ───────────────────────────────────────────────────────────
-function isMobileLayout() {
-  return window.matchMedia('(max-width: 768px)').matches;
-}
+function setupPlayerBarListeners() {
+  if (window._playerBarListeners) return;
+  window._playerBarListeners = true;
 
-function closeMobileSidebar() {
-  document.getElementById('sidebar-wrapper').classList.remove('mobile-open');
-  document.body.classList.remove('sidebar-open');
-}
+  const play = (deviceId, action) => {
+    if (deviceId) npControl(deviceId, action);
+  };
 
-document.getElementById('sidebar-toggle').addEventListener('click', () => {
-  const sidebar = document.getElementById('sidebar-wrapper');
-  if (isMobileLayout()) {
-    sidebar.classList.toggle('mobile-open');
-    document.body.classList.toggle('sidebar-open', sidebar.classList.contains('mobile-open'));
-    return;
-  }
-  sidebar.classList.toggle('collapsed');
-  document.getElementById('content-wrapper').classList.toggle('expanded');
-});
-
-document.querySelectorAll('.sidebar-nav a').forEach(a => {
-  a.addEventListener('click', () => {
-    if (isMobileLayout()) closeMobileSidebar();
+  document.getElementById('np-mini-play')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (typeof WebPlayback !== 'undefined' && WebPlayback.active) {
+      WebPlayback.toggle();
+      return;
+    }
+    const deviceId = e.currentTarget.dataset.deviceId;
+    const d = (window._npItems || []).find(x => x.deviceId === deviceId);
+    if (!deviceId || !d) return;
+    play(deviceId, d.paused ? 'play' : 'pause');
   });
-});
 
-document.body.addEventListener('click', (e) => {
-  if (!isMobileLayout() || !document.body.classList.contains('sidebar-open')) return;
-  if (e.target.closest('#sidebar-wrapper') || e.target.closest('#sidebar-toggle')) return;
-  closeMobileSidebar();
-});
+  document.getElementById('np-bar-prev')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (typeof WebPlayback !== 'undefined' && WebPlayback.active) {
+      WebPlayback.prev().catch(() => {});
+      return;
+    }
+    play(e.currentTarget.dataset.deviceId, 'previous');
+  });
 
-window.addEventListener('resize', () => {
-  if (!isMobileLayout()) closeMobileSidebar();
-});
+  document.getElementById('np-bar-next')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (typeof WebPlayback !== 'undefined' && WebPlayback.active) {
+      WebPlayback.next().catch(() => {});
+      return;
+    }
+    play(e.currentTarget.dataset.deviceId, 'next');
+  });
+
+  document.getElementById('np-bar-shuffle')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (typeof WebPlayback !== 'undefined' && WebPlayback.active) {
+      const st = WebPlayback.getState();
+      WebPlayback.setShuffle(!st.shuffle);
+      return;
+    }
+    npToggleShuffleEl(e.currentTarget);
+  });
+
+  document.getElementById('np-bar-favorite')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (typeof WebPlayback !== 'undefined' && WebPlayback.active) {
+      const btn = e.currentTarget;
+      const path = btn.dataset.favPath;
+      if (!path) return;
+      libFavorite(path, btn.dataset.favTitle || '', btn.dataset.favArtist || '');
+      return;
+    }
+    npFavoriteEl(e.currentTarget);
+  });
+
+  document.getElementById('np-bar-sleep')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const deviceId = e.currentTarget.dataset.deviceId;
+    if (deviceId) npOpenSleep(deviceId);
+  });
+
+  const vol = document.getElementById('np-bar-volume');
+  if (vol) {
+    const dragOn = () => { window._playerBarVolumeDragging = true; };
+    const dragOff = () => { window._playerBarVolumeDragging = false; };
+    vol.addEventListener('mousedown', dragOn);
+    vol.addEventListener('touchstart', dragOn);
+    vol.addEventListener('mouseup', dragOff);
+    vol.addEventListener('touchend', dragOff);
+    vol.addEventListener('input', () => {
+      if (typeof WebPlayback !== 'undefined' && WebPlayback.active) {
+        WebPlayback.setVolume(parseInt(vol.value, 10));
+        return;
+      }
+      npVolumeEl(vol);
+    });
+    vol.addEventListener('change', () => {
+      if (typeof WebPlayback !== 'undefined' && WebPlayback.active) {
+        WebPlayback.setVolume(parseInt(vol.value, 10));
+        return;
+      }
+      npVolumeEl(vol);
+    });
+  }
+
+  document.querySelector('.player-progress-bar')?.addEventListener('click', (e) => {
+    if (typeof WebPlayback === 'undefined' || !WebPlayback.active) return;
+    e.stopPropagation();
+    const rect = e.currentTarget.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    WebPlayback.seekRatio(ratio);
+  });
+}
+
+function setupShellListeners() {
+  setupPlayerBarListeners();
+  document.getElementById('account-menu-btn')?.addEventListener('click', openAppDrawer);
+  document.querySelector('.sidebar-user-btn')?.addEventListener('click', openAppDrawer);
+  document.getElementById('topbar-settings')?.addEventListener('click', openAppDrawer);
+  document.getElementById('topbar-profile')?.addEventListener('click', openAppDrawer);
+  document.getElementById('topbar-back')?.addEventListener('click', () => window.history.back());
+  document.getElementById('spotify-queue-close')?.addEventListener('click', () => toggleQueuePanel(false));
+  document.getElementById('np-bar-queue')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleQueuePanel();
+  });
+  document.getElementById('np-bar-repeat')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const deviceId = e.currentTarget.dataset.deviceId;
+    if (deviceId) npControl(deviceId, 'loop');
+    e.currentTarget.classList.toggle('active');
+  });
+  const topSearch = document.getElementById('topbar-search-q');
+  const topForm = document.getElementById('topbar-search-form');
+  topSearch?.addEventListener('input', () => {
+    const q = topSearch.value;
+    window._lastSearchQ = q;
+    if (currentRoute !== 'search') window.location.hash = 'search';
+    libSearchDebounced(q);
+  });
+  topForm?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (currentRoute !== 'search') window.location.hash = 'search';
+    libSearchDebounced(topSearch?.value || '');
+  });
+  document.getElementById('topbar-search-browse')?.addEventListener('click', () => {
+    window.location.hash = 'search';
+    loadSearchBrowse();
+  });
+  document.getElementById('drawer-close')?.addEventListener('click', closeAppDrawer);
+  document.getElementById('app-backdrop')?.addEventListener('click', closeAppDrawer);
+  document.getElementById('now-playing-bar')?.addEventListener('click', (e) => {
+    if (e.target.closest('.player-center, .player-right, .player-like, .player-transport, .player-btn, .player-volume-wrap, .player-volume-slider')) return;
+    window.location.hash = 'nowplaying';
+  });
+  document.querySelectorAll('.drawer-link').forEach((a) => {
+    a.addEventListener('click', () => closeAppDrawer());
+  });
+  document.addEventListener('click', (e) => {
+    const genreTile = e.target.closest('.search-genre-tile[data-genre]');
+    if (genreTile) {
+      e.preventDefault();
+      const g = genreTile.getAttribute('data-genre') || '';
+      window._lastSearchQ = g;
+      const inp = document.getElementById('lib-search-q');
+      if (inp) inp.value = g;
+      libSearchRun(g);
+      return;
+    }
+    const tile = e.target.closest('.genre-tile[data-genre]');
+    if (tile) window._lastSearchQ = tile.getAttribute('data-genre') || '';
+  });
+}
+
+// Expose routes for UI tests (assigned after all register() calls below)
 
 // ── Global banner (alexapy session expiry, etc.) ─────────────────────────────
 let _bannerDismissed = false;
@@ -4472,9 +6265,11 @@ async function refreshGlobalBanner() {
     el.innerHTML = `
       <div class="global-alert">
         <i class="fa fa-triangle-exclamation"></i>
-        <span>Alexa session expired — "Play on device" and Now Playing controls won't work.
-        Re-run <code>scripts/alexa_login.py</code> to fix.</span>
-        <button onclick="dismissBanner()" title="Dismiss"><i class="fa fa-xmark"></i></button>
+        <span class="global-alert-text">Alexa session expired — Play on device and Now Playing controls won't work until you sign in again.</span>
+        <button type="button" class="btn-sm btn-primary global-alert-signin" onclick="openAlexaReLoginModal(true)">
+          <i class="fa fa-key"></i> Sign in to Amazon
+        </button>
+        <button type="button" class="global-alert-dismiss" onclick="dismissBanner()" title="Dismiss"><i class="fa fa-xmark"></i></button>
       </div>`;
   } else {
     el.innerHTML = '';
@@ -4801,10 +6596,13 @@ function installAuthFetch() {
 }
 
 async function init() {
-  await refreshAuthInfo();
   installAuthFetch();
-  await ensureAuth();
-  // Stop Now Playing poll when navigating away from it
+  if (typeof WebCache !== 'undefined') {
+    WebCache.hydrateHomeFromDisk();
+    WebCache.hydrateLibraryFromDisk();
+    WebCache.hydrateSearchFromDisk();
+  }
+
   window.addEventListener('hashchange', () => {
     const hash = window.location.hash.replace('#', '');
     if (!hash.startsWith('nowplaying')) {
@@ -4818,18 +6616,41 @@ async function init() {
 
   setupPlaylistSortDelegation();
   setupSearchDelegation();
+  setupHomeFilterDelegation();
+  setupShellListeners();
+
+  if (typeof WebPlayback !== 'undefined') {
+    WebPlayback.onChange((st) => {
+      if (!st.active) {
+        renderPlayerBar();
+        return;
+      }
+      renderWebPlayerBar(st);
+      if (!document.getElementById('spotify-queue')?.classList.contains('hidden')) {
+        renderQueuePanel();
+      }
+    });
+  }
 
   // Initial route
   const hash = window.location.hash.replace('#', '') || 'dashboard';
   navigate(hash);
 
-  // Global header poll — update "now playing" bar every 6s regardless of page
+  refreshAuthInfo().then(() => ensureAuth()).catch(() => {});
+
   refreshCurrentTrack();
   setInterval(refreshCurrentTrack, 6000);
+  refreshSidebarPlaylists();
+  setInterval(refreshSidebarPlaylists, 120000);
+  if (!_npGlobalTickTimer) {
+    _npGlobalTickTimer = setInterval(npTickTimes, 1000);
+  }
 
-  // Surface alexapy session expiry without blocking the UI
   refreshGlobalBanner();
   setInterval(refreshGlobalBanner, 120000);
+  warmBackgroundCaches();
+  prefetchCriticalApis();
 }
 
+window.routes = routes;
 init();

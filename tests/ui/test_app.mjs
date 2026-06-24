@@ -1,50 +1,7 @@
 // UI tests for public/js/app.js using jsdom + Node's built-in test runner.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { JSDOM } from 'jsdom';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname  = path.dirname(__filename);
-
-// Build a jsdom window with the SPA shell, load app.js, and return
-// references to the window/document and any module-scoped helpers.
-function bootstrap({ fetchImpl } = {}) {
-  const html = `
-    <!doctype html>
-    <html><body>
-      <span id="page-title"></span>
-      <div id="main-content"></div>
-      <div id="now-playing-bar" style="display:none">
-        <span id="np-track-text"></span>
-      </div>
-      <span id="user-label"></span>
-      <span id="server-label"></span>
-      <button id="sidebar-toggle"></button>
-      <div id="sidebar-wrapper"></div>
-      <div id="content-wrapper"></div>
-      <div id="toast"></div>
-      <nav><a class="nav-link" href="#dashboard">d</a></nav>
-      <ul></ul>
-    </body></html>`;
-  const dom = new JSDOM(html, { url: 'http://localhost/', runScripts: 'dangerously' });
-  const { window } = dom;
-  window.fetch = fetchImpl || (async () => ({ ok: true, json: async () => ({}) }));
-  window.confirm = () => true;
-  window.alert = () => {};
-  window.setInterval = () => 0;
-
-  let src = readFileSync(path.join(__dirname, '..', '..', 'public', 'js', 'app.js'), 'utf8');
-  // Skip the unconditional init() call; tests drive functions directly.
-  src = src.replace(/\binit\(\);?\s*$/m, '');
-  // Inject as <script> so identifiers like `document` resolve to window.document.
-  const script = window.document.createElement('script');
-  script.textContent = src;
-  window.document.body.appendChild(script);
-  return { window, document: window.document, dom };
-}
+import { bootstrap } from './helpers.mjs';
 
 
 // ─────────────────────────── pure helpers ────────────────────────────────────
@@ -238,7 +195,7 @@ test('refreshCurrentTrack hides bar when no devices playing', async () => {
     fetchImpl: async () => ({ ok: true, json: async () => ({ items: [] }) }),
   });
   await window.refreshCurrentTrack();
-  assert.equal(document.getElementById('now-playing-bar').style.display, 'none');
+  assert.ok(document.getElementById('now-playing-bar').classList.contains('hidden'));
 });
 
 test('refreshCurrentTrack shows single device label', async () => {
@@ -248,8 +205,10 @@ test('refreshCurrentTrack shows single device label', async () => {
     }) }),
   });
   await window.refreshCurrentTrack();
-  assert.equal(document.getElementById('now-playing-bar').style.display, 'flex');
-  assert.equal(document.getElementById('np-track-text').textContent, 'Hey — Pixies');
+  const bar = document.getElementById('now-playing-bar');
+  assert.ok(!bar.classList.contains('hidden'));
+  assert.equal(document.getElementById('np-track-text').textContent, 'Hey');
+  assert.equal(document.getElementById('np-artist-text').textContent, 'Pixies');
 });
 
 test('refreshCurrentTrack shows +N when multiple', async () => {
@@ -263,7 +222,7 @@ test('refreshCurrentTrack shows +N when multiple', async () => {
     }) }),
   });
   await window.refreshCurrentTrack();
-  assert.match(document.getElementById('np-track-text').textContent, /\(\+2 more\)$/);
+  assert.match(document.getElementById('np-track-text').textContent, /A \(\+2 more\)$/);
 });
 
 
@@ -433,20 +392,13 @@ test('settings page marks Watch Folder Scanning as legacy/unused', async () => {
 
 // ─────────────────────────── global auth banner ──────────────────────────────
 
-function withBanner(window, document) {
-  const el = document.createElement('div');
-  el.id = 'global-banner';
-  document.body.appendChild(el);
-  return el;
-}
-
 test('refreshGlobalBanner shows warning when configured but session expired', async () => {
   const { window, document } = bootstrap({
     fetchImpl: async () => ({ ok: true, json: async () => ({
       available: true, configured: true, authenticated: false,
     }) }),
   });
-  const el = withBanner(window, document);
+  const el = document.getElementById('global-banner');
   await window.refreshGlobalBanner();
   assert.match(el.innerHTML, /session expired/i);
 });
@@ -457,7 +409,7 @@ test('refreshGlobalBanner stays empty when authenticated', async () => {
       available: true, configured: true, authenticated: true,
     }) }),
   });
-  const el = withBanner(window, document);
+  const el = document.getElementById('global-banner');
   await window.refreshGlobalBanner();
   assert.equal(el.innerHTML, '');
 });
@@ -468,7 +420,7 @@ test('refreshGlobalBanner stays empty when not configured', async () => {
       available: true, configured: false, authenticated: null,
     }) }),
   });
-  const el = withBanner(window, document);
+  const el = document.getElementById('global-banner');
   await window.refreshGlobalBanner();
   assert.equal(el.innerHTML, '');
 });

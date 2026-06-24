@@ -18,7 +18,9 @@ import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import android.util.Log
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
@@ -28,6 +30,7 @@ import com.bockmedia.console.BockMediaApp
 import com.bockmedia.console.MainActivity
 import com.bockmedia.console.R
 import com.bockmedia.console.data.analytics.DeviceAnalyticsReporter
+import com.bockmedia.console.domain.model.PlayTarget
 import kotlinx.coroutines.runBlocking
 
 class LocalPlaybackService : MediaSessionService() {
@@ -37,7 +40,13 @@ class LocalPlaybackService : MediaSessionService() {
     private var artists: List<String> = emptyList()
     private var albums: List<String> = emptyList()
     private var paths: List<String> = emptyList()
+    private var durationsMs: List<Long> = emptyList()
     private var urls: List<String> = emptyList()
+    private var activeTargetKind: String? = null
+    private var activeTargetPath: String? = null
+    private var activeTargetArtist: String? = null
+    private var activeTargetAlbum: String? = null
+    private var activeTargetPlaylistId: String? = null
     private var lastReportedIndex = -1
     private var crossfadeMs: Long = 0
     private var crossfading = false
@@ -48,6 +57,9 @@ class LocalPlaybackService : MediaSessionService() {
     private var audioManager: AudioManager? = null
     private var audioFocusRequest: AudioFocusRequest? = null
     private var resumeOnFocusGain = false
+    private var consecutivePlayErrors = 0
+    private var retryErrorIndex = -1
+    private var consecutiveSkips = 0
     private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
         when (change) {
             AudioManager.AUDIOFOCUS_LOSS -> {
@@ -96,6 +108,7 @@ class LocalPlaybackService : MediaSessionService() {
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
         ensureChannel()
     }
 
@@ -107,14 +120,43 @@ class LocalPlaybackService : MediaSessionService() {
                 artists = intent.getStringArrayListExtra(EXTRA_ARTISTS).orEmpty()
                 albums = intent.getStringArrayListExtra(EXTRA_ALBUMS).orEmpty()
                 paths = intent.getStringArrayListExtra(EXTRA_PATHS).orEmpty()
+                durationsMs = intent.getLongArrayExtra(EXTRA_DURATIONS_MS)?.toList()
+                    ?: List(paths.size) { 0L }
                 crossfadeMs = intent.getLongExtra(EXTRA_CROSSFADE_MS, 0L).coerceAtLeast(0)
+                activeTargetKind = intent.getStringExtra(EXTRA_TARGET_KIND)
+                activeTargetPath = intent.getStringExtra(EXTRA_TARGET_PATH)
+                activeTargetArtist = intent.getStringExtra(EXTRA_TARGET_ARTIST)
+                activeTargetAlbum = intent.getStringExtra(EXTRA_TARGET_ALBUM)
+                activeTargetPlaylistId = intent.getStringExtra(EXTRA_TARGET_PLAYLIST_ID)
                 lastReportedIndex = -1
+                consecutivePlayErrors = 0
+                consecutiveSkips = 0
+                retryErrorIndex = -1
                 releasePlayers()
                 val start = intent.getIntExtra(EXTRA_START_INDEX, 0).coerceAtLeast(0)
                 val shuffle = intent.getBooleanExtra(EXTRA_SHUFFLE, false)
                 startPlayback(urls, start, shuffle)
             }
             ACTION_TOGGLE -> {
+                if (player == null) {
+                    val st = LocalPlaybackController.state.value
+                    if (st.active && st.tracks.isNotEmpty()) {
+                        runBlocking {
+                            LocalPlaybackController.playTracks(
+                                this@LocalPlaybackService,
+                                st.tracks,
+                                startIndex = st.index,
+                                shuffle = st.shuffle,
+                                sourceLabel = st.sourceLabel,
+                                playlist = st.playlist,
+                                playlistId = st.playlistId,
+                                activeTarget = st.activeTarget,
+                            )
+                            if (!st.isPlaying) player?.pause()
+                        }
+                    }
+                    return START_STICKY
+                }
                 if (crossfading) {
                     val playing = incomingPlayer?.isPlaying == true
                     if (playing) {
@@ -191,8 +233,11 @@ class LocalPlaybackService : MediaSessionService() {
 
     private fun checkCrossfadeTrigger(exo: ExoPlayer) {
         if (crossfadeMs <= 0 || crossfading || !exo.isPlaying) return
+        // Only crossfade once ExoPlayer knows the real stream duration — library
+        // metadata is often 0/wrong and would trigger an immediate skip to the next track.
         val duration = exo.duration
-        if (duration == C.TIME_UNSET || duration <= 0) return
+        if (duration == C.TIME_UNSET || duration <= crossfadeMs) return
+        if (exo.currentPosition < CROSSFADE_MIN_PLAYED_MS) return
         if (!exo.hasNextMediaItem()) return
         val remaining = duration - exo.currentPosition
         if (remaining <= crossfadeMs) {
@@ -257,12 +302,22 @@ class LocalPlaybackService : MediaSessionService() {
     private fun skip(forward: Boolean) {
         cancelCrossfade(releaseIncoming = true)
         val exo = player ?: return
-        val stayPaused = !exo.isPlaying
+        val shouldPlay = exo.playWhenReady || exo.isPlaying
         if (forward) exo.seekToNextMediaItem() else exo.seekToPreviousMediaItem()
         exo.volume = 1f
-        if (stayPaused) exo.pause()
+        when (exo.playbackState) {
+            Player.STATE_ENDED -> exo.seekToDefaultPosition()
+            Player.STATE_IDLE -> exo.prepare()
+        }
+        if (shouldPlay) {
+            requestAudioFocus()
+            exo.play()
+        } else {
+            exo.pause()
+        }
         reportPlayIfNeeded(exo.currentMediaItemIndex)
         syncState(exo)
+        startProgressUpdates()
         startForeground(NOTIFICATION_ID, buildNotification())
     }
 
@@ -329,7 +384,7 @@ class LocalPlaybackService : MediaSessionService() {
     }
 
     private fun buildExoPlayer(): ExoPlayer {
-        val httpClient = runBlocking { BockMediaApp.get(this@LocalPlaybackService).buildAuthenticatedHttpClient() }
+        val httpClient = runBlocking { BockMediaApp.get(this@LocalPlaybackService).buildPlaybackHttpClient() }
         val dataSourceFactory = DefaultDataSource.Factory(this, OkHttpDataSource.Factory(httpClient))
         return ExoPlayer.Builder(this)
             .setMediaSourceFactory(
@@ -397,13 +452,37 @@ class LocalPlaybackService : MediaSessionService() {
 
     private fun primaryPlayerListener(exo: ExoPlayer) = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
+            if (isPlaying && exo === leadPlayer()) {
+                consecutivePlayErrors = 0
+                consecutiveSkips = 0
+                retryErrorIndex = -1
+                LocalPlaybackController.update { it.copy(error = null) }
+            }
             syncState(leadPlayer() ?: exo)
             if (isPlaying) startProgressUpdates() else if (!crossfading) stopProgressUpdates()
             startForeground(NOTIFICATION_ID, buildNotification())
         }
 
+        override fun onPlayerError(error: PlaybackException) {
+            Log.w(TAG, "playback error index=${exo.currentMediaItemIndex} ${titles.getOrNull(exo.currentMediaItemIndex)}", error)
+            if (crossfading) {
+                if (exo === incomingPlayer) {
+                    cancelCrossfade(releaseIncoming = true)
+                    player?.let { handlePlaybackError(it, error) }
+                } else {
+                    // Outgoing hit EOF/read error while incoming is playing — promote it.
+                    incomingPlayer?.let { completeCrossfade() }
+                        ?: cancelCrossfade(releaseIncoming = true)
+                }
+                return
+            }
+            handlePlaybackError(exo, error)
+        }
+
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             if (crossfading) return
+            consecutivePlayErrors = 0
+            retryErrorIndex = -1
             syncState(exo)
             reportPlayIfNeeded(exo.currentMediaItemIndex)
             startForeground(NOTIFICATION_ID, buildNotification())
@@ -418,9 +497,133 @@ class LocalPlaybackService : MediaSessionService() {
                 // the service while the user still expects to resume or keep skipping.
                 if (!exo.playWhenReady) return
                 if (exo.hasNextMediaItem()) return
+                if (tryContinueQueue()) return
                 stopPlayback()
             }
         }
+    }
+
+    private fun handlePlaybackError(exo: ExoPlayer, error: PlaybackException) {
+        cancelCrossfade(releaseIncoming = true)
+        val active = player ?: exo
+        val idx = active.currentMediaItemIndex
+        val isRetry = idx == retryErrorIndex
+        if (!isRetry) {
+            retryErrorIndex = idx
+            consecutivePlayErrors = 0
+        }
+        consecutivePlayErrors++
+        // Retry the same track once (transient network / slow server).
+        if (consecutivePlayErrors == 1) {
+            active.seekToDefaultPosition()
+            when (active.playbackState) {
+                Player.STATE_IDLE -> active.prepare()
+                Player.STATE_ENDED -> active.seekToDefaultPosition()
+            }
+            requestAudioFocus()
+            active.play()
+            syncState(active)
+            startProgressUpdates()
+            startForeground(NOTIFICATION_ID, buildNotification())
+            return
+        }
+        val skipped = titles.getOrNull(idx).orEmpty().ifBlank { "Track" }
+        consecutiveSkips++
+        if (consecutiveSkips >= MAX_CONSECUTIVE_PLAY_ERRORS) {
+            LocalPlaybackController.update {
+                it.copy(error = "Playback stopped after several errors (last: $skipped)")
+            }
+            stopPlayback()
+            return
+        }
+        if (!active.hasNextMediaItem()) {
+            LocalPlaybackController.update {
+                it.copy(error = error.localizedMessage ?: "Playback failed")
+            }
+            stopPlayback()
+            return
+        }
+        LocalPlaybackController.update {
+            it.copy(error = "Skipped: $skipped")
+        }
+        active.seekToNextMediaItem()
+        when (active.playbackState) {
+            Player.STATE_IDLE -> active.prepare()
+            Player.STATE_ENDED -> active.seekToDefaultPosition()
+        }
+        requestAudioFocus()
+        active.play()
+        reportPlayIfNeeded(active.currentMediaItemIndex)
+        syncState(active)
+        startProgressUpdates()
+        startForeground(NOTIFICATION_ID, buildNotification())
+    }
+
+    private fun tryContinueQueue(): Boolean {
+        val app = BockMediaApp.get(this)
+        val mode = runBlocking { app.preferences.getContinueAfterQueueSync() }
+        if (mode == "off" || activeTargetKind == "radio") return false
+        val idx = exoCurrentIndex()
+        val lastPath = paths.getOrNull(idx).orEmpty()
+        if (lastPath.isBlank()) return false
+        val target = when (activeTargetKind) {
+            "playlist" -> activeTargetPlaylistId?.let { PlayTarget.Playlist(it, "") }
+            "album" -> activeTargetAlbum?.let { PlayTarget.Album(it, activeTargetArtist) }
+            "artist" -> activeTargetArtist?.let { PlayTarget.Artist(it) }
+            "song" -> activeTargetPath?.let { PlayTarget.Song(it, titles.getOrNull(idx).orEmpty()) }
+            else -> null
+        }
+        val more = runBlocking {
+            app.repository.continuationTracks(
+                mode = mode,
+                target = target,
+                lastPath = lastPath,
+                lastArtist = artists.getOrNull(idx),
+                exclude = paths.toSet(),
+            )
+        }
+        if (more.isEmpty()) return false
+        val base = runBlocking { app.resolveBaseUrl() }
+        val appended = more.mapNotNull { track ->
+            val url = track.localFile?.let { android.net.Uri.fromFile(it).toString() }
+                ?: com.bockmedia.console.data.local.AppPreferences.streamUrl(
+                    base, track.path, track.title, track.artist,
+                )
+            url?.let { track to it }
+        }
+        if (appended.isEmpty()) return false
+        paths = paths + appended.map { it.first.path }
+        titles = titles + appended.map { it.first.title }
+        artists = artists + appended.map { it.first.displayArtist }
+        albums = albums + appended.map { it.first.album.orEmpty() }
+        durationsMs = durationsMs + appended.map { it.first.durationMs }
+        urls = urls + appended.map { it.second }
+        val exo = leadPlayer() ?: player ?: return false
+        val items = urls.mapIndexed { i, url -> mediaItemFor(i, url) }
+        val nextIndex = idx + 1
+        exo.setMediaItems(items, nextIndex, 0)
+        exo.prepare()
+        exo.play()
+        reportPlayIfNeeded(nextIndex)
+        syncState(exo)
+        LocalPlaybackController.update { state ->
+            state.copy(
+                tracks = state.tracks + appended.map { it.first },
+                index = nextIndex,
+                isPlaying = true,
+            )
+        }
+        startForeground(NOTIFICATION_ID, buildNotification())
+        return true
+    }
+
+    private fun exoCurrentIndex(): Int = leadPlayer()?.currentMediaItemIndex ?: 0
+
+    /** ExoPlayer often lacks duration on ffmpeg-transcoded /stream URLs; fall back to library metadata. */
+    private fun effectiveDurationMs(exo: ExoPlayer, index: Int): Long {
+        val fromPlayer = exo.duration
+        if (fromPlayer != C.TIME_UNSET && fromPlayer > 0) return fromPlayer
+        return durationsMs.getOrNull(index)?.takeIf { it > 0 } ?: 0L
     }
 
     private fun attachMediaSession(exo: ExoPlayer) {
@@ -429,16 +632,15 @@ class LocalPlaybackService : MediaSessionService() {
     }
 
     private fun syncState(exo: ExoPlayer) {
-        val duration = exo.duration
-        val durationMs = if (duration == C.TIME_UNSET || duration < 0) 0 else duration
+        val idx = exo.currentMediaItemIndex
+        val durationMs = effectiveDurationMs(exo, idx)
         LocalPlaybackController.onServiceState(
-            index = exo.currentMediaItemIndex,
+            index = idx,
             isPlaying = exo.isPlaying,
             positionMs = exo.currentPosition.coerceAtLeast(0),
             durationMs = durationMs,
             shuffle = player?.shuffleModeEnabled == true,
         )
-        val idx = exo.currentMediaItemIndex
         if (idx in paths.indices) {
             val track = com.bockmedia.console.domain.model.LocalTrack(
                 path = paths[idx],
@@ -469,9 +671,9 @@ class LocalPlaybackService : MediaSessionService() {
         val artist = artists.getOrNull(idx) ?: ""
         val isPlaying = exo?.isPlaying == true
         val buffering = exo?.playbackState == Player.STATE_BUFFERING
-        val duration = exo?.duration ?: 0L
+        val duration = if (exo != null) effectiveDurationMs(exo, idx) else 0L
         val position = exo?.currentPosition?.coerceAtLeast(0) ?: 0L
-        val hasDuration = duration > 0 && duration != C.TIME_UNSET
+        val hasDuration = duration > 0
 
         val prev = actionPendingIntent(ACTION_PREVIOUS, 1)
         val toggle = actionPendingIntent(ACTION_TOGGLE, 2)
@@ -541,6 +743,7 @@ class LocalPlaybackService : MediaSessionService() {
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = mediaSession
 
     override fun onDestroy() {
+        if (instance === this) instance = null
         cancelCrossfade(releaseIncoming = true)
         abandonAudioFocus()
         stopProgressUpdates()
@@ -550,6 +753,11 @@ class LocalPlaybackService : MediaSessionService() {
     }
 
     companion object {
+        @Volatile
+        private var instance: LocalPlaybackService? = null
+
+        fun hasPlayer(): Boolean = instance?.player != null
+
         const val ACTION_PLAY = "com.bockmedia.console.local.PLAY"
         const val ACTION_TOGGLE = "com.bockmedia.console.local.TOGGLE"
         const val ACTION_NEXT = "com.bockmedia.console.local.NEXT"
@@ -563,12 +771,21 @@ class LocalPlaybackService : MediaSessionService() {
         const val EXTRA_ARTISTS = "artists"
         const val EXTRA_ALBUMS = "albums"
         const val EXTRA_PATHS = "paths"
+        const val EXTRA_DURATIONS_MS = "durationsMs"
         const val EXTRA_START_INDEX = "startIndex"
         const val EXTRA_CROSSFADE_MS = "crossfadeMs"
         const val EXTRA_POSITION_MS = "positionMs"
+        const val EXTRA_TARGET_KIND = "targetKind"
+        const val EXTRA_TARGET_PATH = "targetPath"
+        const val EXTRA_TARGET_ARTIST = "targetArtist"
+        const val EXTRA_TARGET_ALBUM = "targetAlbum"
+        const val EXTRA_TARGET_PLAYLIST_ID = "targetPlaylistId"
         private const val CHANNEL_ID = "local_playback"
         private const val NOTIFICATION_ID = 42
         private const val PROGRESS_INTERVAL_MS = 500L
         private const val CROSSFADE_TICK_MS = 50L
+        private const val CROSSFADE_MIN_PLAYED_MS = 15_000L
+        private const val MAX_CONSECUTIVE_PLAY_ERRORS = 8
+        private const val TAG = "LocalPlayback"
     }
 }

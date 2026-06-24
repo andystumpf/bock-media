@@ -462,7 +462,15 @@ final class BockMediaRepository: ObservableObject {
 
     func sortPlaylist(id: String, sortBy: String, order: String) async throws {
         try await ensureAPI()
-        _ = try await api.sortPlaylist(id: id, body: ["sortBy": sortBy, "order": order])
+        _ = try await api.sortPlaylist(id: id, body: ["by": sortBy, "order": order])
+    }
+
+    func movePlaylistTrack(playlistId: String, path: String, toIndex: Int) async throws {
+        try await ensureAPI()
+        _ = try await api.movePlaylistTrack(
+            id: playlistId,
+            body: ["path": path, "toIndex": toIndex]
+        )
     }
 
     func aiPlaylist(prompt: String, name: String, maxTracks: Int, save: Bool) async throws -> AiPlaylistResponse {
@@ -512,12 +520,28 @@ final class BockMediaRepository: ObservableObject {
         return try await api.resonanceMix(body: body)
     }
 
+    func acquireSuggest(seedKind: String, path: String? = nil, album: String? = nil,
+                        artist: String? = nil, playlistId: String? = nil,
+                        limit: Int = 24) async throws -> AcquireSuggestResponse {
+        try await ensureAPI()
+        var body: [String: Any] = ["seedKind": seedKind, "limit": limit]
+        if let path { body["path"] = path }
+        if let album { body["album"] = album }
+        if let artist { body["artist"] = artist }
+        if let playlistId { body["playlistId"] = playlistId }
+        return try await api.acquireSuggest(body: body)
+    }
+
+    func acquireExplore(limit: Int = 24) async throws -> AcquireSuggestResponse {
+        try await ensureAPI()
+        return try await api.acquireExplore(limit: limit)
+    }
+
     func playDiscoveryTracksLocally(_ tracks: [PlaylistTrack], title: String, shuffle: Bool = true) async {
         var localTracks: [LocalTrack] = []
         for t in tracks {
             guard let path = t.path, !path.isEmpty else { continue }
-            let url = await streamURL(for: path)
-            guard let url else { continue }
+            guard let urlStr = await streamURL(for: path), let url = URL(string: urlStr) else { continue }
             localTracks.append(LocalTrack(path: path, title: t.title ?? path, artist: t.artist, album: t.album, streamURL: url, localFileURL: nil))
         }
         guard !localTracks.isEmpty else { return }

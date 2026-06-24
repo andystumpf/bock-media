@@ -152,12 +152,6 @@ fun NowPlayingScreen(
             return
         }
         val serial = resolveSerial(dev, alexaDevices)
-        if (serial == null) {
-            snackbarHostState.showSnackbar(
-                "Can't control \"${dev.deviceName}\" — rename it on Devices to match the Echo's Alexa name.",
-            )
-            return
-        }
         runCatching {
             repository.deviceControl(dev.deviceId, dev.deviceName ?: "", serial, action)
             refreshLive()
@@ -285,6 +279,14 @@ fun NowPlayingScreen(
                 pageCount = { devices.size.coerceAtLeast(1) },
             )
             val deviceIds = remember(devices) { devices.map { it.deviceId } }
+
+            LaunchedEffect(localState.active, deviceIds) {
+                if (!localState.active || devices.isEmpty()) return@LaunchedEffect
+                val localIdx = devices.indexOfFirst { isLocalPhoneDevice(it.deviceId) }
+                if (localIdx >= 0 && pagerState.currentPage != localIdx) {
+                    pagerState.scrollToPage(localIdx)
+                }
+            }
 
             LaunchedEffect(deviceIds, playbackFocusGeneration) {
                 if (devices.isEmpty()) return@LaunchedEffect
@@ -576,6 +578,14 @@ private fun SpotifyNowPlayingPage(
     var artUrl by remember(displayDev.filepath) { mutableStateOf<String?>(null) }
     val context = androidx.compose.ui.platform.LocalContext.current
     val localArtFile = if (isLocal) liveLocal.current?.localFile else null
+    var lastSkipToast by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(isLocal, liveLocal.error) {
+        val err = liveLocal.error ?: return@LaunchedEffect
+        if (isLocal && err != lastSkipToast) {
+            lastSkipToast = err
+            android.widget.Toast.makeText(context, err, android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
     LaunchedEffect(displayDev.filepath, localArtFile) {
         artUrl = repository.resolvePlaybackArtUrl(context, displayDev.filepath, localArtFile)
     }

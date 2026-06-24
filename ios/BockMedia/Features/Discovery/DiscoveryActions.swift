@@ -18,6 +18,8 @@ struct DiscoveryContextMenuItems: View {
     let seed: DiscoverySeed
     @Binding var showMixMuse: Bool
     @Binding var mixMuseSeed: DiscoverySeed?
+    @Binding var showAcquire: Bool
+    @Binding var acquireSeed: DiscoverySeed?
 
     var body: some View {
         Button {
@@ -35,6 +37,12 @@ struct DiscoveryContextMenuItems: View {
             Task { await runResonanceMix() }
         } label: {
             Label("Resonance mix (save)", systemImage: "music.note.list")
+        }
+        Button {
+            acquireSeed = seed
+            showAcquire = true
+        } label: {
+            Label("Music to seek out…", systemImage: "binoculars")
         }
     }
 
@@ -74,6 +82,84 @@ struct DiscoveryContextMenuItems: View {
             }
         } catch {
             appState.toast = error.localizedDescription
+        }
+    }
+}
+
+struct AcquireIdeasSheet: View {
+    @ObservedObject var appState: AppState
+    let seed: DiscoverySeed?
+    @Environment(\.dismiss) private var dismiss
+    @State private var loading = true
+    @State private var response: AcquireSuggestResponse?
+    @State private var errorText: String?
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if loading {
+                    ProgressView("Looking up MusicBrainz…")
+                } else if let errorText {
+                    ContentUnavailableView("Could not load", systemImage: "exclamationmark.triangle", description: Text(errorText))
+                } else if (response?.suggestions ?? []).isEmpty {
+                    ContentUnavailableView(
+                        "Nothing new found",
+                        systemImage: "binoculars",
+                        description: Text(response?.note ?? "Your library may already cover this niche.")
+                    )
+                } else {
+                    List(response?.suggestions ?? []) { item in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text(item.name).font(.headline)
+                                Spacer()
+                                if let urlStr = item.musicbrainzUrl, let url = URL(string: urlStr) {
+                                    Link("MusicBrainz", destination: url)
+                                        .font(.caption)
+                                }
+                            }
+                            if !item.reasons.isEmpty {
+                                Text(item.reasons.prefix(2).joined(separator: " · "))
+                                    .font(.caption)
+                                    .foregroundStyle(BockColors.muted)
+                            }
+                            if !item.tags.isEmpty {
+                                Text(item.tags.prefix(4).joined(separator: " · "))
+                                    .font(.caption2)
+                                    .foregroundStyle(BockColors.muted)
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Music to seek out")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { dismiss() }
+                }
+            }
+            .task { await load() }
+        }
+    }
+
+    private func load() async {
+        loading = true
+        defer { loading = false }
+        do {
+            if let seed {
+                response = try await appState.repository.acquireSuggest(
+                    seedKind: seed.kind.rawValue,
+                    path: seed.path,
+                    album: seed.album,
+                    artist: seed.artist,
+                    playlistId: seed.playlistId
+                )
+            } else {
+                response = try await appState.repository.acquireExplore()
+            }
+        } catch {
+            errorText = error.localizedDescription
         }
     }
 }

@@ -25,9 +25,14 @@ class AppPreferencesTest {
     }
 
     @Test
-    fun localHosts_includesLocalHostOnly() {
-        val hosts = AppPreferences.localHosts("http://192.168.1.187:3001", "http://142.56.8.193:3001")
-        assertTrue(hosts.contains("192.168.1.187"))
-        assertFalse(hosts.contains("142.56.8.193"))
+    fun streamUrl_includesTitleAndArtistQuery() {
+        val url = AppPreferences.streamUrl(
+            "http://host:3001",
+            "/mnt/music/a/track.mp3",
+            title = "Already Gone",
+            artist = "Eagles",
+        )
+        assertTrue(url!!.contains("title=Already%20Gone"))
+        assertTrue(url.contains("artist=Eagles"))
     }
 }

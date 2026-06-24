@@ -40,12 +40,15 @@ struct AlbumsView: View {
     @State private var loadingMore = false
     @State private var showMixMuse = false
     @State private var mixMuseSeed: DiscoverySeed?
+    @State private var showAcquire = false
+    @State private var acquireSeed: DiscoverySeed?
 
     var body: some View {
         browseList(loading: loading && items.isEmpty, empty: "No albums") {
             ForEach(items) { album in
                 NavigationLink(value: LibraryRoute.songs(artist: album.artist, album: album.name)) {
-                    HStack {
+                    HStack(spacing: 12) {
+                        AlbumRowArt(appState: appState, album: album)
                         VStack(alignment: .leading) {
                             Text(album.name).foregroundStyle(BockColors.onSurface)
                             Text(album.artist ?? "").font(.caption).foregroundStyle(BockColors.muted)
@@ -64,7 +67,9 @@ struct AlbumsView: View {
                         appState: appState,
                         seed: DiscoverySeed(kind: .album, title: album.name, album: album.name, artist: album.artist),
                         showMixMuse: $showMixMuse,
-                        mixMuseSeed: $mixMuseSeed
+                        mixMuseSeed: $mixMuseSeed,
+                        showAcquire: $showAcquire,
+                        acquireSeed: $acquireSeed
                     )
                 }
             }
@@ -83,6 +88,9 @@ struct AlbumsView: View {
         .refreshable { await reload() }
         .sheet(isPresented: $showMixMuse) {
             MixMusePromptSheet(appState: appState, seed: mixMuseSeed)
+        }
+        .sheet(isPresented: $showAcquire) {
+            AcquireIdeasSheet(appState: appState, seed: acquireSeed)
         }
     }
 
@@ -123,6 +131,8 @@ struct SongsView: View {
     @State private var loadingMore = false
     @State private var showMixMuse = false
     @State private var mixMuseSeed: DiscoverySeed?
+    @State private var showAcquire = false
+    @State private var acquireSeed: DiscoverySeed?
 
     var body: some View {
         browseList(loading: loading && items.isEmpty, empty: "No songs") {
@@ -149,11 +159,13 @@ struct SongsView: View {
                                 kind: .song,
                                 title: song.title ?? path,
                                 path: path,
-                                artist: song.artist,
-                                album: song.album
+                                album: song.album,
+                                artist: song.artist
                             ),
                             showMixMuse: $showMixMuse,
-                            mixMuseSeed: $mixMuseSeed
+                            mixMuseSeed: $mixMuseSeed,
+                            showAcquire: $showAcquire,
+                            acquireSeed: $acquireSeed
                         )
                     }
                 }
@@ -170,6 +182,9 @@ struct SongsView: View {
         .refreshable { await reload() }
         .sheet(isPresented: $showMixMuse) {
             MixMusePromptSheet(appState: appState, seed: mixMuseSeed)
+        }
+        .sheet(isPresented: $showAcquire) {
+            AcquireIdeasSheet(appState: appState, seed: acquireSeed)
         }
     }
 
@@ -195,6 +210,32 @@ struct SongsView: View {
             items.append(contentsOf: response.items)
             page = next
             total = response.total
+        }
+    }
+}
+
+private struct AlbumRowArt: View {
+    @ObservedObject var appState: AppState
+    let album: AlbumItem
+    @State private var url: URL?
+
+    var body: some View {
+        ArtworkWithUnplayedBadge(showUnplayed: album.unplayed) {
+            BockArtwork(url: url, size: 56, cornerRadius: 6)
+        }
+        .task(id: album.id) {
+            let item = LibraryItem(
+                id: album.id,
+                title: album.name,
+                subtitle: album.artist ?? "",
+                kind: .album,
+                playTarget: .album(name: album.name, artist: album.artist),
+                artPath: album.artPath,
+                artistName: album.artist,
+                albumName: album.name,
+                unplayed: album.unplayed
+            )
+            url = await appState.repository.resolveLibraryArtUrl(for: item)
         }
     }
 }

@@ -5,6 +5,7 @@ Each class maps to a real bug: stuck Now Playing rows, device correlation,
 collision-safe play verbs, cache-busting, etc.
 """
 import json
+import os
 import time
 
 import pytest
@@ -260,6 +261,30 @@ class TestPlaylistAlbumCollision:
         assert _audio_play(resp), resp
         assert paths == [('Mamma Mia!', 'Benny Andersson')]
 
+    def test_play_playlist_token_from_app(self, post_alexa, isolated_paths, monkeypatch, sample_playlist, sample_track):
+        pid = 'PL-APP-TEST'
+        m3u = sample_playlist['source']
+        monkeypatch.setattr(
+            server,
+            '_msp_playlist_by_id',
+            lambda p: (sample_playlist['name'], m3u) if p == pid else (None, None),
+        )
+        monkeypatch.setattr(
+            server,
+            '_playlist_paths_cached',
+            lambda playlist_id, source: [sample_track['path']],
+        )
+        token = server._register_play_playlist_token(
+            pid, sample_playlist['name'], m3u, shuffle=False,
+        )
+        resp = post_alexa(
+            'IntentRequest',
+            'PlayFileTokenIntent',
+            slots={'FileToken': f'playlist token {token}'},
+        )
+        from tests.test_alexa import _audio_play
+        assert _audio_play(resp), resp
+
 
 # ─────────────────────────── static cache busting ──────────────────────────────
 
@@ -449,6 +474,64 @@ class TestHealthEndpoint:
         data = client.get('/api/health').get_json()
         assert data['lastAlexaHit'] is not None
         assert data['lastAlexaHitAgo'] is not None
+
+
+# ─────────────────────────── silent device discovery ─────────────────────────
+
+class TestSilentDeviceDiscovery:
+    def test_silent_correlation_path_under_music_root(self, isolated_paths, monkeypatch, tmp_path):
+        music = tmp_path / 'music'
+        music.mkdir()
+        bundled = os.path.join(os.path.dirname(server.__file__), 'assets', 'silent-correlation.mp3')
+        if not os.path.isfile(bundled):
+            pytest.skip('silent-correlation.mp3 asset missing')
+        monkeypatch.setattr(server, 'MUSIC_ROOT', str(music))
+        path = server._ensure_silent_correlation_path()
+        assert path.startswith(str(music))
+        assert os.path.isfile(path)
+
+    def test_build_silent_correlation_uses_file_token(self, isolated_paths, monkeypatch, tmp_path):
+        music = tmp_path / 'music'
+        music.mkdir()
+        silent = music / '.bock' / 'silent-correlation.mp3'
+        silent.parent.mkdir(parents=True)
+        silent.write_bytes(b'ID3')
+        monkeypatch.setattr(server, 'MUSIC_ROOT', str(music))
+        monkeypatch.setattr(server, '_alexa_alias', lambda: 'bock media')
+        text = server._build_silent_correlation_text()
+        assert 'ask bock media to start file token' in text
+
+    def test_device_needs_discovery_unbound_always(self, isolated_paths):
+        assert server._device_needs_discovery('S-NEW', {}, stale_days=7, only_stale=True)
+
+    def test_device_needs_discovery_respects_stale(self, isolated_paths, monkeypatch):
+        monkeypatch.setattr(server, '_primary_by_serial', lambda s, store=None: 'amzn1.ask.device.X')
+        monkeypatch.setattr(server, '_load_discovery_state',
+                            lambda: {'serials': {'S1': time.time()}})
+        assert not server._device_needs_discovery('S1', {}, stale_days=7, only_stale=True)
+        monkeypatch.setattr(server, '_load_discovery_state',
+                            lambda: {'serials': {'S1': time.time() - 8 * 86400}})
+        assert server._device_needs_discovery('S1', {}, stale_days=7, only_stale=True)
+
+    def test_discover_endpoint_disabled(self, client, isolated_paths, monkeypatch):
+        cfg = server.CONFIG_PATH
+        os.makedirs(os.path.dirname(cfg), exist_ok=True)
+        with open(cfg, 'w') as f:
+            json.dump({'deviceDiscovery': {'enabled': False}}, f)
+        resp = client.post('/api/devices/discover', json={})
+        assert resp.status_code == 400
+        assert resp.get_json()['code'] == 'disabled'
+
+    def test_discover_force_when_disabled(self, client, isolated_paths, monkeypatch):
+        cfg = server.CONFIG_PATH
+        os.makedirs(os.path.dirname(cfg), exist_ok=True)
+        with open(cfg, 'w') as f:
+            json.dump({'deviceDiscovery': {'enabled': False}}, f)
+        import alexa_remote
+        monkeypatch.setattr(alexa_remote, 'list_devices', lambda: [])
+        resp = client.post('/api/devices/discover', json={'force': True})
+        assert resp.status_code == 200
+        assert resp.get_json()['total'] == 0
 
 
 # ─────────────────────────── identify/test analytics exclusion ─────────────────

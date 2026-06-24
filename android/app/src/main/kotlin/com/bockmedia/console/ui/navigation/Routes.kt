@@ -6,6 +6,7 @@ import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.Analytics
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.DirectionsCar
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
@@ -54,7 +55,7 @@ sealed class BockRoute(val route: String, val title: String, val icon: ImageVect
 
         val allRoutes: List<BockRoute> by lazy {
             bottomNavRoutes + accountMenuRoutes + listOf(
-                NowPlaying, Playlists, Artists, Albums, Songs, Favorites, Downloads,
+                NowPlaying, Playlists, Artists, Albums, Songs, Favorites,
             )
         }
     }

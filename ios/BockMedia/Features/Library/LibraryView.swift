@@ -305,10 +305,12 @@ private struct LibraryItemArt: View {
     @State private var url: URL?
 
     var body: some View {
-        BockArtwork(url: url, size: size, cornerRadius: item.kind == .artist ? size / 2 : 6)
-            .task(id: item.id) {
-                url = await appState.repository.resolveLibraryArtUrl(for: item)
-            }
+        ArtworkWithUnplayedBadge(showUnplayed: item.kind == .album && item.unplayed) {
+            BockArtwork(url: url, size: size, cornerRadius: item.kind == .artist ? size / 2 : 6)
+        }
+        .task(id: item.id) {
+            url = await appState.repository.resolveLibraryArtUrl(for: item)
+        }
     }
 }
 

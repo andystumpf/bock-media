@@ -17,6 +17,7 @@ fun LibraryArtListItem(
     artPath: String? = null,
     artistName: String? = null,
     albumName: String? = null,
+    showUnplayed: Boolean = false,
     modifier: Modifier = Modifier,
     trailing: @Composable () -> Unit = {},
 ) {
@@ -32,13 +33,15 @@ fun LibraryArtListItem(
     ListItem(
         modifier = modifier,
         leadingContent = {
-            BockArtwork(
-                model = artUrl,
-                title = title,
-                modifier = Modifier.size(48.dp),
-                shape = RoundedCornerShape(6.dp),
-                fallbackFontSize = 16.sp,
-            )
+            ArtworkWithUnplayedBadge(showUnplayed = showUnplayed) {
+                BockArtwork(
+                    model = artUrl,
+                    title = title,
+                    modifier = Modifier.size(48.dp),
+                    shape = RoundedCornerShape(6.dp),
+                    fallbackFontSize = 16.sp,
+                )
+            }
         },
         headlineContent = { Text(title) },
         supportingContent = { Text(subtitle) },

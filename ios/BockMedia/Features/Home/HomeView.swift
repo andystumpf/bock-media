@@ -56,7 +56,7 @@ final class HomeViewModel: ObservableObject {
     /// individual songs/albums (those come from play history). Recent playlists
     /// first, backfilled from mix rows. Mirrors Android `HomeFeed.homeShortcutCards()`.
     var shortcutCards: [HomeCard] {
-        feed?.homeShortcutCards() ?? []
+        feed.map { $0.homeShortcutCards().filter { $0.eligibleForHomeShortcut } } ?? []
     }
 
     var showShortcuts: Bool {

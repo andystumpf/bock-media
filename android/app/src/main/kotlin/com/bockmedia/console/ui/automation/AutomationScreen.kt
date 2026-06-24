@@ -331,7 +331,8 @@ private fun AutomationFormSheet(
                         onSaved()
                     }
                 },
-                enabled = label.isNotBlank() && deviceValue.isNotBlank() && selectedDays.isNotEmpty(),
+                enabled = label.isNotBlank() && deviceValue.isNotBlank() && selectedDays.isNotEmpty()
+                    && playlistPick.first != null,
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(if (editItem != null) "Save" else "Add automation")

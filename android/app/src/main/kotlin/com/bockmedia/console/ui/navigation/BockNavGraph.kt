@@ -14,6 +14,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import com.bockmedia.console.ui.testing.BockTestTags
 import androidx.navigation.NavHostController
@@ -74,6 +75,7 @@ fun BockApp(repository: BockMediaRepository, deepLinkRoute: String? = null) {
     var remoteOk by remember { mutableStateOf(false) }
     var alexaDevices by remember { mutableStateOf(emptyList<com.bockmedia.console.data.api.dto.AlexaDevice>()) }
     val scope = rememberCoroutineScope()
+    val appContext = LocalContext.current
 
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val fullRoute = navBackStackEntry?.destination?.route
@@ -110,10 +112,19 @@ fun BockApp(repository: BockMediaRepository, deepLinkRoute: String? = null) {
         runCatching { navController.navigate(dest) { launchSingleTop = true } }
     }
 
+    // Land on Now Playing once playback starts, removing the playlist detail screen
+    // (and the device sheet's host) so back returns to the list rather than the picker.
+    fun openNowPlayingAfterPlay() {
+        navController.navigate(BockRoute.NowPlaying.route) {
+            launchSingleTop = true
+            popUpTo(ROUTE_PLAYLIST_DETAIL) { inclusive = true }
+        }
+    }
+
     LaunchedEffect(playTarget, pendingOpenNowPlaying) {
         if (!pendingOpenNowPlaying || playTarget != null) return@LaunchedEffect
         pendingOpenNowPlaying = false
-        navController.navigate(BockRoute.NowPlaying.route) { launchSingleTop = true }
+        openNowPlayingAfterPlay()
     }
 
     AlexaAuthMonitor(repository, snackbarHostState)
@@ -135,7 +146,16 @@ fun BockApp(repository: BockMediaRepository, deepLinkRoute: String? = null) {
     )
 
     suspend fun runMiniControl(dev: NowPlayingDeviceItem, action: String) {
-        val serial = resolveSerial(dev, alexaDevices) ?: return
+        if (com.bockmedia.console.media.isLocalPhoneDevice(dev.deviceId)) {
+            when (action) {
+                "play", "pause" -> com.bockmedia.console.media.LocalPlaybackController.togglePlayPause(appContext)
+                "next" -> com.bockmedia.console.media.LocalPlaybackController.skip(appContext, forward = true)
+                "previous" -> com.bockmedia.console.media.LocalPlaybackController.skip(appContext, forward = false)
+                "stop" -> com.bockmedia.console.media.LocalPlaybackController.stop(appContext)
+            }
+            return
+        }
+        val serial = resolveSerial(dev, alexaDevices)
         runCatching {
             repository.deviceControl(dev.deviceId, dev.deviceName ?: "", serial, action)
         }
@@ -214,6 +234,10 @@ fun BockApp(repository: BockMediaRepository, deepLinkRoute: String? = null) {
                 remoteOk = remoteOk,
                 snackbarHostState = snackbarHostState,
                 onPlay = { playTarget = it },
+                onLocalPlayStarted = {
+                    playbackFocusGeneration = PlaybackFocus.generation
+                    openNowPlayingAfterPlay()
+                },
                 playbackFocusGeneration = playbackFocusGeneration,
                 modifier = Modifier.fillMaxSize(),
             )
@@ -249,6 +273,7 @@ private fun BockNavHost(
     remoteOk: Boolean,
     snackbarHostState: SnackbarHostState,
     onPlay: (PlayTarget) -> Unit,
+    onLocalPlayStarted: () -> Unit = {},
     playbackFocusGeneration: Int = 0,
     modifier: Modifier = Modifier,
 ) {
@@ -375,7 +400,9 @@ private fun BockNavHost(
                 entry.arguments?.getString("id") ?: "",
                 remoteOk,
                 onPlay,
-            ) { navController.popBackStack() }
+                onBack = { navController.popBackStack() },
+                onLocalPlayStarted = onLocalPlayStarted,
+            )
         }
         composable(BockRoute.Artists.route) {
             ArtistsScreen(repository, remoteOk, onPlay) { artist ->

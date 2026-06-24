@@ -224,7 +224,7 @@ fun HomeScreen(
         if (filter == HomeFilter.Offline) loadOffline()
     }
 
-    val shortcutCards = feed?.homeShortcutCards().orEmpty()
+    val shortcutCards = feed?.homeShortcutCards().orEmpty().filter { it.eligibleForHomeShortcut() }
     val showShortcuts = filter == HomeFilter.All && shortcutCards.isNotEmpty()
 
     val sections = when (filter) {
@@ -256,6 +256,8 @@ fun HomeScreen(
     showAllSection?.let { section ->
         HomeSectionShowAllSheet(
             section = section,
+            repository = repository,
+            remoteOk = remoteOk,
             onDismiss = { showAllSection = null },
             onOpenPlaylist = { id ->
                 showAllSection = null
@@ -307,6 +309,7 @@ fun HomeScreen(
                         HomeShortcutGrid(
                             cards = shortcutCards,
                             repository = repository,
+                            remoteOk = remoteOk,
                             onPlay = { card ->
                                 HomeTileEngagement.recordSelection(card.id)
                                 onPlay(card.playTarget)
@@ -323,6 +326,7 @@ fun HomeScreen(
                         SpotifyHomeSection(
                             section = sections[index],
                             repository = repository,
+                            remoteOk = remoteOk,
                             onPlay = { card ->
                                 HomeTileEngagement.recordSelection(card.id)
                                 onPlay(card.playTarget)
@@ -357,7 +361,7 @@ private fun HomeEmptyState(filter: HomeFilter) {
         )
         Text(
             if (filter == HomeFilter.Offline) {
-                "Download playlists from Home tiles or long-press for more."
+                "Download playlists from Home tiles or open them in Your Library."
             } else {
                 "Pull down to refresh, or search for music to play."
             },

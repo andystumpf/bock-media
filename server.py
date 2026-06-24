@@ -84,6 +84,118 @@ def db_one(sql, params=()):
     rows = db_query(sql, params)
     return rows[0] if rows else {}
 
+# ── Albums aggregate (fast /api/albums on large libraries) ───────────────────
+
+_ALBUMS_AGG_LOCK = threading.Lock()
+_ALBUMS_AGG_BUILDING = False
+
+
+def _albums_agg_exists():
+    row = db_one("SELECT name FROM sqlite_master WHERE type='table' AND name='albums_agg'")
+    return bool(row.get('name'))
+
+
+def refresh_albums_agg():
+    """Rebuild albums_agg from songs_cache. One row per (album, artist)."""
+    global _ALBUMS_AGG_BUILDING
+    with _ALBUMS_AGG_LOCK:
+        if _ALBUMS_AGG_BUILDING:
+            return False
+        _ALBUMS_AGG_BUILDING = True
+    try:
+        print('[albums_agg] rebuilding…', flush=True)
+        conn = get_db_rw()
+        conn.execute('DROP TABLE IF EXISTS albums_agg')
+        conn.execute('''
+            CREATE TABLE albums_agg AS
+            SELECT album,
+                   COALESCE(NULLIF(album_artist, ''), artist) AS artist,
+                   COUNT(*) AS track_count,
+                   MAX(CAST(NULLIF(year, '') AS INTEGER)) AS year,
+                   MIN(CASE WHEN path IS NOT NULL AND path != '' THEN path END) AS art_path
+            FROM songs_cache
+            WHERE album IS NOT NULL AND album != ''
+            GROUP BY album, COALESCE(NULLIF(album_artist, ''), artist)
+        ''')
+        conn.execute('CREATE INDEX idx_albums_agg_album ON albums_agg(album COLLATE NOCASE)')
+        conn.execute('CREATE INDEX idx_albums_agg_artist ON albums_agg(artist COLLATE NOCASE)')
+        conn.commit()
+        conn.close()
+        print('[albums_agg] rebuild complete', flush=True)
+        return True
+    except Exception as e:
+        print(f'[albums_agg] rebuild failed: {e}', flush=True)
+        return False
+    finally:
+        _ALBUMS_AGG_BUILDING = False
+
+
+def ensure_albums_agg_async():
+    if _albums_agg_exists() or _ALBUMS_AGG_BUILDING:
+        return
+    threading.Thread(target=refresh_albums_agg, daemon=True, name='albums-agg').start()
+
+
+def _albums_agg_startup():
+    if not _albums_agg_exists():
+        refresh_albums_agg()
+
+
+threading.Thread(target=_albums_agg_startup, daemon=True, name='albums-agg-startup').start()
+
+_PLAYED_PATHS_CACHE = {'history_mtime': 0.0, 'counts_mtime': 0.0, 'paths': set()}
+
+
+def _played_paths_set():
+    """Paths that have ever been played (play_counts + stream history)."""
+    global _PLAYED_PATHS_CACHE
+    try:
+        hist_mtime = os.path.getmtime(STREAM_HISTORY_PATH) if os.path.isfile(STREAM_HISTORY_PATH) else 0.0
+    except OSError:
+        hist_mtime = 0.0
+    try:
+        counts_mtime = os.path.getmtime(PLAY_COUNTS_PATH) if os.path.isfile(PLAY_COUNTS_PATH) else 0.0
+    except OSError:
+        counts_mtime = 0.0
+    if (hist_mtime == _PLAYED_PATHS_CACHE['history_mtime']
+            and counts_mtime == _PLAYED_PATHS_CACHE['counts_mtime']):
+        return _PLAYED_PATHS_CACHE['paths']
+    import bock_play_counts
+    paths = set((bock_play_counts.load_counts(PLAY_COUNTS_PATH).get('paths') or {}).keys())
+    for row in _read_stream_history():
+        fp = row.get('filepath') or row.get('path')
+        if fp:
+            paths.add(fp)
+    _PLAYED_PATHS_CACHE = {'history_mtime': hist_mtime, 'counts_mtime': counts_mtime, 'paths': paths}
+    return paths
+
+
+def _albums_played_flags(items):
+    """Map (album, artist) -> True if any track from that album has been played."""
+    if not items:
+        return {}
+    played_paths = _played_paths_set()
+    if not played_paths:
+        return {(it['album'], it.get('artist') or ''): False for it in items}
+    conds = []
+    params = []
+    for it in items:
+        conds.append('(album = ? AND COALESCE(NULLIF(album_artist, ""), artist) = ?)')
+        params.extend([it['album'], it.get('artist') or ''])
+    rows = db_query(
+        f'SELECT album, COALESCE(NULLIF(album_artist, ""), artist) AS artist, path '
+        f'FROM songs_cache WHERE {" OR ".join(conds)}',
+        params,
+    )
+    played_albums = set()
+    for row in rows:
+        if row.get('path') in played_paths:
+            played_albums.add((row['album'], row.get('artist') or ''))
+    return {
+        (it['album'], it.get('artist') or ''): (it['album'], it.get('artist') or '') in played_albums
+        for it in items
+    }
+
 # ── XML helper ───────────────────────────────────────────────────────────────
 
 def xml_text(el, tag, default=''):
@@ -307,12 +419,19 @@ def _verify_alexa_signature(raw_body, body_json):
         return 'signature does not match request body'
     ts_str = (body_json.get('request') or {}).get('timestamp', '')
     try:
-        ts = datetime.datetime.strptime(ts_str.replace('Z', ''), '%Y-%m-%dT%H:%M:%S')
-        ts = ts.replace(tzinfo=datetime.timezone.utc)
+        raw = (ts_str or '').strip().replace('Z', '+00:00')
+        if '.' in raw and '+' in raw:
+            ts = datetime.datetime.fromisoformat(raw)
+        else:
+            ts = datetime.datetime.strptime(raw.split('+')[0], '%Y-%m-%dT%H:%M:%S')
+            ts = ts.replace(tzinfo=datetime.timezone.utc)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=datetime.timezone.utc)
     except Exception:
         return 'malformed request timestamp'
-    if abs((datetime.datetime.now(datetime.timezone.utc) - ts).total_seconds()) > _ALEXA_TIMESTAMP_WINDOW_SEC:
-        return 'request timestamp outside acceptance window'
+    skew = abs((datetime.datetime.now(datetime.timezone.utc) - ts).total_seconds())
+    if skew > _ALEXA_TIMESTAMP_WINDOW_SEC:
+        return f'request timestamp outside acceptance window (skew={skew:.0f}s ts={ts_str!r})'
     return None
 
 def _app_download_user():
@@ -384,7 +503,24 @@ def _app_download_token_ok():
 def _app_download_auth_ok_or_token():
     return _app_download_auth_ok() or _app_download_token_ok()
 
+def _android_app_deployed_version():
+    """Version stamp written next to the APK in DATA_DIR on mobile deploy."""
+    path = os.path.join(DATA_DIR, 'bockmedia-console.version')
+    try:
+        if os.path.isfile(path):
+            with open(path, encoding='utf-8') as fh:
+                v = (fh.read() or '').strip()
+            if v:
+                return v
+    except Exception as e:
+        print(f'app android version sidecar read {path}: {e}', flush=True)
+    return None
+
+
 def _android_app_version():
+    deployed = _android_app_deployed_version()
+    if deployed:
+        return deployed
     try:
         with open(os.path.join(HERE, 'android', 'app', 'build.gradle.kts')) as f:
             for line in f:
@@ -393,6 +529,19 @@ def _android_app_version():
     except Exception:
         pass
     return 'unknown'
+
+
+def _warn_app_version_mismatch(releases, android_version):
+    """Log when the APK stamp and release notes disagree (common partial-deploy mistake)."""
+    if not releases or not android_version or android_version == 'unknown':
+        return
+    notes_ver = (releases[0].get('version') or '').strip()
+    if notes_ver and notes_ver != android_version:
+        print(
+            f'APP VERSION MISMATCH: android build={android_version!r} '
+            f'release notes latest={notes_ver!r} — run scripts/deploy_mobile_app.sh',
+            flush=True,
+        )
 
 def _ios_app_version():
     try:
@@ -478,6 +627,65 @@ def _render_app_release_notes_html(releases):
         + '</section>'
     )
 
+
+def _render_app_highlights_html(releases):
+    """Short summary from the latest entry in app-release-notes.json."""
+    latest = releases[0] if releases else None
+    items = (latest or {}).get('items') or []
+    if not items:
+        return ''
+    version = html.escape((latest.get('version') or '').strip())
+    date = html.escape((latest.get('date') or '').strip())
+    heading = 'Highlights in this release'
+    if version:
+        heading += f' (v{version}' + (f' · {date}' if date else '') + ')'
+    lis = ''.join(
+        f'<li>{html.escape(item["text"])}</li>'
+        for item in items[:6]
+        if (item.get('text') or '').strip()
+    )
+    if not lis:
+        return ''
+    return (
+        f'<section class="highlights"><h2>{heading}</h2>'
+        f'<ul>{lis}</ul>'
+        f'<p class="hint">Full history below. Mix Muse needs API keys in server config; Resonance works out of the box.</p>'
+        f'</section>'
+    )
+
+
+def _app_download_payload(*, issue_token=False):
+    apk = _app_apk_path()
+    ipa = _app_ipa_path()
+    dl_token = _issue_app_download_token() if issue_token else None
+    releases = _load_app_release_notes()
+    android_version = _android_app_version()
+    _warn_app_version_mismatch(releases, android_version)
+    android = {
+        'version': android_version,
+        'sizeMb': round(os.path.getsize(apk) / (1024 * 1024), 1) if apk else None,
+        'available': apk is not None,
+    }
+    ios = {
+        'version': _ios_app_version(),
+        'sizeMb': round(os.path.getsize(ipa) / (1024 * 1024), 1) if ipa else None,
+        'available': ipa is not None,
+        'otaAvailable': bool(ipa and get_public_url().startswith('https://')),
+    }
+    if issue_token and dl_token:
+        android['downloadHref'] = f'/download/bockmedia-console.apk?t={dl_token}'
+        ios['downloadHref'] = f'/download/bockmedia-console.ipa?t={dl_token}'
+        ios['manifestHref'] = f'/download/bockmedia-console-ios.plist?t={dl_token}'
+        if ios['otaAvailable']:
+            manifest_url = _app_download_abs_url('/download/bockmedia-console-ios.plist', dl_token)
+            ios['otaHref'] = f'itms-services://?action=download-manifest&url={quote(manifest_url, safe="")}'
+    return {
+        'android': android,
+        'ios': ios,
+        'releases': _load_app_release_notes(),
+        'appPageHref': '/app',
+    }
+
 def _app_download_abs_url(path, token=None):
     base = get_public_url().rstrip('/')
     q = f'?t={quote(token)}' if token else ''
@@ -540,6 +748,42 @@ def check_auth():
 
 PUBLIC = os.path.join(HERE, 'public')
 
+_WEB_REQUIRED = (
+    'index.html',
+    'css/shell.css',
+    'css/style.css',
+    'css/dark-theme.css',
+    'js/app.js',
+    'js/boot.js',
+    'js/webCache.js',
+    'js/homeFeed.js',
+)
+
+
+def _verify_web_assets():
+    """Log missing/stale web shell assets (partial deploys break the sidebar and routes)."""
+    missing = [rel for rel in _WEB_REQUIRED if not os.path.isfile(os.path.join(PUBLIC, rel))]
+    if missing:
+        print(
+            f'WEB UI INCOMPLETE — missing under public/: {", ".join(missing)} '
+            f'(run scripts/deploy_web.sh)',
+            flush=True,
+        )
+        return
+    try:
+        shell_bytes = os.path.getsize(os.path.join(PUBLIC, 'css', 'shell.css'))
+    except OSError:
+        shell_bytes = 0
+    if shell_bytes and shell_bytes < 30000:
+        print(
+            f'WEB UI WARNING — css/shell.css is only {shell_bytes} bytes; '
+            f'expected ~40k (stale partial deploy?)',
+            flush=True,
+        )
+
+
+_verify_web_assets()
+
 def _no_cache(resp):
     """Force revalidation so UI changes show on a normal reload (no hard-refresh)."""
     resp.headers['Cache-Control'] = 'no-cache, must-revalidate'
@@ -561,30 +805,31 @@ def static_files(filename):
 
 @app.route('/app')
 def app_download_page():
-    apk = _app_apk_path()
-    ipa = _app_ipa_path()
-    dl_token = _issue_app_download_token()
+    payload = _app_download_payload(issue_token=True)
     android = {
-        'version': _android_app_version(),
-        'size_mb': round(os.path.getsize(apk) / (1024 * 1024), 1) if apk else None,
-        'available': apk is not None,
-        'download_href': f'/download/bockmedia-console.apk?t={dl_token}',
+        'version': payload['android']['version'],
+        'size_mb': payload['android']['sizeMb'],
+        'available': payload['android']['available'],
+        'download_href': payload['android'].get('downloadHref', '/download/bockmedia-console.apk'),
     }
     ios = {
-        'version': _ios_app_version(),
-        'size_mb': round(os.path.getsize(ipa) / (1024 * 1024), 1) if ipa else None,
-        'available': ipa is not None,
-        'download_href': f'/download/bockmedia-console.ipa?t={dl_token}',
-        'manifest_href': f'/download/bockmedia-console-ios.plist?t={dl_token}',
-        'ota_href': None,
+        'version': payload['ios']['version'],
+        'size_mb': payload['ios']['sizeMb'],
+        'available': payload['ios']['available'],
+        'download_href': payload['ios'].get('downloadHref', '/download/bockmedia-console.ipa'),
+        'manifest_href': payload['ios'].get('manifestHref', '/download/bockmedia-console-ios.plist'),
+        'ota_href': payload['ios'].get('otaHref'),
     }
-    if ipa and get_public_url().startswith('https://'):
-        manifest_url = _app_download_abs_url('/download/bockmedia-console-ios.plist', dl_token)
-        ios['ota_href'] = f'itms-services://?action=download-manifest&url={quote(manifest_url, safe="")}'
     return _no_cache(Response(
-        _render_app_download_html(android, ios),
+        _render_app_download_html(android, ios, payload['releases']),
         mimetype='text/html; charset=utf-8',
     ))
+
+
+@app.route('/api/app/info')
+def app_info():
+    """Mobile app builds + release notes for the web console download page."""
+    return jsonify(_app_download_payload(issue_token=True))
 
 @app.route('/download/bockmedia-console.apk')
 def app_download_apk():
@@ -659,10 +904,10 @@ def app_download_ios_manifest():
 </plist>'''
     return Response(plist, mimetype='application/xml; charset=utf-8')
 
-def _render_app_download_html(android, ios):
+def _render_app_download_html(android, ios, releases=None):
     def platform_section(title, subtitle, version, size_mb, available, primary_btn, secondary_btn, steps_html):
         meta = (
-            f'<p class="meta">Build {html.escape(version)} · {size_mb} MB</p>'
+            f'<p class="meta">Build {html.escape(version)} · {size_mb} MB · full install</p>'
             if available and size_mb else ''
         )
         if available:
@@ -715,7 +960,9 @@ def _render_app_download_html(android, ios):
         'iPhone', 'IPA', ios['version'], ios['size_mb'], ios['available'],
         ios_primary, ios_secondary, ios_steps,
     )
-    release_notes = _render_app_release_notes_html(_load_app_release_notes())
+    releases = releases if releases is not None else _load_app_release_notes()
+    highlights = _render_app_highlights_html(releases)
+    release_notes = _render_app_release_notes_html(releases)
 
     return f'''<!DOCTYPE html>
 <html lang="en"><head>
@@ -728,6 +975,12 @@ def _render_app_download_html(android, ios):
     box-shadow: 0 4px 24px rgba(0,0,0,.08); text-align: center; }}
   h1 {{ font-size: 1.5rem; margin: 0 0 8px; color: #30426a; }}
   .lead {{ color: #666; margin: 0 0 24px; font-size: .95rem; }}
+  .highlights {{ text-align: left; margin: 0 0 20px; padding: 16px; background: #f8fafc; border-radius: 8px; font-size: .88rem; }}
+  .highlights h2 {{ font-size: .95rem; margin: 0 0 10px; color: #30426a; text-align: center; }}
+  .highlights ul {{ margin: 0; padding-left: 18px; color: #444; line-height: 1.5; }}
+  .highlights li {{ margin-bottom: 6px; }}
+  .highlights .hint {{ margin: 12px 0 0; font-size: .8rem; color: #666; }}
+  .highlights code {{ font-size: .78rem; background: #eef2f7; padding: 1px 4px; border-radius: 3px; }}
   .platform {{ text-align: center; padding-top: 20px; margin-top: 20px; border-top: 1px solid #e8ecf1; }}
   .platform:first-of-type {{ border-top: none; margin-top: 0; padding-top: 0; }}
   h2 {{ font-size: 1.15rem; margin: 0 0 8px; color: #30426a; }}
@@ -759,7 +1012,8 @@ def _render_app_download_html(android, ios):
 </style></head><body>
 <div class="card">
   <h1>Bock Media Console</h1>
-  <p class="lead">Mobile apps for your server</p>
+  <p class="lead">Mobile apps for your home music server — play, download, and discover your library anywhere.</p>
+  {highlights}
   {release_notes}
   {android_section}
   {ios_section}
@@ -1340,11 +1594,22 @@ def library_search():
                         break
         except Exception:
             pass
+    album_rows = [{'album': r['album'], 'artist': r.get('artist'), 'path': r.get('art_path')} for r in albums]
+    album_played = _albums_played_flags(album_rows)
+    album_items = []
+    for r in album_rows:
+        key = (r['album'], r.get('artist') or '')
+        album_items.append({
+            'name': r['album'],
+            'artist': r.get('artist'),
+            'path': r.get('path'),
+            'played': album_played.get(key, False),
+        })
     return jsonify({
         'query': q,
         'playlists': playlists[:limit],
         'artists': [{'name': r['artist'], 'path': r.get('art_path')} for r in artists],
-        'albums': [{'name': r['album'], 'artist': r.get('artist'), 'path': r.get('art_path')} for r in albums],
+        'albums': album_items,
         'songs': [{'title': r['title'], 'artist': r['artist'], 'album': r['album'], 'path': r['path']} for r in songs],
         'genres': [{'name': r['genre'], 'path': r.get('path')} for r in genres],
         'smartPlaylists': smart_pl,
@@ -1593,7 +1858,7 @@ def alexa_remote_volume():
             return jsonify({'error': 'alexapy not installed', 'code': 'not_installed'}), 503
         except Exception as e:
             code = str(e)
-            status = 400 if code in ('not_configured', 'not_authenticated', 'device_not_found') else 500
+            status = 400 if code in ('not_configured', 'not_authenticated', 'device_not_found', 'speaker_group_not_supported') else 500
             return jsonify({'error': code, 'code': code}), status
 
     data = request.get_json() or {}
@@ -1701,6 +1966,10 @@ def _new_playlist_token_id():
 
 
 def _register_play_playlist_token(playlist_id, name, source, shuffle=False):
+    src = (source or '').strip()
+    if not src and playlist_id:
+        _, looked = _msp_playlist_by_id(playlist_id)
+        src = (looked or '').strip()
     token = _new_playlist_token_id()
     now = time.time()
     with _PLAYLIST_TOKEN_LOCK:
@@ -1710,7 +1979,7 @@ def _register_play_playlist_token(playlist_id, name, source, shuffle=False):
             'kind': 'playlist',
             'id': str(playlist_id),
             'name': name or '',
-            'source': (source or '').strip(),
+            'source': src,
             'shuffle': bool(shuffle),
             'exp': now + _PLAYLIST_TOKEN_TTL,
         }
@@ -1767,6 +2036,12 @@ def _start_playlist_token_entry(token_entry, shuffle=None):
     name = token_entry.get('name') or 'playlist'
     pid = token_entry.get('id')
     source = token_entry.get('source')
+    if pid:
+        looked_name, looked_src = _msp_playlist_by_id(pid)
+        if looked_name:
+            name = looked_name
+        if not source and looked_src:
+            source = looked_src
     do_shuffle = token_entry.get('shuffle', False) if shuffle is None else shuffle
     speech = f"Shuffling {name}." if do_shuffle else f"Playing {name}."
     return start_playing(None, shuffle=do_shuffle, speech=speech,
@@ -1857,8 +2132,11 @@ def _build_play_text(kind, name, shuffle, artist=None, path=None, playlist_id=No
         pid = (playlist_id or '').strip()
         src = (playlist_source or '').strip()
         if pid:
+            resolved_name, src_lookup = _msp_playlist_by_id(pid)
             if not src:
-                _, src = _msp_playlist_by_id(pid)
+                src = src_lookup
+            if resolved_name:
+                name = resolved_name
             token = _register_play_playlist_token(pid, name, src, shuffle=shuffle)
             # Explicit "playlist token" routes to PlayFileTokenIntent and avoids
             # album/artist intents grabbing bare titles like "Mamma Mia".
@@ -2091,10 +2369,15 @@ def play_on_device():
     fpath = (data.get('path') or '').strip()
     if not device:
         return jsonify({'error': 'device required'}), 400
-    if not name and pid and kind == 'playlist':
-        name, playlist_source = _msp_playlist_by_id(pid)
-    else:
-        playlist_source = _msp_playlist_by_id(pid)[1] if pid and kind == 'playlist' else None
+    playlist_source = None
+    if kind == 'playlist' and pid:
+        resolved_name, playlist_source = _msp_playlist_by_id(pid)
+        if resolved_name:
+            name = resolved_name
+        elif not name:
+            name = resolved_name or ''
+    elif not name:
+        return jsonify({'error': 'name or id required'}), 400
     if not name:
         return jsonify({'error': 'name or id required'}), 400
     text = _build_play_text(
@@ -2102,6 +2385,7 @@ def play_on_device():
         playlist_id=pid if kind == 'playlist' else None,
         playlist_source=playlist_source,
     )
+    print(f'[PLAY DEVICE] targets={device!r} kind={kind} name={name!r} text={text!r}', flush=True)
     try:
         targets = _expand_play_targets(device)
     except ValueError as e:
@@ -2145,7 +2429,7 @@ def play_on_device():
                 errors.append({'device': member_name, 'error': str(e)})
         if not results:
             code = errors[0]['error'] if errors else 'play_failed'
-            status = 400 if code in ('not_configured', 'not_authenticated', 'device_not_found') else 500
+            status = 400 if code in ('not_configured', 'not_authenticated', 'device_not_found', 'speaker_group_not_supported') else 500
             return jsonify({'error': code, 'code': code, 'errors': errors}), status
         label = results[0].get('device') if len(results) == 1 else f'{len(results)} devices'
         return jsonify({'ok': True, 'device': label, 'count': len(results), 'errors': errors})
@@ -2153,7 +2437,7 @@ def play_on_device():
         return jsonify({'error': 'alexapy not installed', 'code': 'not_installed'}), 503
     except Exception as e:
         code = str(e)
-        status = 400 if code in ('not_configured', 'not_authenticated', 'device_not_found') else 500
+        status = 400 if code in ('not_configured', 'not_authenticated', 'device_not_found', 'speaker_group_not_supported') else 500
         return jsonify({'error': code, 'code': code}), status
 
 
@@ -2388,6 +2672,264 @@ def test_device():
     threading.Thread(target=worker, daemon=True).start()
     return jsonify({'ok': True, 'device': name})
 
+# ── Silent device discovery (bind rotated skill deviceIds without audible play) ─
+# Alexa skill events only carry an opaque deviceId that Amazon occasionally rotates.
+# Automations and Play-on-device use the stable hardware serial via alexapy. A
+# scheduled silent ping (volume 0 + ~250ms silent track + immediate stop) triggers
+# PlaybackStarted so play-intent correlation can fold the new id onto the room.
+_DISCOVER = {'running': False, 'total': 0, 'done': 0, 'current': '',
+             'skipped': [], 'pinged': [], 'errors': [], 'lastRun': 0}
+_DISCOVER_LOCK = threading.Lock()
+_DISCOVER_AUDIO_FAMILIES = {'ECHO', 'ROOK', 'KNIGHT'}
+_DISCOVERY_STATE_PATH = os.path.join(DATA_DIR, 'device_discovery.json')
+_DISCOVERY_STATE_LOCK = threading.Lock()
+_device_discovery_scheduler_started = False
+
+
+def _device_discovery_cfg():
+    raw = load_config().get('deviceDiscovery') or {}
+    return {
+        'enabled': bool(raw.get('enabled', True)),
+        'intervalHours': max(1.0, float(raw.get('intervalHours') or 6)),
+        'staleDays': max(0.0, float(raw.get('staleDays') or 7)),
+        'dwellSeconds': max(3.0, min(10.0, float(raw.get('dwellSeconds') or 5))),
+        'onlyStale': raw.get('onlyStale', True),
+    }
+
+
+def _load_discovery_state():
+    with _DISCOVERY_STATE_LOCK:
+        try:
+            with open(_DISCOVERY_STATE_PATH) as f:
+                return json.load(f) or {}
+        except Exception:
+            return {}
+
+
+def _save_discovery_state(state):
+    with _DISCOVERY_STATE_LOCK:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        _atomic_json_write(_DISCOVERY_STATE_PATH, state)
+
+
+def _mark_discovery_serial(serial):
+    if not serial:
+        return
+    state = _load_discovery_state()
+    serials = state.setdefault('serials', {})
+    serials[serial] = time.time()
+    _save_discovery_state(state)
+
+
+def _ensure_silent_correlation_path():
+    """Return a streamable silent mp3 under MUSIC_ROOT (copied from assets/)."""
+    dest_dir = os.path.join(MUSIC_ROOT, '.bock')
+    dest = os.path.join(dest_dir, 'silent-correlation.mp3')
+    if os.path.isfile(dest):
+        return dest
+    os.makedirs(dest_dir, exist_ok=True)
+    bundled = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           'assets', 'silent-correlation.mp3')
+    if os.path.isfile(bundled):
+        shutil.copy2(bundled, dest)
+        return dest
+    raise RuntimeError('silent_correlation_track_missing')
+
+
+def _build_silent_correlation_text():
+    path = _ensure_silent_correlation_path()
+    token = _register_play_file_token(path, 'Silent ping', artist='')
+    alias = _alexa_alias()
+    return f"ask {alias} to start file token {token}"
+
+
+def _device_needs_discovery(serial, store, stale_days, only_stale):
+    if not serial:
+        return False
+    if not only_stale:
+        return True
+    if not _primary_by_serial(serial, store):
+        return True
+    if stale_days <= 0:
+        return True
+    last = (_load_discovery_state().get('serials') or {}).get(serial) or 0
+    return (time.time() - last) >= stale_days * 86400
+
+
+def _silent_ping_device(serial, name, alias, dwell):
+    """Mute, play a silent file token, stop, restore volume — for correlation."""
+    import alexa_remote
+    text = _build_silent_correlation_text()
+    prev_vol = None
+    try:
+        prev_vol = alexa_remote.get_volume(serial)
+    except Exception:
+        pass
+    try:
+        alexa_remote.set_volume(serial, 0)
+    except Exception as e:
+        print(f'[DEVICE DISCOVER] mute failed for {name!r}: {e}', flush=True)
+    _record_play_intent([(serial, name)])
+    _mark_test_serial(serial)
+    try:
+        alexa_remote.play_text(serial, text)
+    except Exception:
+        if prev_vol is not None:
+            try:
+                alexa_remote.set_volume(serial, prev_vol)
+            except Exception:
+                pass
+        raise
+    time.sleep(dwell)
+    try:
+        alexa_remote.device_control(serial, 'stop', alias)
+    except Exception:
+        pass
+    if prev_vol is not None:
+        try:
+            alexa_remote.set_volume(serial, prev_vol)
+        except Exception as e:
+            print(f'[DEVICE DISCOVER] unmute failed for {name!r}: {e}', flush=True)
+    _mark_discovery_serial(serial)
+
+
+def _discover_worker(devices, alias, dwell):
+    import alexa_remote  # noqa: F401
+    try:
+        for d in devices:
+            serial, name = d['serial'], d['name']
+            with _DISCOVER_LOCK:
+                _DISCOVER['current'] = name
+            try:
+                _silent_ping_device(serial, name, alias, dwell)
+            except Exception as e:
+                with _DISCOVER_LOCK:
+                    _DISCOVER['errors'].append(f'{name}: {e}')
+                    _DISCOVER['done'] += 1
+                continue
+            with _DISCOVER_LOCK:
+                _DISCOVER['pinged'].append(name)
+                _DISCOVER['done'] += 1
+            time.sleep(1.0)
+    finally:
+        state = _load_discovery_state()
+        state['lastRun'] = time.time()
+        _save_discovery_state(state)
+        with _DISCOVER_LOCK:
+            _DISCOVER['running'] = False
+            _DISCOVER['current'] = ''
+            _DISCOVER['lastRun'] = state['lastRun']
+
+
+def _start_device_discovery(*, force=False, stale_days=None, dwell=None, only_stale=None):
+    """Return (payload_dict, http_status) for API handlers and scheduler."""
+    cfg = _device_discovery_cfg()
+    if not cfg['enabled'] and not force:
+        return {'error': 'disabled', 'code': 'disabled'}, 400
+    with _IDENTIFY_LOCK:
+        if _IDENTIFY['running']:
+            return {'error': 'identify_running', 'code': 'identify_running'}, 409
+    with _DISCOVER_LOCK:
+        if _DISCOVER['running']:
+            return {'error': 'already_running', 'code': 'already_running', **_DISCOVER}, 409
+    try:
+        import alexa_remote
+        devs = alexa_remote.list_devices() or []
+    except ImportError:
+        return {'error': 'not_installed', 'code': 'not_installed'}, 503
+    except Exception as e:
+        code = str(e)
+        status = 400 if code in ('not_configured', 'not_authenticated') else 500
+        return {'error': code, 'code': code}, status
+    stale = cfg['staleDays'] if stale_days is None else max(0.0, float(stale_days))
+    only = cfg['onlyStale'] if only_stale is None else bool(only_stale)
+    dwell_sec = cfg['dwellSeconds'] if dwell is None else max(3.0, min(10.0, float(dwell)))
+    store = _load_devices()
+    online = [d for d in devs
+              if d.get('online') and d.get('family') in _DISCOVER_AUDIO_FAMILIES]
+    targets, skipped = [], []
+    for d in online:
+        serial = d.get('serial')
+        if _device_needs_discovery(serial, store, stale, only):
+            targets.append(d)
+        else:
+            skipped.append(d.get('name') or serial or '?')
+    if not targets:
+        return {'ok': True, 'total': 0, 'skipped': skipped, 'message': 'nothing_to_do'}, 200
+    alias = _alexa_alias()
+    with _DISCOVER_LOCK:
+        _DISCOVER.update({'running': True, 'total': len(targets), 'done': 0,
+                          'current': '', 'skipped': skipped, 'pinged': [], 'errors': []})
+    threading.Thread(target=_discover_worker,
+                     args=(targets, alias, dwell_sec),
+                     daemon=True, name='device-discover').start()
+    eta = int(len(targets) * (dwell_sec + 1.5))
+    return {'ok': True, 'total': len(targets), 'skipped': skipped,
+            'dwellSeconds': dwell_sec, 'etaSeconds': eta}, 202
+
+
+def _tick_device_discovery(force=False):
+    cfg = _device_discovery_cfg()
+    if not cfg['enabled'] and not force:
+        return
+    if not force:
+        state = _load_discovery_state()
+        if time.time() - state.get('lastRun', 0) < cfg['intervalHours'] * 3600:
+            return
+    payload, status = _start_device_discovery(force=force)
+    if status == 202:
+        print(f"[DEVICE DISCOVER] started sweep: {payload.get('total')} device(s)", flush=True)
+    elif status == 200 and payload.get('total') == 0:
+        pass  # nothing due
+    elif status >= 400 and payload.get('error') not in ('already_running', 'identify_running'):
+        print(f"[DEVICE DISCOVER] skip: {payload.get('error')}", flush=True)
+
+
+def _device_discovery_scheduler_loop():
+    while True:
+        try:
+            _tick_device_discovery()
+        except Exception as e:
+            print(f'[DEVICE DISCOVER] scheduler error: {e}', flush=True)
+        time.sleep(300)
+
+
+def _start_device_discovery_scheduler():
+    global _device_discovery_scheduler_started
+    if _device_discovery_scheduler_started:
+        return
+    _device_discovery_scheduler_started = True
+    t = threading.Thread(target=_device_discovery_scheduler_loop,
+                         daemon=True, name='device-discovery-scheduler')
+    t.start()
+
+
+@app.route('/api/devices/discover', methods=['POST'])
+def discover_devices():
+    body = request.get_json(silent=True) or {}
+    force = bool(body.get('force'))
+    stale_days = body.get('staleDays')
+    dwell = body.get('dwell') or body.get('dwellSeconds')
+    only_stale = body.get('onlyStale')
+    if only_stale is None and 'onlyStale' not in body and force:
+        only_stale = False
+    payload, status = _start_device_discovery(
+        force=force or bool(body.get('all')),
+        stale_days=stale_days,
+        dwell=dwell,
+        only_stale=only_stale,
+    )
+    return jsonify(payload), status
+
+
+@app.route('/api/devices/discover/status')
+def discover_status():
+    with _DISCOVER_LOCK:
+        out = dict(_DISCOVER)
+    out['state'] = _load_discovery_state()
+    out['config'] = _device_discovery_cfg()
+    return jsonify(out)
+
 # ── Automations (scheduled playlist playback) ────────────────────────────────
 
 AUTOMATIONS_PATH = os.path.join(DATA_DIR, 'automations.json')
@@ -2477,6 +3019,10 @@ def _validate_automation_body(body, existing=None):
 
     if not playlist_name and playlist_id:
         playlist_name, _ = _msp_playlist_by_id(playlist_id)
+    elif playlist_id:
+        resolved, _ = _msp_playlist_by_id(playlist_id)
+        if resolved:
+            playlist_name = resolved
     if not playlist_name:
         return None, ('playlistName or playlistId required', 400)
     if not device:
@@ -2513,12 +3059,27 @@ def _validate_automation_body(body, existing=None):
 
 
 def _fire_automation(auto):
-    text = _build_play_text('playlist', auto['playlistName'], auto.get('shuffle'))
+    pid = (auto.get('playlistId') or '').strip()
+    pl_name = auto.get('playlistName') or ''
+    shuffle = bool(auto.get('shuffle'))
+    src = None
+    if pid:
+        resolved_name, src = _msp_playlist_by_id(pid)
+        if resolved_name:
+            pl_name = resolved_name
+        if src:
+            _playlist_paths_cached(pid, src)
+    text = _build_play_text(
+        'playlist', pl_name, shuffle,
+        playlist_id=pid or None,
+        playlist_source=src,
+    )
+    print(f'[AUTOMATION] {auto.get("name")!r} device={auto.get("deviceName")!r} playlist={pl_name!r} text={text!r}', flush=True)
     import alexa_remote
     targets = _expand_play_targets(auto['device'])
     _record_play_intent(
         targets,
-        playlist=auto.get('playlistName'),
+        playlist=pl_name,
         playlist_id=auto.get('playlistId'),
     )
     vol = auto.get('volume')
@@ -2685,6 +3246,10 @@ def artists():
 
 @app.route('/api/albums')
 def albums():
+    if not _albums_agg_exists():
+        ensure_albums_agg_async()
+        return jsonify({'items': [], 'total': 0, 'status': 'building'}), 503
+
     page = int(request.args.get('page', 1))
     limit = int(request.args.get('limit', 50))
     search = request.args.get('search', '')
@@ -2692,31 +3257,28 @@ def albums():
     sort = (request.args.get('sort') or 'name').strip().lower()
     offset = (page - 1) * limit
 
-    conditions = ['album IS NOT NULL', 'album != ""']
+    conditions = ['1=1']
     params = []
     if search:
-        conditions.append('(album LIKE ? OR album_artist LIKE ? OR artist LIKE ?)')
-        params += [f'%{search}%', f'%{search}%', f'%{search}%']
+        conditions.append('(album LIKE ? OR artist LIKE ?)')
+        params += [f'%{search}%', f'%{search}%']
     if artist:
-        conditions.append('(artist = ? OR album_artist = ?)')
-        params += [artist, artist]
+        conditions.append('artist = ?')
+        params.append(artist)
 
     where = ' AND '.join(conditions)
-    order = 'year DESC, album' if sort == 'year' else 'album'
+    order = 'year DESC, album' if sort == 'year' else 'album COLLATE NOCASE'
 
     rows = db_query(
-        f'SELECT album, COALESCE(NULLIF(album_artist,""), artist) as artist, '
-        f'COUNT(*) as track_count, '
-        f'MAX(CAST(NULLIF(year, "") AS INTEGER)) as year, '
-        f'MIN(CASE WHEN path IS NOT NULL AND path != "" THEN path END) as art_path '
-        f'FROM songs_cache WHERE {where} '
-        f'GROUP BY album, artist ORDER BY {order} LIMIT ? OFFSET ?',
+        f'SELECT album, artist, track_count, year, art_path FROM albums_agg '
+        f'WHERE {where} ORDER BY {order} LIMIT ? OFFSET ?',
         params + [limit, offset]
     )
-    total_row = db_one(
-        f'SELECT COUNT(DISTINCT album) as total FROM songs_cache WHERE {where}',
-        params
-    )
+    played = _albums_played_flags(rows)
+    for row in rows:
+        key = (row['album'], row.get('artist') or '')
+        row['played'] = played.get(key, False)
+    total_row = db_one(f'SELECT COUNT(*) as total FROM albums_agg WHERE {where}', params)
     return jsonify({'items': rows, 'total': total_row.get('total', 0)})
 
 
@@ -3280,6 +3842,7 @@ SETTINGS_MAP = {
     'scanIgnoreFiles':      'ScanIgnoreFiles',
     'bypassProxy':          'BypassProxy',
     'allowExternalAccess':  'AllowExternalAccess',
+    'continueAfterQueue':   'ContinueAfterQueue',
 }
 
 @app.route('/api/auth/info')
@@ -6081,7 +6644,7 @@ def _db_path_keys(full_path):
 def _stream_audio_filters(full_path, ffmpeg_bin):
     mode = _stream_loudness_mode()
     if not mode:
-        return None, None
+        return None, None, None
     row = None
     for key in _db_path_keys(full_path):
         row = db_one(
@@ -6093,16 +6656,27 @@ def _stream_audio_filters(full_path, ffmpeg_bin):
             break
     db_path = (row or {}).get('path') or full_path
     gain = bock_loudness.gain_db_for_path(db_one, db_path, mode)
-    af = bock_loudness.ffmpeg_af_filter(mode, gain, use_loudnorm_fallback=(gain is None))
-    return af, mode
+    # Never fall back to realtime `loudnorm` analysis on a normal stream: it spawns a
+    # CPU-bound ffmpeg per request and melts the server when many un-analyzed tracks
+    # play back-to-back. Un-analyzed tracks stream as-is; run the loudness analyze job
+    # to populate replaygain values for cheap volume-filter normalization instead.
+    af = bock_loudness.ffmpeg_af_filter(mode, gain, use_loudnorm_fallback=False)
+    return af, mode, gain
+
+
+# Cap concurrent live transcodes so a burst of plays can't saturate every core.
+# Each ffmpeg is already niced, but unbounded fan-out still melts the box; when at
+# the cap, native files fall back to serving original bytes instead of queueing.
+_MAX_STREAM_TRANSCODES = max(2, (os.cpu_count() or 4) // 2)
+_stream_transcode_sem = threading.BoundedSemaphore(_MAX_STREAM_TRANSCODES)
 
 
 @app.route('/stream/<path:filepath>')
 def stream_audio(filepath):
-    full_path = '/' + filepath
-    if not os.path.abspath(full_path).startswith(MUSIC_ROOT):
-        return 'Forbidden', 403
-    if not os.path.isfile(full_path):
+    title = (request.args.get('title') or '').strip() or None
+    artist = (request.args.get('artist') or '').strip() or None
+    full_path = _resolve_library_path('/' + filepath.lstrip('/'), title=title, artist=artist)
+    if not full_path:
         return 'Not found', 404
     ext = os.path.splitext(full_path)[1].lower()
 
@@ -6114,7 +6688,16 @@ def stream_audio(filepath):
 
     is_flac_ext = ext in TRANSCODE_EXTS
     transcode = req_bitrate is not None or is_flac_ext
-    af_filter, _norm_mode = _stream_audio_filters(full_path, get_pref('FFmpegLocation', '').strip() or 'ffmpeg')
+    af_filter, _norm_mode, gain_db = _stream_audio_filters(full_path, get_pref('FFmpegLocation', '').strip() or 'ffmpeg')
+    # Attenuation-only on native files: serve the original MP3/M4A and let clients
+    # lower volume — avoids a per-play ffmpeg transcode that stalls/fails under load.
+    gain_only = (
+        af_filter and af_filter.startswith('volume=')
+        and ext in NATIVE_EXTS and req_bitrate is None
+        and gain_db is not None and gain_db <= 0
+    )
+    if gain_only:
+        af_filter = None
     if af_filter and not transcode:
         transcode = True
     # Non-native formats still require FlacSupport unless the client explicitly
@@ -6127,34 +6710,53 @@ def stream_audio(filepath):
         transcode = False  # native file with no ffmpeg → serve original bytes
 
     if transcode:
+        # Non-blocking grab; FLAC must transcode so it waits briefly, native files
+        # at capacity just serve original bytes so playback never stalls.
+        acquired = _stream_transcode_sem.acquire(blocking=False)
+        if not acquired and is_flac_ext:
+            acquired = _stream_transcode_sem.acquire(timeout=15)
+        if not acquired:
+            transcode = False
+
+    if transcode:
         ffmpeg_bin = get_pref('FFmpegLocation', '').strip() or 'ffmpeg'
         bitrate    = str(req_bitrate) if req_bitrate is not None \
             else (get_pref('TranscodeBitrate', '128').strip() or '128')
-        cmd = [ffmpeg_bin, '-i', full_path, '-ar', '44100', '-ac', '2']
+        cmd = bock_loudness.nice_prefix(level=10, io_idle=False) + [
+            ffmpeg_bin, '-threads', '1', '-i', full_path, '-ar', '44100', '-ac', '2',
+        ]
         if af_filter:
             cmd += ['-af', af_filter]
-        cmd += ['-b:a', f'{bitrate}k', '-f', 'mp3', '-']
+        cmd += ['-b:a', f'{bitrate}k', '-write_xing', '0', '-f', 'mp3', '-flush_packets', '1', '-']
         def _generate():
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
-            )
             try:
-                while True:
-                    chunk = proc.stdout.read(16384)
-                    if not chunk:
-                        break
-                    yield chunk
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+                )
+                try:
+                    while True:
+                        chunk = proc.stdout.read(16384)
+                        if not chunk:
+                            break
+                        yield chunk
+                finally:
+                    proc.terminate()
             finally:
-                proc.terminate()
+                _stream_transcode_sem.release()
         return Response(_generate(), mimetype='audio/mpeg',
                         headers={'Accept-Ranges': 'none'})
 
     mime = 'audio/mpeg' if ext == '.mp3' else 'audio/mp4' if ext == '.m4a' else 'audio/aac'
     accel = _xaccel_send(full_path, mime)
     if accel is not None:
+        if gain_db is not None:
+            accel.headers['X-Bock-ReplayGain-Db'] = f'{gain_db:.2f}'
         return accel
-    return send_file(full_path, mimetype=mime, conditional=True)
+    resp = send_file(full_path, mimetype=mime, conditional=True)
+    if gain_db is not None:
+        resp.headers['X-Bock-ReplayGain-Db'] = f'{gain_db:.2f}'
+    return resp
 
 _ART_MIME_BY_EXT = {
     '.jpg':  'image/jpeg', '.jpeg': 'image/jpeg',
@@ -6163,7 +6765,7 @@ _ART_MIME_BY_EXT = {
 
 @app.route('/artwork/<path:filepath>')
 def serve_artwork(filepath):
-    full_path = '/' + filepath
+    full_path = _resolve_library_path('/' + filepath.lstrip('/')) or ('/' + filepath.lstrip('/'))
     abs_path = os.path.abspath(full_path)
     allowed_roots = (
         MUSIC_ROOT,
@@ -6567,6 +7169,57 @@ def _write_m3u_file(path, track_paths):
                 f.write(p + '\n')
 
 
+def _music_root_abs():
+    return os.path.abspath(MUSIC_ROOT)
+
+
+def _resolve_library_path(path, title=None, artist=None):
+    """Map a playlist/library path to an on-disk file under MUSIC_ROOT.
+
+    Plex .m3u entries and songs_cache can drift apart when files move; prefer
+    the indexed path when the stored path no longer exists.
+    """
+    if not path or not str(path).strip():
+        return None
+    raw = str(path).strip()
+    abs_path = os.path.abspath(raw if raw.startswith('/') else '/' + raw)
+    root = _music_root_abs()
+    if abs_path.startswith(root) and os.path.isfile(abs_path):
+        return abs_path
+    base = os.path.basename(abs_path)
+    if not base:
+        return None
+    rows = db_query(
+        'SELECT path, title, artist FROM songs_cache WHERE path LIKE ? LIMIT 50',
+        [f'%/{base}'],
+    ) or []
+    if title:
+        tl = str(title).strip().lower()
+        for row in rows:
+            if (row.get('title') or '').strip().lower() == tl:
+                p = row.get('path')
+                if p:
+                    ap = os.path.abspath(p)
+                    if ap.startswith(root) and os.path.isfile(ap):
+                        return ap
+    if artist:
+        al = str(artist).strip().lower()
+        for row in rows:
+            if (row.get('artist') or '').strip().lower() == al:
+                p = row.get('path')
+                if p:
+                    ap = os.path.abspath(p)
+                    if ap.startswith(root) and os.path.isfile(ap):
+                        return ap
+    for row in rows:
+        p = row.get('path')
+        if p:
+            ap = os.path.abspath(p)
+            if ap.startswith(root) and os.path.isfile(ap):
+                return ap
+    return None
+
+
 def _enrich_track_paths(paths):
     """Attach title/artist/album from songs_cache (batched IN queries, not one per row)."""
     if not paths:
@@ -6590,10 +7243,13 @@ def _enrich_track_paths(paths):
             continue
         row = by_path.get(path) or {}
         fname = os.path.splitext(os.path.basename(path))[0]
+        title = row.get('title') or fname
+        artist = row.get('artist') or ''
+        canonical = _resolve_library_path(path, title=title, artist=artist) or path
         out.append({
-            'path': path,
-            'title': row.get('title') or fname,
-            'artist': row.get('artist') or '',
+            'path': canonical,
+            'title': title,
+            'artist': artist,
             'album': row.get('album') or '',
             'duration_seconds': row.get('duration_seconds') or 0,
         })
@@ -6833,22 +7489,71 @@ def _m3u_first_paths(source, limit=12):
     return out
 
 
-def _playlist_cover_path_from_tree(root, playlist_id):
-    """Resolve first track path for playlist cover art (shared by single + batch endpoints)."""
+def _playlist_cover_path_from_tree(root, playlist_id, avoid_paths=None):
+    """Pick a representative track for playlist cover art — prefer metadata that matches the playlist name."""
     key, _entry = _find_playlist_key(root, playlist_id)
     if key is None:
         return None
     meta = _playlist_meta_from_key(key)
     source = meta.get('source') or ''
-    paths = _m3u_first_paths(source, limit=12)
+    playlist_name = (meta.get('name') or '').strip()
+    paths = _m3u_first_paths(source, limit=24)
     if not paths:
         return None
+    avoid = set(avoid_paths or [])
+    keywords = _playlist_cover_keywords(playlist_name)
     rows = db_query(
-        f'SELECT path FROM songs_cache WHERE path IN ({",".join("?" * len(paths))}) '
-        f'AND path IS NOT NULL AND path != "" LIMIT 1',
+        f'SELECT path, genre, artist, album, track FROM songs_cache WHERE path IN ({",".join("?" * len(paths))}) '
+        f'AND path IS NOT NULL AND path != ""',
         paths,
     ) or []
-    return (rows[0].get('path') if rows else None) or paths[0]
+    by_path = {r.get('path'): r for r in rows if r.get('path')}
+
+    def score_path(path):
+        if path in avoid:
+            return -1
+        row = by_path.get(path) or {}
+        haystack = ' '.join(
+            str(row.get(k) or '') for k in ('genre', 'artist', 'album', 'track')
+        ).lower()
+        if playlist_name:
+            haystack = f'{playlist_name.lower()} {haystack}'
+        score = 0
+        for kw in keywords:
+            if kw in haystack:
+                score += 12
+        try:
+            score += max(0, 4 - paths.index(path))
+        except ValueError:
+            pass
+        return score
+
+    if rows:
+        candidates = [r.get('path') for r in rows if r.get('path')]
+        if candidates:
+            best = max(candidates, key=score_path)
+            if score_path(best) >= 0:
+                return best
+    for path in paths:
+        if path not in avoid:
+            return path
+    return paths[0]
+
+
+def _playlist_cover_keywords(playlist_name):
+    stop = {
+        'mix', 'era', 'hits', 'party', 'focus', 'favorites', 'essentials', 'decade',
+        'the', 'and', 'for', 'vol', 'volume', 'best', 'top', 'only', 'playlist',
+    }
+    words = re.findall(r"[a-z0-9']+", (playlist_name or '').lower())
+    out = []
+    seen = set()
+    for w in words:
+        if len(w) < 3 or w in stop or w in seen:
+            continue
+        seen.add(w)
+        out.append(w)
+    return out
 
 
 @app.route('/api/playlists/<playlist_id>/cover')
@@ -6880,10 +7585,12 @@ def playlist_covers_batch():
             break
     root = _load_playlists_tree().getroot()
     covers = {}
+    used_paths = set()
     for pid in ids:
-        path = _playlist_cover_path_from_tree(root, pid)
+        path = _playlist_cover_path_from_tree(root, pid, avoid_paths=used_paths)
         if path:
             covers[pid] = path
+            used_paths.add(path)
     return jsonify({'covers': covers})
 
 
@@ -6915,20 +7622,16 @@ def playlist_detail(playlist_id):
 
     q = (request.args.get('q') or '').strip().lower()
     if q:
-        if sort_by == 'title':
-            ordered_paths = [
-                p for p in ordered_paths
-                if q in os.path.basename(p).lower()
-                or q in os.path.splitext(os.path.basename(p))[0].lower()
-            ]
-        else:
-            enriched = _playlist_all_tracks_enriched(playlist_id, source)
-            ordered_paths = [
-                t['path'] for t in enriched
-                if q in (t.get('title') or '').lower()
-                or q in (t.get('artist') or '').lower()
-                or q in (t.get('album') or '').lower()
-            ]
+        enriched = _playlist_all_tracks_enriched(playlist_id, source)
+        meta_by_path = {t['path']: t for t in enriched if t.get('path')}
+        ordered_paths = [
+            p for p in ordered_paths
+            if q in (meta_by_path.get(p, {}).get('title') or '').lower()
+            or q in (meta_by_path.get(p, {}).get('artist') or '').lower()
+            or q in (meta_by_path.get(p, {}).get('album') or '').lower()
+            or q in os.path.basename(p).lower()
+            or q in os.path.splitext(os.path.basename(p))[0].lower()
+        ]
     total = len(ordered_paths)
     start = (page - 1) * limit
     page_paths = ordered_paths[start:start + limit]
@@ -7050,7 +7753,7 @@ def update_playlist(playlist_id):
 @app.route('/api/playlists/<playlist_id>/sort', methods=['POST'])
 def sort_playlist(playlist_id):
     body = request.get_json(silent=True) or {}
-    field = (body.get('by') or body.get('field') or 'title').strip().lower()
+    field = (body.get('by') or body.get('field') or body.get('sortBy') or 'title').strip().lower()
     order = (body.get('order') or 'asc').strip().lower()
     if order not in ('asc', 'desc'):
         return jsonify({'error': 'order must be asc or desc'}), 400
@@ -7095,6 +7798,108 @@ def remove_playlist_track(playlist_id):
         _save_playlists_tree(tree)
     _PLAYLIST_TRACKS_CACHE.pop(playlist_id, None)
     return jsonify({'ok': True, 'trackCount': len(paths)})
+
+
+@app.route('/api/playlists/<playlist_id>/tracks/move', methods=['POST'])
+def move_playlist_track(playlist_id):
+    """Move one track to a new index in the playlist (manual reorder)."""
+    body = request.get_json(silent=True) or {}
+    path = (body.get('path') or '').strip()
+    if not path:
+        return jsonify({'error': 'path required'}), 400
+    try:
+        to_index = int(body.get('toIndex'))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'toIndex required'}), 400
+    tree = _load_playlists_tree()
+    key, _ = _find_playlist_key(tree.getroot(), playlist_id)
+    if key is None:
+        return jsonify({'error': 'not_found'}), 404
+    meta = _playlist_meta_from_key(key)
+    source = meta.get('source') or ''
+    paths = list(_playlist_paths_cached(playlist_id, source))
+    if path not in paths:
+        return jsonify({'error': 'track_not_in_playlist'}), 404
+    from_index = paths.index(path)
+    to_index = max(0, min(to_index, len(paths) - 1))
+    if from_index != to_index:
+        paths.pop(from_index)
+        paths.insert(to_index, path)
+    if meta.get('sourceName') == BOCK_SOURCE_NAME:
+        _persist_playlist(playlist_id, meta.get('name'), paths, create=False)
+    elif source:
+        _write_m3u_file(source, paths)
+        _update_playlist_key(key, meta.get('name'), source, len(paths))
+        _save_playlists_tree(tree)
+    else:
+        return jsonify({'error': 'not_editable'}), 403
+    _PLAYLIST_TRACKS_CACHE.pop(playlist_id, None)
+    return jsonify({'ok': True, 'fromIndex': from_index, 'toIndex': to_index, 'trackCount': len(paths)})
+
+
+def _continue_after_queue_mode():
+    try:
+        tree = ET.parse(os.path.join(DATA_DIR, 'Preferences.xml'))
+        root = tree.getroot()
+        el = root.find('ContinueAfterQueue')
+        return ((el.text if el is not None else None) or 'off').strip().lower()
+    except Exception:
+        return 'off'
+
+
+def _continue_after_queue_paths(data, tracks, current_idx):
+    """Return extra track paths to append when a queue ends, or None."""
+    mode = _continue_after_queue_mode()
+    if mode in ('', 'off', 'false', '0', 'none'):
+        return None
+    if not tracks or current_idx < 0 or current_idx >= len(tracks):
+        return None
+    last_path = tracks[current_idx]
+    if not last_path or not os.path.isfile(last_path):
+        return None
+    try:
+        import bock_resonance
+        seed_row = db_one('SELECT * FROM songs_cache WHERE path = ?', [last_path]) or {}
+        if mode in ('artist', 'artist_radio', 'artist radio'):
+            artist = (seed_row.get('artist') or '').strip()
+            if not artist:
+                return None
+            _seed, rows = bock_resonance.build_mix(
+                db_query, db_one, 'artist', artist=artist, limit=30)
+        elif data.get('playlist_id'):
+            _seed, rows = bock_resonance.build_mix(
+                db_query, db_one, 'playlist',
+                playlist_paths=tracks, limit=30)
+        elif (data.get('context') or '').lower().startswith('album') or seed_row.get('album'):
+            _seed, rows = bock_resonance.build_mix(
+                db_query, db_one, 'album',
+                album=seed_row.get('album'), artist=seed_row.get('artist'), limit=30)
+        else:
+            _seed, rows = bock_resonance.build_mix(
+                db_query, db_one, 'song', path=last_path, limit=30)
+    except Exception as e:
+        print(f'[continue-after-queue] failed: {e}', flush=True)
+        return None
+    seen = set(tracks)
+    extra = [
+        r['path'] for r in rows
+        if r.get('path') and r['path'] not in seen and os.path.isfile(r['path'])
+    ]
+    return extra[:30] or None
+
+
+def _try_continue_queue(data, tracks, idx):
+    extra = _continue_after_queue_paths(data, tracks, idx)
+    if not extra:
+        return None
+    new_tracks = (tracks + extra)[:_QUEUE_TRACK_LIMIT]
+    next_idx = idx + 1
+    if next_idx >= len(new_tracks):
+        return None
+    base = {k: v for k, v in data.items()
+            if k not in ('qid', 'lazy', 'source', 'stopAt', 'stopAfterIdx')}
+    base.update({'tracks': new_tracks, 'idx': next_idx, 'loop': False})
+    return new_tracks[next_idx], encode_token(base)
 
 
 # ── Smart playlists (rule-based, auto-refresh) ───────────────────────────────
@@ -8111,9 +8916,13 @@ def alexa_play(stream_url, token, offset_ms=0, previous_token=None,
     if ifaces is None:
         ifaces = getattr(g, 'supported_interfaces', None) or {}
     dev_id = device_id if device_id is not None else getattr(g, 'device_id', None)
-    apl_directives, apl_on = alexa_apl.play_apl_directives(
-        filepath, offset_ms, title, subtitle, ifaces, dev_id,
-    )
+    try:
+        apl_directives, apl_on = alexa_apl.play_apl_directives(
+            filepath, offset_ms, title, subtitle, ifaces, dev_id,
+        )
+    except Exception as ex:
+        print(f'[APL] play_apl_directives skipped: {ex}', flush=True)
+        apl_directives, apl_on = [], False
     if apl_on:
         audio_item['stream']['progressReportingIntervalInMilliseconds'] = alexa_apl.PROGRESS_REPORT_MS
 
@@ -8355,6 +9164,19 @@ def _filter_ignored_queue(queue):
 
 def start_playing(tracks, shuffle=False, speech=None, loop=False,
                   playlist=None, playlist_id=None, context=None, source=None):
+    try:
+        return _start_playing_impl(
+            tracks, shuffle=shuffle, speech=speech, loop=loop,
+            playlist=playlist, playlist_id=playlist_id, context=context, source=source,
+        )
+    except Exception as ex:
+        import traceback
+        print(f'[ALEXA] start_playing failed: {ex}\n{traceback.format_exc()}', flush=True)
+        return alexa_speak("Sorry, I couldn't start playback right now.")
+
+
+def _start_playing_impl(tracks, shuffle=False, speech=None, loop=False,
+                        playlist=None, playlist_id=None, context=None, source=None):
     t0 = time.time()
     shuffle_seed = None
     if playlist_id and not source:
@@ -8969,6 +9791,11 @@ def alexa_skill():
             if data.get('loop'):
                 next_idx = 0
             else:
+                continued = _try_continue_queue(data, tracks, idx)
+                if continued:
+                    next_path, next_token = continued
+                    return _np_play_path(next_path, next_token,
+                                         previous_token=token, play_behavior='ENQUEUE')
                 return alexa_empty()
         if next_idx < len(tracks):
             next_path  = tracks[next_idx]
@@ -9028,7 +9855,13 @@ def alexa_skill():
     if rtype == 'PlaybackController.PlayCommandIssued':
         return _np_resume_playback(playback_controller=True)
 
-    if rtype == 'ExceptionEncountered':
+    if rtype in ('ExceptionEncountered', 'System.ExceptionEncountered'):
+        err = req.get('error') or {}
+        print(
+            f'[ALEXA EXCEPTION] type={err.get("type")} message={err.get("message")!r} '
+            f'failed_req={((err.get("failedRequest") or {}).get("type"))!r}',
+            flush=True,
+        )
         return alexa_empty()
 
     if rtype == 'CanFulfillIntentRequest':
@@ -9249,21 +10082,30 @@ def alexa_skill():
 
         # ── Play file by UI token (exact path, no fuzzy match) ─────────────
         elif iname == 'PlayFileTokenIntent':
-            token_raw = sv('FileToken')
-            entry = _consume_play_file_token(token_raw)
-            if not entry:
+            try:
+                token_raw = sv('FileToken')
                 pl_entry = _consume_play_playlist_token(token_raw)
                 if pl_entry:
                     if pl_entry.get('kind') == 'album':
                         return _start_album_token_entry(pl_entry)
                     return _start_playlist_token_entry(pl_entry)
-            if not entry or not os.path.isfile(entry['path']):
-                return alexa_speak("Sorry, I couldn't find that track.")
-            label = entry['title']
-            if entry.get('artist'):
-                label = f"{label} by {entry['artist']}"
-            return start_playing([entry['path']], speech=f"Playing {label}.",
-                                context=f'Song · {label}')
+                entry = _consume_play_file_token(token_raw)
+                if entry and entry.get('path') and os.path.isfile(entry['path']):
+                    label = entry['title']
+                    if entry.get('artist'):
+                        label = f"{label} by {entry['artist']}"
+                    return start_playing([entry['path']], speech=f"Playing {label}.",
+                                        context=f'Song · {label}')
+                return alexa_speak(
+                    "Sorry, that play link expired or was not found. "
+                    "Try playing again from the Bock Media app.",
+                )
+            except Exception as ex:
+                import traceback
+                print(f'[ALEXA] PlayFileTokenIntent failed: {ex}\n{traceback.format_exc()}', flush=True)
+                return alexa_speak(
+                    "Sorry, I couldn't start playback. Check the Bock Media server logs.",
+                )
 
         # ── Play specific track ────────────────────────────────────────────
         elif iname == 'PlayTrackIntent':
@@ -9655,6 +10497,7 @@ except Exception as e:
 register_bock_routes(app, globals())
 
 _start_automation_scheduler()
+_start_device_discovery_scheduler()
 
 if __name__ == '__main__':
     apply_logging()

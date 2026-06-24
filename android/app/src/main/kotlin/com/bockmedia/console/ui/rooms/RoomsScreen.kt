@@ -271,7 +271,7 @@ private fun RoomRow(
             }
         }
         if (remoteOk && !room.pseudo && room.serial != null && np?.playlist != null) {
-            PlayButton(onClick = { onPlay(PlayTarget.Playlist("", np.playlist ?: "")) })
+            PlayButton(onClick = { onPlay(PlayTarget.Playlist("", np.playlist.orEmpty())) })
         }
     }
 }

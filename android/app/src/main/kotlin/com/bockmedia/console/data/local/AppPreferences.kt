@@ -26,6 +26,7 @@ class AppPreferences(private val context: Context) {
     private val keyHasConnected = booleanPreferencesKey("has_connected")
     private val keyDownloadWifiOnly = booleanPreferencesKey("download_wifi_only")
     private val keyCrossfadeSeconds = intPreferencesKey("crossfade_seconds")
+    private val keyContinueAfterQueue = stringPreferencesKey("continue_after_queue")
     private val keyLastEndpoint = stringPreferencesKey("last_good_endpoint")
 
     val rememberMe: Flow<Boolean> = context.dataStore.data.map { it[keyRememberMe] != false }
@@ -85,6 +86,15 @@ class AppPreferences(private val context: Context) {
     suspend fun isDownloadWifiOnlySync(): Boolean = downloadWifiOnly.first()
 
     suspend fun getCrossfadeSecondsSync(): Int = crossfadeSeconds.first()
+
+    suspend fun getContinueAfterQueueSync(): String =
+        context.dataStore.data.first()[keyContinueAfterQueue]?.takeIf { it.isNotBlank() } ?: "off"
+
+    suspend fun setContinueAfterQueue(mode: String) {
+        context.dataStore.edit { prefs ->
+            prefs[keyContinueAfterQueue] = mode
+        }
+    }
 
     suspend fun setCrossfadeSeconds(seconds: Int) {
         context.dataStore.edit { prefs ->
@@ -193,9 +203,26 @@ class AppPreferences(private val context: Context) {
             return if (sizePx != null && sizePx > 0) "$url?size=$sizePx" else url
         }
 
-        fun streamUrl(base: String, filepath: String?): String? {
+        const val CELLULAR_STREAM_BITRATE_KBPS = 128
+
+        fun streamUrl(
+            base: String,
+            filepath: String?,
+            title: String? = null,
+            artist: String? = null,
+            lowBandwidth: Boolean = false,
+        ): String? {
             if (filepath.isNullOrBlank()) return null
-            return "${normalizeUrl(base)}/stream/${encodeMediaPath(filepath)}"
+            val params = mutableListOf<String>()
+            title?.trim()?.takeIf { it.isNotEmpty() }?.let {
+                params += "title=${java.net.URLEncoder.encode(it, "UTF-8").replace("+", "%20")}"
+            }
+            artist?.trim()?.takeIf { it.isNotEmpty() }?.let {
+                params += "artist=${java.net.URLEncoder.encode(it, "UTF-8").replace("+", "%20")}"
+            }
+            if (lowBandwidth) params += "br=$CELLULAR_STREAM_BITRATE_KBPS"
+            val qs = if (params.isEmpty()) "" else "?${params.joinToString("&")}"
+            return "${normalizeUrl(base)}/stream/${encodeMediaPath(filepath)}$qs"
         }
 
         fun hostOf(raw: String?): String? {

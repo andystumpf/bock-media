@@ -44,7 +44,7 @@ class LocalPlaybackQueueResolver(
             val resp = repository.playlistDetail(id, page = page, limit = 200)
             resp.tracks.forEach { t ->
                 val path = t.path ?: return@forEach
-                out += songTrack(path, t.title ?: path, t.artist, t.album, collectionId)
+                out += songTrack(path, t.title ?: path, t.artist, t.album, collectionId, t.duration)
                 if (maxTracks != null && out.size >= maxTracks) return out
             }
             if (out.size >= resp.total || resp.tracks.isEmpty()) break
@@ -61,7 +61,7 @@ class LocalPlaybackQueueResolver(
             val resp = repository.songs(page = page, search = artist, artist = artist)
             resp.items.forEach { t ->
                 val path = t.path ?: return@forEach
-                out += songTrack(path, t.title ?: path, t.artist, t.album)
+                out += songTrack(path, t.title ?: path, t.artist, t.album, durationSec = t.duration)
                 if (maxTracks != null && out.size >= maxTracks) return out
             }
             if (resp.items.isEmpty() || out.size >= resp.total) break
@@ -78,7 +78,7 @@ class LocalPlaybackQueueResolver(
             val resp = repository.songs(page = page, search = album, artist = artist, album = album)
             resp.items.forEach { t ->
                 val path = t.path ?: return@forEach
-                out += songTrack(path, t.title ?: path, t.artist, t.album)
+                out += songTrack(path, t.title ?: path, t.artist, t.album, durationSec = t.duration)
                 if (maxTracks != null && out.size >= maxTracks) return out
             }
             if (resp.items.isEmpty() || out.size >= resp.total) break
@@ -94,8 +94,17 @@ class LocalPlaybackQueueResolver(
         artist: String?,
         album: String?,
         playlistId: String? = null,
+        durationSec: Int? = null,
     ): LocalTrack {
         val local = offlineStore.localFileFor(path, playlistId)
-        return LocalTrack(path = path, title = title, artist = artist, album = album, localFile = local)
+        val durationMs = durationSec?.takeIf { it > 0 }?.times(1000L) ?: 0L
+        return LocalTrack(
+            path = path,
+            title = title,
+            artist = artist,
+            album = album,
+            localFile = local,
+            durationMs = durationMs,
+        )
     }
 }

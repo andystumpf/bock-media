@@ -61,6 +61,14 @@ struct SettingsView: View {
                         step: 1
                     )
                 }
+                Picker("When queue ends", selection: Binding(
+                    get: { appState.preferences.continueAfterQueue },
+                    set: { appState.preferences.continueAfterQueue = $0 }
+                )) {
+                    Text("Stop").tag("off")
+                    Text("Similar songs").tag("similar")
+                    Text("Artist radio").tag("artist_radio")
+                }
             }
             Section("Watch folders") {
                 if watchFolders.isEmpty {

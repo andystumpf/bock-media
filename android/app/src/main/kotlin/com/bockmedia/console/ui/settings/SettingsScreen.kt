@@ -1,5 +1,6 @@
 package com.bockmedia.console.ui.settings
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import com.bockmedia.console.ui.components.bockVerticalScroll
 import androidx.compose.material.icons.Icons
@@ -38,6 +39,8 @@ fun SettingsScreen(
     val app = remember { BockMediaApp.get(context) }
     var wifiOnlyDownloads by remember { mutableStateOf(false) }
     var crossfadeSeconds by remember { mutableFloatStateOf(0f) }
+    var continueAfterQueue by remember { mutableStateOf("off") }
+    val continueOptions = listOf("off" to "Stop", "similar" to "Similar songs", "artist_radio" to "Artist radio")
     var loading by remember { mutableStateOf(true) }
     var message by remember { mutableStateOf<String?>(null) }
 
@@ -45,6 +48,7 @@ fun SettingsScreen(
         loading = true
         wifiOnlyDownloads = app.preferences.isDownloadWifiOnlySync()
         crossfadeSeconds = app.preferences.getCrossfadeSecondsSync().toFloat()
+        continueAfterQueue = app.preferences.getContinueAfterQueueSync()
         loading = false
     }
 
@@ -120,6 +124,26 @@ fun SettingsScreen(
                         valueRange = 0f..20f,
                         steps = 19,
                     )
+                    Spacer(Modifier.height(8.dp))
+                    Text("When queue ends", fontWeight = FontWeight.SemiBold)
+                    continueOptions.forEach { (value, label) ->
+                        Row(
+                            Modifier.fillMaxWidth().clickable {
+                                continueAfterQueue = value
+                                scope.launch { app.preferences.setContinueAfterQueue(value) }
+                            }.padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(
+                                selected = continueAfterQueue == value,
+                                onClick = {
+                                    continueAfterQueue = value
+                                    scope.launch { app.preferences.setContinueAfterQueue(value) }
+                                },
+                            )
+                            Text(label)
+                        }
+                    }
                 }
             }
 

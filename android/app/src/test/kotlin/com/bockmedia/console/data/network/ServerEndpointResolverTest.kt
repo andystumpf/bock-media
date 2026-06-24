@@ -37,4 +37,16 @@ class ServerEndpointResolverTest {
         )
         assertEquals("http://192.168.1.187:3001", url)
     }
+
+    @Test
+    fun pickEndpoint_onCellular_usesExternalEvenWhenUnreachable() {
+        val url = ServerEndpointResolver.pickEndpoint(
+            local = "http://192.168.1.187:3001",
+            external = "http://142.56.8.193:3001",
+            localReachable = false,
+            externalReachable = false,
+            wifiAvailable = false,
+        )
+        assertEquals("http://142.56.8.193:3001", url)
+    }
 }

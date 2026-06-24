@@ -1,5 +1,6 @@
 package com.bockmedia.console.ui.playlists
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import com.bockmedia.console.ui.theme.BockGreen
 import androidx.compose.foundation.clickable
@@ -31,11 +32,16 @@ import com.bockmedia.console.data.api.dto.PlaylistSummary
 import com.bockmedia.console.data.api.dto.PlaylistTrack
 import com.bockmedia.console.data.api.dto.SmartPlaylist
 import com.bockmedia.console.data.repository.BockMediaRepository
+import com.bockmedia.console.domain.model.LocalTrack
+import com.bockmedia.console.domain.model.PlaybackFocus
 import com.bockmedia.console.domain.model.PlayTarget
+import com.bockmedia.console.media.LOCAL_PHONE_DEVICE_ID
+import com.bockmedia.console.media.LocalPlaybackController
 import com.bockmedia.console.local.DownloadState
 import com.bockmedia.console.local.OfflineDownloadManager
 import com.bockmedia.console.local.downloadId
 import com.bockmedia.console.ui.components.*
+import com.bockmedia.console.ui.discovery.AcquireIdeasDialog
 import com.bockmedia.console.ui.discovery.DiscoveryActionsDialog
 import com.bockmedia.console.ui.discovery.DiscoverySeed
 import com.bockmedia.console.ui.discovery.DiscoverySeedKind
@@ -283,6 +289,7 @@ fun PlaylistDetailScreen(
     remoteOk: Boolean,
     onPlay: (PlayTarget) -> Unit,
     onBack: () -> Unit,
+    onLocalPlayStarted: () -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -301,6 +308,13 @@ fun PlaylistDetailScreen(
     var showMixMuse by remember { mutableStateOf(false) }
     var mixMuseSeed by remember { mutableStateOf<DiscoverySeed?>(null) }
     var discoverySeed by remember { mutableStateOf<DiscoverySeed?>(null) }
+    var acquireIdeasSeed by remember { mutableStateOf<DiscoverySeed?>(null) }
+    var reorderMode by remember { mutableStateOf(false) }
+    var playlistSource by remember { mutableStateOf<String?>(null) }
+    var playlistSourceName by remember { mutableStateOf<String?>(null) }
+    var reorderError by remember { mutableStateOf<String?>(null) }
+    val canReorder = filter.isBlank() && sortBy == "title" && sortOrder == "asc" &&
+        isPlaylistEditable(playlistSource, playlistSourceName)
     val listState = rememberLazyListState()
     val pageSize = 100
     val playTarget = remember(name, playlistId) { PlayTarget.Playlist(playlistId, name) }
@@ -310,6 +324,17 @@ fun PlaylistDetailScreen(
     val downloading = collectionStatus?.state == DownloadState.Downloading
     val downloadFailed = collectionStatus?.state == DownloadState.Failed
     val downloadProgress = collectionStatus?.progress ?: 0f
+
+    suspend fun playOnPhone(shuffle: Boolean = false) {
+        LocalPlaybackController.playTarget(context, playTarget, shuffle)
+        val err = LocalPlaybackController.state.value.error
+        if (err != null) {
+            android.widget.Toast.makeText(context, err, android.widget.Toast.LENGTH_LONG).show()
+        } else {
+            PlaybackFocus.notePlayStarted(LOCAL_PHONE_DEVICE_ID, "This phone")
+            onLocalPlayStarted()
+        }
+    }
 
     suspend fun loadPage(page: Int, append: Boolean) {
         if (append) {
@@ -330,6 +355,8 @@ fun PlaylistDetailScreen(
             )
             name = d.name
             editName = d.name
+            playlistSource = d.source
+            playlistSourceName = d.sourceName
             total = d.total.takeIf { it > 0 } ?: d.tracks.size
             tracks = if (append) {
                 val seen = tracks.mapNotNull { it.path }.toMutableSet()
@@ -356,6 +383,51 @@ fun PlaylistDetailScreen(
         loadPage(page = 1, append = false)
     }
 
+    suspend fun applySort(newSortBy: String? = null, newOrder: String? = null) {
+        newSortBy?.let { sortBy = it }
+        newOrder?.let { sortOrder = it }
+        reorderMode = false
+        if (filter.isBlank()) {
+            runCatching { repository.sortPlaylist(playlistId, sortBy, sortOrder) }
+        }
+    }
+
+    suspend fun loadAllTracksIfNeeded() {
+        if (tracks.size >= total) return
+        val all = mutableListOf<PlaylistTrack>()
+        var page = 1
+        while (true) {
+            val d = repository.playlistDetail(playlistId, page = page, limit = pageSize, sortBy = sortBy, order = sortOrder)
+            if (page == 1) {
+                name = d.name
+                playlistSource = d.source
+                playlistSourceName = d.sourceName
+                total = d.total.takeIf { it > 0 } ?: d.tracks.size
+            }
+            all.addAll(d.tracks)
+            if (d.tracks.size < pageSize || all.size >= total) break
+            page++
+        }
+        tracks = all
+    }
+
+    suspend fun moveTrack(fromIndex: Int, toIndex: Int) {
+        if (fromIndex !in tracks.indices || toIndex !in tracks.indices || fromIndex == toIndex) return
+        val path = tracks[fromIndex].path ?: return
+        if (tracks.size < total) loadAllTracksIfNeeded()
+        val previous = tracks
+        val reordered = tracks.toMutableList()
+        val item = reordered.removeAt(fromIndex)
+        reordered.add(toIndex.coerceIn(0, reordered.size), item)
+        tracks = reordered
+        reorderError = null
+        runCatching { repository.movePlaylistTrack(playlistId, path, toIndex) }
+            .onFailure {
+                tracks = previous
+                reorderError = httpErrorMessage(it, "Could not reorder track")
+            }
+    }
+
     LaunchedEffect(listState, tracks.size, total, loading, loadingMore, reloadKey) {
         snapshotFlow {
             val info = listState.layoutInfo
@@ -377,9 +449,19 @@ fun PlaylistDetailScreen(
             confirmButton = {
                 TextButton(onClick = {
                     scope.launch {
-                        repository.renamePlaylist(playlistId, editName.trim())
-                        showRename = false
-                        loadPage(page = 1, append = false)
+                        runCatching { repository.renamePlaylist(playlistId, editName.trim()) }
+                            .onSuccess {
+                                showRename = false
+                                loadPage(page = 1, append = false)
+                            }
+                            .onFailure { e ->
+                                showRename = false
+                                android.widget.Toast.makeText(
+                                    context,
+                                    httpErrorMessage(e, "Could not rename playlist"),
+                                    android.widget.Toast.LENGTH_LONG,
+                                ).show()
+                            }
                     }
                 }) { Text("Save") }
             },
@@ -411,6 +493,14 @@ fun PlaylistDetailScreen(
                     repository.runResonanceMix(seed) { id, plName -> onPlay(PlayTarget.Playlist(id, plName)) }
                 }
             },
+            onAcquireIdeas = { acquireIdeasSeed = seed },
+        )
+    }
+    acquireIdeasSeed?.let { seed ->
+        AcquireIdeasDialog(
+            repository = repository,
+            seed = seed,
+            onDismiss = { acquireIdeasSeed = null },
         )
     }
 
@@ -436,7 +526,8 @@ fun PlaylistDetailScreen(
                             downloading = downloading,
                             downloadFailed = downloadFailed,
                             downloadProgress = downloadProgress,
-                            onPlay = { onPlay(playTarget) },
+                            onPlay = { scope.launch { playOnPhone() } },
+                            onPlayOnSpeaker = { onPlay(playTarget) },
                             onDownload = {
                                 if (downloaded) {
                                     OfflineDownloadManager.resync(context, playTarget)
@@ -446,7 +537,17 @@ fun PlaylistDetailScreen(
                             },
                             onRename = { showRename = true },
                             onDelete = {
-                                scope.launch { repository.deletePlaylist(playlistId); onBack() }
+                                scope.launch {
+                                    runCatching { repository.deletePlaylist(playlistId) }
+                                        .onSuccess { onBack() }
+                                        .onFailure { e ->
+                                            android.widget.Toast.makeText(
+                                                context,
+                                                httpErrorMessage(e, "Could not delete playlist"),
+                                                android.widget.Toast.LENGTH_LONG,
+                                            ).show()
+                                        }
+                                }
                             },
                             onDiscover = {
                                 discoverySeed = DiscoverySeed(
@@ -459,26 +560,84 @@ fun PlaylistDetailScreen(
                     }
                     item {
                         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-                            SearchField(filter, { filter = it }, "Filter tracks")
+                            SearchField(filter, {
+                                filter = it
+                                reorderMode = false
+                            }, "Search in playlist")
                             Spacer(Modifier.height(8.dp))
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                SortChip("Title", sortBy == "title") { sortBy = "title" }
-                                SortChip("Artist", sortBy == "artist") { sortBy = "artist" }
-                                SortChip("Album", sortBy == "album") { sortBy = "album" }
-                                SortChip("↑", sortOrder == "asc") { sortOrder = "asc" }
-                                SortChip("↓", sortOrder == "desc") { sortOrder = "desc" }
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    SortChip("Title", sortBy == "title") { scope.launch { applySort(newSortBy = "title") } }
+                                    SortChip("Artist", sortBy == "artist") { scope.launch { applySort(newSortBy = "artist") } }
+                                    SortChip("Album", sortBy == "album") { scope.launch { applySort(newSortBy = "album") } }
+                                    SortChip("↑", sortOrder == "asc") { scope.launch { applySort(newOrder = "asc") } }
+                                    SortChip("↓", sortOrder == "desc") { scope.launch { applySort(newOrder = "desc") } }
+                                }
+                                if (canReorder) {
+                                    TextButton(onClick = {
+                                        reorderError = null
+                                        reorderMode = !reorderMode
+                                        if (reorderMode) scope.launch { loadAllTracksIfNeeded() }
+                                    }) {
+                                        Text(if (reorderMode) "Done" else "Reorder")
+                                    }
+                                }
+                            }
+                            reorderError?.let { msg ->
+                                Text(
+                                    msg,
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.padding(top = 4.dp),
+                                )
                             }
                         }
                     }
-                    items(tracks.size, key = { idx -> "pl-$playlistId-row-$idx" }) { idx ->
+                    items(tracks.size, key = { idx -> "${tracks[idx].path ?: "row"}-$idx" }) { idx ->
                         val t = tracks[idx]
                         val trackNum = idx + 1
                         SpotifyTrackRow(
                             trackNum = trackNum,
                             track = t,
+                            reorderMode = reorderMode,
+                            canMoveUp = reorderMode && idx > 0,
+                            canMoveDown = reorderMode && idx < tracks.lastIndex,
+                            onMoveUp = { scope.launch { moveTrack(idx, idx - 1) } },
+                            onMoveDown = { scope.launch { moveTrack(idx, idx + 1) } },
                             onClick = {
-                                t.path?.let { path ->
-                                    onPlay(PlayTarget.Song(path, t.title ?: "Track"))
+                                scope.launch {
+                                    if (tracks.size < total) loadAllTracksIfNeeded()
+                                    val queue = tracks.mapNotNull { pt ->
+                                        pt.path?.let { path ->
+                                            LocalTrack(
+                                                path = path,
+                                                title = pt.title ?: path,
+                                                artist = pt.artist,
+                                                album = pt.album,
+                                                durationMs = (pt.duration ?: 0).coerceAtLeast(0) * 1000L,
+                                            )
+                                        }
+                                    }
+                                    if (queue.isEmpty()) return@launch
+                                    val startIdx = queue.indexOfFirst { it.path == t.path }
+                                        .takeIf { it >= 0 } ?: idx
+                                    LocalPlaybackController.playPlaylistFromIndex(
+                                        context,
+                                        playTarget,
+                                        queue,
+                                        startIdx,
+                                    )
+                                    val err = LocalPlaybackController.state.value.error
+                                    if (err != null) {
+                                        android.widget.Toast.makeText(context, err, android.widget.Toast.LENGTH_LONG).show()
+                                    } else {
+                                        PlaybackFocus.notePlayStarted(LOCAL_PHONE_DEVICE_ID, "This phone")
+                                        onLocalPlayStarted()
+                                    }
                                 }
                             },
                             onRemove = {
@@ -529,6 +688,7 @@ private fun SpotifyPlaylistHeader(
     downloadFailed: Boolean,
     downloadProgress: Float,
     onPlay: () -> Unit,
+    onPlayOnSpeaker: () -> Unit = {},
     onDownload: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
@@ -624,6 +784,11 @@ private fun SpotifyPlaylistHeader(
                 }
                 DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
                     DropdownMenuItem(
+                        text = { Text("Play on a speaker") },
+                        onClick = { menuExpanded = false; onPlayOnSpeaker() },
+                        leadingIcon = { Icon(Icons.Default.Speaker, null) },
+                    )
+                    DropdownMenuItem(
                         text = { Text("Mix Muse / Resonance") },
                         onClick = { menuExpanded = false; onDiscover() },
                         leadingIcon = { Icon(Icons.Default.AutoAwesome, null) },
@@ -693,6 +858,7 @@ private fun SpotifyPlaylistHeader(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun SpotifyTrackRow(
     trackNum: Int,
@@ -700,6 +866,11 @@ private fun SpotifyTrackRow(
     onClick: () -> Unit,
     onRemove: () -> Unit,
     onDiscover: () -> Unit = {},
+    reorderMode: Boolean = false,
+    canMoveUp: Boolean = false,
+    canMoveDown: Boolean = false,
+    onMoveUp: () -> Unit = {},
+    onMoveDown: () -> Unit = {},
 ) {
     Row(
         modifier = Modifier
@@ -747,6 +918,14 @@ private fun SpotifyTrackRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(end = 4.dp),
             )
+        }
+        if (reorderMode) {
+            IconButton(onClick = onMoveUp, enabled = canMoveUp, modifier = Modifier.size(32.dp)) {
+                Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Move up")
+            }
+            IconButton(onClick = onMoveDown, enabled = canMoveDown, modifier = Modifier.size(32.dp)) {
+                Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Move down")
+            }
         }
         IconButton(onClick = onRemove, modifier = Modifier.size(36.dp)) {
             Icon(
@@ -873,4 +1052,9 @@ private fun AiPlaylistDialog(repository: BockMediaRepository, onDismiss: () -> U
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+}
+
+private fun isPlaylistEditable(source: String?, sourceName: String?): Boolean {
+    if (sourceName.equals("bockmedia", ignoreCase = true)) return true
+    return !source.isNullOrBlank()
 }

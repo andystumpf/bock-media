@@ -13,6 +13,10 @@ import com.bockmedia.console.domain.model.toLocalPlayContext
 import com.bockmedia.console.local.OfflineDownloadStore
 import com.bockmedia.console.local.OfflineCollectionManifest
 import com.bockmedia.console.local.downloadId
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -29,6 +33,7 @@ data class LocalPlaybackState(
     val sourceLabel: String? = null,
     val playlist: String? = null,
     val playlistId: String? = null,
+    val activeTarget: PlayTarget? = null,
     val loading: Boolean = false,
     val error: String? = null,
 ) {
@@ -38,6 +43,7 @@ data class LocalPlaybackState(
 object LocalPlaybackController {
     private val _state = MutableStateFlow(LocalPlaybackState())
     val state: StateFlow<LocalPlaybackState> = _state.asStateFlow()
+    private val restartScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     fun update(block: (LocalPlaybackState) -> LocalPlaybackState) {
         _state.value = block(_state.value)
@@ -65,6 +71,7 @@ object LocalPlaybackController {
                 sourceLabel = ctx.sourceLabel,
                 playlist = ctx.playlist,
                 playlistId = ctx.playlistId,
+                activeTarget = target,
             )
         }.onFailure { e ->
             update { it.copy(loading = false, error = httpErrorMessage(e, "Playback failed")) }
@@ -82,6 +89,7 @@ object LocalPlaybackController {
         runCatching {
             val tracks = store.localTracksForManifest(manifest)
             if (tracks.isEmpty()) error("No offline audio files found on this device")
+            val playlistId = manifest.sourcePlaylistId ?: manifest.legacyPlaylistId
             playTracks(
                 context,
                 tracks,
@@ -89,7 +97,8 @@ object LocalPlaybackController {
                 shuffle = shuffle,
                 sourceLabel = "Playlist · ${manifest.title}",
                 playlist = manifest.title,
-                playlistId = manifest.sourcePlaylistId ?: manifest.legacyPlaylistId,
+                playlistId = playlistId,
+                activeTarget = playlistId?.let { PlayTarget.Playlist(it, manifest.title) },
             )
         }.onFailure { e ->
             update { it.copy(loading = false, error = e.message ?: "Offline playback failed") }
@@ -104,6 +113,7 @@ object LocalPlaybackController {
         sourceLabel: String? = _state.value.sourceLabel,
         playlist: String? = _state.value.playlist,
         playlistId: String? = _state.value.playlistId,
+        activeTarget: PlayTarget? = _state.value.activeTarget,
     ) {
         if (tracks.isEmpty()) return
         // Keep canonical order; ExoPlayer's shuffle mode handles randomized traversal so the
@@ -111,9 +121,13 @@ object LocalPlaybackController {
         val ordered = tracks
         val resolvedStart = if (shuffle && startIndex == 0) tracks.indices.random() else startIndex
         val base = BockMediaApp.get(context).resolveBaseUrl()
+        // Stream the original file even on cellular: forcing a ?br=128 transcode makes
+        // the server re-encode every track in realtime, which this CPU can't keep up with
+        // (≈7s to first byte vs ≈5ms for the original) and stalls playback. Data-saving
+        // transcode stays opt-in for explicit offline downloads only.
         val urls = ordered.map { track ->
             track.localFile?.let { Uri.fromFile(it).toString() }
-                ?: AppPreferences.streamUrl(base, track.path)
+                ?: AppPreferences.streamUrl(base, track.path, track.title, track.artist)
                 ?: error("Missing stream URL for ${track.title}")
         }
         update {
@@ -125,6 +139,7 @@ object LocalPlaybackController {
                 sourceLabel = sourceLabel,
                 playlist = playlist,
                 playlistId = playlistId,
+                activeTarget = activeTarget,
                 loading = false,
                 error = null,
                 isPlaying = true,
@@ -138,14 +153,60 @@ object LocalPlaybackController {
             putStringArrayListExtra(LocalPlaybackService.EXTRA_ARTISTS, ArrayList(ordered.map { it.displayArtist }))
             putStringArrayListExtra(LocalPlaybackService.EXTRA_ALBUMS, ArrayList(ordered.map { it.album.orEmpty() }))
             putStringArrayListExtra(LocalPlaybackService.EXTRA_PATHS, ArrayList(ordered.map { it.path }))
+            putExtra(LocalPlaybackService.EXTRA_DURATIONS_MS, LongArray(ordered.size) { i -> ordered[i].durationMs })
             putExtra(LocalPlaybackService.EXTRA_START_INDEX, resolvedStart.coerceIn(0, ordered.lastIndex))
             putExtra(LocalPlaybackService.EXTRA_SHUFFLE, shuffle)
             putExtra(LocalPlaybackService.EXTRA_CROSSFADE_MS, crossfadeMs)
+            activeTarget?.let { target ->
+                when (target) {
+                    is PlayTarget.Playlist -> {
+                        putExtra(LocalPlaybackService.EXTRA_TARGET_KIND, "playlist")
+                        putExtra(LocalPlaybackService.EXTRA_TARGET_PLAYLIST_ID, target.id)
+                    }
+                    is PlayTarget.Album -> {
+                        putExtra(LocalPlaybackService.EXTRA_TARGET_KIND, "album")
+                        putExtra(LocalPlaybackService.EXTRA_TARGET_ALBUM, target.name)
+                        target.artist?.let { putExtra(LocalPlaybackService.EXTRA_TARGET_ARTIST, it) }
+                    }
+                    is PlayTarget.Artist -> {
+                        putExtra(LocalPlaybackService.EXTRA_TARGET_KIND, "artist")
+                        putExtra(LocalPlaybackService.EXTRA_TARGET_ARTIST, target.name)
+                    }
+                    is PlayTarget.Song -> {
+                        putExtra(LocalPlaybackService.EXTRA_TARGET_KIND, "song")
+                        putExtra(LocalPlaybackService.EXTRA_TARGET_PATH, target.path)
+                    }
+                    is PlayTarget.Radio -> {
+                        putExtra(LocalPlaybackService.EXTRA_TARGET_KIND, "radio")
+                    }
+                }
+            }
         }
         context.startForegroundService(intent)
     }
 
     fun togglePlayPause(context: Context) {
+        val s = _state.value
+        if (s.active && s.tracks.isNotEmpty() && !LocalPlaybackService.hasPlayer()) {
+            restartScope.launch {
+                playTracks(
+                    context,
+                    s.tracks,
+                    startIndex = s.index,
+                    shuffle = s.shuffle,
+                    sourceLabel = s.sourceLabel,
+                    playlist = s.playlist,
+                    playlistId = s.playlistId,
+                    activeTarget = s.activeTarget,
+                )
+                if (!s.isPlaying) {
+                    context.startService(Intent(context, LocalPlaybackService::class.java).apply {
+                        action = LocalPlaybackService.ACTION_TOGGLE
+                    })
+                }
+            }
+            return
+        }
         context.startService(Intent(context, LocalPlaybackService::class.java).apply {
             action = LocalPlaybackService.ACTION_TOGGLE
         })
@@ -184,7 +245,47 @@ object LocalPlaybackController {
     suspend fun seekToQueueIndex(context: Context, index: Int) {
         val current = _state.value
         if (index !in current.tracks.indices) return
-        playTracks(context, current.tracks, startIndex = index, shuffle = current.shuffle)
+        playTracks(
+            context,
+            current.tracks,
+            startIndex = index,
+            shuffle = current.shuffle,
+            sourceLabel = current.sourceLabel,
+            playlist = current.playlist,
+            playlistId = current.playlistId,
+            activeTarget = current.activeTarget,
+        )
+    }
+
+    /** Play a playlist (or jump within the active one) starting at [startIndex]. */
+    suspend fun playPlaylistFromIndex(
+        context: Context,
+        target: PlayTarget.Playlist,
+        tracks: List<LocalTrack>,
+        startIndex: Int,
+        shuffle: Boolean = false,
+    ) {
+        if (tracks.isEmpty()) return
+        val idx = startIndex.coerceIn(0, tracks.lastIndex)
+        val current = _state.value
+        if (current.playlistId == target.id && current.tracks.isNotEmpty()) {
+            val path = tracks.getOrNull(idx)?.path
+            val globalIdx = if (path != null) current.tracks.indexOfFirst { it.path == path } else -1
+            if (globalIdx >= 0) {
+                seekToQueueIndex(context, globalIdx)
+                return
+            }
+        }
+        playTracks(
+            context,
+            tracks,
+            startIndex = idx,
+            shuffle = shuffle,
+            sourceLabel = "Playlist · ${target.name}",
+            playlist = target.name,
+            playlistId = target.id,
+            activeTarget = target,
+        )
     }
 
     /** Blocking hook for service binder callbacks. */

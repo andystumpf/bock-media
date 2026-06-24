@@ -60,6 +60,7 @@ android/keystore.properties
 android/release.keystore
 android/*.keystore
 android/.gradle/
+android/.kotlin/
 android/app/build/
 android/build/
 android/.idea/

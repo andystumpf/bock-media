@@ -94,17 +94,84 @@ class TestBrowse:
             return ('key1', None) if pid in ('pl-1', 'pl-2') else (None, None)
 
         monkeypatch.setattr(server, '_find_playlist_key', fake_find)
-        monkeypatch.setattr(server, '_playlist_meta_from_key', lambda key: {'source': '/fake/list.m3u'})
-        monkeypatch.setattr(server, '_m3u_first_paths', lambda source, limit=12: ['/music/a.mp3'])
         monkeypatch.setattr(
             server,
-            'db_query',
-            lambda sql, params=(): [{'path': '/music/a.mp3'}],
+            '_playlist_meta_from_key',
+            lambda key: {'source': '/fake/list.m3u', 'name': 'Classical Era Mix'},
         )
+        monkeypatch.setattr(
+            server,
+            '_m3u_first_paths',
+            lambda source, limit=12: ['/music/classical.mp3', '/music/country.mp3'],
+        )
+
+        def fake_db_query(sql, params=()):
+            rows = {
+                '/music/classical.mp3': {
+                    'path': '/music/classical.mp3',
+                    'genre': 'Classical',
+                    'artist': 'Mozart',
+                    'album': 'Symphonies',
+                    'track': 'No. 40',
+                },
+                '/music/country.mp3': {
+                    'path': '/music/country.mp3',
+                    'genre': 'Country',
+                    'artist': 'Willie Nelson',
+                    'album': 'Red Headed Stranger',
+                    'track': 'Blue Eyes',
+                },
+            }
+            return [rows[p] for p in params if p in rows]
+
+        monkeypatch.setattr(server, 'db_query', fake_db_query)
         data = client.post('/api/playlists/covers', json={'ids': ['pl-1', 'pl-2', 'missing']}).get_json()
-        assert data['covers']['pl-1'] == '/music/a.mp3'
-        assert data['covers']['pl-2'] == '/music/a.mp3'
+        assert data['covers']['pl-1'] == '/music/classical.mp3'
+        assert data['covers']['pl-2'] == '/music/country.mp3'
         assert 'missing' not in data['covers']
+
+    def test_playlist_cover_keywords_prefers_genre_match(self, client, monkeypatch):
+        import xml.etree.ElementTree as ET
+
+        monkeypatch.setattr(
+            server,
+            '_load_playlists_tree',
+            lambda: ET.ElementTree(ET.Element('playlists')),
+        )
+        monkeypatch.setattr(server, '_find_playlist_key', lambda root, pid: ('key1', None))
+        monkeypatch.setattr(
+            server,
+            '_playlist_meta_from_key',
+            lambda key: {'source': '/fake/classical.m3u', 'name': 'Classical Era Mix'},
+        )
+        monkeypatch.setattr(
+            server,
+            '_m3u_first_paths',
+            lambda source, limit=12: ['/music/country.mp3', '/music/classical.mp3'],
+        )
+
+        def fake_db_query(sql, params=()):
+            rows = {
+                '/music/classical.mp3': {
+                    'path': '/music/classical.mp3',
+                    'genre': 'Classical',
+                    'artist': 'Bach',
+                    'album': 'Goldberg',
+                    'track': 'Aria',
+                },
+                '/music/country.mp3': {
+                    'path': '/music/country.mp3',
+                    'genre': 'Country',
+                    'artist': 'Dolly Parton',
+                    'album': 'Hits',
+                    'track': 'Jolene',
+                },
+            }
+            return [rows[p] for p in params if p in rows]
+
+        monkeypatch.setattr(server, 'db_query', fake_db_query)
+        data = client.get('/api/playlists/pl-1/cover').get_json()
+        assert data.get('path') == '/music/classical.mp3'
 
     def test_songs_paginated(self, client):
         data = client.get('/api/songs?page=1&limit=3').get_json()
@@ -295,6 +362,24 @@ class TestStreamRoutes:
     def test_stream_missing_file(self, client):
         rv = client.get('/stream/no/such/file.mp3')
         assert rv.status_code in (404, 403, 400)
+
+    def test_resolve_library_path_by_basename(self, tmp_path, monkeypatch):
+        import server
+        root = tmp_path / 'music'
+        monkeypatch.setattr(server, 'MUSIC_ROOT', str(root))
+        real = root / 'Artist' / 'Album' / 'Chicago.mp3'
+        real.parent.mkdir(parents=True)
+        real.write_bytes(b'ID3')
+        stale = root / 'exportedPlaylists' / 'Chicago.mp3'
+
+        def fake_db_query(sql, params=()):
+            if 'songs_cache' in sql and params:
+                return [{'path': str(real), 'title': 'Chicago', 'artist': 'Chicago'}]
+            return []
+
+        monkeypatch.setattr(server, 'db_query', fake_db_query)
+        resolved = server._resolve_library_path(str(stale), title='Chicago', artist='Chicago')
+        assert resolved == str(real.resolve())
 
     def test_artwork_missing_file(self, client):
         rv = client.get('/artwork/no/such/file.jpg')
@@ -675,6 +760,29 @@ class TestAppDownload:
         assert b'com.bockmedia.console' in manifest.data
         assert b'bockmedia-console.ipa' in manifest.data
 
+    def test_app_info_api(self, client, isolated_paths):
+        import json
+        cfg = isolated_paths / 'state' / 'config.json'
+        cfg.write_text(json.dumps({'publicUrl': 'https://alexa.example.test'}))
+        apk = isolated_paths / 'mma' / 'bockmedia-console.apk'
+        apk.write_bytes(b'PK\x03\x04fake')
+        sidecar = isolated_paths / 'mma' / 'bockmedia-console.version'
+        sidecar.write_text('2.4.2', encoding='utf-8')
+        data = client.get('/api/app/info').get_json()
+        assert data['android']['available'] is True
+        assert data['android']['version'] == '2.4.2'
+        assert data['android']['downloadHref'].startswith('/download/bockmedia-console.apk?t=')
+        assert data['releases'][0]['version'] == '2.4.2'
+        assert any('Mix Muse' in (it.get('text') or '') for rel in data['releases'] for it in rel.get('items', []))
+
+    def test_app_info_uses_sidecar_over_gradle(self, client, isolated_paths):
+        import json
+        (isolated_paths / 'state' / 'config.json').write_text('{}')
+        (isolated_paths / 'mma' / 'bockmedia-console.apk').write_bytes(b'PK\x03\x04fake')
+        (isolated_paths / 'mma' / 'bockmedia-console.version').write_text('9.9.9', encoding='utf-8')
+        data = client.get('/api/app/info').get_json()
+        assert data['android']['version'] == '9.9.9'
+
 
 class TestParityFeatures:
     def test_feature_flags(self, client):
@@ -787,3 +895,47 @@ class TestDiscoveryFeatures:
         data = rv.get_json()
         assert data.get('shuffle') is True
         assert 'tracks' in data
+
+    def test_acquire_status(self, client):
+        data = client.get('/api/acquire/status').get_json()
+        assert data.get('source') == 'musicbrainz'
+        assert 'enabled' in data
+
+    def test_acquire_suggest_requires_artist(self, client):
+        assert client.get('/api/acquire/suggest').status_code == 400
+
+    def test_acquire_suggest_mocked(self, client, sample_track, monkeypatch):
+        import bock_acquire
+
+        def fake_suggest(**kwargs):
+            return {
+                'source': 'musicbrainz',
+                'seed': {'artist': kwargs.get('artist') or 'Test Artist'},
+                'suggestions': [{'name': 'New Band', 'inLibrary': False, 'reasons': ['Shared tag: rock']}],
+            }
+
+        monkeypatch.setattr(bock_acquire, 'suggest_for_seed', lambda *a, **k: fake_suggest(**k))
+        rv = client.get('/api/acquire/suggest?artist=Test%20Artist')
+        assert rv.status_code == 200
+        data = rv.get_json()
+        assert data['suggestions'][0]['name'] == 'New Band'
+
+        rv2 = client.post('/api/acquire/suggest', json={
+            'seedKind': 'song',
+            'path': sample_track['path'],
+        })
+        assert rv2.status_code == 200
+
+    def test_acquire_explore_mocked(self, client, monkeypatch):
+        import bock_acquire
+
+        monkeypatch.setattr(
+            bock_acquire, 'explore_library',
+            lambda *a, **k: {'source': 'musicbrainz', 'suggestions': [], 'seed': {'kind': 'library'}},
+        )
+        rv = client.get('/api/acquire/explore')
+        assert rv.status_code == 200
+
+    def test_feature_flags_acquire(self, client):
+        data = client.get('/api/config/features').get_json()
+        assert 'acquireIdeas' in data

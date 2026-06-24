@@ -60,7 +60,7 @@ fun LibraryScreen(
     var loading by remember { mutableStateOf(LibrarySessionCache.peek() == null) }
     var refreshing by remember { mutableStateOf(false) }
     var filter by rememberSaveable { mutableStateOf(LibraryFilter.All) }
-    var viewMode by rememberSaveable { mutableStateOf(LibraryViewMode.List) }
+    var viewMode by rememberSaveable { mutableStateOf(LibraryViewMode.Grid) }
     var sort by rememberSaveable { mutableStateOf(LibrarySort.Recents) }
     var search by remember { mutableStateOf("") }
 
@@ -214,7 +214,7 @@ fun LibraryScreen(
                     Text(
                         when {
                             filter == LibraryFilter.Downloaded && search.isBlank() ->
-                                "Nothing downloaded yet — tap download on Home tiles or long-press for more."
+                                "Nothing downloaded yet — tap download on Home or Library tiles."
                             search.isNotBlank() ->
                                 "No results for \"$search\"."
                             else ->
@@ -512,12 +512,17 @@ private fun LibraryItemArt(
                 )
             } ?: item.artPath?.let { repository.artworkUrl(it) }
     }
-    BockArtwork(
-        model = artUrl,
-        title = item.title,
+    ArtworkWithUnplayedBadge(
+        showUnplayed = item.kind == LibraryItemKind.Album && item.unplayed,
         modifier = modifier,
-        shape = shape,
-        fallbackFontSize = fallbackFontSize,
-        crossfadeMs = 0,
-    )
+    ) {
+        BockArtwork(
+            model = artUrl,
+            title = item.title,
+            modifier = Modifier.fillMaxSize(),
+            shape = shape,
+            fallbackFontSize = fallbackFontSize,
+            crossfadeMs = 0,
+        )
+    }
 }

@@ -13,8 +13,8 @@ android {
         applicationId = "com.bockmedia.console"
         minSdk = 26
         targetSdk = 35
-        versionCode = 10
-        versionName = "2.3.3"
+        versionCode = 13
+        versionName = "2.4.2"
         // Bock Media server endpoints (override via local.properties if needed)
         val localProps = rootProject.file("local.properties")
         fun prop(name: String) = if (localProps.exists()) {
@@ -72,6 +72,14 @@ android {
             if (rootProject.file("keystore.properties").exists()) {
                 signingConfig = signingConfigs.getByName("release")
             }
+        }
+        /** Full-size APK for NAS /app sideload (no R8 shrink — ~25 MB vs ~5 MB release). */
+        create("sideload") {
+            initWith(getByName("release"))
+            isMinifyEnabled = false
+            isShrinkResources = false
+            matchingFallbacks += listOf("release")
+            signingConfig = null
         }
         debug {
             applicationIdSuffix = ".debug"

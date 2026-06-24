@@ -1255,3 +1255,49 @@ ul.sidebar-nav li a .nav-label { overflow: hidden; }
 .room-autos-label { font-weight: 600; color: #7a8aa8; margin-bottom: 4px; }
 .room-auto { margin-bottom: 2px; }
 .room-pseudo { opacity: 0.92; border-style: dashed; }
+
+/* Mobile app download page (#download) */
+.app-download-page .app-download-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+  margin: 16px 0 20px;
+}
+.app-download-platform {
+  padding: 14px;
+  border: 1px solid #e0e6ef;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+.app-download-platform h4 { margin: 0 0 8px; font-size: 14px; color: #30426a; }
+.app-install-steps { margin: 10px 0 0; padding-left: 18px; }
+.release-highlights {
+  margin: 12px 0 16px;
+  padding: 12px 14px;
+  background: #f8fafc;
+  border-radius: 8px;
+  border: 1px solid #e8ecf1;
+}
+.release-highlights h4 { margin: 0 0 8px; font-size: 13px; color: #30426a; }
+.release-highlights ul { margin: 0; padding-left: 18px; font-size: 13px; color: #444; }
+.release-notes-panel { margin-top: 8px; padding-top: 16px; border-top: 1px solid #e8ecf1; }
+.release-notes-panel > h4 { margin: 0 0 12px; font-size: 13px; color: #30426a; }
+.release-block { margin-bottom: 16px; }
+.release-block h4 { margin: 0 0 8px; font-size: 13px; color: #30426a; }
+.release-block.release-older h4 { color: #667; font-weight: 600; }
+.release-list { list-style: none; margin: 0; padding: 0; }
+.release-list li { font-size: 13px; color: #444; margin-bottom: 8px; line-height: 1.45; }
+.release-tag {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-right: 6px;
+}
+.release-tag-feat { background: #e8f5e9; color: #2e7d32; }
+.release-tag-fix { background: #fff3e0; color: #e65100; }
+.release-tag-improve { background: #e3f2fd; color: #1565c0; }
+.release-tag-chore { background: #f3e5f5; color: #6a1b9a; }

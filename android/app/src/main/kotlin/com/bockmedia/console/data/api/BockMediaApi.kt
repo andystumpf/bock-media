@@ -111,6 +111,9 @@ interface BockMediaApi {
     @POST("api/playlists/{id}/tracks/remove")
     suspend fun removePlaylistTrack(@Path("id") id: String, @Body body: JsonObject): OkResponse
 
+    @POST("api/playlists/{id}/tracks/move")
+    suspend fun movePlaylistTrack(@Path("id") id: String, @Body body: JsonObject): OkResponse
+
     @POST("api/playlists/play")
     suspend fun playOnDevice(@Body body: JsonObject): PlayResponse
 
@@ -128,6 +131,12 @@ interface BockMediaApi {
 
     @POST("api/resonance/radio")
     suspend fun resonanceRadio(@Body body: JsonObject): DiscoveryMixResponse
+
+    @POST("api/acquire/suggest")
+    suspend fun acquireSuggest(@Body body: JsonObject): AcquireSuggestResponse
+
+    @GET("api/acquire/explore")
+    suspend fun acquireExplore(@Query("limit") limit: Int = 24): AcquireSuggestResponse
 
     @GET("api/smart_playlists")
     suspend fun smartPlaylists(): SmartPlaylistsResponse

@@ -31,6 +31,7 @@ private fun friendlyApiError(error: String?, code: String?): String? {
         "no_devices" -> return "No Alexa speakers found"
         "no_playlist" -> return "Playlist not found"
         "not_found" -> return "Not found"
+        "only_bockmedia_playlists_deletable" -> return "Only playlists created in Bock Media can be deleted"
     }
     return error?.takeIf { it.isNotBlank() && !it.startsWith("HTTP ") }
 }

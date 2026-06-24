@@ -178,6 +178,10 @@ struct AutomationFormSheet: View {
         if let playlistName { body["playlistName"] = playlistName }
         if let vol = Int(volume) { body["volume"] = vol }
         do {
+            if playlistId == nil && (playlistName ?? "").isEmpty {
+                error = "Select a playlist from search results"
+                return
+            }
             if let editItem {
                 try await appState.repository.updateAutomation(editItem.id, body: body)
             } else {

@@ -22,9 +22,14 @@ suspend fun repositoryPlay(
     shuffle: Boolean,
 ): PlayResponse = when (target) {
     is PlayTarget.Playlist -> {
-        val playlistId = target.id.ifBlank { repository.resolvePlaylistId(target.name).orEmpty() }
+        val (playlistId, playlistName) = repository.resolvePlaylistPlayArgs(target)
+            ?: return PlayResponse(error = "Playlist not found")
         repository.playOnDevice(
-            device, "playlist", name = target.name, id = playlistId.ifBlank { null }, shuffle = shuffle,
+            device,
+            "playlist",
+            name = playlistName.ifBlank { null },
+            id = playlistId.ifBlank { null },
+            shuffle = shuffle,
         )
     }
     is PlayTarget.Artist -> repository.playOnDevice(
@@ -78,7 +83,11 @@ fun PlayTargetLauncher(
             shuffleDefault = target.shuffleDefault,
             onDismiss = { showPicker = false; onClear() },
             onPlay = { device, shuffle, deviceLabel ->
-                val response = repositoryPlay(repository, target, device, shuffle)
+                val response = runCatching { repositoryPlay(repository, target, device, shuffle) }
+                    .getOrElse { e ->
+                        snackbarHostState.showSnackbar(playErrorMessage(e))
+                        return@DevicePickerSheet false
+                    }
                 if (response.ok) {
                     val label = response.device ?: deviceLabel
                     PlaybackFocus.notePlayStarted(device, label)
@@ -87,8 +96,10 @@ fun PlayTargetLauncher(
                     snackbarHostState.showSnackbar(
                         "Playing \"${target.label}\" on $label",
                     )
+                    true
                 } else {
                     snackbarHostState.showSnackbar(response.error ?: "Play failed")
+                    false
                 }
             },
             onPlayOnPhone = { shuffle ->

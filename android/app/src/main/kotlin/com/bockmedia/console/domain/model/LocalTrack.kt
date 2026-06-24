@@ -8,6 +8,8 @@ data class LocalTrack(
     val artist: String? = null,
     val album: String? = null,
     val localFile: File? = null,
+    /** Library duration when ExoPlayer cannot read it from a transcoded stream. */
+    val durationMs: Long = 0,
 ) {
     val displayArtist: String get() = artist?.takeIf { it.isNotBlank() } ?: "Unknown artist"
 }

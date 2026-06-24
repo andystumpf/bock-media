@@ -250,6 +250,7 @@ data class PlaylistDetailResponse(
     val total: Int = 0,
     val page: Int = 1,
     val source: String? = null,
+    val sourceName: String? = null,
 )
 
 @Serializable
@@ -296,7 +297,10 @@ data class AlbumItem(
     @SerialName("track_count") val tracks: Int = 0,
     val year: Int? = null,
     @SerialName("art_path") val artPath: String? = null,
-)
+    val played: Boolean = true,
+) {
+    val unplayed: Boolean get() = !played
+}
 
 @Serializable
 data class GenresResponse(val items: List<GenreItem> = emptyList(), val total: Int = 0)
@@ -587,6 +591,34 @@ data class DiscoverySeedInfo(
     val path: String? = null,
     val title: String? = null,
     val artist: String? = null,
+)
+
+@Serializable
+data class AcquireSuggestion(
+    val name: String = "",
+    val mbid: String? = null,
+    val reasons: List<String> = emptyList(),
+    val tags: List<String> = emptyList(),
+    val inLibrary: Boolean = false,
+    val musicbrainzUrl: String? = null,
+)
+
+@Serializable
+data class AcquireSuggestResponse(
+    val source: String? = null,
+    val seed: AcquireSeedInfo? = null,
+    val suggestions: List<AcquireSuggestion> = emptyList(),
+    val note: String? = null,
+    val error: String? = null,
+)
+
+@Serializable
+data class AcquireSeedInfo(
+    val kind: String? = null,
+    val artist: String? = null,
+    val resolvedName: String? = null,
+    val mbid: String? = null,
+    val artists: List<String>? = null,
 )
 
 @Serializable

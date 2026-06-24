@@ -1,10 +1,12 @@
 package com.bockmedia.console.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import com.bockmedia.console.domain.model.PlayTarget
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -33,7 +35,6 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.runtime.collectAsState
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.PushPin
 import com.bockmedia.console.domain.model.PlaybackFocus
@@ -330,14 +331,15 @@ fun DevicePickerSheet(
     remoteOk: Boolean = true,
     shuffleDefault: Boolean = false,
     onDismiss: () -> Unit,
-    onPlay: suspend (device: String, shuffle: Boolean, deviceLabel: String) -> Unit,
+    onPlay: suspend (device: String, shuffle: Boolean, deviceLabel: String) -> Boolean,
     onPlayOnPhone: (shuffle: Boolean) -> Unit = {},
     onPlayError: suspend (Throwable) -> Unit = {},
 ) {
     val context = LocalContext.current
     val pinnedStore = remember { PinnedDevicesStore(context) }
-    val pinned by pinnedStore.pinnedValues.collectAsState(initial = emptyList())
+    var pinned by remember { mutableStateOf<List<String>?>(null) }
     val scope = rememberCoroutineScope()
+    val deviceListState = rememberLazyListState()
     val initialSnapshot = remember { DeviceCatalog.peek() }
     var deviceOptions by remember { mutableStateOf(initialSnapshot?.options.orEmpty()) }
     var deviceValue by remember { mutableStateOf("") }
@@ -350,6 +352,7 @@ fun DevicePickerSheet(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     LaunchedEffect(Unit) {
+        pinned = pinnedStore.pinnedValuesSync()
         if (DeviceCatalog.isFresh()) return@LaunchedEffect
         val snap = DeviceCatalog.refresh(repository, probe = false)
         deviceOptions = snap.options
@@ -359,23 +362,30 @@ fun DevicePickerSheet(
     }
 
     LaunchedEffect(deviceOptions, pinned) {
+        val pinnedList = pinned ?: return@LaunchedEffect
         if (deviceOptions.isEmpty()) return@LaunchedEffect
         val online = { v: String ->
             deviceOptions.any { it.value == v && !it.label.contains("offline", true) }
         }
-        val lastUsed = runCatching { LastDeviceStore(context).lastDeviceSync() }.getOrNull()
         deviceValue = PlaybackFocus.pendingDeviceValue?.takeIf { online(it) }
-            ?: pinned.firstOrNull { online(it) }
-            ?: lastUsed?.takeIf { online(it) }
+            ?: pinnedList.firstOrNull { online(it) }
+            ?: runCatching { LastDeviceStore(context).lastDeviceSync() }.getOrNull()?.takeIf { online(it) }
             ?: deviceOptions.firstOrNull { !it.label.contains("offline", true) }?.value
             ?: deviceOptions.firstOrNull()?.value.orEmpty()
     }
 
     val orderedOptions = remember(deviceOptions, pinned) {
-        val pinnedSet = pinned.toSet()
-        val pinnedOpts = pinned.mapNotNull { value -> deviceOptions.find { it.value == value } }
+        val pinnedList = pinned.orEmpty()
+        val pinnedSet = pinnedList.toSet()
+        val pinnedOpts = pinnedList.mapNotNull { value -> deviceOptions.find { it.value == value } }
         val rest = deviceOptions.filter { it.value !in pinnedSet }
         pinnedOpts + rest
+    }
+
+    LaunchedEffect(orderedOptions) {
+        if (orderedOptions.isNotEmpty()) {
+            deviceListState.scrollToItem(0)
+        }
     }
 
     ModalBottomSheet(
@@ -431,7 +441,7 @@ fun DevicePickerSheet(
             }
 
             when {
-                loading -> {
+                loading || pinned == null -> {
                     Box(
                         Modifier
                             .fillMaxWidth()
@@ -462,6 +472,7 @@ fun DevicePickerSheet(
                     Spacer(Modifier.height(8.dp))
 
                     LazyColumn(
+                        state = deviceListState,
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(max = 280.dp),
@@ -470,6 +481,7 @@ fun DevicePickerSheet(
                         items(orderedOptions, key = { it.value }) { opt ->
                             val selected = opt.value == deviceValue
                             val offline = opt.label.contains("offline", ignoreCase = true)
+                            val pinnedList = pinned.orEmpty()
                             Surface(
                                 onClick = { if (!offline) deviceValue = opt.value },
                                 enabled = !offline,
@@ -507,12 +519,15 @@ fun DevicePickerSheet(
                                         )
                                     }
                                     IconButton(onClick = {
-                                        scope.launch { pinnedStore.toggle(opt.value) }
+                                        scope.launch {
+                                            pinnedStore.toggle(opt.value)
+                                            pinned = pinnedStore.pinnedValuesSync()
+                                        }
                                     }) {
                                         Icon(
                                             Icons.Default.PushPin,
                                             contentDescription = "Pin speaker",
-                                            tint = if (opt.value in pinned) BockGreen else SpotifyMuted,
+                                            tint = if (opt.value in pinnedList) BockGreen else SpotifyMuted,
                                             modifier = Modifier.size(18.dp),
                                         )
                                     }
@@ -568,12 +583,18 @@ fun DevicePickerSheet(
                             if (deviceValue.isBlank()) return@Button
                             scope.launch {
                                 playing = true
-                                runCatching {
-                                    val label = deviceOptions.find { it.value == deviceValue }?.label ?: deviceValue
+                                val label = deviceOptions.find { it.value == deviceValue }?.label ?: deviceValue
+                                val succeeded = runCatching {
                                     onPlay(deviceValue, shuffle, label)
-                                }.onFailure { onPlayError(it) }
+                                }.fold(
+                                    onSuccess = { it },
+                                    onFailure = {
+                                        onPlayError(it)
+                                        false
+                                    },
+                                )
                                 playing = false
-                                onDismiss()
+                                if (succeeded) onDismiss()
                             }
                         },
                         enabled = !playing && deviceValue.isNotBlank() && remoteReady,
@@ -617,5 +638,34 @@ private fun Modifier.clickableRow(onClick: () -> Unit): Modifier =
 fun PlayButton(onClick: () -> Unit, enabled: Boolean = true) {
     IconButton(onClick = onClick, enabled = enabled) {
         Icon(Icons.Default.PlayArrow, contentDescription = "Play", tint = MaterialTheme.colorScheme.secondary)
+    }
+}
+
+/** Plex-style corner ring for albums you have not played yet. */
+@Composable
+fun UnplayedAlbumBadge(modifier: Modifier = Modifier) {
+    Box(
+        modifier
+            .size(14.dp)
+            .border(2.5.dp, BockGreen, CircleShape)
+            .background(Color.Black.copy(alpha = 0.35f), CircleShape),
+    )
+}
+
+@Composable
+fun ArtworkWithUnplayedBadge(
+    showUnplayed: Boolean,
+    modifier: Modifier = Modifier,
+    content: @Composable BoxScope.() -> Unit,
+) {
+    Box(modifier) {
+        content()
+        if (showUnplayed) {
+            UnplayedAlbumBadge(
+                Modifier
+                    .align(Alignment.TopStart)
+                    .padding(6.dp),
+            )
+        }
     }
 }

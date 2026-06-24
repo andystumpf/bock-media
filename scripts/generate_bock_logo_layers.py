@@ -14,6 +14,7 @@ SRC = ROOT / "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png"
 ANDROID_OUT = ROOT / "android/app/src/main/res/drawable-nodpi"
 IOS_BASE = ROOT / "ios/BockMedia/Resources/Assets.xcassets/bock_logo_base.imageset"
 IOS_CAP = ROOT / "ios/BockMedia/Resources/Assets.xcassets/bock_logo_cap.imageset"
+WEB_OUT = ROOT / "public/img"
 
 # Emblem center in 192×192 launcher art (circle above BOCK text).
 CX = 96.0
@@ -82,6 +83,29 @@ def generate() -> None:
     cap.save(ANDROID_OUT / "bock_logo_cap.png")
     base.save(IOS_BASE / "bock_logo_base.png")
     cap.save(IOS_CAP / "bock_logo_cap.png")
+
+    emblem_r = int(CY)
+    left, top, right, bottom = int(CX - emblem_r), 0, int(CX + emblem_r), int(CY + emblem_r)
+
+    def emblem_crop(layer: Image.Image) -> Image.Image:
+        cropped = layer.crop((left, top, right, bottom))
+        px = cropped.load()
+        cw, ch = cropped.size
+        for y in range(ch):
+            for x in range(cw):
+                r, g, b, a = px[x, y]
+                if r > 248 and g > 248 and b > 245 and a > 200:
+                    px[x, y] = (r, g, b, 0)
+        return cropped
+
+    WEB_OUT.mkdir(parents=True, exist_ok=True)
+    mark = emblem_crop(base)
+    mark.save(WEB_OUT / "bock-logo-mark.png")
+    emblem_crop(base).save(WEB_OUT / "bock-logo-base.png")
+    emblem_crop(cap).save(WEB_OUT / "bock-logo-cap.png")
+    for size, name in ((32, "icon-32.png"), (180, "icon-180.png"), (192, "icon-192.png"), (512, "icon-512.png")):
+        mark.resize((size, size), Image.LANCZOS).save(WEB_OUT / name)
+
     print(f"Wrote layers ({w}x{h}) cap_pixels={cap_count} pivot=({CX/w:.3f}, {CY/h:.3f})")
 
 

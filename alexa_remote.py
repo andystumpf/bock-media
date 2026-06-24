@@ -158,6 +158,10 @@ class _Device:
 def _playable(d):
     if not (d.get('serialNumber') and d.get('deviceType') and d.get('accountName')):
         return False
+    # Multi-room music groups (WHA) accept TTS but do not invoke custom skills,
+    # which breaks app "play on device" (token → PlayFileTokenIntent).
+    if d.get('deviceFamily') == 'WHA':
+        return False
     caps = d.get('capabilities') or []
     if 'AUDIO_PLAYER' not in caps and d.get('deviceFamily') not in _PLAYABLE_FAMILIES:
         return False
@@ -214,6 +218,8 @@ async def _play_text(target, text):
         dev = _match(devices, target)
         if not dev:
             raise AlexaRemoteError('device_not_found')
+        if dev.get('deviceFamily') == 'WHA':
+            raise AlexaRemoteError('speaker_group_not_supported')
         api = AlexaAPI(_Device(dev), login)
         # run_custom is decorated to swallow exceptions and returns None, so we
         # can only surface auth/lookup errors (handled above), not Alexa-side ones.

@@ -1,6 +1,7 @@
 """Register Spotify-parity API routes on the Flask app."""
 from flask import jsonify, request, Response
 
+import bock_acquire
 import bock_continue
 import bock_discover
 import bock_folders
@@ -61,19 +62,38 @@ def register(app, g):
 
     @app.route('/api/library/analyze-loudness', methods=['POST'])
     def api_analyze_loudness():
+        import datetime
         body = request.get_json(silent=True) or {}
         ffmpeg_bin = get_pref('FFmpegLocation', '').strip() or 'ffmpeg'
+        paths = body.get('paths')
+        days = body.get('days')
+        if days and not paths:
+            try:
+                days_n = max(1, int(days))
+            except (TypeError, ValueError):
+                return jsonify({'error': 'invalid_days'}), 400
+            from_dt = datetime.datetime.now() - datetime.timedelta(days=days_n)
+            hist_rows = g['_filter_history_rows'](g['_read_stream_history'](), from_dt, None)
+            paths = sorted({
+                fp for r in hist_rows if not r.get('test')
+                for fp in [r.get('filepath') or r.get('path')]
+                if fp
+            })
         ok = bock_loudness.run_analyze_job(
             g['get_db_rw'], db_query, db_one, MUSIC_ROOT, ffmpeg_bin,
-            force=bool(body.get('force')), limit=body.get('limit'),
+            force=bool(body.get('force')), limit=body.get('limit'), paths=paths,
         )
         if not ok:
             return jsonify({'error': 'already_running'}), 409
-        return jsonify({'ok': True})
+        return jsonify({'ok': True, 'queued': len(paths) if paths else None, 'days': days})
 
     @app.route('/api/library/analyze-loudness/status')
     def api_analyze_loudness_status():
         return jsonify(bock_loudness.analyze_status())
+
+    @app.route('/api/library/analyze-loudness/cancel', methods=['POST'])
+    def api_analyze_loudness_cancel():
+        return jsonify({'cancelled': bock_loudness.cancel_analyze_job()})
 
     @app.route('/api/songs/<path:song_path>/audio-meta')
     def api_song_audio_meta(song_path):
@@ -412,6 +432,69 @@ def register(app, g):
             'tracks': _enrich_track_paths([r['path'] for r in rows if r.get('path')]),
         })
 
+    def _acquire_limit(default=20, cap=40):
+        return min(max(int(request.args.get('limit') or default), 1), cap)
+
+    @app.route('/api/acquire/status')
+    def api_acquire_status():
+        return jsonify(bock_acquire.status(load_config))
+
+    @app.route('/api/acquire/suggest')
+    def api_acquire_suggest_get():
+        artist = (request.args.get('artist') or '').strip()
+        if not artist:
+            return jsonify({'error': 'artist required'}), 400
+        limit = _acquire_limit()
+        out = bock_acquire.suggest_for_seed(
+            db_query, db_one, load_config, DATA_DIR, _atomic_json_write,
+            seed_kind='artist', artist=artist, limit=limit,
+        )
+        if out.get('error') == 'acquire_disabled':
+            return jsonify(out), 503
+        if out.get('error') == 'seed_not_found':
+            return jsonify(out), 404
+        return jsonify(out)
+
+    @app.route('/api/acquire/suggest', methods=['POST'])
+    def api_acquire_suggest_post():
+        body = request.get_json(silent=True) or {}
+        seed_kind = (body.get('seedKind') or body.get('kind') or 'artist').strip().lower()
+        path = (body.get('path') or body.get('filepath') or '').strip()
+        album = (body.get('album') or '').strip()
+        artist = (body.get('artist') or '').strip()
+        playlist_id = (body.get('playlistId') or body.get('playlist_id') or '').strip()
+        limit = min(max(int(body.get('limit') or 20), 1), 40)
+        playlist_paths = None
+        if seed_kind == 'playlist' and playlist_id:
+            for pid, _name, src in _load_playlist_entries():
+                if pid == playlist_id:
+                    playlist_paths = _playlist_paths_cached(pid, src)
+                    break
+            if not playlist_paths:
+                return jsonify({'error': 'playlist_not_found'}), 404
+        out = bock_acquire.suggest_for_seed(
+            db_query, db_one, load_config, DATA_DIR, _atomic_json_write,
+            seed_kind=seed_kind, path=path or None, album=album or None,
+            artist=artist or None, playlist_paths=playlist_paths, limit=limit,
+        )
+        if out.get('error') == 'acquire_disabled':
+            return jsonify(out), 503
+        if out.get('error') == 'seed_not_found':
+            return jsonify(out), 404
+        return jsonify(out)
+
+    @app.route('/api/acquire/explore')
+    def api_acquire_explore():
+        limit = _acquire_limit(default=24, cap=40)
+        out = bock_acquire.explore_library(
+            db_query, db_one, load_config, DATA_DIR, _atomic_json_write, limit=limit,
+        )
+        if out.get('error') == 'acquire_disabled':
+            return jsonify(out), 503
+        if out.get('error') == 'library_empty':
+            return jsonify(out), 404
+        return jsonify(out)
+
     @app.route('/api/config/features')
     def api_feature_flags():
         return jsonify({
@@ -424,4 +507,5 @@ def register(app, g):
             'drivingMode': True,
             'mixMuse': bock_mix_muse.status(load_config).get('configured', False),
             'resonance': True,
+            'acquireIdeas': bock_acquire.status(load_config).get('enabled', True),
         })

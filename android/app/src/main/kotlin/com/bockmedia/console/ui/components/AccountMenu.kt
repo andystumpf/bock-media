@@ -2,6 +2,8 @@ package com.bockmedia.console.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -25,14 +27,14 @@ private data class AccountMenuSection(
 )
 
 private val accountMenuSections = listOf(
-    AccountMenuSection("Library", listOf(BockRoute.Settings, BockRoute.Downloads)),
+    AccountMenuSection("Library", listOf(BockRoute.Settings, BockRoute.Downloads, BockRoute.Analytics)),
     AccountMenuSection("Alexa & home", listOf(
         BockRoute.RecentRequests,
         BockRoute.Rooms,
         BockRoute.Devices,
         BockRoute.Family,
         BockRoute.Driving,
-        BockRoute.Analytics,
+        BockRoute.Routines,
     )),
     AccountMenuSection("App", listOf(BockRoute.About)),
 )
@@ -77,66 +79,65 @@ fun AccountMenuButton(onNavigate: (String) -> Unit) {
                 )
             },
         ) {
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp)
-                    .padding(bottom = 36.dp),
-                verticalArrangement = Arrangement.spacedBy(20.dp),
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth(),
+                contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 36.dp),
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(14.dp),
-                ) {
-                    Surface(
-                        shape = CircleShape,
-                        color = BockGreen.copy(alpha = 0.18f),
-                        modifier = Modifier.size(52.dp),
+                item {
+                    Row(
+                        modifier = Modifier.padding(bottom = 20.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(
-                                Icons.Default.Person,
-                                contentDescription = null,
-                                tint = BockGreen,
-                                modifier = Modifier.size(28.dp),
+                        Surface(
+                            shape = CircleShape,
+                            color = BockGreen.copy(alpha = 0.18f),
+                            modifier = Modifier.size(52.dp),
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    Icons.Default.Person,
+                                    contentDescription = null,
+                                    tint = BockGreen,
+                                    modifier = Modifier.size(28.dp),
+                                )
+                            }
+                        }
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                "Bock Media",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            Text(
+                                "Settings & household",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = BockMuted,
                             )
                         }
-                    }
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(
-                            "Bock Media",
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold,
-                        )
-                        Text(
-                            "Settings & household",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = BockMuted,
-                        )
                     }
                 }
 
                 accountMenuSections.forEach { section ->
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    item {
                         Text(
                             section.title.uppercase(),
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.SemiBold,
                             color = BockMuted,
-                            modifier = Modifier.padding(start = 4.dp),
+                            modifier = Modifier.padding(start = 4.dp, bottom = 8.dp, top = 4.dp),
                         )
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            section.routes.forEach { route ->
-                                AccountMenuRow(
-                                    route = route,
-                                    onClick = {
-                                        open = false
-                                        onNavigate(route.route)
-                                    },
-                                )
-                            }
-                        }
                     }
+                    items(section.routes, key = { it.route }) { route ->
+                        AccountMenuRow(
+                            route = route,
+                            onClick = {
+                                open = false
+                                onNavigate(route.route)
+                            },
+                        )
+                    }
+                    item { Spacer(Modifier.height(12.dp)) }
                 }
             }
         }
@@ -150,7 +151,9 @@ private fun AccountMenuRow(
 ) {
     Surface(
         onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 6.dp),
         shape = RoundedCornerShape(12.dp),
         color = SpotifyElevated,
     ) {

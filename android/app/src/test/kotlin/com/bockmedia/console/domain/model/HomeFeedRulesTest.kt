@@ -45,10 +45,13 @@ class HomeFeedRulesTest {
     }
 
     @Test
-    fun isAutomationPlaylistName_matchesPrefixOnly() {
-        assertTrue(HomeFeedRules.isAutomationPlaylistName("Automations Morning"))
-        assertTrue(HomeFeedRules.isAutomationPlaylistName("automations kitchen"))
-        assertFalse(HomeFeedRules.isAutomationPlaylistName("My Automations"))
-        assertFalse(HomeFeedRules.isAutomationPlaylistName("Country Bangers Only"))
+    fun artPathForPlaylistDistinct_skipsUsedPaths() {
+        val history = listOf(
+            StreamHistoryItem(filepath = "/a.mp3", playlist = "Classical Era Mix"),
+            StreamHistoryItem(filepath = "/b.mp3", playlist = "Classical Era Mix"),
+            StreamHistoryItem(filepath = "/c.mp3", playlist = "Rock Mix"),
+        )
+        val used = setOf("/a.mp3")
+        assertEquals("/b.mp3", HomeFeedRules.artPathForPlaylistDistinct(history, "Classical Era Mix", used))
     }
 }

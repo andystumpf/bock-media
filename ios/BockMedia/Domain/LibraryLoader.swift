@@ -28,6 +28,7 @@ struct LibraryItem: Identifiable, Hashable {
     let artistName: String?
     let albumName: String?
     let sortDate: Int64
+    let unplayed: Bool
 
     init(
         id: String,
@@ -39,7 +40,8 @@ struct LibraryItem: Identifiable, Hashable {
         playlistId: String? = nil,
         artistName: String? = nil,
         albumName: String? = nil,
-        sortDate: Int64 = 0
+        sortDate: Int64 = 0,
+        unplayed: Bool = false
     ) {
         self.id = id
         self.title = title
@@ -51,6 +53,7 @@ struct LibraryItem: Identifiable, Hashable {
         self.artistName = artistName
         self.albumName = albumName
         self.sortDate = sortDate
+        self.unplayed = unplayed
     }
 }
 
@@ -152,7 +155,8 @@ enum LibraryLoader {
                 playTarget: .album(name: album.name, artist: album.artist),
                 artPath: album.artPath,
                 artistName: album.artist,
-                albumName: album.name
+                albumName: album.name,
+                unplayed: album.unplayed
             )
         } ?? []
     }

@@ -248,10 +248,12 @@ struct AlbumItem: Codable, Identifiable {
     var track_count: Int = 0
     var year: Int?
     var art_path: String?
+    var played: Bool = true
 
     var id: String { "\(album)-\(artist ?? "")" }
     var name: String { album }
     var artPath: String? { art_path }
+    var unplayed: Bool { !played }
 }
 
 struct WatchFolder: Codable, Identifiable {
@@ -697,4 +699,31 @@ struct DiscoverySeedInfo: Codable {
     var path: String?
     var title: String?
     var artist: String?
+}
+
+struct AcquireSuggestion: Codable, Identifiable {
+    var name: String = ""
+    var mbid: String?
+    var reasons: [String] = []
+    var tags: [String] = []
+    var inLibrary: Bool = false
+    var musicbrainzUrl: String?
+
+    var id: String { mbid ?? name }
+}
+
+struct AcquireSuggestResponse: Codable {
+    var source: String?
+    var seed: AcquireSeedInfo?
+    var suggestions: [AcquireSuggestion] = []
+    var note: String?
+    var error: String?
+}
+
+struct AcquireSeedInfo: Codable {
+    var kind: String?
+    var artist: String?
+    var resolvedName: String?
+    var mbid: String?
+    var artists: [String]?
 }

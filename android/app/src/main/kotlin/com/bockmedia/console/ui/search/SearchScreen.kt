@@ -58,8 +58,9 @@ fun SearchScreen(
 
     LaunchedEffect(Unit) {
         runCatching { favoritePaths = repository.favorites().map { it.path }.toSet() }
-        if (SearchBrowseSessionCache.getIfFresh() != null) {
-            browseFeed = SearchBrowseSessionCache.peek()
+        val cached = SearchBrowseSessionCache.getIfFresh()
+        if (cached != null) {
+            browseFeed = cached
             browseLoading = false
             scope.launch {
                 runCatching {
@@ -68,15 +69,20 @@ fun SearchScreen(
                     browseFeed = fresh
                 }
             }
-        } else {
-            browseLoading = browseFeed == null
-            runCatching {
-                val fresh = SearchBrowseLoader.load(repository)
-                SearchBrowseSessionCache.put(fresh)
-                browseFeed = fresh
-            }
-            browseLoading = false
+            return@LaunchedEffect
         }
+        browseLoading = true
+        runCatching {
+            val quick = SearchBrowseLoader.loadFast(repository)
+            if (quick.genres.isNotEmpty() || quick.newReleases.isNotEmpty()) {
+                browseFeed = quick
+                browseLoading = false
+            }
+            val full = SearchBrowseLoader.load(repository)
+            SearchBrowseSessionCache.put(full)
+            browseFeed = full
+        }
+        browseLoading = false
     }
 
     LaunchedEffect(historyStore) {

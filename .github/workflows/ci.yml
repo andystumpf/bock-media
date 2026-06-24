@@ -32,7 +32,7 @@ jobs:
         run: npm install
       - name: Run jsdom UI tests
         working-directory: tests/ui
-        run: node --test test_app.mjs
+        run: node --test test_*.mjs
 
   ios-tests:
     runs-on: macos-15

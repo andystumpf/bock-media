@@ -4805,25 +4805,6 @@
       ]
     },
     {
-      "id": "dfac46d3-5aac-493c-9e02-c3aaa3eee435",
-      "names": [
-        {
-          "language": "en",
-          "value": "Best ITALIAN hits of all time"
-        }
-      ],
-      "popularity": {
-        "default": 75
-      },
-      "lastUpdatedTime": "2026-06-13T09:30:02.000Z",
-      "locales": [
-        {
-          "country": "US",
-          "language": "en"
-        }
-      ]
-    },
-    {
       "id": "89e70822-f7e1-48d5-ba02-722523f421cd",
       "names": [
         {
@@ -10547,7 +10528,7 @@
       "names": [
         {
           "language": "en",
-          "value": "Best ITALIAN hits of all time🇮🇹"
+          "value": "Best Italian hits of all time"
         }
       ],
       "popularity": {

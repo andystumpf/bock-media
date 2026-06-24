@@ -49,6 +49,13 @@ enum HomeFeedRules {
         }?.filepath
     }
 
+    static func artPathForPlaylistDistinct(_ history: [StreamHistoryItem], playlistName: String, used: Set<String>) -> String? {
+        history.first { row in
+            guard let path = row.filepath, !used.contains(path) else { return false }
+            return row.playlist?.caseInsensitiveCompare(playlistName) == .orderedSame
+        }?.filepath
+    }
+
     static func nextDistinctArtPath(_ history: [StreamHistoryItem], used: Set<String>) -> String? {
         history.first { row in
             guard let path = row.filepath else { return false }

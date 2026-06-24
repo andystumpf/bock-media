@@ -71,6 +71,16 @@ object HomeFeedRules {
             historyMatchesGenre(row, genre)
     }?.filepath
 
+    fun artPathForPlaylistDistinct(
+        history: List<StreamHistoryItem>,
+        playlistName: String,
+        used: Set<String>,
+    ): String? = history.firstOrNull { row ->
+        row.filepath != null &&
+            row.filepath !in used &&
+            row.playlist.equals(playlistName, ignoreCase = true)
+    }?.filepath
+
     /** Next unused cover from stream history — avoids duplicate tiles when genre/artist data is sparse. */
     fun nextDistinctArtPath(history: List<StreamHistoryItem>, used: Set<String>): String? =
         history.firstOrNull { row ->

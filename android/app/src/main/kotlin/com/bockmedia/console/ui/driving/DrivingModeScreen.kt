@@ -19,8 +19,7 @@ import com.bockmedia.console.media.LocalPlaybackController
 @Composable
 fun DrivingModeScreen(repository: BockMediaRepository, onOpenNowPlaying: () -> Unit) {
     val context = LocalContext.current
-    val controller = remember { LocalPlaybackController(context) }
-    val state by controller.state.collectAsState()
+    val state by LocalPlaybackController.state.collectAsState()
 
     Column(
         modifier = Modifier.fillMaxSize().padding(24.dp),
@@ -37,17 +36,17 @@ fun DrivingModeScreen(repository: BockMediaRepository, onOpenNowPlaying: () -> U
             Text(it, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Row(horizontalArrangement = Arrangement.spacedBy(36.dp)) {
-            IconButton(onClick = { controller.skip(context, forward = false) }) {
+            IconButton(onClick = { LocalPlaybackController.skip(context, forward = false) }) {
                 Icon(Icons.Default.SkipPrevious, contentDescription = "Previous", modifier = Modifier.size(44.dp))
             }
-            IconButton(onClick = { controller.togglePlayPause(context) }) {
+            IconButton(onClick = { LocalPlaybackController.togglePlayPause(context) }) {
                 Icon(
                     if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                     contentDescription = "Play/Pause",
                     modifier = Modifier.size(56.dp),
                 )
             }
-            IconButton(onClick = { controller.skip(context, forward = true) }) {
+            IconButton(onClick = { LocalPlaybackController.skip(context, forward = true) }) {
                 Icon(Icons.Default.SkipNext, contentDescription = "Next", modifier = Modifier.size(44.dp))
             }
         }

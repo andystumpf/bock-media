@@ -33,6 +33,7 @@ data class LibraryItem(
     val artistName: String? = null,
     val albumName: String? = null,
     val sortDate: Long = 0L,
+    val unplayed: Boolean = false,
 )
 
 object LibraryLoader {
@@ -91,6 +92,7 @@ object LibraryLoader {
                     albumName = album.name,
                     artistName = album.artist,
                     artPath = album.artPath,
+                    unplayed = album.unplayed,
                 )
             }
         }
@@ -175,6 +177,7 @@ object LibraryLoader {
                         albumName = album.name,
                         artistName = album.artist,
                         artPath = album.artPath,
+                        unplayed = album.unplayed,
                     )
                 }
             }

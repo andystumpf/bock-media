@@ -166,6 +166,16 @@ class BockMediaApp(private val appContext: Context) {
         return buildHttpClient(user, pass, token, local, external)
     }
 
+    /** Longer read timeout for ExoPlayer streaming — default 30s gaps cause false skips. */
+    suspend fun buildPlaybackHttpClient(): OkHttpClient {
+        val user = preferences.adminUser.first()
+        val pass = preferences.adminPass.first()
+        val token = preferences.mobileToken.first()
+        val local = preferences.getLocalServerUrlSync()
+        val external = preferences.getExternalServerUrlSync()
+        return buildHttpClient(user, pass, token, local, external, readTimeoutSec = 120)
+    }
+
     private fun buildPlainHttpClient(): OkHttpClient {
         return OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
@@ -186,11 +196,13 @@ class BockMediaApp(private val appContext: Context) {
         token: String?,
         localUrl: String?,
         externalUrl: String?,
+        readTimeoutSec: Long = 30,
     ): OkHttpClient {
         val localHosts = AppPreferences.localHosts(localUrl, externalUrl)
         return OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(readTimeoutSec, TimeUnit.SECONDS)
+            .writeTimeout(30, TimeUnit.SECONDS)
             .addInterceptor(BockAuthInterceptor({ localHosts }, { user }, { pass }, { token }))
             .apply {
                 if (BuildConfig.DEBUG) {

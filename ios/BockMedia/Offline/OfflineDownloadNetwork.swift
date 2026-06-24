@@ -38,4 +38,9 @@ extension AppPreferences {
         get { min(20, max(0, UserDefaults.standard.integer(forKey: "crossfade_seconds"))) }
         set { UserDefaults.standard.set(min(20, max(0, newValue)), forKey: "crossfade_seconds") }
     }
+
+    var continueAfterQueue: String {
+        get { UserDefaults.standard.string(forKey: "continue_after_queue") ?? "off" }
+        set { UserDefaults.standard.set(newValue, forKey: "continue_after_queue") }
+    }
 }

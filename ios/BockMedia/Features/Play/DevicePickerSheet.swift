@@ -160,10 +160,10 @@ struct DevicePickerSheet: View {
             let online = { (value: String) in
                 deviceOptions.contains { $0.value == value && !$0.label.localizedCaseInsensitiveContains("offline") }
             }
-            if let last = repository.preferences.lastDevice, online(last) {
-                selectedValue = last
-            } else if let pinnedFirst = pinned.first(where: online) {
+            if let pinnedFirst = pinned.first(where: online) {
                 selectedValue = pinnedFirst
+            } else if let last = repository.preferences.lastDevice, online(last) {
+                selectedValue = last
             } else {
                 selectedValue = deviceOptions.first(where: { !$0.label.localizedCaseInsensitiveContains("offline") })?.value
                     ?? deviceOptions.first?.value

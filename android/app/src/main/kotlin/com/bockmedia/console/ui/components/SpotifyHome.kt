@@ -2,6 +2,7 @@ package com.bockmedia.console.ui.components
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
@@ -34,6 +35,7 @@ import com.bockmedia.console.domain.model.HomeCard
 import com.bockmedia.console.domain.model.HomeFilter
 import com.bockmedia.console.domain.model.HomeSection
 import com.bockmedia.console.domain.model.HomeSectionKind
+import com.bockmedia.console.domain.model.PlayTarget
 import com.bockmedia.console.local.DownloadState
 import com.bockmedia.console.ui.theme.*
 
@@ -46,7 +48,12 @@ private fun openHomeCard(
     onOpenPlaylist: (String) -> Unit,
     onPlay: (HomeCard) -> Unit,
 ) {
-    card.playlistId?.let(onOpenPlaylist) ?: onPlay(card)
+    val playlistId = card.playlistId ?: (card.playTarget as? PlayTarget.Playlist)?.id
+    if (playlistId != null) {
+        onOpenPlaylist(playlistId)
+        return
+    }
+    onPlay(card)
 }
 
 @Composable
@@ -123,6 +130,7 @@ fun HomePillFilters(
 fun HomeShortcutGrid(
     cards: List<HomeCard>,
     repository: BockMediaRepository,
+    remoteOk: Boolean,
     onPlay: (HomeCard) -> Unit,
     onLongPress: (HomeCard) -> Unit,
     onOpenPlaylist: (String) -> Unit = {},
@@ -144,8 +152,8 @@ fun HomeShortcutGrid(
                     HomeShortcutTile(
                         card = card,
                         repository = repository,
-                        onClick = { openHomeCard(card, onOpenPlaylist, onPlay) },
-                        onLongClick = { onLongPress(card) },
+                        onPlay = onPlay,
+                        onLongPress = { onLongPress(card) },
                         modifier = Modifier.weight(1f),
                     )
                 }
@@ -162,8 +170,8 @@ fun HomeShortcutGrid(
 private fun HomeShortcutTile(
     card: HomeCard,
     repository: BockMediaRepository,
-    onClick: () -> Unit,
-    onLongClick: () -> Unit,
+    onPlay: (HomeCard) -> Unit,
+    onLongPress: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Row(
@@ -172,7 +180,10 @@ private fun HomeShortcutTile(
             .height(56.dp)
             .clip(RoundedCornerShape(4.dp))
             .background(SpotifyElevated)
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
+            .combinedClickable(
+                onClick = { onPlay(card) },
+                onLongClick = onLongPress,
+            ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         HomeCardArt(
@@ -201,6 +212,7 @@ private fun HomeShortcutTile(
 fun SpotifyHomeSection(
     section: HomeSection,
     repository: BockMediaRepository,
+    remoteOk: Boolean,
     onPlay: (HomeCard) -> Unit,
     onLongPress: (HomeCard) -> Unit,
     onOpenPlaylist: (String) -> Unit = {},
@@ -246,23 +258,15 @@ fun SpotifyHomeSection(
             contentPadding = PaddingValues(horizontal = 16.dp),
         ) {
             items(section.cards, key = { it.id }) { card ->
-                when (section.kind) {
-                    HomeSectionKind.TopMixes, HomeSectionKind.ExploreThemes, HomeSectionKind.Mood, HomeSectionKind.DailyMixes ->
-                        GenreMixTile(
-                            card = card,
-                            repository = repository,
-                            onOpenPlaylist = onOpenPlaylist,
-                            onPlay = onPlay,
-                            onLongPress = { onLongPress(card) },
-                        )
-                    else -> PlaylistArtTile(
-                        card = card,
-                        repository = repository,
-                        onOpenPlaylist = onOpenPlaylist,
-                        onPlay = onPlay,
-                        onLongPress = { onLongPress(card) },
-                    )
-                }
+                HomeCollectionTile(
+                    card = card,
+                    repository = repository,
+                    remoteOk = remoteOk || card.kind == HomeSectionKind.Offline,
+                    onOpenPlaylist = onOpenPlaylist,
+                    onPlay = onPlay,
+                    onLongPress = { onLongPress(card) },
+                    modifier = Modifier.width(TileSize),
+                )
             }
         }
     }
@@ -341,6 +345,8 @@ fun HomeCardActionSheet(
 @Composable
 fun HomeSectionShowAllSheet(
     section: HomeSection,
+    repository: BockMediaRepository,
+    remoteOk: Boolean,
     onDismiss: () -> Unit,
     onPlay: (HomeCard) -> Unit,
     onOpenPlaylist: (String) -> Unit = {},
@@ -378,26 +384,47 @@ fun HomeSectionShowAllSheet(
                     .padding(bottom = 24.dp),
             ) {
                 section.cards.forEach { card ->
-                    Surface(
-                        onClick = { openHomeCard(card, onOpenPlaylist, onPlay) },
-                        color = SpotifyElevated,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Column(
-                            Modifier.padding(horizontal = 20.dp, vertical = 14.dp),
-                            verticalArrangement = Arrangement.spacedBy(2.dp),
-                        ) {
+                    ListItem(
+                        modifier = Modifier.clickable {
+                            openHomeCard(card, onOpenPlaylist, onPlay)
+                        },
+                        leadingContent = {
+                            HomeCardArt(
+                                card = card,
+                                repository = repository,
+                                modifier = Modifier
+                                    .size(56.dp)
+                                    .clip(ArtShape),
+                            )
+                        },
+                        headlineContent = {
                             Text(
                                 card.title,
                                 fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                style = MaterialTheme.typography.bodyLarge,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                             )
+                        },
+                        supportingContent = {
                             card.subtitle?.let {
-                                Text(it, color = BockMuted, style = MaterialTheme.typography.bodySmall)
+                                Text(
+                                    it,
+                                    color = BockMuted,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
                             }
-                        }
-                    }
+                        },
+                        trailingContent = {
+                            PlayDownloadActions(
+                                playTarget = card.playTarget,
+                                remoteOk = remoteOk || card.kind == HomeSectionKind.Offline,
+                                onPlay = { onPlay(card) },
+                                showDownload = card.kind != HomeSectionKind.Offline,
+                            )
+                        },
+                    )
                     HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
                 }
             }
@@ -433,33 +460,58 @@ private fun HomeCardArt(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun PlaylistArtTile(
+private fun HomeCollectionTile(
     card: HomeCard,
     repository: BockMediaRepository,
+    remoteOk: Boolean,
     onOpenPlaylist: (String) -> Unit,
     onPlay: (HomeCard) -> Unit,
     onLongPress: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Column(
-        modifier = Modifier
-            .width(TileSize)
-            .combinedClickable(
-                onClick = { openHomeCard(card, onOpenPlaylist, onPlay) },
-                onLongClick = onLongPress,
-            ),
-    ) {
-        HomeCardArt(
-            card = card,
-            repository = repository,
-            modifier = Modifier
-                .size(TileSize)
-                .clip(ArtShape),
-        )
+    val tileShape = RoundedCornerShape(8.dp)
+    Column(modifier = modifier) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .aspectRatio(1f)
+                .combinedClickable(
+                    onClick = { openHomeCard(card, onOpenPlaylist, onPlay) },
+                    onLongClick = onLongPress,
+                ),
+        ) {
+            HomeCardArt(
+                card = card,
+                repository = repository,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(tileShape),
+            )
+            if (card.kind != HomeSectionKind.Offline) {
+                DownloadStatusControl(
+                    playTarget = card.playTarget,
+                    onArtwork = true,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(4.dp),
+                )
+            }
+            if (remoteOk) {
+                CircularPlayButton(
+                    onClick = { onPlay(card) },
+                    size = 48.dp,
+                    elevated = true,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(8.dp),
+                )
+            }
+        }
         Spacer(Modifier.height(8.dp))
         Text(
             card.title,
             style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.Bold,
+            fontWeight = FontWeight.SemiBold,
             color = Color.White,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
@@ -473,70 +525,6 @@ private fun PlaylistArtTile(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-        }
-    }
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun GenreMixTile(
-    card: HomeCard,
-    repository: BockMediaRepository,
-    onOpenPlaylist: (String) -> Unit,
-    onPlay: (HomeCard) -> Unit,
-    onLongPress: () -> Unit,
-) {
-    val accent = mixAccentColor(card.id)
-    Box(
-        modifier = Modifier
-            .size(TileSize)
-            .clip(ArtShape)
-            .combinedClickable(
-                onClick = { openHomeCard(card, onOpenPlaylist, onPlay) },
-                onLongClick = onLongPress,
-            ),
-    ) {
-        HomeCardArt(
-            card = card,
-            repository = repository,
-            modifier = Modifier.fillMaxSize(),
-        )
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.verticalGradient(
-                        colors = listOf(
-                            Color.Transparent,
-                            accent.copy(alpha = 0.25f),
-                            Color.Black.copy(alpha = 0.72f),
-                        ),
-                    ),
-                ),
-        )
-        Column(
-            Modifier
-                .align(Alignment.BottomStart)
-                .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            Text(
-                card.title,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = Color.White,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            card.subtitle?.let {
-                Text(
-                    it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color.White.copy(alpha = 0.85f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
         }
     }
 }

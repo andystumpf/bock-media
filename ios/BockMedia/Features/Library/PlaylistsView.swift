@@ -58,7 +58,14 @@ struct PlaylistDetailView: View {
     @State private var loadError: String?
     @State private var showMixMuse = false
     @State private var mixMuseSeed: DiscoverySeed?
+    @State private var showAcquire = false
+    @State private var acquireSeed: DiscoverySeed?
+    @State private var editMode: EditMode = .inactive
     private let pageSize = 100
+
+    private var canReorder: Bool {
+        filter.isEmpty && sortBy == "title" && sortOrder == "asc"
+    }
 
     /// Stable, unique identity for each row. `key` = "offset-trackId": the trackId keeps
     /// identity tied to content (so sort/filter/pagination reuse views correctly) and the
@@ -78,38 +85,55 @@ struct PlaylistDetailView: View {
                 }
                 .padding()
             } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
+                List {
+                    Section {
                         playlistHeader
+                        HStack(spacing: 8) {
+                            Image(systemName: "magnifyingglass")
+                                .foregroundStyle(BockColors.muted)
+                            TextField("Search in playlist", text: $filter)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                        }
                         filterSortBar
-                        // Key combines the track's stable id with its position: the id keeps
-                        // SwiftUI identity tied to content across sort/filter/pagination, while
-                        // the offset prefix guarantees uniqueness even when a playlist contains
-                        // duplicate paths (which share an id and would otherwise crash ForEach).
+                    }
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
+
+                    Section {
                         ForEach(indexedTracks, id: \.key) { item in
                             trackRow(index: item.index + 1, track: item.track)
                         }
+                        .onMove(perform: canReorder && editMode == .active ? moveTracks : nil)
                         if loadingMore {
                             HStack { Spacer(); ProgressView(); Spacer() }
-                                .padding()
                         } else if tracks.count < total {
                             Color.clear.frame(height: 1)
                                 .onAppear { Task { await loadMoreIfNeeded() } }
                         }
                     }
                 }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .environment(\.editMode, $editMode)
             }
         }
         .navigationTitle(name.isEmpty ? "Playlist" : name)
-        .searchable(text: $filter, prompt: "Filter tracks")
+        .searchable(text: $filter, prompt: "Search in playlist")
         .toolbar {
+            if canReorder {
+                ToolbarItem(placement: .topBarLeading) {
+                    EditButton()
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
-                    Button("Sort by title") { sortBy = "title"; Task { await reload() } }
-                    Button("Sort by artist") { sortBy = "artist"; Task { await reload() } }
-                    Button("Sort by album") { sortBy = "album"; Task { await reload() } }
-                    Button("Ascending") { sortOrder = "asc"; Task { await reload() } }
-                    Button("Descending") { sortOrder = "desc"; Task { await reload() } }
+                    Button("Sort by title") { Task { await applySort(by: "title", order: sortOrder) } }
+                    Button("Sort by artist") { Task { await applySort(by: "artist", order: sortOrder) } }
+                    Button("Sort by album") { Task { await applySort(by: "album", order: sortOrder) } }
+                    Button("Ascending") { Task { await applySort(by: sortBy, order: "asc") } }
+                    Button("Descending") { Task { await applySort(by: sortBy, order: "desc") } }
                     Divider()
                     Button {
                         mixMuseSeed = DiscoverySeed(kind: .playlist, title: name, playlistId: playlistId)
@@ -120,6 +144,12 @@ struct PlaylistDetailView: View {
                     }
                     Button { Task { await runResonanceMix(seed: playlistSeed) } } label: {
                         Label("Resonance mix (save)", systemImage: "music.note.list")
+                    }
+                    Button {
+                        acquireSeed = playlistSeed
+                        showAcquire = true
+                    } label: {
+                        Label("Music to seek out…", systemImage: "binoculars")
                     }
                     Divider()
                     Button("Delete playlist", role: .destructive) {
@@ -142,15 +172,24 @@ struct PlaylistDetailView: View {
             }
         }
         .onChange(of: filter) { _, _ in
+            editMode = .inactive
             Task {
                 try? await Task.sleep(nanoseconds: 400_000_000)
                 await reload()
+            }
+        }
+        .onChange(of: editMode) { _, mode in
+            if mode == .active {
+                Task { await loadAllTracksIfNeeded() }
             }
         }
         .task { await reload() }
         .refreshable { await reload() }
         .sheet(isPresented: $showMixMuse) {
             MixMusePromptSheet(appState: appState, seed: mixMuseSeed)
+        }
+        .sheet(isPresented: $showAcquire) {
+            AcquireIdeasSheet(appState: appState, seed: acquireSeed)
         }
     }
 
@@ -201,15 +240,15 @@ struct PlaylistDetailView: View {
     private var filterSortBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack {
-                sortChip("Title", sortBy == "title") { sortBy = "title"; Task { await reload() } }
-                sortChip("Artist", sortBy == "artist") { sortBy = "artist"; Task { await reload() } }
-                sortChip("Album", sortBy == "album") { sortBy = "album"; Task { await reload() } }
-                sortChip("↑", sortOrder == "asc") { sortOrder = "asc"; Task { await reload() } }
-                sortChip("↓", sortOrder == "desc") { sortOrder = "desc"; Task { await reload() } }
+                sortChip("Title", sortBy == "title") { Task { await applySort(by: "title", order: sortOrder) } }
+                sortChip("Artist", sortBy == "artist") { Task { await applySort(by: "artist", order: sortOrder) } }
+                sortChip("Album", sortBy == "album") { Task { await applySort(by: "album", order: sortOrder) } }
+                sortChip("↑", sortOrder == "asc") { Task { await applySort(by: sortBy, order: "asc") } }
+                sortChip("↓", sortOrder == "desc") { Task { await applySort(by: sortBy, order: "desc") } }
             }
             .padding(.horizontal, 16)
         }
-        .padding(.bottom, 8)
+        .padding(.vertical, 8)
     }
 
     private func sortChip(_ label: String, _ active: Bool, action: @escaping () -> Void) -> some View {
@@ -249,9 +288,11 @@ struct PlaylistDetailView: View {
             if let path = track.path {
                 DiscoveryContextMenuItems(
                     appState: appState,
-                    seed: DiscoverySeed(kind: .song, title: track.title ?? path, path: path, artist: track.artist, album: track.album),
+                    seed: DiscoverySeed(kind: .song, title: track.title ?? path, path: path, album: track.album, artist: track.artist),
                     showMixMuse: $showMixMuse,
-                    mixMuseSeed: $mixMuseSeed
+                    mixMuseSeed: $mixMuseSeed,
+                    showAcquire: $showAcquire,
+                    acquireSeed: $acquireSeed
                 )
                 Divider()
                 Button(role: .destructive) {
@@ -262,6 +303,45 @@ struct PlaylistDetailView: View {
                 } label: { Text("Remove") }
             }
         }
+    }
+
+    private func applySort(by: String, order: String) async {
+        editMode = .inactive
+        sortBy = by
+        sortOrder = order
+        await reload()
+        if filter.isEmpty {
+            try? await appState.repository.sortPlaylist(id: playlistId, sortBy: by, order: order)
+        }
+    }
+
+    private func moveTracks(from source: IndexSet, to destination: Int) {
+        var reordered = tracks
+        reordered.move(fromOffsets: source, toOffset: destination)
+        tracks = reordered
+        guard let moved = reordered.indices.contains(destination) ? reordered[destination].path : nil else { return }
+        Task {
+            try? await appState.repository.movePlaylistTrack(
+                playlistId: playlistId, path: moved, toIndex: destination
+            )
+            await reload()
+        }
+    }
+
+    private func loadAllTracksIfNeeded() async {
+        guard tracks.count < total else { return }
+        var page = 1
+        var all: [PlaylistTrack] = []
+        while true {
+            guard let detail = try? await appState.repository.playlistDetail(
+                id: playlistId, page: page, limit: pageSize, sortBy: sortBy, order: sortOrder
+            ) else { break }
+            if page == 1 { name = detail.name; total = detail.total > 0 ? detail.total : detail.tracks.count }
+            all.append(contentsOf: detail.tracks)
+            if detail.tracks.count < pageSize || all.count >= total { break }
+            page += 1
+        }
+        tracks = all
     }
 
     private func reload() async {

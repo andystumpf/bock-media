@@ -51,6 +51,7 @@ final class LocalPlaybackController: ObservableObject {
     private var crossfadeTimer: Timer?
     private var crossfadeStartedAt: Date?
     private var crossfadeDuration: TimeInterval = 0
+    private var activePlayTarget: PlayTarget?
 
     private var crossfadeSeconds: Int {
         min(20, max(0, UserDefaults.standard.integer(forKey: "crossfade_seconds")))
@@ -63,6 +64,7 @@ final class LocalPlaybackController: ObservableObject {
 
     func playTarget(repository: BockMediaRepository, target: PlayTarget, shuffle: Bool) async {
         analyticsRepository = repository
+        activePlayTarget = target
         state.loading = true
         state.error = nil
         do {
@@ -182,6 +184,7 @@ final class LocalPlaybackController: ObservableObject {
         removeTimeObserver()
         removeEndObserver()
         player = nil
+        activePlayTarget = nil
         if let analyticsRepository {
             DeviceAnalyticsReporter.clearPlayback(repository: analyticsRepository)
         }
@@ -196,10 +199,68 @@ final class LocalPlaybackController: ObservableObject {
         guard state.active, !state.tracks.isEmpty else { return }
         if crossfading { return }
         if state.index >= state.tracks.count - 1 {
-            stopPlayback()
+            Task {
+                if await tryContinuePlayback() { return }
+                stopPlayback()
+            }
         } else {
             state.index += 1
             Task { try? await playCurrent() }
+        }
+    }
+
+    private func tryContinuePlayback() async -> Bool {
+        let mode = UserDefaults.standard.string(forKey: "continue_after_queue") ?? "off"
+        if mode == "off" || mode.isEmpty { return false }
+        guard let repository = analyticsRepository, let target = activePlayTarget else { return false }
+        if case .radio = target { return false }
+        guard let last = state.current else { return false }
+        do {
+            let resp: DiscoveryMixResponse
+            if mode == "artist_radio" {
+                let artist = last.artist?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                guard !artist.isEmpty else { return false }
+                resp = try await repository.resonanceRadio(
+                    seedKind: "artist", artist: artist, maxTracks: 30
+                )
+            } else {
+                switch target {
+                case .playlist(let id, _):
+                    resp = try await repository.resonanceRadio(
+                        seedKind: "playlist", playlistId: id, maxTracks: 30
+                    )
+                case .album(let name, let artist):
+                    resp = try await repository.resonanceRadio(
+                        seedKind: "album", album: name, artist: artist, maxTracks: 30
+                    )
+                case .artist(let name):
+                    resp = try await repository.resonanceRadio(
+                        seedKind: "artist", artist: name, maxTracks: 30
+                    )
+                default:
+                    resp = try await repository.resonanceRadio(
+                        seedKind: "song", path: last.path, maxTracks: 30
+                    )
+                }
+            }
+            var appended: [LocalTrack] = []
+            let seen = Set(state.tracks.map(\.path))
+            for t in resp.tracks {
+                guard let path = t.path, !path.isEmpty, !seen.contains(path),
+                      let urlStr = await repository.streamURL(for: path),
+                      let url = URL(string: urlStr) else { continue }
+                appended.append(LocalTrack(
+                    path: path, title: t.title ?? path, artist: t.artist,
+                    album: t.album, streamURL: url, localFileURL: nil
+                ))
+            }
+            guard !appended.isEmpty else { return false }
+            state.tracks.append(contentsOf: appended)
+            state.index += 1
+            try await playCurrent()
+            return true
+        } catch {
+            return false
         }
     }
 

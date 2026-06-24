@@ -189,6 +189,10 @@ final class BockMediaAPIClient {
         try await post("api/playlists/\(id)/tracks/remove", body: body)
     }
 
+    func movePlaylistTrack(id: String, body: [String: Any]) async throws -> OkResponse {
+        try await post("api/playlists/\(id)/tracks/move", body: body)
+    }
+
     func aiPlaylist(body: [String: Any]) async throws -> AiPlaylistResponse {
         try await post("api/playlists/ai", body: body)
     }
@@ -207,6 +211,14 @@ final class BockMediaAPIClient {
 
     func resonanceRadio(body: [String: Any]) async throws -> DiscoveryMixResponse {
         try await post("api/resonance/radio", body: body)
+    }
+
+    func acquireSuggest(body: [String: Any]) async throws -> AcquireSuggestResponse {
+        try await post("api/acquire/suggest", body: body)
+    }
+
+    func acquireExplore(limit: Int = 24) async throws -> AcquireSuggestResponse {
+        try await get("api/acquire/explore", query: ["limit": String(limit)])
     }
 
     func plexSyncStatus() async throws -> PlexSyncStatusResponse {

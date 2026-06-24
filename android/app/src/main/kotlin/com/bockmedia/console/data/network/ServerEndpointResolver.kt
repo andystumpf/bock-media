@@ -49,7 +49,12 @@ object ServerEndpointResolver {
         external: String?,
         localReachable: Boolean,
         externalReachable: Boolean,
+        wifiAvailable: Boolean = true,
     ): String? {
+        if (!wifiAvailable) {
+            // On cellular the LAN host is unreachable — never fall back to it.
+            return external?.takeIf { it.isNotBlank() }?.let { AppPreferences.normalizeUrl(it) }
+        }
         if (!local.isNullOrBlank() && localReachable) {
             return AppPreferences.normalizeUrl(local)
         }
@@ -107,13 +112,8 @@ object ServerEndpointResolver {
                 localProbe.await() to externalProbe.await()
             }
 
-            val chosen = when {
-                !wifiAvailable && !external.isNullOrBlank() ->
-                    pickEndpoint(local, external, localReachable = false, externalReachable = externalOk)
-                        ?: AppPreferences.normalizeUrl(external)
-                else ->
-                    pickEndpoint(local, external, localOk, externalOk)
-            } ?: throw IllegalStateException("No server URL configured")
+            val chosen = pickEndpoint(local, external, localOk, externalOk, wifiAvailable)
+                ?: throw IllegalStateException("No server URL configured")
             if (localOk || externalOk) {
                 runCatching { preferences.setLastGoodEndpoint(chosen) }
                 cache(chosen)

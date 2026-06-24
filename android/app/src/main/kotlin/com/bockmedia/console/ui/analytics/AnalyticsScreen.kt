@@ -2,12 +2,21 @@ package com.bockmedia.console.ui.analytics
 
 import android.content.Intent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.filled.Album
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.LocalFireDepartment
+import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -154,6 +163,33 @@ fun AnalyticsScreen(repository: BockMediaRepository) {
         loadAnalytics()
     }
 
+    val onExportClick: () -> Unit = {
+        scope.launch {
+            exporting = true
+            val (from, to) = analyticsDateRange(preset, customFrom, customTo)
+            val deviceId = deviceFilter.apiDeviceId(thisPhoneId)
+            runCatching {
+                val file = repository.exportAnalyticsCsv(from, to, context.cacheDir, deviceId)
+                val uri = androidx.core.content.FileProvider.getUriForFile(
+                    context,
+                    "${context.packageName}.fileprovider",
+                    file,
+                )
+                context.startActivity(
+                    Intent.createChooser(
+                        Intent(Intent.ACTION_SEND).apply {
+                            type = "text/csv"
+                            putExtra(Intent.EXTRA_STREAM, uri)
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        },
+                        "Export analytics",
+                    ),
+                )
+            }
+            exporting = false
+        }
+    }
+
     if (showFromPicker) {
         val state = rememberDatePickerState(
             initialSelectedDateMillis = customFrom?.let { localDateToPickerMillis(it) }
@@ -222,45 +258,22 @@ fun AnalyticsScreen(repository: BockMediaRepository) {
                 customFrom = null
                 customTo = null
             },
-            onExport = {
-                scope.launch {
-                    exporting = true
-                    val (from, to) = analyticsDateRange(preset, customFrom, customTo)
-                    val deviceId = deviceFilter.apiDeviceId(thisPhoneId)
-                    runCatching {
-                        val file = repository.exportAnalyticsCsv(from, to, context.cacheDir, deviceId)
-                        val uri = androidx.core.content.FileProvider.getUriForFile(
-                            context,
-                            "${context.packageName}.fileprovider",
-                            file,
-                        )
-                        context.startActivity(
-                            Intent.createChooser(
-                                Intent(Intent.ACTION_SEND).apply {
-                                    type = "text/csv"
-                                    putExtra(Intent.EXTRA_STREAM, uri)
-                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                },
-                                "Export analytics",
-                            ),
-                        )
-                    }
-                    exporting = false
-                }
-            },
+            onExport = onExportClick,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
         )
-
         if (loading && data == null) {
             LoadingBox(Modifier.weight(1f))
         } else {
             BockPullRefresh(
                 isRefreshing = refreshing,
                 onRefresh = { scope.launch { loadAnalytics() } },
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
             ) {
                 BockLazyColumn(
                     Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 32.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     val deviceScoped = deviceFilter !is AnalyticsDeviceFilter.AllDevices
@@ -274,20 +287,14 @@ fun AnalyticsScreen(repository: BockMediaRepository) {
                             )
                         }
                         item(key = "hour-dow-$queryKey") {
-                            Row(
+                            Column(
                                 Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp),
                             ) {
-                                AnalyticsCard(
-                                    title = "Hour of day",
-                                    modifier = Modifier.weight(1f),
-                                ) {
+                                AnalyticsCard(title = "Hour of day") {
                                     HourOfDayChart(a.hourOfDay)
                                 }
-                                AnalyticsCard(
-                                    title = "Day of week",
-                                    modifier = Modifier.weight(1f),
-                                ) {
+                                AnalyticsCard(title = "Day of week") {
                                     DayOfWeekChart(a.dayOfWeek)
                                 }
                             }
@@ -371,114 +378,112 @@ private fun AnalyticsToolbar(
     onTo: () -> Unit,
     onClear: () -> Unit,
     onExport: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val thisPhoneName = knownDevices.firstOrNull { it.deviceId == thisPhoneId }?.name
     val otherDevices = knownDevices
         .filter { it.deviceId.isNotBlank() && it.deviceId != thisPhoneId }
         .sortedBy { it.name?.lowercase() ?: it.deviceId }
+    val deviceLabel = when (deviceFilter) {
+        AnalyticsDeviceFilter.ThisPhone -> thisPhoneName?.let { "This phone ($it)" } ?: "This phone"
+        else -> deviceFilter.displayLabel(thisPhoneId)
+    }
+    val presetScroll = rememberScrollState()
+    val dateScroll = rememberScrollState()
 
     Column(
-        Modifier
+        modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.background)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .padding(vertical = 4.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Row(
             Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("Analytics", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-            TextButton(enabled = !exporting, onClick = onExport) {
-                Icon(Icons.Default.Download, null, Modifier.size(18.dp))
-                Spacer(Modifier.width(4.dp))
-                Text(if (exporting) "Exporting…" else "Export")
+            Box(Modifier.weight(1f).widthIn(min = 0.dp)) {
+                OutlinedButton(
+                    onClick = { onDeviceMenuExpanded(true) },
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+                ) {
+                    Text(
+                        deviceLabel,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+                }
+                DropdownMenu(
+                    expanded = deviceMenuExpanded,
+                    onDismissRequest = { onDeviceMenuExpanded(false) },
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("All devices") },
+                        onClick = { onDeviceFilter(AnalyticsDeviceFilter.AllDevices) },
+                        leadingIcon = {
+                            if (deviceFilter is AnalyticsDeviceFilter.AllDevices) {
+                                Icon(Icons.Default.Check, null, tint = BockGreen)
+                            }
+                        },
+                    )
+                    if (thisPhoneId.isNotBlank()) {
+                        DropdownMenuItem(
+                            text = {
+                                Text(thisPhoneName?.let { "This phone ($it)" } ?: "This phone")
+                            },
+                            onClick = { onDeviceFilter(AnalyticsDeviceFilter.ThisPhone) },
+                            leadingIcon = {
+                                if (deviceFilter is AnalyticsDeviceFilter.ThisPhone) {
+                                    Icon(Icons.Default.Check, null, tint = BockGreen)
+                                } else {
+                                    Icon(Icons.Default.PhoneAndroid, null, tint = BockMuted)
+                                }
+                            },
+                        )
+                    }
+                    otherDevices.forEach { device ->
+                        val selected = deviceFilter is AnalyticsDeviceFilter.Specific &&
+                            deviceFilter.deviceId == device.deviceId
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    device.name?.takeIf { it.isNotBlank() } ?: device.deviceId.takeLast(8),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            },
+                            onClick = {
+                                onDeviceFilter(
+                                    AnalyticsDeviceFilter.Specific(
+                                        deviceId = device.deviceId,
+                                        label = device.name?.takeIf { it.isNotBlank() }
+                                            ?: device.deviceId.takeLast(8),
+                                    ),
+                                )
+                            },
+                            leadingIcon = {
+                                if (selected) {
+                                    Icon(Icons.Default.Check, null, tint = BockGreen)
+                                }
+                            },
+                        )
+                    }
+                }
             }
-        }
-        ExposedDropdownMenuBox(
-            expanded = deviceMenuExpanded,
-            onExpandedChange = onDeviceMenuExpanded,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            OutlinedTextField(
-                value = when (deviceFilter) {
-                    AnalyticsDeviceFilter.ThisPhone -> thisPhoneName?.let { "This phone ($it)" } ?: "This phone"
-                    else -> deviceFilter.displayLabel(thisPhoneId)
-                },
-                onValueChange = {},
-                readOnly = true,
-                singleLine = true,
-                label = { Text("Device") },
-                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = deviceMenuExpanded) },
-                modifier = Modifier
-                    .menuAnchor()
-                    .fillMaxWidth(),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = BockGreen,
-                    focusedLabelColor = BockGreen,
-                    cursorColor = BockGreen,
-                ),
-            )
-            ExposedDropdownMenu(
-                expanded = deviceMenuExpanded,
-                onDismissRequest = { onDeviceMenuExpanded(false) },
-            ) {
-                DropdownMenuItem(
-                    text = { Text("All devices") },
-                    onClick = { onDeviceFilter(AnalyticsDeviceFilter.AllDevices) },
-                    leadingIcon = {
-                        if (deviceFilter is AnalyticsDeviceFilter.AllDevices) {
-                            Icon(Icons.Default.Check, null, tint = BockGreen)
-                        }
-                    },
+            IconButton(onClick = onExport, enabled = !exporting) {
+                Icon(
+                    Icons.Default.Download,
+                    contentDescription = if (exporting) "Exporting" else "Export analytics",
                 )
-                if (thisPhoneId.isNotBlank()) {
-                    DropdownMenuItem(
-                        text = {
-                            Text(thisPhoneName?.let { "This phone ($it)" } ?: "This phone")
-                        },
-                        onClick = { onDeviceFilter(AnalyticsDeviceFilter.ThisPhone) },
-                        leadingIcon = {
-                            if (deviceFilter is AnalyticsDeviceFilter.ThisPhone) {
-                                Icon(Icons.Default.Check, null, tint = BockGreen)
-                            } else {
-                                Icon(Icons.Default.PhoneAndroid, null, tint = BockMuted)
-                            }
-                        },
-                    )
-                }
-                otherDevices.forEach { device ->
-                    val selected = deviceFilter is AnalyticsDeviceFilter.Specific &&
-                        deviceFilter.deviceId == device.deviceId
-                    DropdownMenuItem(
-                        text = {
-                            Text(
-                                device.name?.takeIf { it.isNotBlank() } ?: device.deviceId.takeLast(8),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        },
-                        onClick = {
-                            onDeviceFilter(
-                                AnalyticsDeviceFilter.Specific(
-                                    deviceId = device.deviceId,
-                                    label = device.name?.takeIf { it.isNotBlank() }
-                                        ?: device.deviceId.takeLast(8),
-                                ),
-                            )
-                        },
-                        leadingIcon = {
-                            if (selected) {
-                                Icon(Icons.Default.Check, null, tint = BockGreen)
-                            }
-                        },
-                    )
-                }
             }
         }
         Row(
-            Modifier.fillMaxWidth(),
+            Modifier
+                .fillMaxWidth()
+                .horizontalScroll(presetScroll),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             listOf(
@@ -490,7 +495,6 @@ private fun AnalyticsToolbar(
                     selected = preset == p,
                     onClick = { onPreset(p) },
                     label = { Text(label, maxLines = 1) },
-                    modifier = Modifier.weight(1f),
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = BockGreen,
                         selectedLabelColor = Color(0xFF0F1419),
@@ -498,7 +502,13 @@ private fun AnalyticsToolbar(
                 )
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .horizontalScroll(dateScroll),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             OutlinedButton(onClick = onFrom, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
                 Text(customFrom?.format(isoDate) ?: "From", style = MaterialTheme.typography.labelLarge)
             }
@@ -579,7 +589,7 @@ private fun SummaryStatsGrid(data: AnalyticsResponse) {
                         value = tile.value,
                         label = tile.label,
                         subtitle = tile.subtitle,
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(1f).widthIn(min = 0.dp),
                     )
                 }
                 if (row.size == 1) {
@@ -614,8 +624,20 @@ private fun StatCard(
     ) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Icon(icon, null, tint = tint, modifier = Modifier.size(22.dp))
-            Text(value, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            Text(label, style = MaterialTheme.typography.labelMedium, color = BockMuted)
+            Text(
+                value,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                label,
+                style = MaterialTheme.typography.labelMedium,
+                color = BockMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
             subtitle?.let {
                 Text(it, style = MaterialTheme.typography.labelSmall, color = BockMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
@@ -654,8 +676,14 @@ private fun ActivityChartCard(
         ActivityPeriod.Year -> data.activity?.year.orEmpty()
     }
     AnalyticsCard("Activity over time") {
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            items(ActivityPeriod.entries) { p ->
+        val periodScroll = rememberScrollState()
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .horizontalScroll(periodScroll),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            ActivityPeriod.entries.forEach { p ->
                 FilterChip(
                     selected = period == p,
                     onClick = { onPeriod(p) },
@@ -747,9 +775,12 @@ private fun DayOfWeekChart(days: List<DayCount>) {
 @Composable
 private fun DecadeChart(decades: List<DecadeRow>) {
     ColumnChart(decades.map { it.count }, height = 160.dp, color = Color(0xFF8D67AB))
+    val decadeScroll = rememberScrollState()
     Row(
-        Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceEvenly,
+        Modifier
+            .fillMaxWidth()
+            .horizontalScroll(decadeScroll),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         decades.take(8).forEach { d ->
             Text(
@@ -874,13 +905,19 @@ private fun DeviceBreakdownCard(devices: List<DeviceBreakdownRow>) {
     if (active.isEmpty()) return
     AnalyticsCard("Device Activity") {
         active.forEach { d ->
-            Row(
-                Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                Column(Modifier.weight(1f)) {
-                    Text(d.name.ifBlank { d.deviceId.takeLast(8) }, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Column(Modifier.fillMaxWidth()) {
+                    Text(
+                        d.name.ifBlank { d.deviceId.takeLast(8) },
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                     Text(d.platform, style = MaterialTheme.typography.labelSmall, color = BockMuted)
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {

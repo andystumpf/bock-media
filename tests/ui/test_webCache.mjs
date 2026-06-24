@@ -1,0 +1,64 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { JSDOM } from 'jsdom';
+
+const REPO = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+function loadWebCache() {
+  const dom = new JSDOM('<!doctype html><html><body></body></html>', {
+    url: 'http://localhost/',
+    runScripts: 'dangerously',
+  });
+  const script = dom.window.document.createElement('script');
+  script.textContent = readFileSync(path.join(REPO, 'public', 'js', 'webCache.js'), 'utf8');
+  dom.window.document.body.appendChild(script);
+  return dom.window.WebCache;
+}
+
+const sampleFeed = () => ({
+  sections: [
+    { kind: 'Mood', title: 'Dinner', cards: [{ playlistId: 'p1', title: 'A' }] },
+    ...Array.from({ length: 8 }, (_, i) => ({ kind: 'Mood', title: `M${i}`, cards: [] })),
+  ],
+});
+
+test('WebCache stores and skips reload within session TTL', () => {
+  const WebCache = loadWebCache();
+  const feed = sampleFeed();
+  WebCache.putHome(feed, { p1: '/art.jpg' });
+  WebCache.markHomeLoaded();
+  assert.ok(WebCache.peekHome());
+  assert.ok(WebCache.shouldSkipHomeReload());
+});
+
+test('WebCache visibleHomeCoverIds caps at limit', () => {
+  const WebCache = loadWebCache();
+  const feed = {
+    sections: Array.from({ length: 10 }, (_, i) => ({
+      kind: 'Mood',
+      cards: [{ playlistId: `p${i}` }],
+    })),
+  };
+  const ids = WebCache.visibleHomeCoverIds(feed, 5);
+  assert.equal(ids.length, 5);
+});
+
+test('WebCache library session cache', () => {
+  const WebCache = loadWebCache();
+  WebCache.putLibrary({ playlists: [{ id: '1', name: 'Test' }], smart: [], folders: [], genres: [] });
+  WebCache.markLibraryLoaded();
+  const snap = WebCache.peekLibrary();
+  assert.equal(snap.playlists.length, 1);
+  assert.ok(WebCache.shouldSkipLibraryReload());
+});
+
+test('WebCache playlist session cache', () => {
+  const WebCache = loadWebCache();
+  WebCache.setPlaylists([{ id: '1', name: 'Test' }]);
+  const items = WebCache.getPlaylistsIfFresh();
+  assert.equal(items.length, 1);
+  assert.equal(items[0].name, 'Test');
+});

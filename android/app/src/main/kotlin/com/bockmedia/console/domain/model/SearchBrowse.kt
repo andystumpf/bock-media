@@ -28,21 +28,65 @@ data class SearchSuggestion(
 )
 
 object SearchBrowseLoader {
-    private const val HISTORY_LIMIT = 80
-    private const val ANALYTICS_TIMEOUT_MS = 4_000L
+    private const val HISTORY_LIMIT = 40
+    private const val PLAYLIST_LIMIT = 80
+    private const val REQUEST_TIMEOUT_MS = 6_000L
+    private const val ANALYTICS_TIMEOUT_MS = 3_000L
+
+    /** Lightweight feed for first paint (genres + new releases). */
+    suspend fun loadFast(repository: BockMediaRepository): SearchBrowseFeed = coroutineScope {
+        val genresDef = async {
+            withTimeoutOrNull(REQUEST_TIMEOUT_MS) {
+                runCatching { repository.genres(limit = 16) }.getOrNull()
+            }
+        }
+        val newReleasesDef = async {
+            withTimeoutOrNull(REQUEST_TIMEOUT_MS) {
+                runCatching { repository.recentAlbums(limit = 12) }.getOrNull()
+            }
+        }
+        SearchBrowseFeed(
+            genres = genresDef.await()?.items.orEmpty(),
+            newReleases = newReleasesDef.await()?.items.orEmpty(),
+        )
+    }
 
     suspend fun load(repository: BockMediaRepository): SearchBrowseFeed = coroutineScope {
-        val historyDef = async { runCatching { repository.streamHistory(1, HISTORY_LIMIT) }.getOrNull() }
+        val historyDef = async {
+            withTimeoutOrNull(REQUEST_TIMEOUT_MS) {
+                runCatching { repository.streamHistory(1, HISTORY_LIMIT) }.getOrNull()
+            }
+        }
         val analyticsDef = async {
             withTimeoutOrNull(ANALYTICS_TIMEOUT_MS) {
                 runCatching { repository.analytics() }.getOrNull()
             }
         }
-        val playlistsDef = async { runCatching { repository.playlists(limit = 200) }.getOrNull() }
-        val smartDef = async { runCatching { repository.smartPlaylists() }.getOrNull() }
-        val genresDef = async { runCatching { repository.genres(limit = 16) }.getOrNull() }
-        val newReleasesDef = async { runCatching { repository.recentAlbums(limit = 12) }.getOrNull() }
-        val dashboardDef = async { runCatching { repository.dashboardQuick() }.getOrNull() }
+        val playlistsDef = async {
+            withTimeoutOrNull(REQUEST_TIMEOUT_MS) {
+                runCatching { repository.playlists(limit = PLAYLIST_LIMIT) }.getOrNull()
+            }
+        }
+        val smartDef = async {
+            withTimeoutOrNull(REQUEST_TIMEOUT_MS) {
+                runCatching { repository.smartPlaylists() }.getOrNull()
+            }
+        }
+        val genresDef = async {
+            withTimeoutOrNull(REQUEST_TIMEOUT_MS) {
+                runCatching { repository.genres(limit = 16) }.getOrNull()
+            }
+        }
+        val newReleasesDef = async {
+            withTimeoutOrNull(REQUEST_TIMEOUT_MS) {
+                runCatching { repository.recentAlbums(limit = 12) }.getOrNull()
+            }
+        }
+        val dashboardDef = async {
+            withTimeoutOrNull(REQUEST_TIMEOUT_MS) {
+                runCatching { repository.dashboardQuick() }.getOrNull()
+            }
+        }
 
         val history = historyDef.await()?.items.orEmpty()
         val analytics = analyticsDef.await()

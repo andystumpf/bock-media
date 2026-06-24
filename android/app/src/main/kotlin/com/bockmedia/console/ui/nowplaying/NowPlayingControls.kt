@@ -18,6 +18,6 @@ fun canControlDevice(
     if (isLocalPhoneDevice(device.deviceId)) return true
     if (!controlsAvailable || !remoteOk) return false
     if (device.deviceId.startsWith("msp-")) return false
-    if (device.deviceName.isNullOrBlank()) return false
-    return resolveSerial(device, alexaDevices) != null
+    // Server accepts device name when serial is unknown — don't block the UI.
+    return !device.deviceName.isNullOrBlank()
 }

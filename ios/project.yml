@@ -30,8 +30,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.bockmedia.console
         CODE_SIGN_ENTITLEMENTS: BockMedia/BockMedia.entitlements
-        MARKETING_VERSION: "2.3.1"
-        CURRENT_PROJECT_VERSION: "7"
+        MARKETING_VERSION: "2.4.0"
+        CURRENT_PROJECT_VERSION: "8"
         INFOPLIST_KEY_CFBundleDisplayName: Bock Media
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UIRequiresFullScreen: true
@@ -81,8 +81,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.bockmedia.console.widget
         CODE_SIGN_ENTITLEMENTS: BockMediaWidget/BockMediaWidget.entitlements
-        MARKETING_VERSION: "2.3.1"
-        CURRENT_PROJECT_VERSION: "7"
+        MARKETING_VERSION: "2.4.0"
+        CURRENT_PROJECT_VERSION: "8"
         INFOPLIST_KEY_CFBundleDisplayName: Bock Media
         SKIP_INSTALL: YES
     info:

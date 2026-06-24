@@ -7,6 +7,7 @@ import com.bockmedia.console.data.local.AppPreferences
 import com.bockmedia.console.data.network.NetworkReachability
 import com.bockmedia.console.domain.model.HomeArtworkCache
 import com.bockmedia.console.domain.model.PlayTarget
+import com.bockmedia.console.domain.model.LocalTrack
 import com.bockmedia.console.domain.model.SearchSuggestion
 import com.bockmedia.console.domain.model.SearchSuggestionKind
 import com.bockmedia.console.domain.model.filterSearchSongHits
@@ -147,8 +148,8 @@ class BockMediaRepository(
         playTarget: PlayTarget,
     ): String? {
         val pick = kotlin.math.abs(cardId.hashCode())
-        playlistId?.let { return artworkUrlForPlaylist(it, it) }
         artPath?.let { return artworkUrl(it) }
+        playlistId?.let { return artworkUrlForPlaylist(it, it) }
         return when (playTarget) {
             is PlayTarget.Album -> {
                 runCatching {
@@ -271,12 +272,32 @@ class BockMediaRepository(
     suspend fun resolvePlaylistId(name: String): String? {
         val trimmed = name.trim()
         if (trimmed.isEmpty()) return null
-        return runCatching {
-            playlists(search = trimmed, limit = 50).items
-                .firstOrNull { it.name.equals(trimmed, ignoreCase = true) }
+        var page = 1
+        while (true) {
+            val batch = runCatching {
+                playlists(search = trimmed, page = page, limit = 100).items
+            }.getOrNull() ?: return null
+            batch.firstOrNull { it.name.equals(trimmed, ignoreCase = true) }
                 ?.id
                 ?.takeIf { it.isNotBlank() }
-        }.getOrNull()
+                ?.let { return it }
+            if (batch.size < 100) break
+            page++
+        }
+        return null
+    }
+
+    /** Resolve playlist id + display name for Alexa/local play. */
+    suspend fun resolvePlaylistPlayArgs(target: PlayTarget.Playlist): Pair<String, String>? {
+        var id = target.id.trim()
+        var name = target.name.trim()
+        if (id.isBlank()) id = resolvePlaylistId(name).orEmpty()
+        if (name.isBlank() && id.isNotBlank()) {
+            name = runCatching { playlistDetail(id, limit = 1).name.trim() }.getOrNull().orEmpty()
+        }
+        if (id.isBlank() && name.isNotBlank()) id = resolvePlaylistId(name).orEmpty()
+        if (id.isBlank() && name.isBlank()) return null
+        return id to name
     }
 
     suspend fun playlistDetail(
@@ -561,7 +582,40 @@ class BockMediaRepository(
     }
 
     suspend fun sortPlaylist(id: String, sortBy: String, order: String) {
-        api().sortPlaylist(id, buildJsonObject { put("sortBy", sortBy); put("order", order) })
+        api().sortPlaylist(id, buildJsonObject { put("by", sortBy); put("order", order) })
+    }
+
+    suspend fun movePlaylistTrack(playlistId: String, path: String, toIndex: Int) {
+        api().movePlaylistTrack(playlistId, buildJsonObject {
+            put("path", path)
+            put("toIndex", toIndex)
+        })
+    }
+
+    suspend fun continuationTracks(
+        mode: String,
+        target: PlayTarget?,
+        lastPath: String,
+        lastArtist: String?,
+        exclude: Set<String>,
+    ): List<LocalTrack> {
+        if (mode == "off" || mode.isBlank()) return emptyList()
+        val resp = when {
+            mode == "artist_radio" -> {
+                val artist = lastArtist?.trim().orEmpty()
+                if (artist.isBlank()) return emptyList()
+                resonanceRadio(seedKind = "artist", artist = artist)
+            }
+            target is PlayTarget.Playlist -> resonanceRadio(seedKind = "playlist", playlistId = target.id)
+            target is PlayTarget.Album -> resonanceRadio(seedKind = "album", album = target.name, artist = target.artist)
+            target is PlayTarget.Artist -> resonanceRadio(seedKind = "artist", artist = target.name)
+            else -> resonanceRadio(seedKind = "song", path = lastPath)
+        }
+        return resp.tracks.mapNotNull { t ->
+            val path = t.path?.takeIf { it.isNotBlank() && it !in exclude } ?: return@mapNotNull null
+            LocalTrack(path = path, title = t.title ?: path, artist = t.artist, album = t.album,
+                durationMs = t.duration?.takeIf { it > 0 }?.times(1000L) ?: 0L)
+        }
     }
 
     suspend fun aiPlaylist(prompt: String, name: String, maxTracks: Int, save: Boolean) =
@@ -625,6 +679,24 @@ class BockMediaRepository(
         put("maxTracks", maxTracks)
         put("save", save)
     })
+
+    suspend fun acquireSuggest(
+        seedKind: String,
+        path: String? = null,
+        album: String? = null,
+        artist: String? = null,
+        playlistId: String? = null,
+        limit: Int = 24,
+    ) = api().acquireSuggest(buildJsonObject {
+        put("seedKind", seedKind)
+        path?.let { put("path", it) }
+        album?.let { put("album", it) }
+        artist?.let { put("artist", it) }
+        playlistId?.let { put("playlistId", it) }
+        put("limit", limit)
+    })
+
+    suspend fun acquireExplore(limit: Int = 24) = api().acquireExplore(limit)
 
     suspend fun createSmartPlaylist(name: String, genre: String?, artist: String?, maxTracks: Int) {
         val rules = buildJsonArray {

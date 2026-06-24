@@ -2,6 +2,14 @@
   "publicUrl": "https://alexa.morejava.bid",
   "launchPlaylistPrompt": true,
   "identifyPlaylist": "",
+  "deviceDiscovery": {
+    "_comment": "Silent background sweep: mutes each Echo, plays a ~250ms silent track via the skill, stops, restores volume — binds rotated Alexa skill deviceIds to hardware serials without audible playback. POST /api/devices/discover?force=1 to run immediately.",
+    "enabled": true,
+    "intervalHours": 6,
+    "staleDays": 7,
+    "dwellSeconds": 5,
+    "onlyStale": true
+  },
   "msp": {
     "skillId": "amzn1.ask.skill.5a3f1b96-1e0d-4a39-ac7a-1bacd6f4438a",
     "catalogId": "amzn1.ask-catalog.cat.8d881399-7f6b-4d02-93c9-6c4b44043406",

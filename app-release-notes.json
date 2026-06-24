@@ -2,6 +2,39 @@
   "_comment": "Update this file whenever you upload a new APK/IPA to /app. Shown on GET /app.",
   "releases": [
     {
+      "version": "2.4.2",
+      "date": "2026-06-22",
+      "items": [
+        {"kind": "feat", "text": "Web: Spotify-style playback in the browser — play here on laptop/phone, or choose Play on speaker…"},
+        {"kind": "fix", "text": "Android: playlist Play starts on this phone; speaker controls work without serial mapping"},
+        {"kind": "fix", "text": "Android: Now Playing focuses this phone; play restarts if the audio service stopped"},
+        {"kind": "fix", "text": "Android: playlist tracks play the full queue from the tapped song"}
+      ]
+    },
+    {
+      "version": "2.4.1",
+      "date": "2026-06-22",
+      "items": [
+        {"kind": "fix", "text": "Android: progress bar advances during remote/streaming playback (library duration fallback when ExoPlayer lacks stream metadata)"},
+        {"kind": "fix", "text": "Android: skip next/previous reliably starts the new track (recover from ENDED/IDLE)"},
+        {"kind": "improve", "text": "Android: Search tab loads genres and new releases first, then enriches in background"}
+      ]
+    },
+    {
+      "version": "2.4.0",
+      "date": "2026-06-21",
+      "items": [
+        {"kind": "feat", "text": "Mix Muse — conversational AI playlists from Claude or OpenAI (prompt or “sounds like this song/album/playlist”)"},
+        {"kind": "feat", "text": "Resonance — library-native similar-vibe mixes and endless radio (genre, year, duration, loudness)"},
+        {"kind": "feat", "text": "Discover Weekly, Release Radar, and Continue Listening on home (iOS, Android, web)"},
+        {"kind": "feat", "text": "Playlist folders, expanded smart rules, unified search with suggestions"},
+        {"kind": "feat", "text": "Playback handoff — move listening between phone and speakers"},
+        {"kind": "feat", "text": "Driving mode + Android Auto browse; CarPlay templates (iOS)"},
+        {"kind": "feat", "text": "Optional loudness normalization on stream (night mode / kid-safe rooms)"},
+        {"kind": "improve", "text": "Long-press songs, albums, or playlists for Mix Muse / Resonance (Android & iOS)"}
+      ]
+    },
+    {
       "version": "2.3.3",
       "date": "2026-06-21",
       "items": [

@@ -1,5 +1,6 @@
 package com.bockmedia.console.ui.library
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
@@ -16,6 +17,7 @@ import com.bockmedia.console.ui.components.LoadingBox
 import com.bockmedia.console.ui.components.PaginationBar
 import com.bockmedia.console.ui.components.PlayButton
 import com.bockmedia.console.ui.components.SearchField
+import com.bockmedia.console.ui.discovery.AcquireIdeasDialog
 import com.bockmedia.console.ui.discovery.DiscoveryActionsDialog
 import com.bockmedia.console.ui.discovery.DiscoverySeed
 import com.bockmedia.console.ui.discovery.DiscoverySeedKind
@@ -65,9 +67,10 @@ fun AlbumsScreen(
         remoteOk = remoteOk,
         onPlayItem = { onPlay(PlayTarget.Album(it.name, it.artist)) },
         onOpen = { onOpenAlbum(it.name) },
-        artPath = { null },
+        artPath = { it.artPath },
         albumName = { it.name },
         artistName = { it.artist },
+        showUnplayed = { it.unplayed },
         discoverySeed = { album ->
             DiscoverySeed(
                 kind = DiscoverySeedKind.album,
@@ -114,6 +117,7 @@ fun SongsScreen(
     )
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun <T> LibraryListScreen(
     repository: BockMediaRepository,
@@ -128,6 +132,7 @@ private fun <T> LibraryListScreen(
     artPath: ((T) -> String?)? = null,
     artistName: ((T) -> String?)? = null,
     albumName: ((T) -> String?)? = null,
+    showUnplayed: ((T) -> Boolean)? = null,
     discoverySeed: ((T) -> DiscoverySeed?)? = null,
 ) {
     val context = LocalContext.current
@@ -135,6 +140,7 @@ private fun <T> LibraryListScreen(
     var showMixMuse by remember { mutableStateOf(false) }
     var mixMuseSeed by remember { mutableStateOf<DiscoverySeed?>(null) }
     var discoveryDialogSeed by remember { mutableStateOf<DiscoverySeed?>(null) }
+    var acquireIdeasSeed by remember { mutableStateOf<DiscoverySeed?>(null) }
     var search by remember { mutableStateOf("") }
     var page by remember { mutableIntStateOf(1) }
     var items by remember { mutableStateOf<List<T>>(emptyList()) }
@@ -174,6 +180,14 @@ private fun <T> LibraryListScreen(
             onResonanceMix = {
                 scope.launch { repository.runResonanceMix(seed) { _, _ -> } }
             },
+            onAcquireIdeas = { acquireIdeasSeed = seed },
+        )
+    }
+    acquireIdeasSeed?.let { seed ->
+        AcquireIdeasDialog(
+            repository = repository,
+            seed = seed,
+            onDismiss = { acquireIdeasSeed = null },
         )
     }
 
@@ -202,6 +216,7 @@ private fun <T> LibraryListScreen(
                             artPath = artPath?.invoke(item),
                             artistName = artistName?.invoke(item),
                             albumName = albumName?.invoke(item),
+                            showUnplayed = showUnplayed?.invoke(item) == true,
                             modifier = rowModifier,
                             trailing = {
                                 if (remoteOk) PlayButton(onClick = { onPlayItem(item) })

@@ -6,6 +6,7 @@ import com.bockmedia.console.data.api.dto.DashboardQuickResponse
 import com.bockmedia.console.data.api.dto.FavoriteItem
 import com.bockmedia.console.data.api.dto.GenreItem
 import com.bockmedia.console.data.api.dto.PlaylistSummary
+import com.bockmedia.console.data.api.dto.ResumeEntry
 import com.bockmedia.console.data.api.dto.SmartPlaylist
 import com.bockmedia.console.data.api.dto.StreamHistoryItem
 object HomeFeedLimits {
@@ -55,6 +56,7 @@ private class HomeFeedRegistry {
 
     fun registerCard(card: HomeCard) {
         usedCardIds.add(card.id)
+        card.artPath?.takeIf { it.isNotBlank() }?.let { usedArtPaths.add(it) }
         card.playlistId?.let { usedPlaylistIds.add(it) }
         if (card.playlistId != null) usedPlaylistNameKeys.add(card.title.lowercase())
     }
@@ -100,20 +102,57 @@ object HomeFeedComposer {
             }
         }
 
+        fun resolvePlaylistArt(pl: PlaylistSummary, genreHint: String? = null): String? {
+            artPathForPlaylistSeed(input.history, pl.name)?.let { path ->
+                registry.claimArtPath(path)?.let { return it }
+            }
+            HomeFeedRules.artPathForPlaylistDistinct(input.history, pl.name, registry.usedArtPaths)
+                ?.let { path -> registry.claimArtPath(path)?.let { return it } }
+            val genreHints = buildList {
+                genreHint?.let { add(it) }
+                for (row in topGenres) {
+                    val g = row.name ?: row.label ?: continue
+                    if (pl.name.contains(g, ignoreCase = true)) add(g)
+                }
+            }.distinct()
+            for (g in genreHints) {
+                registry.claimArtPath(
+                    HomeFeedRules.artPathForGenreDistinct(input.history, g, registry.usedArtPaths),
+                )?.let { return it }
+            }
+            HomeThemeCatalog.themesForDay(input.shuffleSeed)
+                .firstOrNull { HomeFeedRules.playlistMatchesTheme(pl, it) }
+                ?.let { theme ->
+                    HomeFeedRules.topArtistForTheme(input.history, theme)?.let { artist ->
+                        registry.claimArtPath(
+                            HomeFeedRules.artPathForArtistDistinct(input.history, artist, registry.usedArtPaths),
+                        )?.let { return it }
+                    }
+                    input.libraryGenres.firstOrNull { HomeFeedRules.genreMatchesTheme(it.name, theme) }
+                        ?.artPath
+                        ?.let { path -> registry.claimArtPath(path)?.let { return it } }
+                }
+            return registry.claimArtPath(
+                HomeFeedRules.nextDistinctArtPath(input.history, registry.usedArtPaths),
+            )
+        }
+
         fun playlistCard(
             pl: PlaylistSummary,
             artPath: String? = null,
             kind: HomeSectionKind,
             subtitle: String? = null,
             claim: Boolean = true,
+            genreHint: String? = null,
         ): HomeCard? {
             if (HomeFeedRules.isAutomationPlaylistName(pl.name)) return null
             if (claim && !registry.claimPlaylist(pl.id, pl.name)) return null
+            val resolvedArt = artPath?.let { registry.claimArtPath(it) } ?: resolvePlaylistArt(pl, genreHint)
             val card = HomeCard(
                 id = "pl-${pl.id}",
                 title = pl.name,
                 subtitle = subtitle ?: "${pl.tracks} tracks",
-                artPath = artPath,
+                artPath = resolvedArt,
                 playlistId = pl.id,
                 playTarget = PlayTarget.Playlist(pl.id, pl.name),
                 kind = kind,
@@ -259,6 +298,7 @@ object HomeFeedComposer {
                             pl,
                             kind = HomeSectionKind.TopMixes,
                             subtitle = "$genre mix",
+                            genreHint = genre,
                         )?.let { add(it) }
                         continue
                     }
@@ -270,6 +310,7 @@ object HomeFeedComposer {
                         named,
                         kind = HomeSectionKind.TopMixes,
                         subtitle = "$genre mix",
+                        genreHint = genre,
                     )?.let { add(it) }
                     continue
                 }
