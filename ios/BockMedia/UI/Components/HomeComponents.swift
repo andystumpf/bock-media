@@ -73,6 +73,23 @@ struct HomeCardArtwork: View {
     }
 
     private func load() async {
+        if let playlistId = card.linkedPlaylistId {
+            // Inline cover from /api/playlists (first track) — paint without a per-tile lookup.
+            if let path = HomeArtworkCache.playlistPath(id: playlistId) ?? card.artPath,
+               let str = await appState.repository.artworkURL(for: path),
+               let cached = URL(string: str) {
+                url = cached
+                await ArtworkImageCache.prefetch(cached)
+                return
+            }
+            if let path = try? await appState.repository.playlistCoverPath(id: playlistId),
+               let str = await appState.repository.artworkURL(for: path),
+               let resolved = URL(string: str) {
+                url = resolved
+                await ArtworkImageCache.prefetch(resolved)
+                return
+            }
+        }
         if let cached = HomeArtworkCache.url(for: card.id) {
             url = cached
             await ArtworkImageCache.prefetch(cached)
@@ -210,7 +227,7 @@ struct HomePlaylistTile: View {
     private let size: CGFloat = 148
 
     var body: some View {
-        Button { appState.playHomeCard(card) } label: {
+        homeTileLink {
             VStack(alignment: .leading, spacing: 8) {
                 HomeCardArtwork(
                     appState: appState,
@@ -233,9 +250,24 @@ struct HomePlaylistTile: View {
                 }
             }
         }
-        .buttonStyle(.plain)
         .fixedSize(horizontal: true, vertical: false)
         .simultaneousGesture(LongPressGesture().onEnded { _ in onLongPress?() })
+    }
+
+    @ViewBuilder
+    private func homeTileLink<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        if let route = card.browseLibraryRoute {
+            NavigationLink(value: route) { content() }
+                .buttonStyle(.plain)
+        } else if let route = card.browseSearchRoute {
+            NavigationLink(value: route) { content() }
+                .buttonStyle(.plain)
+        } else {
+            Button { appState.playHomeCard(card) } label: {
+                content()
+            }
+            .buttonStyle(.plain)
+        }
     }
 }
 
@@ -247,7 +279,7 @@ struct HomeGenreMixTile: View {
     private let size: CGFloat = 148
 
     var body: some View {
-        Button { appState.playHomeCard(card) } label: {
+        homeTileLink {
             ZStack(alignment: .bottomLeading) {
                 HomeCardArtwork(
                     appState: appState,
@@ -282,9 +314,24 @@ struct HomeGenreMixTile: View {
             .frame(width: size, height: size)
             .clipShape(RoundedRectangle(cornerRadius: 4))
         }
-        .buttonStyle(.plain)
         .fixedSize(horizontal: true, vertical: false)
         .simultaneousGesture(LongPressGesture().onEnded { _ in onLongPress?() })
+    }
+
+    @ViewBuilder
+    private func homeTileLink<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        if let route = card.browseLibraryRoute {
+            NavigationLink(value: route) { content() }
+                .buttonStyle(.plain)
+        } else if let route = card.browseSearchRoute {
+            NavigationLink(value: route) { content() }
+                .buttonStyle(.plain)
+        } else {
+            Button { appState.playHomeCard(card) } label: {
+                content()
+            }
+            .buttonStyle(.plain)
+        }
     }
 }
 
@@ -353,19 +400,20 @@ struct HomeSectionShowAllSheet: View {
     var body: some View {
         NavigationStack {
             List(section.cards) { card in
-                Button {
-                    onDismiss()
-                    appState.playHomeCard(card)
-                } label: {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(card.title)
-                            .font(.body.weight(.bold))
-                            .foregroundStyle(BockColors.onSurface)
-                        if let sub = card.subtitle {
-                            Text(sub)
-                                .font(.caption)
-                                .foregroundStyle(BockColors.muted)
-                        }
+                if let route = card.browseLibraryRoute {
+                    NavigationLink(value: route) {
+                        showAllRow(card)
+                    }
+                } else if let route = card.browseSearchRoute {
+                    NavigationLink(value: route) {
+                        showAllRow(card)
+                    }
+                } else {
+                    Button {
+                        onDismiss()
+                        appState.playHomeCard(card)
+                    } label: {
+                        showAllRow(card)
                     }
                 }
             }
@@ -380,7 +428,42 @@ struct HomeSectionShowAllSheet: View {
                         .foregroundStyle(BockColors.onSurface)
                 }
             }
+            .navigationDestination(for: LibraryRoute.self) { route in
+                switch route {
+                case .playlistDetail(let id):
+                    PlaylistDetailView(appState: appState, playlistId: id)
+                case .albums(let artist):
+                    AlbumsView(appState: appState, artist: artist)
+                case .songs(_, let album):
+                    SongsView(appState: appState, artist: nil, album: album)
+                default:
+                    EmptyView()
+                }
+            }
+            .navigationDestination(for: SearchRoute.self) { route in
+                switch route {
+                case .genre(let name):
+                    GenreDetailView(appState: appState, genreName: name)
+                case .artist(let name):
+                    ArtistDetailView(appState: appState, artistName: name)
+                case .album(let name, let artist):
+                    AlbumDetailView(appState: appState, albumName: name, artist: artist)
+                }
+            }
         }
         .presentationBackground(BockColors.sheetBg)
+    }
+
+    private func showAllRow(_ card: HomeCard) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(card.title)
+                .font(.body.weight(.bold))
+                .foregroundStyle(BockColors.onSurface)
+            if let sub = card.subtitle {
+                Text(sub)
+                    .font(.caption)
+                    .foregroundStyle(BockColors.muted)
+            }
+        }
     }
 }

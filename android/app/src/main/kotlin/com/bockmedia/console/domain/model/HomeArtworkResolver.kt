@@ -1,6 +1,7 @@
 package com.bockmedia.console.domain.model
 
 import com.bockmedia.console.data.local.AppPreferences
+import com.bockmedia.console.domain.model.ArtworkPaths.TILE_SIZE_PX
 import com.bockmedia.console.data.repository.BockMediaRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -14,14 +15,14 @@ object HomeArtworkResolver {
     private const val RESOLVE_CONCURRENCY = 8
 
     /** Build artwork URL from cached paths only — no network (safe for first paint). */
-    fun peekUrl(baseUrl: String?, card: HomeCard): String? {
+    fun peekUrl(baseUrl: String?, card: HomeCard, sizePx: Int = TILE_SIZE_PX): String? {
         val path = HomeArtworkCache.mediaPathFor(card) ?: return null
         val base = baseUrl?.takeIf { it.isNotBlank() } ?: return null
-        return AppPreferences.artworkUrl(base, path)
+        return AppPreferences.artworkUrl(base, path, sizePx)
     }
 
     suspend fun warmPlaylistCovers(repository: BockMediaRepository, cards: List<HomeCard>) {
-        val ids = cards.mapNotNull { it.playlistId }.distinct()
+        val ids = cards.mapNotNull { it.linkedPlaylistId() }.distinct()
         repository.prefetchPlaylistCoverPaths(ids)
     }
 
@@ -47,33 +48,45 @@ object HomeArtworkResolver {
         repository: BockMediaRepository,
         card: HomeCard,
         allowNetwork: Boolean = true,
+        sizePx: Int = TILE_SIZE_PX,
     ): String? {
         HomeArtworkCache.mediaPathFor(card)?.let { path ->
-            repository.artworkUrl(path)?.let { url ->
+            repository.artworkUrl(path, sizePx)?.let { url ->
                 HomeArtworkCache.storeCard(card.id, path)
                 return url
             }
         }
 
-        if (!allowNetwork) return null
+        val linkedPlaylistId = card.linkedPlaylistId()
 
-        card.artPath?.let { path ->
-            repository.artworkUrl(path)?.let { url ->
-                HomeArtworkCache.storeCard(card.id, path)
-                return url
-            }
-        }
-
-        card.playlistId?.let { playlistId ->
+        linkedPlaylistId?.let { playlistId ->
             HomeArtworkCache.playlistPath(playlistId)?.let { path ->
-                repository.artworkUrl(path)?.let { url ->
+                repository.artworkUrl(path, sizePx)?.let { url ->
                     HomeArtworkCache.storeCard(card.id, path)
                     return url
                 }
             }
         }
 
-        repository.resolveHomeCardArtUrl(card.id, card.artPath, card.playlistId, card.playTarget)?.let { url ->
+        if (!allowNetwork) return null
+
+        linkedPlaylistId?.let { playlistId ->
+            repository.artworkUrlForPlaylist(playlistId, card.id, sizePx)?.let { url ->
+                val path = ArtworkPaths.extractMediaPath(url)
+                if (path != null) HomeArtworkCache.storeCard(card.id, path)
+                else HomeArtworkCache.storeCardUrl(card.id, url)
+                return url
+            }
+        }
+
+        card.artPath?.takeIf { linkedPlaylistId == null }?.let { path ->
+            repository.artworkUrl(path, sizePx)?.let { url ->
+                HomeArtworkCache.storeCard(card.id, path)
+                return url
+            }
+        }
+
+        repository.resolveHomeCardArtUrl(card.id, card.artPath, card.playlistId, card.playTarget, sizePx)?.let { url ->
             val path = ArtworkPaths.extractMediaPath(url)
             if (path != null) HomeArtworkCache.storeCard(card.id, path)
             else HomeArtworkCache.storeCardUrl(card.id, url)

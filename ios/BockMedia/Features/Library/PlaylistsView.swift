@@ -61,6 +61,7 @@ struct PlaylistDetailView: View {
     @State private var showAcquire = false
     @State private var acquireSeed: DiscoverySeed?
     @State private var editMode: EditMode = .inactive
+    @State private var isDaily = false
     private let pageSize = 100
 
     private var canReorder: Bool {
@@ -233,8 +234,35 @@ struct PlaylistDetailView: View {
             Text("\(total > 0 ? total : tracks.count) songs")
                 .font(.subheadline)
                 .foregroundStyle(BockColors.muted)
+            if isDaily {
+                Text("Fresh daily mix — these songs change every day. Save it to keep today's set.")
+                    .font(.caption)
+                    .foregroundStyle(BockColors.muted)
+                Button {
+                    Task { await saveDaily() }
+                } label: {
+                    Label("Save to your library", systemImage: "bookmark")
+                        .font(.subheadline.weight(.bold))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(BockColors.pillActive)
+                        .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
         }
         .padding(16)
+    }
+
+    private func saveDaily() async {
+        do {
+            try await appState.repository.saveDailyPlaylist(id: playlistId, name: nil)
+            isDaily = false
+            appState.toast = "Saved to your library"
+            await reload()
+        } catch {
+            appState.toast = error.localizedDescription
+        }
     }
 
     private var filterSortBar: some View {
@@ -377,6 +405,7 @@ struct PlaylistDetailView: View {
             )
             name = detail.name
             total = detail.total > 0 ? detail.total : detail.tracks.count
+            isDaily = detail.daily
             if append {
                 let seen = Set(tracks.compactMap(\.path))
                 tracks.append(contentsOf: detail.tracks.filter { track in

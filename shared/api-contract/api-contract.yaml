@@ -197,9 +197,25 @@ components:
     SearchResponse:
       type: object
       properties:
+        query: { type: string }
         playlists: { type: array, items: { $ref: "#/components/schemas/SearchHit" } }
         artists: { type: array, items: { $ref: "#/components/schemas/SearchHit" } }
+        albums: { type: array, items: { $ref: "#/components/schemas/SearchHit" } }
         songs: { type: array, items: { $ref: "#/components/schemas/SearchHit" } }
+        genres: { type: array, items: { $ref: "#/components/schemas/SearchHit" } }
+        smartPlaylists: { type: array, items: { $ref: "#/components/schemas/SearchHit" } }
+        radios: { type: array, items: { $ref: "#/components/schemas/SearchRadioHit" } }
+        similar: { type: array, items: { $ref: "#/components/schemas/SearchHit" } }
+        counts: { type: object, additionalProperties: { type: integer } }
+        preview: { type: integer }
+    SearchRadioHit:
+      type: object
+      properties:
+        kind: { type: string }
+        name: { type: string }
+        artist: { type: string }
+        displayTitle: { type: string }
+        path: { type: string }
     SearchHit:
       type: object
       properties:

@@ -10,6 +10,7 @@ import bock_loudness
 import bock_mix_muse
 import bock_play_counts
 import bock_resonance
+import bock_search
 import bock_search_ext
 
 
@@ -199,6 +200,37 @@ def register(app, g):
             cache_path, db_query, STREAM_HISTORY_PATH, mids,
         )
         return jsonify({'ok': True, 'generatedAt': cache.get('generatedAt')})
+
+    @app.route('/api/search/pins')
+    def api_search_pins_get():
+        return jsonify({'pins': bock_search.load_pins()})
+
+    @app.route('/api/search/pins', methods=['PUT'])
+    def api_search_pins_put():
+        body = request.get_json(silent=True) or {}
+        pins = body.get('pins')
+        if not isinstance(pins, list):
+            return jsonify({'error': 'pins array required'}), 400
+        cleaned = []
+        for p in pins[:24]:
+            if not isinstance(p, dict):
+                continue
+            kind = (p.get('kind') or '').strip().lower()
+            if kind not in ('genre', 'playlist', 'artist', 'album', 'radio', 'mix'):
+                continue
+            entry = {'kind': kind, 'title': (p.get('title') or p.get('name') or '').strip()}
+            if p.get('id'):
+                entry['id'] = str(p['id'])
+            if p.get('name'):
+                entry['name'] = str(p['name'])
+            if p.get('artist'):
+                entry['artist'] = str(p['artist'])
+            if p.get('path'):
+                entry['path'] = str(p['path'])
+            if entry.get('title') or entry.get('name'):
+                cleaned.append(entry)
+        bock_search.save_pins(cleaned)
+        return jsonify({'ok': True, 'pins': cleaned})
 
     @app.route('/api/search/suggest')
     def api_search_suggest():

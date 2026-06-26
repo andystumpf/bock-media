@@ -2,6 +2,7 @@ package com.bockmedia.console.domain.model
 
 import android.content.Context
 import com.bockmedia.console.data.repository.BockMediaRepository
+import com.bockmedia.console.domain.model.HomeArtworkCache
 import com.bockmedia.console.local.OfflineDownloadManager
 import com.bockmedia.console.local.OfflineDownloadStore
 import com.bockmedia.console.local.toPlayTarget
@@ -38,9 +39,33 @@ data class LibraryItem(
 
 object LibraryLoader {
     private const val BROWSE_PLAYLIST_LIMIT = 500
-    private const val BROWSE_ARTIST_LIMIT = 100
-    private const val BROWSE_ALBUM_LIMIT = 100
-    private const val SEARCH_LIMIT = 100
+    private const val PAGE_SIZE = 200
+
+    private suspend fun BockMediaRepository.fetchAllArtists(search: String = ""): List<com.bockmedia.console.data.api.dto.ArtistItem> {
+        val all = mutableListOf<com.bockmedia.console.data.api.dto.ArtistItem>()
+        var page = 1
+        while (true) {
+            val resp = artists(page = page, search = search, limit = PAGE_SIZE)
+            if (resp.items.isEmpty()) break
+            all.addAll(resp.items)
+            if (all.size >= resp.total || resp.items.size < PAGE_SIZE) break
+            page++
+        }
+        return all
+    }
+
+    private suspend fun BockMediaRepository.fetchAllAlbums(search: String = ""): List<com.bockmedia.console.data.api.dto.AlbumItem> {
+        val all = mutableListOf<com.bockmedia.console.data.api.dto.AlbumItem>()
+        var page = 1
+        while (true) {
+            val resp = albums(page = page, search = search, limit = PAGE_SIZE)
+            if (resp.items.isEmpty()) break
+            all.addAll(resp.items)
+            if (all.size >= resp.total || resp.items.size < PAGE_SIZE) break
+            page++
+        }
+        return all
+    }
 
     /** Load all library buckets in parallel — filter client-side for instant tab switches. */
     suspend fun loadBuckets(
@@ -50,12 +75,17 @@ object LibraryLoader {
         val playlistsDef = async {
             runCatching {
                 repository.playlists(search = "", limit = BROWSE_PLAYLIST_LIMIT).items
-            }.getOrDefault(emptyList()).map { pl ->
+            }.getOrDefault(emptyList()).also { items ->
+                items.forEach { pl ->
+                    pl.artPath?.takeIf { it.isNotBlank() }?.let { HomeArtworkCache.storePlaylistPath(pl.id, it) }
+                }
+            }.map { pl ->
                 LibraryItem(
                     id = "pl-${pl.id}",
                     title = pl.name,
                     subtitle = "${pl.tracks ?: 0} songs",
                     kind = LibraryItemKind.Playlist,
+                    artPath = pl.artPath,
                     playTarget = PlayTarget.Playlist(pl.id, pl.name),
                     playlistId = pl.id,
                     sortDate = 0L,
@@ -64,7 +94,7 @@ object LibraryLoader {
         }
         val artistsDef = async {
             runCatching {
-                repository.artists(page = 1, search = "", limit = BROWSE_ARTIST_LIMIT).items
+                repository.fetchAllArtists()
             }.getOrDefault(emptyList()).map { artist ->
                 artist.artPath?.let { repository.cacheArtistArtPath(artist.name, it) }
                 LibraryItem(
@@ -80,7 +110,7 @@ object LibraryLoader {
         }
         val albumsDef = async {
             runCatching {
-                repository.albums(page = 1, search = "", limit = BROWSE_ALBUM_LIMIT).items
+                repository.fetchAllAlbums()
             }.getOrDefault(emptyList()).map { album ->
                 album.artPath?.let { repository.cacheArtPath(album.name, album.artist, it) }
                 LibraryItem(
@@ -135,7 +165,7 @@ object LibraryLoader {
         when (filter) {
             LibraryFilter.Playlists, LibraryFilter.All -> {
                 val items = runCatching {
-                    repository.playlists(search = q, limit = SEARCH_LIMIT).items
+                    repository.playlists(search = q, limit = BROWSE_PLAYLIST_LIMIT).items
                 }.getOrDefault(emptyList())
                 runCatching { repository.prefetchPlaylistCoverPaths(items.map { it.id }) }
                 items.map { pl ->
@@ -144,6 +174,7 @@ object LibraryLoader {
                         title = pl.name,
                         subtitle = "${pl.tracks ?: 0} songs",
                         kind = LibraryItemKind.Playlist,
+                        artPath = pl.artPath,
                         playTarget = PlayTarget.Playlist(pl.id, pl.name),
                         playlistId = pl.id,
                     )
@@ -151,7 +182,7 @@ object LibraryLoader {
             }
             LibraryFilter.Artists -> {
                 runCatching {
-                    repository.artists(page = 1, search = q, limit = SEARCH_LIMIT).items
+                    repository.fetchAllArtists(search = q)
                 }.getOrDefault(emptyList()).map { artist ->
                     LibraryItem(
                         id = "ar-${artist.name}",
@@ -166,7 +197,7 @@ object LibraryLoader {
             }
             LibraryFilter.Albums -> {
                 runCatching {
-                    repository.albums(page = 1, search = q, limit = SEARCH_LIMIT).items
+                    repository.fetchAllAlbums(search = q)
                 }.getOrDefault(emptyList()).map { album ->
                     LibraryItem(
                         id = "al-${album.name}\u0000${album.artist.orEmpty()}",

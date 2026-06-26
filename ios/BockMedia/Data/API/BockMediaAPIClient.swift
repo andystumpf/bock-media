@@ -85,8 +85,21 @@ final class BockMediaAPIClient {
         try await post("api/playlists/covers", body: ["ids": ids])
     }
 
-    func search(q: String, limit: Int = 30) async throws -> SearchResponse {
-        try await get("api/search", query: ["q": q, "limit": "\(limit)"])
+    func search(
+        q: String,
+        limit: Int = 30,
+        preview: Int = 5,
+        section: String? = nil,
+        source: String? = nil
+    ) async throws -> SearchResponse {
+        var query: [String: String] = ["q": q, "limit": "\(limit)", "preview": "\(preview)"]
+        if let section { query["section"] = section }
+        if let source { query["source"] = source }
+        return try await get("api/search", query: query)
+    }
+
+    func searchPins() async throws -> SearchPinsResponse {
+        try await get("api/search/pins")
     }
 
     func searchSuggest(q: String) async throws -> SearchResponse {
@@ -131,6 +144,10 @@ final class BockMediaAPIClient {
 
     func artists(page: Int = 1, limit: Int = 50, search: String = "") async throws -> ArtistsResponse {
         try await get("api/artists", query: ["page": "\(page)", "limit": "\(limit)", "search": search])
+    }
+
+    func artistPortrait(artist: String) async throws -> ArtistPortraitResponse {
+        try await get("api/artist-portrait", query: ["artist": artist])
     }
 
     func albums(
@@ -179,6 +196,10 @@ final class BockMediaAPIClient {
 
     func mergePlaylists(body: [String: Any]) async throws -> OkResponse {
         try await post("api/playlists/merge", body: body)
+    }
+
+    func saveDailyPlaylist(id: String, body: [String: Any]) async throws -> OkResponse {
+        try await post("api/daily-playlists/\(id)/save", body: body)
     }
 
     func sortPlaylist(id: String, body: [String: Any]) async throws -> OkResponse {

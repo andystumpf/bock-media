@@ -1,6 +1,7 @@
 package com.bockmedia.console.domain.model
 
 import android.content.Context
+import com.bockmedia.console.data.api.dto.FavoriteItem
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.local.OfflineDownloadManager
 import com.bockmedia.console.local.OfflineDownloadStore
@@ -42,6 +43,10 @@ data class HomeCard(
     val playTarget: PlayTarget,
     val kind: HomeSectionKind,
 )
+
+/** Library playlist id when this card opens playlist detail / cover API. */
+fun HomeCard.linkedPlaylistId(): String? =
+    playlistId ?: (playTarget as? PlayTarget.Playlist)?.id
 
 data class HomeSection(
     val id: String,
@@ -108,19 +113,32 @@ object HomeFeedLoader {
         }
         val playlistsDef = async { runCatching { repository.playlists(limit = PLAYLIST_LIMIT) }.getOrNull() }
         val smartDef = async { runCatching { repository.smartPlaylists() }.getOrNull() }
-        val favoritesDef = async { runCatching { repository.favorites() }.getOrNull().orEmpty() }
+        val favoritesDef = async { runCatching { repository.ratedSongs() }.getOrNull().orEmpty() }
         val dashboardDef = async { runCatching { repository.dashboardQuick() }.getOrNull() }
-        val genresDef = async { runCatching { repository.genres(limit = 40) }.getOrNull() }
+        val genresDef = async { runCatching { repository.genres(limit = 200) }.getOrNull() }
         val continueDef = async { runCatching { repository.continueListening() }.getOrNull() }
         val newDef = async { runCatching { repository.libraryNew() }.getOrNull() }
         val discoverDef = async { runCatching { repository.discoverWeekly() }.getOrNull() }
 
         val history = historyDef.await()?.items.orEmpty()
         val analytics = analyticsDef.await()
-        val allPlaylists = playlistsDef.await()?.items.orEmpty()
+        val allPlaylists = playlistsDef.await()?.items.orEmpty().also { items ->
+            items.forEach { pl ->
+                pl.artPath?.takeIf { it.isNotBlank() }?.let { HomeArtworkCache.storePlaylistPath(pl.id, it) }
+            }
+        }
         val smartPlaylists = smartDef.await()?.items.orEmpty()
         val dashboard = dashboardDef.await()
-        val favorites = dashboard?.favorites?.takeIf { it.isNotEmpty() } ?: favoritesDef.await()
+        val ratedItems = favoritesDef.await()
+        val favorites = dashboard?.favorites?.takeIf { it.isNotEmpty() }
+            ?: ratedItems.map { row ->
+                FavoriteItem(
+                    path = row.id,
+                    track = row.title,
+                    artist = row.artist,
+                    album = row.album,
+                )
+            }
         val libraryGenres = genresDef.await()?.items.orEmpty()
         val continueData = continueDef.await()
         val libraryNew = newDef.await()

@@ -16,13 +16,14 @@
     RECENT_PLAYLISTS: 24,
     RADIO: 16,
     DISCOVER: 24,
-    MORE_PLAYLISTS: 24,
+    MORE_PLAYLISTS: 60,
   };
 
   const RE = {
     dailyMix: /daily mix|daylist/i,
     discover: /discover weekly|new release|fresh find|new to you/i,
-    genreMix: /\bmix\b|essentials|decade|era|hits|party|focus|favorites/i,
+    genreMix: /\bmix\b|\bmixes\b|\bremix\b|\bremixes\b|essentials|\bdecade\b|\bera\b|\bhits\b|\bparty\b|\bfocus\b|\bfavorites\b/i,
+    mixLikeName: /\bmix\b|\bmixes\b|\bremix\b|\bremixes\b/i,
     explicitRadio: /\bradio\b|\bstation\b/i,
     mixLike: /\bmix\b|daily|discover weekly|essentials|station/i,
   };
@@ -72,7 +73,38 @@
     isGenreMixPlaylistName(name, genre) {
       if (this.isDailyMixName(name) || this.isDiscoverName(name)) return false;
       if (!RE.genreMix.test(name)) return false;
-      return genre == null || name.toLowerCase().includes(genre.toLowerCase());
+      if (genre == null) return true;
+      return this.nameContainsGenre(name, genre);
+    },
+    hasMixLikeName(name) {
+      return RE.mixLikeName.test(name);
+    },
+    nameContainsGenre(name, genre) {
+      const g = (genre || '').trim();
+      if (!g) return false;
+      if (name.toLowerCase().includes(g.toLowerCase())) return true;
+      const tokens = g.split(/\s+/).filter((t) => t.length > 1);
+      return tokens.length > 1 && tokens.every((t) => name.toLowerCase().includes(t.toLowerCase()));
+    },
+    genreMixNameScore(name, genre) {
+      let score = 0;
+      if (name.toLowerCase() === `${genre.toLowerCase()} mix`) score += 100;
+      if (name.toLowerCase().startsWith(genre.toLowerCase())) score += 40;
+      const wordRe = new RegExp(`\\b${genre.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+      if (wordRe.test(name)) score += 30;
+      else if (name.toLowerCase().includes(genre.toLowerCase())) score += 10;
+      return score;
+    },
+    bestGenreMixPlaylist(all, genre) {
+      const g = (genre || '').trim();
+      if (!g) return null;
+      const candidates = all.filter((p) => plTracks(p) > 0 && this.isGenreMixPlaylistName(p.name, g));
+      if (!candidates.length) return null;
+      return candidates.sort((a, b) => {
+        const ds = this.genreMixNameScore(b.name, g) - this.genreMixNameScore(a.name, g);
+        if (ds !== 0) return ds;
+        return plTracks(b) - plTracks(a);
+      })[0];
     },
     isExplicitRadioPlaylistName(name) {
       if (RE.mixLike.test(name) && !RE.explicitRadio.test(name)) return false;
@@ -163,6 +195,14 @@
       const g = libraryGenres.find((x) => this.genreMatchesTheme(x.name, theme));
       return g?.name || null;
     },
+    matchingLibraryGenreForLabel(label, libraryGenres) {
+      const g = (label || '').trim();
+      if (!g) return null;
+      const exact = libraryGenres.find((x) => x.name.toLowerCase() === g.toLowerCase());
+      if (exact) return exact;
+      return libraryGenres.find((x) =>
+        this.nameContainsGenre(x.name, g) || this.nameContainsGenre(g, x.name)) || null;
+    },
     playlistThemeScore(name, theme) {
       const hay = (name || '').toLowerCase();
       let score = 0;
@@ -197,6 +237,15 @@
     },
     shuffledBrowsablePlaylists(all, seed) {
       return shuffled(this.browsablePlaylists(all), seed);
+    },
+    // Every playlist eligible for the home catch-all row (excludes automations and
+    // the server's auto-generated daily mixes, which have their own row).
+    allHomePlaylists(all) {
+      return all.filter((p) => plTracks(p) > 0 &&
+        !this.isAutomationPlaylistName(p.name) && !this.isDailyMixName(p.name));
+    },
+    shuffledAllPlaylists(all, seed) {
+      return shuffled(this.allHomePlaylists(all), seed);
     },
   };
 
@@ -369,7 +418,7 @@
         id: cardId,
         title: pl.name,
         subtitle,
-        artPath: null,
+        artPath: pl.artPath || null,
         playlistId: pl.id,
         playTarget: ptPlaylist(pl.id, pl.name),
         kind,
@@ -522,8 +571,13 @@
       const th = themes[index];
 
       const playlistMatch = input.allPlaylists
-        .filter((p) => Rules.playlistMatchesThemeName(p.name, th) && plTracks(p) > 0)
-        .sort((a, b) => plTracks(b) - plTracks(a))[0];
+        .filter((p) => Rules.playlistMatchesTheme(p, th) && plTracks(p) > 0)
+        .sort((a, b) => {
+          const ds = Rules.playlistThemeScore(Rules.playlistSearchText(b), th) -
+            Rules.playlistThemeScore(Rules.playlistSearchText(a), th);
+          if (ds !== 0) return ds;
+          return plTracks(b) - plTracks(a);
+        })[0];
       if (playlistMatch) {
         const c = playlistCard(playlistMatch, null, 'ExploreThemes', th.subtitle, true);
         if (c) registerThemeCard(c);
@@ -645,38 +699,15 @@
     }
 
     function resolvePlaylistArt(pl, genreHint) {
-      let p = artPathForPlaylistSeed(input.history, pl.name);
-      if (registry.claimArtPath(p)) return p;
-      p = Rules.artPathForPlaylistDistinct(input.history, pl.name, registry.usedArtPaths);
-      if (registry.claimArtPath(p)) return p;
-      const genreHints = [];
-      if (genreHint) genreHints.push(genreHint);
-      for (const row of topGenres) {
-        const g = row.name || row.label;
-        if (g && pl.name.toLowerCase().includes(g.toLowerCase()) && !genreHints.includes(g)) genreHints.push(g);
-      }
-      for (const g of genreHints) {
-        p = Rules.artPathForGenreDistinct(input.history, g, registry.usedArtPaths);
-        if (registry.claimArtPath(p)) return p;
-      }
-      const themes = ThemeCatalog.themesForDay(input.shuffleSeed);
-      const theme = themes.find((th) => Rules.playlistMatchesThemeName(pl.name, th));
-      if (theme) {
-        const artist = Rules.topArtistForTheme(input.history, theme);
-        if (artist) {
-          p = Rules.artPathForArtistDistinct(input.history, artist, registry.usedArtPaths);
-          if (registry.claimArtPath(p)) return p;
-        }
-        const lib = (input.libraryGenres || []).find((x) => Rules.genreMatchesTheme(x.name, theme));
-        if (lib?.artPath && registry.claimArtPath(lib.artPath)) return lib.artPath;
-      }
-      return registry.claimArtPath(Rules.nextDistinctArtPath(input.history, registry.usedArtPaths));
+      return null;
     }
 
     function playlistCard(pl, artPath, kind, subtitle, claim = true, genreHint = null) {
       if (Rules.isAutomationPlaylistName(pl.name)) return null;
       if (claim && !registry.claimPlaylist(pl.id, pl.name)) return null;
-      const resolvedArt = (artPath && registry.claimArtPath(artPath)) || resolvePlaylistArt(pl, genreHint);
+      // Prefer the playlist's own cover (first track, from /api/playlists) so the tile
+      // renders from the cached feed — no separate cover fetch, survives navigation.
+      const resolvedArt = (artPath && registry.claimArtPath(artPath)) || pl.artPath || resolvePlaylistArt(pl, genreHint);
       const card = {
         id: `pl-${pl.id}`,
         title: pl.name,
@@ -702,6 +733,8 @@
     }
 
     function resolveMixArt(genre, artist, index) {
+      const lib = Rules.matchingLibraryGenreForLabel(genre, input.libraryGenres || []);
+      if (lib?.artPath && registry.claimArtPath(lib.artPath)) return lib.artPath;
       let p = Rules.artPathForGenreDistinct(input.history, genre, registry.usedArtPaths);
       if (registry.claimArtPath(p)) return p;
       if (artist) {
@@ -713,7 +746,7 @@
         p = Rules.artPathForArtistDistinct(input.history, ta, registry.usedArtPaths);
         if (registry.claimArtPath(p)) return p;
       }
-      return registry.claimArtPath(Rules.nextDistinctArtPath(input.history, registry.usedArtPaths));
+      return null;
     }
 
     const moodSections = HomeMoodSections.map((mood) => {
@@ -753,7 +786,7 @@
       if (jumpBackIn.length >= LIMITS.JUMP_BACK_IN) break;
       const pl = playlistByName[name.toLowerCase()];
       if (!pl) continue;
-      const c = playlistCard(pl, artByPlaylist[name.toLowerCase()], 'JumpBackIn', 'Recently played');
+      const c = playlistCard(pl, null, 'JumpBackIn', 'Recently played');
       if (c) addJump(c);
     }
     const seenAlbums = new Set();
@@ -819,9 +852,10 @@
           continue;
         }
       }
-      const named = allPlaylists.find((p) => Rules.isGenreMixPlaylistName(p.name, genre)) ||
-        allPlaylists.find((p) => p.name.toLowerCase() === `${genre.toLowerCase()} mix`);
+      const named = Rules.bestGenreMixPlaylist(allPlaylists, genre);
       if (named) {
+        // A real genre-mix playlist represents this genre — never synthesize a
+        // "${genre} Mix" artist card, even if the playlist already appears elsewhere.
         const c = playlistCard(named, null, 'TopMixes', `${genre} mix`, true, genre);
         if (c) genreMixes.push(c);
         continue;
@@ -834,7 +868,7 @@
         title: `${genre} Mix`,
         subtitle: 'Based on your listening',
         artPath: resolveMixArt(genre, seedArtist, index),
-        playTarget: ptArtist(seedArtist),
+        playTarget: ptRadio(`${genre} Mix`, 'genre', seedArtist),
         kind: 'TopMixes',
       };
       if (!registry.hasCard(card.id)) {
@@ -867,7 +901,7 @@
       if (c) dailyMixes.push(c);
     }
     const mixLike = allPlaylists.filter((p) =>
-      Rules.isGenreMixPlaylistName(p.name) || /mix/i.test(p.name)).sort((a, b) => plTracks(b) - plTracks(a));
+      Rules.isGenreMixPlaylistName(p.name) || Rules.hasMixLikeName(p.name)).sort((a, b) => plTracks(b) - plTracks(a));
     dailyMixes.push(...fillPlaylists(
       mixLike.concat(shuffledGeneric),
       LIMITS.DAILY_MIXES - dailyMixes.length,
@@ -891,7 +925,7 @@
       if (recentPlaylists.length >= LIMITS.RECENT_PLAYLISTS) break;
       const pl = playlistByName[name.toLowerCase()];
       if (!pl) continue;
-      const c = playlistCard(pl, artByPlaylist[name.toLowerCase()], 'RecentPlaylists', 'Played recently');
+      const c = playlistCard(pl, null, 'RecentPlaylists', 'Played recently');
       if (c) recentPlaylists.push(c);
     }
     recentPlaylists.push(...fillPlaylists(
@@ -927,11 +961,14 @@
     ));
     const discoverFinal = discoverCandidates.filter((c, i, a) => a.findIndex((x) => x.id === c.id) === i).slice(0, LIMITS.DISCOVER);
 
+    // Catch-all so no library playlist is permanently hidden from home; the daily
+    // shuffle seed rotates which lead, and any not shown elsewhere land here.
+    const allRotated = Rules.shuffledAllPlaylists(allPlaylists, input.shuffleSeed);
     const morePlaylists = fillPlaylists(
-      shuffledGeneric.concat(allPlaylists.slice().sort((a, b) => plTracks(b) - plTracks(a))),
+      allRotated.concat(allPlaylists.slice().sort((a, b) => plTracks(b) - plTracks(a))),
       LIMITS.MORE_PLAYLISTS,
       'RecentPlaylists',
-      (pl) => `${plTracks(pl)} tracks · Suggested for you`,
+      (pl) => `${plTracks(pl)} tracks · From your library`,
     );
 
     const releaseRadar = [];
@@ -958,7 +995,7 @@
       section('release-radar', 'Release Radar', 'Discover', releaseRadar),
       section('discover-weekly', 'Discover Weekly', 'Discover', input.discoverWeeklyCards || []),
       section('explore-themes', 'Explore genres & worlds', 'ExploreThemes', exploreThemes),
-      section('daily-mixes', 'Daily mixes', 'DailyMixes', dailyMixesFinal),
+      section('daily-mixes', 'New daily mixes', 'DailyMixes', dailyMixesFinal),
       section('recent-playlists', 'Recent playlists', 'RecentPlaylists', recentPlaylists),
       section('radio', 'Radio', 'Radio', radioCards),
       section('discover', 'Discover', 'Discover', discoverFinal),
@@ -1016,6 +1053,11 @@
     if (card.playlistId) return `#playlists/detail/${encodeURIComponent(card.playlistId)}`;
     if (t.kind === 'album') return `#songs/album/${encodeURIComponent(t.name)}`;
     if (t.kind === 'artist') return `#songs/artist/${encodeURIComponent(t.name)}`;
+    if (t.kind === 'radio') {
+      if (t.seedKind === 'artist') return `#songs/artist/${encodeURIComponent(t.seed)}`;
+      if (t.seedKind === 'genre') return `#genres`;
+    }
+    if (card.kind === 'Offline') return '#download';
     return '#search';
   }
 

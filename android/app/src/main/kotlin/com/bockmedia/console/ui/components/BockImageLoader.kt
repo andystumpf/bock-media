@@ -27,7 +27,7 @@ object BockImageLoader {
             if (installed) return
             val appContext = context.applicationContext
             val client: OkHttpClient = runBlocking(Dispatchers.IO) {
-                runCatching { app.buildAuthenticatedHttpClient() }.getOrElse {
+                runCatching { app.buildLiveAuthHttpClient() }.getOrElse {
                     OkHttpClient.Builder().build()
                 }
             }
@@ -55,5 +55,11 @@ object BockImageLoader {
     /** Call when credentials change so the next install picks up a new OkHttp client. */
     fun reset() {
         synchronized(this) { installed = false }
+    }
+
+    /** Drop and rebuild Coil with the current saved credentials (after setup or cold boot). */
+    fun reinstall(context: Context, app: BockMediaApp) {
+        reset()
+        install(context, app)
     }
 }

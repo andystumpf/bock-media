@@ -4,48 +4,64 @@ import android.content.Context
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.bockmedia.console.data.api.bockJson
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.serialization.builtins.ListSerializer
 
 private val Context.searchHistoryStore by preferencesDataStore("search_history")
 
 class SearchHistoryStore(private val context: Context) {
-    private val keyHistory = stringPreferencesKey("queries_csv")
-    private val maxItems = 10
+    private val keySelections = stringPreferencesKey("selections_json")
+    private val maxItems = 12
+    private val listSerializer = ListSerializer(SearchRecentSelection.serializer())
 
-    val queries: Flow<List<String>> = context.searchHistoryStore.data.map { prefs ->
-        prefs[keyHistory]
-            ?.split('\u0001')
-            ?.map { it.trim() }
-            ?.filter { it.isNotEmpty() }
-            ?: emptyList()
+    val selections: Flow<List<SearchRecentSelection>> = context.searchHistoryStore.data.map { prefs ->
+        decode(prefs[keySelections])
     }
 
-    suspend fun queriesSync(): List<String> = queries.first()
+    /** @deprecated Query strings — use [selections] and [addSelection]. */
+    val queries: Flow<List<String>> = selections.map { items ->
+        items.map { it.title }
+    }
 
-    suspend fun add(query: String) {
-        val trimmed = query.trim()
-        if (trimmed.length < 2) return
-        val current = queriesSync().toMutableList()
-        current.removeAll { it.equals(trimmed, ignoreCase = true) }
-        current.add(0, trimmed)
+    suspend fun selectionsSync(): List<SearchRecentSelection> = selections.first()
+
+    suspend fun addSelection(selection: SearchRecentSelection) {
+        val trimmed = selection.title.trim()
+        if (trimmed.isEmpty()) return
+        val current = selectionsSync().toMutableList()
+        current.removeAll { it.key == selection.key }
+        current.add(0, selection)
         save(current.take(maxItems))
     }
 
-    suspend fun remove(query: String) {
-        val current = queriesSync().filterNot { it.equals(query, ignoreCase = true) }
-        save(current)
+    suspend fun removeSelection(selection: SearchRecentSelection) {
+        save(selectionsSync().filterNot { it.key == selection.key })
     }
 
-    suspend fun clear() {
+    suspend fun clearSelections() {
         save(emptyList())
     }
 
-    private suspend fun save(items: List<String>) {
+    suspend fun remove(query: String) {
+        save(selectionsSync().filterNot { it.title.equals(query, ignoreCase = true) })
+    }
+
+    suspend fun clear() = clearSelections()
+
+    private suspend fun save(items: List<SearchRecentSelection>) {
         context.searchHistoryStore.edit { prefs ->
-            if (items.isEmpty()) prefs.remove(keyHistory)
-            else prefs[keyHistory] = items.joinToString("\u0001")
+            if (items.isEmpty()) prefs.remove(keySelections)
+            else prefs[keySelections] = bockJson.encodeToString(listSerializer, items)
         }
+    }
+
+    private fun decode(raw: String?): List<SearchRecentSelection> {
+        if (raw.isNullOrBlank()) return emptyList()
+        return runCatching {
+            bockJson.decodeFromString(listSerializer, raw)
+        }.getOrDefault(emptyList())
     }
 }

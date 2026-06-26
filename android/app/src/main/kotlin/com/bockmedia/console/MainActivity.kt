@@ -84,8 +84,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val app = BockMediaApp.get(applicationContext)
         NetworkReachability.update(applicationContext)
-        BockImageLoader.install(applicationContext, app)
         val coldBoot = runBlocking(Dispatchers.IO) { coldBootFast(applicationContext) }
+        BockImageLoader.install(applicationContext, app)
         lifecycleScope.launch(Dispatchers.IO) {
             SessionDiskHydrator.warmHomeArtwork(applicationContext, app)
         }

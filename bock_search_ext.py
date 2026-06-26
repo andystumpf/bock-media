@@ -1,6 +1,8 @@
 """FTS5 search + suggest extensions."""
 import sqlite3
 
+import bock_search
+
 _FTS_READY = False
 
 
@@ -47,44 +49,85 @@ def rebuild_fts(get_db):
 def fts_songs(db_query, q, limit=5):
     if len(q) < 1:
         return []
+    fts_q = bock_search._fts_query(q)
     try:
-        rows = db_query(
-            'SELECT s.title, s.artist, s.album, s.path FROM songs_fts f '
-            'JOIN songs_cache s ON s.rowid = f.rowid '
-            'WHERE songs_fts MATCH ? LIMIT ?',
-            [q + '*', limit],
-        ) or []
-        return rows
+        if fts_q:
+            rows = db_query(
+                'SELECT s.title, s.artist, s.album, s.path FROM songs_fts f '
+                'JOIN songs_cache s ON s.rowid = f.rowid '
+                'WHERE songs_fts MATCH ? LIMIT ?',
+                [fts_q, limit * 3],
+            ) or []
+            if rows:
+                return [
+                    r for r in rows
+                    if bock_search.library_search_song_match(
+                        q, r.get('title'), r.get('album'), artist=r.get('artist'),
+                    )
+                ][:limit]
     except Exception:
-        like = f'%{q.lower()}%'
-        return db_query(
-            'SELECT title, artist, album, path FROM songs_cache '
-            'WHERE (LOWER(title) LIKE ? OR LOWER(artist) LIKE ?) AND path IS NOT NULL LIMIT ?',
-            [like, like, limit],
-        ) or []
+        pass
+    patterns = bock_search._sql_prefix_patterns(q)
+    if not patterns:
+        return []
+    clause, params = bock_search._like_or_clause(('title', 'artist'), patterns)
+    rows = db_query(
+        f'SELECT title, artist, album, path FROM songs_cache '
+        f'WHERE ({clause}) AND path IS NOT NULL LIMIT ?',
+        [*params, limit * 4],
+    ) or []
+    return [
+        r for r in rows
+        if bock_search.library_search_song_match(
+            q, r.get('title'), r.get('album'), artist=r.get('artist'),
+        )
+    ][:limit]
 
 
 def suggest_payload(db_query, q, playlist_names, device_names, smart_names, limit=5):
     songs = fts_songs(db_query, q, limit)
-    ql = q.lower()
-    playlists = [p for p in playlist_names if ql in p['name'].lower()][:limit]
-    artists = db_query(
-        'SELECT artist, MIN(path) as path FROM songs_cache '
-        'WHERE LOWER(artist) LIKE ? AND artist != "" GROUP BY artist LIMIT ?',
-        [f'%{ql}%', limit],
-    ) or []
-    albums = db_query(
-        'SELECT album, artist, MIN(path) as path FROM songs_cache '
-        'WHERE LOWER(album) LIKE ? AND album != "" GROUP BY album, artist LIMIT ?',
-        [f'%{ql}%', limit],
-    ) or []
-    genres = db_query(
-        'SELECT genre, MIN(path) as path FROM songs_cache '
-        'WHERE LOWER(genre) LIKE ? AND genre != "" GROUP BY genre LIMIT ?',
-        [f'%{ql}%', limit],
-    ) or []
-    rooms = [{'name': n} for n in device_names if ql in n.lower()][:limit]
-    smart = [s for s in smart_names if ql in s['name'].lower()][:limit]
+    playlists = [
+        p for p in playlist_names
+        if bock_search.field_matches_query(q, p.get('name') or '')
+    ][:limit]
+    patterns = bock_search._sql_prefix_patterns(q)
+    artists, albums, genres = [], [], []
+    if patterns:
+        clause, params = bock_search._like_or_clause(('artist',), patterns)
+        artists = [
+            r for r in db_query(
+                'SELECT artist, MIN(path) as path FROM songs_cache '
+                f'WHERE ({clause}) AND artist != "" GROUP BY artist LIMIT ?',
+                [*params, limit * 4],
+            ) or []
+            if bock_search.field_matches_query(q, r.get('artist') or '')
+        ][:limit]
+        clause, params = bock_search._like_or_clause(('album',), patterns)
+        albums = [
+            r for r in db_query(
+                'SELECT album, artist, MIN(path) as path FROM songs_cache '
+                f'WHERE ({clause}) AND album != "" GROUP BY album, artist LIMIT ?',
+                [*params, limit * 4],
+            ) or []
+            if bock_search.field_matches_query(q, r.get('album') or '')
+        ][:limit]
+        clause, params = bock_search._like_or_clause(('genre',), patterns)
+        genres = [
+            r for r in db_query(
+                'SELECT genre, MIN(path) as path FROM songs_cache '
+                f'WHERE ({clause}) AND genre != "" GROUP BY genre LIMIT ?',
+                [*params, limit * 4],
+            ) or []
+            if bock_search.field_matches_query(q, r.get('genre') or '')
+        ][:limit]
+    rooms = [
+        {'name': n} for n in device_names
+        if bock_search.field_matches_query(q, n)
+    ][:limit]
+    smart = [
+        s for s in smart_names
+        if bock_search.field_matches_query(q, s.get('name') or '')
+    ][:limit]
     return {
         'query': q,
         'songs': songs,

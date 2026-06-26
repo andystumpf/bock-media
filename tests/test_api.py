@@ -43,6 +43,22 @@ class TestBrowse:
         assert 'total' in data
         assert len(data['items']) <= 3
 
+    def test_artist_portrait_endpoint(self, client, monkeypatch, tmp_path):
+        monkeypatch.setattr(server, 'ARTWORK_CACHE', str(tmp_path))
+        monkeypatch.setattr(
+            server.bock_artist_art,
+            'resolve_portrait',
+            lambda *a, **k: {
+                'artist': 'Radiohead',
+                'art_path': 'artwork_cache/artist-portrait-test.jpg',
+                'source': 'deezer',
+                'cached': True,
+            },
+        )
+        data = client.get('/api/artist-portrait?artist=Radiohead').get_json()
+        assert data['art_path'] == 'artwork_cache/artist-portrait-test.jpg'
+        assert data['source'] == 'deezer'
+
     def test_albums_paginated(self, client):
         data = client.get('/api/albums?page=1&limit=3').get_json()
         assert 'items' in data and 'total' in data
@@ -128,9 +144,12 @@ class TestBrowse:
         data = client.post('/api/playlists/covers', json={'ids': ['pl-1', 'pl-2', 'missing']}).get_json()
         assert data['covers']['pl-1'] == '/music/classical.mp3'
         assert data['covers']['pl-2'] == '/music/country.mp3'
+        assert data['collages']['pl-1'] == ['/music/classical.mp3', '/music/country.mp3']
+        assert data['collages']['pl-2'] == ['/music/classical.mp3', '/music/country.mp3']
         assert 'missing' not in data['covers']
 
-    def test_playlist_cover_keywords_prefers_genre_match(self, client, monkeypatch):
+    def test_playlist_cover_uses_first_track_in_order(self, client, monkeypatch):
+        """Cover art is the first .m3u entry, not a keyword-scored match deeper in the list."""
         import xml.etree.ElementTree as ET
 
         monkeypatch.setattr(
@@ -171,7 +190,7 @@ class TestBrowse:
 
         monkeypatch.setattr(server, 'db_query', fake_db_query)
         data = client.get('/api/playlists/pl-1/cover').get_json()
-        assert data.get('path') == '/music/classical.mp3'
+        assert data.get('path') == '/music/country.mp3'
 
     def test_songs_paginated(self, client):
         data = client.get('/api/songs?page=1&limit=3').get_json()
@@ -401,13 +420,13 @@ class TestNewFeatures:
 
         def recording_db_query(sql, params=()):
             calls.append((sql, params))
-            if 'GROUP BY album, artist' in sql:
+            if 'GROUP BY album' in sql:
                 return [{'album': 'Mamma Mia', 'artist': 'ABBA', 'art_path': '/c.mp3'}]
-            if 'GROUP BY artist' in sql:
+            if 'GROUP BY' in sql and 'genre' in sql:
                 return []
-            if 'GROUP BY genre' in sql:
+            if 'GROUP BY' in sql:
                 return []
-            if 'FROM songs_cache' in sql:
+            if 'FROM songs_cache' in sql or 'songs_fts' in sql:
                 return [
                     {'title': 'Waterloo', 'artist': 'ABBA', 'album': 'Mamma Mia!', 'path': '/a.mp3'},
                     {'title': 'Waterloo - From Mamma Mia! Here We Go Again', 'artist': 'ABBA',
@@ -418,19 +437,16 @@ class TestNewFeatures:
             return []
 
         monkeypatch.setattr(server, 'db_query', recording_db_query)
+        monkeypatch.setattr('bock_search.fts_songs_ranked', lambda *a, **k: recording_db_query(
+            'FROM songs_cache', ()))
         monkeypatch.setattr(server, '_load_playlist_entries', lambda: [])
 
         data = client.get('/api/search?q=mamma&limit=30').get_json()
         assert len(data['albums']) == 1
         assert data['albums'][0]['name'] == 'Mamma Mia'
         assert [s['title'] for s in data['songs']] == ['Mamma Mia']
-
-        song_queries = [c for c in calls if 'LOWER(title) LIKE' in c[0]]
-        assert len(song_queries) == 1
-        sql, params = song_queries[0]
-        assert 'LOWER(album) LIKE' not in sql
-        assert 'LOWER(artist) LIKE' not in sql
-        assert params[0] == '%mamma%'
+        assert 'counts' in data
+        assert 'preview' in data
 
 
 class TestLibrarySearchSongMatch:
@@ -822,6 +838,18 @@ class TestParityFeatures:
         data = client.get('/api/search?q=ab').get_json()
         assert 'genres' in data
         assert 'smartPlaylists' in data
+        assert 'radios' in data
+        assert 'similar' in data
+        assert 'counts' in data
+        assert 'preview' in data
+
+    def test_search_pins(self, client, isolated_paths):
+        rv = client.put('/api/search/pins', json={
+            'pins': [{'kind': 'genre', 'title': 'Jazz', 'name': 'Jazz'}],
+        })
+        assert rv.status_code == 200
+        data = client.get('/api/search/pins').get_json()
+        assert data['pins'][0]['name'] == 'Jazz'
 
     def test_analyze_loudness_status(self, client):
         data = client.get('/api/library/analyze-loudness/status').get_json()

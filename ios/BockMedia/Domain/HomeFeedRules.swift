@@ -3,7 +3,13 @@ import Foundation
 enum HomeFeedRules {
     private static let dailyMixPattern = try! NSRegularExpression(pattern: "(?i)daily mix|daylist")
     private static let discoverPattern = try! NSRegularExpression(pattern: "(?i)discover weekly|new release|fresh find|new to you")
-    private static let genreMixPattern = try! NSRegularExpression(pattern: "(?i)\\bmix\\b|essentials|decade|era|hits|party|focus|favorites")
+    private static let genreMixPattern = try! NSRegularExpression(
+        pattern: "(?i)\\bmix\\b|\\bmixes\\b|\\bremix\\b|\\bremixes\\b|essentials|" +
+            "\\bdecade\\b|\\bera\\b|\\bhits\\b|\\bparty\\b|\\bfocus\\b|\\bfavorites\\b"
+    )
+    private static let mixLikeNamePattern = try! NSRegularExpression(
+        pattern: "(?i)\\bmix\\b|\\bmixes\\b|\\bremix\\b|\\bremixes\\b"
+    )
     private static let explicitRadioPattern = try! NSRegularExpression(pattern: "(?i)\\bradio\\b|\\bstation\\b")
     private static let mixLikePattern = try! NSRegularExpression(pattern: "(?i)\\bmix\\b|daily|discover weekly|essentials|station")
 
@@ -19,7 +25,42 @@ enum HomeFeedRules {
         if isDailyMixName(name) || isDiscoverName(name) { return false }
         guard genreMixPattern.firstMatch(in: name, range: NSRange(name.startIndex..., in: name)) != nil else { return false }
         guard let genre else { return true }
-        return name.localizedCaseInsensitiveContains(genre)
+        return nameContainsGenre(name, genre: genre)
+    }
+
+    static func hasMixLikeName(_ name: String) -> Bool {
+        mixLikeNamePattern.firstMatch(in: name, range: NSRange(name.startIndex..., in: name)) != nil
+    }
+
+    static func nameContainsGenre(_ name: String, genre: String) -> Bool {
+        let g = genre.trimmingCharacters(in: .whitespacesAndNewlines)
+        if g.isEmpty { return false }
+        if name.localizedCaseInsensitiveContains(g) { return true }
+        let tokens = g.split(separator: " ").map(String.init).filter { $0.count > 1 }
+        return tokens.count > 1 && tokens.all { name.localizedCaseInsensitiveContains($0) }
+    }
+
+    static func bestGenreMixPlaylist(_ all: [PlaylistSummary], genre: String) -> PlaylistSummary? {
+        let g = genre.trimmingCharacters(in: .whitespacesAndNewlines)
+        if g.isEmpty { return nil }
+        return all.filter { $0.tracks > 0 && isGenreMixPlaylistName($0.name, genre: g) }
+            .max { lhs, rhs in
+                let ls = genreMixNameScore(lhs.name, genre: g) * 10_000 + lhs.tracks
+                let rs = genreMixNameScore(rhs.name, genre: g) * 10_000 + rhs.tracks
+                return ls < rs
+            }
+    }
+
+    private static func genreMixNameScore(_ name: String, genre: String) -> Int {
+        var score = 0
+        if name.caseInsensitiveCompare("\(genre) Mix") == .orderedSame { score += 100 }
+        if name.lowercased().hasPrefix(genre.lowercased()) { score += 40 }
+        if name.range(of: "\\b\(NSRegularExpression.escapedPattern(for: genre))\\b", options: [.regularExpression, .caseInsensitive]) != nil {
+            score += 30
+        } else if name.localizedCaseInsensitiveContains(genre) {
+            score += 10
+        }
+        return score
     }
 
     static func isExplicitRadioPlaylistName(_ name: String) -> Bool {
@@ -113,6 +154,15 @@ enum HomeFeedRules {
         libraryGenres.first { genreMatchesTheme($0.name, theme: theme) }?.name
     }
 
+    static func matchingLibraryGenreForLabel(_ label: String, libraryGenres: [GenreItem]) -> GenreItem? {
+        let g = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        if g.isEmpty { return nil }
+        if let exact = libraryGenres.first(where: { $0.name.caseInsensitiveCompare(g) == .orderedSame }) { return exact }
+        return libraryGenres.first {
+            nameContainsGenre($0.name, genre: g) || nameContainsGenre(g, genre: $0.name)
+        }
+    }
+
     static func playlistThemeScore(_ playlist: PlaylistSummary, theme: HomeTheme) -> Int {
         playlistThemeScore(playlistSearchText(playlist), theme: theme)
     }
@@ -181,6 +231,18 @@ enum HomeFeedRules {
     static func shuffledBrowsablePlaylists(_ all: [PlaylistSummary], seed: UInt64) -> [PlaylistSummary] {
         var generator = SeededRandomNumberGenerator(seed: seed)
         return browsablePlaylists(all).shuffled(using: &generator)
+    }
+
+    /// Every playlist eligible for the home catch-all row (excludes automations
+    /// and the server's auto-generated daily mixes, which have their own row).
+    static func allHomePlaylists(_ all: [PlaylistSummary]) -> [PlaylistSummary] {
+        all.filter { $0.tracks > 0 && !isAutomationPlaylistName($0.name) && !isDailyMixName($0.name) }
+    }
+
+    /// Daily-rotated full playlist set so the home teaser eventually surfaces them all.
+    static func shuffledAllPlaylists(_ all: [PlaylistSummary], seed: UInt64) -> [PlaylistSummary] {
+        var generator = SeededRandomNumberGenerator(seed: seed)
+        return allHomePlaylists(all).shuffled(using: &generator)
     }
 }
 

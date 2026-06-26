@@ -451,3 +451,83 @@ private fun SearchSuggestionRow(
         modifier = Modifier.clickable(onClick = onClick),
     )
 }
+
+@Composable
+fun SearchPinsSection(
+    pins: List<com.bockmedia.console.data.api.dto.SearchPin>,
+    repository: BockMediaRepository,
+    onPlay: (com.bockmedia.console.domain.model.PlayTarget) -> Unit,
+    onOpenPlaylist: (String) -> Unit,
+    onOpenGenre: (String) -> Unit,
+    onOpenArtist: (String) -> Unit,
+    onOpenAlbum: (String, String?) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (pins.isEmpty()) return
+    Column(modifier) {
+        Text(
+            "Aural fixations",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
+        )
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            contentPadding = PaddingValues(horizontal = 16.dp),
+        ) {
+            items(pins, key = { "${it.kind}-${it.id ?: it.name ?: it.title}" }) { pin ->
+                val title = pin.title ?: pin.name ?: "Shortcut"
+                val artUrl = rememberArtworkUrl(
+                    repository = repository,
+                    title = title,
+                    artPath = pin.path,
+                    playlistId = pin.id,
+                    artistName = if (pin.kind == "artist") pin.name else null,
+                    albumName = if (pin.kind == "album") pin.name else null,
+                    albumArtist = pin.artist,
+                    variantKey = pin.id ?: pin.path ?: title,
+                )
+                Column(
+                    Modifier
+                        .width(112.dp)
+                        .clickable {
+                            when (pin.kind.lowercase()) {
+                                "playlist" -> pin.id?.let(onOpenPlaylist)
+                                "genre" -> (pin.name ?: title).let(onOpenGenre)
+                                "artist" -> (pin.name ?: title).let(onOpenArtist)
+                                "album" -> onOpenAlbum(pin.name ?: title, pin.artist)
+                                "radio" -> onPlay(
+                                    com.bockmedia.console.domain.model.PlayTarget.Radio(
+                                        "$title Radio",
+                                        com.bockmedia.console.domain.model.PlayTarget.RadioSeedKind.Artist,
+                                        pin.name ?: title,
+                                        pin.path,
+                                    ),
+                                )
+                                else -> pin.path?.let {
+                                    onPlay(com.bockmedia.console.domain.model.PlayTarget.Song(it, title))
+                                }
+                            }
+                        },
+                ) {
+                    BockArtwork(
+                        model = artUrl,
+                        title = title,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(1f),
+                        shape = TileShape,
+                        fallbackFontSize = 22.sp,
+                    )
+                    Text(
+                        title,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                }
+            }
+        }
+    }
+}

@@ -34,6 +34,8 @@ from flask import Flask, jsonify, request, send_from_directory, send_file, Respo
 import bock_loudness
 import bock_continue
 import bock_folders
+import bock_artist_art
+import bock_ratings
 from bock_routes import register as register_bock_routes
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -51,6 +53,9 @@ _LAST_ALEXA_HIT = 0.0
 #   OURMEDIA_MUSIC_ROOT – root of the music library that gets streamed
 DB_PATH = os.environ.get('OURMEDIA_DB_PATH', '/mnt/bock/Music/music_organizer.db')
 DATA_DIR = os.environ.get('OURMEDIA_DATA_DIR', '/home/plex/.bockmedia')
+
+import bock_search as _bock_search_mod
+_bock_search_mod.configure(DATA_DIR)
 HEALTH_STATE_PATH = os.path.join(DATA_DIR, 'health_state.json')
 PLAYLIST_FOLDERS_PATH = os.path.join(DATA_DIR, 'playlist_folders.json')
 PLAYBACK_RESUME_PATH = os.path.join(DATA_DIR, 'playback_resume.json')
@@ -975,7 +980,8 @@ def _render_app_download_html(android, ios, releases=None):
     box-shadow: 0 4px 24px rgba(0,0,0,.08); text-align: center; }}
   h1 {{ font-size: 1.5rem; margin: 0 0 8px; color: #30426a; }}
   .lead {{ color: #666; margin: 0 0 24px; font-size: .95rem; }}
-  .highlights {{ text-align: left; margin: 0 0 20px; padding: 16px; background: #f8fafc; border-radius: 8px; font-size: .88rem; }}
+  .highlights {{ text-align: left; margin: 20px 0; padding: 16px; background: #f8fafc; border-radius: 8px; font-size: .88rem;
+    border-top: 1px solid #e8ecf1; padding-top: 20px; }}
   .highlights h2 {{ font-size: .95rem; margin: 0 0 10px; color: #30426a; text-align: center; }}
   .highlights ul {{ margin: 0; padding-left: 18px; color: #444; line-height: 1.5; }}
   .highlights li {{ margin-bottom: 6px; }}
@@ -1013,10 +1019,10 @@ def _render_app_download_html(android, ios, releases=None):
 <div class="card">
   <h1>Bock Media Console</h1>
   <p class="lead">Mobile apps for your home music server — play, download, and discover your library anywhere.</p>
-  {highlights}
-  {release_notes}
   {android_section}
   {ios_section}
+  {highlights}
+  {release_notes}
 </div></body></html>'''
 
 # ── API: Summary ─────────────────────────────────────────────────────────────
@@ -1162,6 +1168,17 @@ def playlists():
         total = len(all_playlists)
         start = (page - 1) * limit
         items = all_playlists[start:start + limit]
+        # Inline cover art for the returned page (cached by mtime) so tiles render from
+        # the list itself — no separate /covers round-trip. Bound disk reads per request;
+        # a background thread warms the rest so repeat loads are fully covered and fast.
+        _start_playlist_cover_warm()
+        inline_budget = _PLAYLIST_COVER_INLINE_BUDGET
+        for it in items:
+            cached = _playlist_cover_fast(it.get('id'), it.get('source'), compute=False)
+            if cached is None and inline_budget > 0:
+                cached = _playlist_cover_fast(it.get('id'), it.get('source'), compute=True)
+                inline_budget -= 1
+            it['artPath'] = cached
         return jsonify({'items': items, 'total': total, 'sortBy': sort_by, 'order': 'desc' if reverse else 'asc'})
     except Exception as e:
         print(f'Playlists error: {e}')
@@ -1416,17 +1433,38 @@ def plex_sync_status():
 
 # ── Favorites (starred tracks) ───────────────────────────────────────────────
 
+RATINGS_PATH = bock_ratings.ratings_path(HERE)
 FAVORITES_PATH = os.path.join(HERE, 'favorites.json')
 _FAVORITES_LOCK = threading.Lock()
 
+def _rated_songs_as_favorites(limit=200):
+    """Song ratings (1–5 stars) in legacy favorites list shape."""
+    out = []
+    for row in bock_ratings.list_ratings(RATINGS_PATH):
+        if row.get('kind') != 'song':
+            continue
+        out.append({
+            'path': row.get('id'),
+            'title': row.get('title'),
+            'artist': row.get('artist'),
+            'album': row.get('album'),
+        })
+        if len(out) >= limit:
+            break
+    return out
+
 def _load_favorites():
+    rated = _rated_songs_as_favorites()
+    if rated:
+        return rated
     with _FAVORITES_LOCK:
         try:
             with open(FAVORITES_PATH) as f:
                 data = json.load(f)
-            return data if isinstance(data, list) else []
+            legacy = data if isinstance(data, list) else []
         except Exception:
-            return []
+            legacy = []
+    return legacy
 
 def _save_favorites(items):
     with _FAVORITES_LOCK:
@@ -1443,17 +1481,21 @@ def add_favorite():
     if not path:
         return jsonify({'error': 'path required'}), 400
     title, artist, album, _ = track_metadata(path)
+    try:
+        row = bock_ratings.set_rating(
+            RATINGS_PATH, 'song', path, 5, _atomic_json_write,
+            title=body.get('title') or title,
+            artist=body.get('artist') or artist,
+            album=body.get('album') or album,
+        )
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     item = {
         'path': path,
-        'title': body.get('title') or title,
-        'artist': body.get('artist') or artist,
-        'album': body.get('album') or album,
-        'addedAt': time.time(),
+        'title': (row or {}).get('title') or title,
+        'artist': (row or {}).get('artist') or artist,
+        'album': (row or {}).get('album') or album,
     }
-    items = _load_favorites()
-    if not any(x.get('path') == path for x in items):
-        items.insert(0, item)
-        _save_favorites(items[:200])
     return jsonify({'ok': True, 'item': item})
 
 @app.route('/api/favorites', methods=['DELETE'])
@@ -1462,9 +1504,43 @@ def remove_favorite():
     path = (body.get('path') or '').strip()
     if not path:
         return jsonify({'error': 'path required'}), 400
-    items = [x for x in _load_favorites() if x.get('path') != path]
-    _save_favorites(items)
+    try:
+        bock_ratings.set_rating(RATINGS_PATH, 'song', path, 0, _atomic_json_write)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     return jsonify({'ok': True})
+
+@app.route('/api/ratings')
+def ratings_list():
+    return jsonify({'items': bock_ratings.list_ratings(RATINGS_PATH)})
+
+@app.route('/api/ratings/lookup')
+def ratings_lookup():
+    kind = (request.args.get('kind') or '').strip().lower()
+    item_id = (request.args.get('id') or '').strip()
+    if not kind or not item_id:
+        return jsonify({'error': 'kind and id required'}), 400
+    return jsonify({'kind': kind, 'id': item_id, 'stars': bock_ratings.get_rating(RATINGS_PATH, kind, item_id)})
+
+@app.route('/api/ratings', methods=['PUT'])
+def ratings_set():
+    body = request.get_json(silent=True) or {}
+    kind = (body.get('kind') or '').strip().lower()
+    item_id = (body.get('id') or '').strip()
+    try:
+        stars = int(body.get('stars', 0))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'stars must be 0–5'}), 400
+    try:
+        row = bock_ratings.set_rating(
+            RATINGS_PATH, kind, item_id, stars, _atomic_json_write,
+            title=body.get('title'), artist=body.get('artist'), album=body.get('album'),
+        )
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    if stars == 0:
+        return jsonify({'ok': True, 'stars': 0})
+    return jsonify({'ok': True, 'item': row, 'stars': stars})
 
 @app.route('/api/dashboard/quick')
 def dashboard_quick():
@@ -1493,129 +1569,48 @@ def dashboard_quick():
 # ── Library search ─────────────────────────────────────────────────────────────
 
 def _library_search_song_match(q, title, album):
-    """True when a track belongs in unified search Songs, not album tracklist noise."""
-    ql = (q or '').lower().strip()
-    if len(ql) < 2:
-        return False
-    tl = (title or '').lower().strip()
-    al = (album or '').lower().strip()
-    if ql not in tl:
-        return False
-    for sep in (' - from ', ' – from '):
-        if sep in tl:
-            primary, suffix = tl.split(sep, 1)
-            if ql in al and ql not in primary and ql in suffix:
-                return False
-    if ' - ' in tl and ql in al:
-        primary, suffix = tl.split(' - ', 1)
-        if ql not in primary and ql in suffix:
-            return False
-    return True
+    import bock_search
+    return bock_search.library_search_song_match(q, title, album)
 
 
 @app.route('/api/search')
 def library_search():
+    import bock_search
     import bock_search_ext
+    import bock_resonance
+
+    def _list_devices():
+        import alexa_remote
+        return alexa_remote.list_devices()
+
     q = (request.args.get('q') or '').strip()
-    limit = min(max(int(request.args.get('limit', 15) or 15), 1), 30)
-    if len(q) < 2:
-        return jsonify({
-            'query': q, 'playlists': [], 'artists': [], 'albums': [], 'songs': [],
-            'genres': [], 'smartPlaylists': [], 'rooms': [], 'messages': [],
-        })
-    bock_search_ext.ensure_fts(get_db_rw, db_query)
-    like = f'%{q.lower()}%'
-    raw_songs = bock_search_ext.fts_songs(db_query, q, limit * 2) or db_query(
-        'SELECT title, artist, album, path FROM songs_cache '
-        'WHERE LOWER(title) LIKE ? '
-        'AND path IS NOT NULL LIMIT ?',
-        [like, limit * 8],
-    ) or []
-    songs = [
-        r for r in raw_songs
-        if _library_search_song_match(q, r.get('title'), r.get('album'))
-    ][:limit]
-    artists = db_query(
-        'SELECT artist, MIN(path) as art_path FROM songs_cache WHERE LOWER(artist) LIKE ? '
-        'AND artist IS NOT NULL AND artist != "" AND path IS NOT NULL AND path != "" '
-        'GROUP BY artist LIMIT ?',
-        [like, limit],
-    ) or []
-    albums = db_query(
-        'SELECT album, artist, MIN(path) as art_path FROM songs_cache WHERE LOWER(album) LIKE ? '
-        'AND album IS NOT NULL AND album != "" AND path IS NOT NULL AND path != "" '
-        'GROUP BY album, artist LIMIT ?',
-        [like, limit],
-    ) or []
-    playlists = []
-    for pid, name, src in _load_playlist_entries():
-        if _score_playlist(q, name) >= 0.5:
-            playlists.append({'id': pid, 'name': name, 'source': src})
-        if len(playlists) >= limit:
-            break
-    playlists.sort(key=lambda x: _score_playlist(q, x['name']), reverse=True)
-    genres = db_query(
-        'SELECT genre, MIN(path) as path FROM songs_cache WHERE LOWER(genre) LIKE ? '
-        'AND genre IS NOT NULL AND genre != "" GROUP BY genre LIMIT ?',
-        [like, limit],
-    ) or []
-    smart_pl = []
-    for sp in _load_smart_playlists():
-        name = sp.get('name') or ''
-        if q.lower() in name.lower():
-            smart_pl.append({'id': sp.get('id'), 'name': name})
-        if len(smart_pl) >= limit:
-            break
-    rooms = []
-    if request.args.get('includeRooms', '1') != '0':
-        try:
-            import alexa_remote
-            for d in alexa_remote.list_devices() or []:
-                nm = d.get('name') or ''
-                if q.lower() in nm.lower():
-                    rooms.append({'name': nm, 'serial': d.get('serialNumber')})
-                if len(rooms) >= limit:
-                    break
-        except Exception:
-            pass
-    messages = []
-    if request.args.get('includeMessages') == '1' and os.path.isfile(MESSAGES_PATH):
-        try:
-            with open(MESSAGES_PATH) as f:
-                for line in f:
-                    try:
-                        m = json.loads(line)
-                    except Exception:
-                        continue
-                    text = (m.get('text') or m.get('body') or '')
-                    if q.lower() in text.lower():
-                        messages.append({'id': m.get('id'), 'text': text[:120]})
-                    if len(messages) >= limit:
-                        break
-        except Exception:
-            pass
-    album_rows = [{'album': r['album'], 'artist': r.get('artist'), 'path': r.get('art_path')} for r in albums]
-    album_played = _albums_played_flags(album_rows)
-    album_items = []
-    for r in album_rows:
-        key = (r['album'], r.get('artist') or '')
-        album_items.append({
-            'name': r['album'],
-            'artist': r.get('artist'),
-            'path': r.get('path'),
-            'played': album_played.get(key, False),
-        })
-    return jsonify({
-        'query': q,
-        'playlists': playlists[:limit],
-        'artists': [{'name': r['artist'], 'path': r.get('art_path')} for r in artists],
-        'albums': album_items,
-        'songs': [{'title': r['title'], 'artist': r['artist'], 'album': r['album'], 'path': r['path']} for r in songs],
-        'genres': [{'name': r['genre'], 'path': r.get('path')} for r in genres],
-        'smartPlaylists': smart_pl,
-        'rooms': rooms,
-        'messages': messages,
-    })
+    limit = min(max(int(request.args.get('limit', 30) or 30), 1), 100)
+    preview = min(max(int(request.args.get('preview', 5) or 5), 1), 15)
+    section = (request.args.get('section') or '').strip() or None
+    source = (request.args.get('source') or '').strip() or None
+
+    payload = bock_search.run_search(
+        db_query=db_query,
+        db_one=db_one,
+        q=q,
+        limit=limit,
+        preview=preview,
+        section=section,
+        source=source,
+        include_rooms=request.args.get('includeRooms', '1') != '0',
+        include_messages=request.args.get('includeMessages') == '1',
+        include_resonance=request.args.get('includeResonance', '1') != '0',
+        ensure_fts_fn=lambda: bock_search_ext.ensure_fts(get_db_rw, db_query),
+        load_playlist_entries_fn=_load_playlist_entries,
+        score_playlist_fn=_score_playlist,
+        load_smart_playlists_fn=_load_smart_playlists,
+        albums_played_fn=_albums_played_flags,
+        playlist_paths_fn=_playlist_paths_cached,
+        list_devices_fn=_list_devices,
+        messages_path=MESSAGES_PATH,
+        resonance_mod=bock_resonance,
+    )
+    return jsonify(payload)
 
 @app.route('/api/alexa_remote/devices')
 def alexa_remote_devices():
@@ -1704,10 +1699,10 @@ def alexa_remote_control():
             elif action == 'stop':
                 # Device goes home — drop it from Now Playing entirely.
                 write_np_state_for_device(device_id, None)
-            elif action == 'next':
-                _optimistic_np_skip(device_id, 1)
-            elif action == 'previous':
-                _optimistic_np_skip(device_id, -1)
+            # Do not call _optimistic_np_skip for next/previous: remote control speaks
+            # "ask <skill> to skip/go back", which triggers SkipIntent/BackIntent and
+            # _np_skip_next/_np_skip_previous — advancing idx here skips twice (UI shows
+            # track+1, device plays track+2).
         return jsonify({'ok': True, **result})
     except ImportError:
         return jsonify({'error': 'alexapy not installed', 'code': 'not_installed'}), 503
@@ -2272,6 +2267,15 @@ def _np_source_fields(token=None, device_id=None):
     }
 
 
+def _play_intents_pending(now=None):
+    """True while a recent single-target play may still be correlating to a new deviceId."""
+    now = now or time.time()
+    with _PLAY_INTENT_LOCK:
+        if now < _PLAY_GROUP_UNTIL:
+            return True
+        return any(now - i['ts'] < _PLAY_INTENT_TTL for i in _PLAY_INTENTS)
+
+
 def _record_play_intent(targets, *, playlist=None, playlist_id=None, context=None):
     """targets: list of (serial, name). One target → correlatable; many → mark
     an ambiguous group window so we don't mis-attribute rooms."""
@@ -2287,25 +2291,39 @@ def _record_play_intent(targets, *, playlist=None, playlist_id=None, context=Non
             _PLAY_GROUP_UNTIL = now + _PLAY_GROUP_TTL
 
 def _correlate_play_intent(new_device_id):
-    """If exactly one single-device play intent is pending, bind a freshly-seen
-    (auto-named) `new_device_id` to that room. Returns True if it bound."""
+    """Bind a freshly-seen (auto-named) `new_device_id` to a pending play intent.
+
+    Intents are consumed FIFO so back-to-back plays on different rooms each get
+    their own primary deviceId instead of folding onto whoever was active last.
+    Returns True if it bound."""
     if not new_device_id or new_device_id == 'default':
         return False
     now = time.time()
     with _PLAY_INTENT_LOCK:
         if now < _PLAY_GROUP_UNTIL:
             return False
-        pending = [i for i in _PLAY_INTENTS if now - i['ts'] < _PLAY_INTENT_TTL]
-        if len(pending) != 1:
+        pending = sorted(
+            [i for i in _PLAY_INTENTS if now - i['ts'] < _PLAY_INTENT_TTL],
+            key=lambda i: i['ts'],
+        )
+        if not pending:
             return False
         intent = pending[0]
-        _PLAY_INTENTS.clear()
+        _PLAY_INTENTS.remove(intent)
     name = intent['name']
     serial = intent.get('serial')
     store = _load_devices()
     ent = store.get(new_device_id) or {}
     if ent.get('aliasOf'):
-        return False  # already mapped
+        # A wrong fingerprint auto-merge can land here before we correlate — peel
+        # it so this PlaybackStarted can bind to the room we actually commanded.
+        if not ent.get('autoMerged'):
+            return False
+        prim_name = ((store.get(ent['aliasOf']) or {}).get('name') or '').strip().lower()
+        if prim_name == name.strip().lower():
+            return False
+        store.pop(new_device_id, None)
+        ent = {}
 
     # Serial-first: if this hardware serial is already bound to a primary device
     # (a different deviceId), this is a rotation — fold the new id onto it
@@ -3240,7 +3258,30 @@ def artists():
         f'SELECT COUNT(DISTINCT artist) as total FROM songs_cache WHERE {where}',
         params
     )
+    for row in rows:
+        name = (row.get('artist') or '').strip()
+        cached = bock_artist_art.cached_portrait_rel_path(name, ARTWORK_CACHE)
+        if cached:
+            row['art_path'] = cached
     return jsonify({'items': rows, 'total': total_row.get('total', 0)})
+
+
+@app.route('/api/artist-portrait')
+def artist_portrait():
+    """Fetch/cache an artist portrait (Deezer → iTunes → library; all free)."""
+    artist = (request.args.get('artist') or '').strip()
+    if not artist:
+        return jsonify({'error': 'artist required'}), 400
+    result = bock_artist_art.resolve_portrait(
+        artist,
+        ARTWORK_CACHE,
+        load_config,
+        db_query=db_query,
+        find_artwork_fn=find_artwork,
+    )
+    if not result:
+        return jsonify({'artist': artist, 'art_path': None}), 404
+    return jsonify(result)
 
 # ── API: Albums ──────────────────────────────────────────────────────────────
 
@@ -3809,14 +3850,25 @@ def songs():
     rows = db_query(
         f'SELECT id, title, artist, album, genre, year, duration_seconds, bitrate, track_number, path '
         f'FROM songs_cache WHERE {where} '
-        f'ORDER BY artist, album, CAST(track_number AS INTEGER), title LIMIT ? OFFSET ?',
+        f'ORDER BY CAST(COALESCE(NULLIF(track_number, ""), "0") AS INTEGER), title LIMIT ? OFFSET ?',
         params + [limit, offset]
     )
     total_row = db_one(
         f'SELECT COUNT(*) as total FROM songs_cache WHERE {where}',
         params
     )
-    return jsonify({'items': rows, 'total': total_row.get('total', 0)})
+    items = []
+    for row in rows:
+        r = dict(row)
+        try:
+            r['duration_seconds'] = _song_duration_seconds(r.get('path'), r.get('duration_seconds'))
+        except Exception:
+            try:
+                r['duration_seconds'] = int(float(r.get('duration_seconds') or 0))
+            except (TypeError, ValueError):
+                r['duration_seconds'] = 0
+        items.append(r)
+    return jsonify({'items': items, 'total': total_row.get('total', 0)})
 
 # ── API: Settings ────────────────────────────────────────────────────────────
 
@@ -4121,7 +4173,9 @@ def register_device(device_id, default_name=None, supported_interfaces=None):
     # Auto-merge on every event while the device is still auto-named so we get
     # a second chance even if the first event had a degraded fingerprint
     # (AudioPlayer events from Echo Shows omit Display from supportedInterfaces).
-    if looks_auto and cur.get('fingerprint'):
+    # Skip while play intents are pending — two Echo Shows share fingerprints and
+    # we'd fold the new room onto whichever speaker was active most recently.
+    if looks_auto and cur.get('fingerprint') and not _play_intents_pending(now):
         tgt = _auto_merge_target(device_id, cur['fingerprint'], data)
         if tgt:
             _alias_to(device_id, tgt, data)
@@ -5228,12 +5282,14 @@ def _playlist_visible_to(meta_entry, member_id):
 def _public_playlist_meta(entry, household=None):
     if not entry:
         return {'ownerMemberId': None, 'ownerName': '', 'visibility': 'household',
-                'sharedWith': []}
+                'sharedWith': [], 'daily': False}
     return {
         'ownerMemberId': entry.get('ownerMemberId'),
         'ownerName': _member_label(entry.get('ownerMemberId'), household),
         'visibility': entry.get('visibility') or 'household',
         'sharedWith': entry.get('sharedWith') or [],
+        'daily': bool(entry.get('daily')),
+        'dailyRecipe': entry.get('dailyRecipe'),
     }
 
 
@@ -5873,9 +5929,9 @@ def analytics():
     hour_of_day = [{'hour': h, 'count': hour_ctr.get(h, 0)} for h in range(24)]
     day_of_week = [{'day': dow_names[d], 'count': dow_ctr.get(d, 0)} for d in range(7)]
 
-    top_artists = [{'name': k, 'count': v}                    for k, v in artist_ctr.most_common(10)]
-    top_albums  = [{'name': k[0], 'artist': k[1], 'count': v} for k, v in album_ctr.most_common(10)]
-    top_tracks  = [{'name': k[0], 'artist': k[1], 'count': v} for k, v in track_ctr.most_common(10)]
+    top_artists = [{'name': k, 'count': v}                    for k, v in artist_ctr.most_common(50)]
+    top_albums  = [{'name': k[0], 'artist': k[1], 'count': v} for k, v in album_ctr.most_common(50)]
+    top_tracks  = [{'name': k[0], 'artist': k[1], 'count': v} for k, v in track_ctr.most_common(50)]
     top_genres  = [{'name': k, 'count': v}                    for k, v in genre_ctr.most_common(10)]
     top_decades = [{'decade': k, 'count': v}                  for k, v in sorted(decade_ctr.items())]
     top_devices = [{'name': k, 'count': v}                    for k, v in device_ctr.most_common(10)]
@@ -6763,10 +6819,22 @@ _ART_MIME_BY_EXT = {
     '.png':  'image/png',  '.webp': 'image/webp',
 }
 
+def _resolve_artwork_abs_path(filepath):
+    """Map /artwork/ URL path to an on-disk image (library, artwork_cache, static)."""
+    rel = (filepath or '').lstrip('/')
+    if rel.startswith('artwork_cache/'):
+        return os.path.abspath(os.path.join(ARTWORK_CACHE, rel[len('artwork_cache/'):]))
+    resolved = _resolve_library_path('/' + rel)
+    if resolved and os.path.isfile(resolved):
+        return os.path.abspath(resolved)
+    under_here = os.path.join(HERE, rel)
+    if os.path.isfile(under_here):
+        return os.path.abspath(under_here)
+    return os.path.abspath('/' + rel)
+
 @app.route('/artwork/<path:filepath>')
 def serve_artwork(filepath):
-    full_path = _resolve_library_path('/' + filepath.lstrip('/')) or ('/' + filepath.lstrip('/'))
-    abs_path = os.path.abspath(full_path)
+    abs_path = _resolve_artwork_abs_path(filepath)
     allowed_roots = (
         MUSIC_ROOT,
         os.path.abspath(ARTWORK_CACHE),
@@ -7320,6 +7388,8 @@ def _persist_playlist(pid, name, track_paths, *, create=False):
     else:
         _update_playlist_key(key, name, m3u_path, len(paths))
     _save_playlists_tree(tree)
+    _invalidate_playlist_cover(pid)
+    _save_playlist_cover_cache()
     return {'id': pid, 'name': name, 'source': m3u_path, 'trackCount': len(paths)}
 
 
@@ -7489,71 +7559,158 @@ def _m3u_first_paths(source, limit=12):
     return out
 
 
+# pid -> cover_path. Persisted to disk so art survives restarts with no mount I/O
+# (each .m3u open is ~60ms on the network mount). Covers only change when a playlist's
+# tracks change, so we invalidate explicitly on edit rather than stat()-ing per request.
+_PLAYLIST_COVER_CACHE = {}
+_PLAYLIST_COVER_CACHE_LOCK = threading.Lock()
+_PLAYLIST_COVER_CACHE_PATH = os.path.join(DATA_DIR, 'playlist_cover_cache.json')
+_playlist_cover_cache_loaded = False
+_playlist_cover_cache_dirty = False
+
+
+def _load_playlist_cover_cache():
+    global _playlist_cover_cache_loaded
+    with _PLAYLIST_COVER_CACHE_LOCK:
+        if _playlist_cover_cache_loaded:
+            return
+        _playlist_cover_cache_loaded = True
+        try:
+            with open(_PLAYLIST_COVER_CACHE_PATH) as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                _PLAYLIST_COVER_CACHE.update({k: v for k, v in data.items() if isinstance(v, str)})
+        except Exception:
+            pass
+
+
+def _save_playlist_cover_cache():
+    global _playlist_cover_cache_dirty
+    with _PLAYLIST_COVER_CACHE_LOCK:
+        if not _playlist_cover_cache_dirty:
+            return
+        snapshot = dict(_PLAYLIST_COVER_CACHE)
+        _playlist_cover_cache_dirty = False
+    try:
+        _atomic_json_write(_PLAYLIST_COVER_CACHE_PATH, snapshot)
+    except Exception:
+        pass
+
+
+def _playlist_cover_fast(pid, source, compute=True):
+    """First-track cover path for a playlist (cached, persisted).
+
+    Lets /api/playlists return artPath inline so home/library tiles render art from the
+    cached list with no separate cover fetch (fast, survives navigation, any network).
+    compute=False returns only an already-cached value (no disk read), bounding latency.
+    """
+    if not pid:
+        return None
+    _load_playlist_cover_cache()
+    with _PLAYLIST_COVER_CACHE_LOCK:
+        if pid in _PLAYLIST_COVER_CACHE:
+            return _PLAYLIST_COVER_CACHE[pid] or None
+    if not compute or not source or not os.path.isfile(source):
+        return None
+    paths = _m3u_first_paths(source, limit=8)
+    path = paths[0] if paths else None
+    global _playlist_cover_cache_dirty
+    with _PLAYLIST_COVER_CACHE_LOCK:
+        _PLAYLIST_COVER_CACHE[pid] = path or ''
+        _playlist_cover_cache_dirty = True
+    return path
+
+
+def _invalidate_playlist_cover(pid):
+    global _playlist_cover_cache_dirty
+    if not pid:
+        return
+    with _PLAYLIST_COVER_CACHE_LOCK:
+        if pid in _PLAYLIST_COVER_CACHE:
+            del _PLAYLIST_COVER_CACHE[pid]
+            _playlist_cover_cache_dirty = True
+
+
+# Bound how many uncached covers a single /api/playlists call computes inline so the
+# first cold request stays responsive; a background thread warms the remainder.
+_PLAYLIST_COVER_INLINE_BUDGET = 150
+_playlist_cover_warm_started = False
+_playlist_cover_warm_lock = threading.Lock()
+
+
+def _warm_playlist_covers():
+    """Populate the cover cache for every playlist (first-track art) in the background.
+
+    Throttled so it never saturates the media mount and starve live requests.
+    """
+    try:
+        root = _load_playlists_tree().getroot()
+    except Exception:
+        return
+    for entry in root.findall('Entry'):
+        key = entry.find('Key')
+        if key is None:
+            continue
+        pid = xml_text(key, 'ID')
+        source = xml_text(key, 'SourceID')
+        if not (pid and source):
+            continue
+        with _PLAYLIST_COVER_CACHE_LOCK:
+            already = pid in _PLAYLIST_COVER_CACHE
+        if already:
+            continue  # loaded from disk — no I/O, no throttle needed
+        try:
+            _playlist_cover_fast(pid, source, compute=True)
+        except Exception:
+            pass
+        time.sleep(0.02)  # throttle disk reads so warm never starves live requests
+    _save_playlist_cover_cache()
+
+
+def _start_playlist_cover_warm():
+    global _playlist_cover_warm_started
+    with _playlist_cover_warm_lock:
+        if _playlist_cover_warm_started:
+            return
+        _playlist_cover_warm_started = True
+    threading.Thread(target=_warm_playlist_covers, daemon=True, name='cover-warm').start()
+
+
+def _playlist_collage_paths_from_tree(root, playlist_id, limit=4):
+    """Up to [limit] distinct track paths from the start of a playlist — for 2×2 collage tiles."""
+    key, _entry = _find_playlist_key(root, playlist_id)
+    if key is None:
+        return []
+    meta = _playlist_meta_from_key(key)
+    source = meta.get('source') or ''
+    if not source:
+        return []
+    paths = []
+    seen = set()
+    for path in _m3u_first_paths(source, limit=max(limit * 12, 24)):
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        paths.append(path)
+        if len(paths) >= limit:
+            break
+    return paths
+
+
 def _playlist_cover_path_from_tree(root, playlist_id, avoid_paths=None):
-    """Pick a representative track for playlist cover art — prefer metadata that matches the playlist name."""
+    """First track in the playlist file — same art users see when they open the playlist."""
     key, _entry = _find_playlist_key(root, playlist_id)
     if key is None:
         return None
     meta = _playlist_meta_from_key(key)
     source = meta.get('source') or ''
-    playlist_name = (meta.get('name') or '').strip()
-    paths = _m3u_first_paths(source, limit=24)
-    if not paths:
+    if not source:
         return None
     avoid = set(avoid_paths or [])
-    keywords = _playlist_cover_keywords(playlist_name)
-    rows = db_query(
-        f'SELECT path, genre, artist, album, track FROM songs_cache WHERE path IN ({",".join("?" * len(paths))}) '
-        f'AND path IS NOT NULL AND path != ""',
-        paths,
-    ) or []
-    by_path = {r.get('path'): r for r in rows if r.get('path')}
-
-    def score_path(path):
-        if path in avoid:
-            return -1
-        row = by_path.get(path) or {}
-        haystack = ' '.join(
-            str(row.get(k) or '') for k in ('genre', 'artist', 'album', 'track')
-        ).lower()
-        if playlist_name:
-            haystack = f'{playlist_name.lower()} {haystack}'
-        score = 0
-        for kw in keywords:
-            if kw in haystack:
-                score += 12
-        try:
-            score += max(0, 4 - paths.index(path))
-        except ValueError:
-            pass
-        return score
-
-    if rows:
-        candidates = [r.get('path') for r in rows if r.get('path')]
-        if candidates:
-            best = max(candidates, key=score_path)
-            if score_path(best) >= 0:
-                return best
-    for path in paths:
+    for path in _m3u_first_paths(source, limit=24):
         if path not in avoid:
             return path
-    return paths[0]
-
-
-def _playlist_cover_keywords(playlist_name):
-    stop = {
-        'mix', 'era', 'hits', 'party', 'focus', 'favorites', 'essentials', 'decade',
-        'the', 'and', 'for', 'vol', 'volume', 'best', 'top', 'only', 'playlist',
-    }
-    words = re.findall(r"[a-z0-9']+", (playlist_name or '').lower())
-    out = []
-    seen = set()
-    for w in words:
-        if len(w) < 3 or w in stop or w in seen:
-            continue
-        seen.add(w)
-        out.append(w)
-    return out
+    return None
 
 
 @app.route('/api/playlists/<playlist_id>/cover')
@@ -7585,13 +7742,21 @@ def playlist_covers_batch():
             break
     root = _load_playlists_tree().getroot()
     covers = {}
+    collages = {}
     used_paths = set()
     for pid in ids:
+        collage = _playlist_collage_paths_from_tree(root, pid)
+        if collage:
+            collages[pid] = collage
+            covers[pid] = collage[0]
+            used_paths.add(collage[0])
+            continue
         path = _playlist_cover_path_from_tree(root, pid, avoid_paths=used_paths)
         if path:
             covers[pid] = path
+            collages[pid] = [path]
             used_paths.add(path)
-    return jsonify({'covers': covers})
+    return jsonify({'covers': covers, 'collages': collages})
 
 
 @app.route('/api/playlists/<playlist_id>')
@@ -7637,6 +7802,8 @@ def playlist_detail(playlist_id):
     page_paths = ordered_paths[start:start + limit]
     tracks = _enrich_track_paths(page_paths)
 
+    ext_meta = _load_playlist_meta().get(playlist_id) or {}
+
     return jsonify({
         **meta,
         'tracks': tracks,
@@ -7646,6 +7813,8 @@ def playlist_detail(playlist_id):
         'sortBy': sort_by,
         'order': order,
         'q': q or None,
+        'daily': bool(ext_meta.get('daily')),
+        'dailyRecipe': ext_meta.get('dailyRecipe'),
     })
 
 
@@ -7744,9 +7913,11 @@ def update_playlist(playlist_id):
         _update_playlist_key(key, name, source, len([p for p in track_paths if os.path.isfile(p)]))
         _save_playlists_tree(tree)
         _PLAYLIST_TRACKS_CACHE.pop(playlist_id, None)
+        _invalidate_playlist_cover(playlist_id)
         return jsonify({'id': playlist_id, 'name': name, 'trackCount': len(track_paths)})
     result = _persist_playlist(playlist_id, name, track_paths, create=False)
     _PLAYLIST_TRACKS_CACHE.pop(playlist_id, None)
+    _invalidate_playlist_cover(playlist_id)
     return jsonify(result)
 
 
@@ -7774,6 +7945,7 @@ def sort_playlist(playlist_id):
         _save_playlists_tree(tree)
         result = {'id': playlist_id, 'name': meta.get('name'), 'trackCount': len(sorted_paths)}
     _PLAYLIST_TRACKS_CACHE.pop(playlist_id, None)
+    _invalidate_playlist_cover(playlist_id)
     return jsonify({**result, 'sortedBy': field, 'order': order, 'ok': True})
 
 
@@ -7797,6 +7969,7 @@ def remove_playlist_track(playlist_id):
         _update_playlist_key(key, meta.get('name'), source, len(paths))
         _save_playlists_tree(tree)
     _PLAYLIST_TRACKS_CACHE.pop(playlist_id, None)
+    _invalidate_playlist_cover(playlist_id)
     return jsonify({'ok': True, 'trackCount': len(paths)})
 
 
@@ -7834,6 +8007,7 @@ def move_playlist_track(playlist_id):
     else:
         return jsonify({'error': 'not_editable'}), 403
     _PLAYLIST_TRACKS_CACHE.pop(playlist_id, None)
+    _invalidate_playlist_cover(playlist_id)
     return jsonify({'ok': True, 'fromIndex': from_index, 'toIndex': to_index, 'trackCount': len(paths)})
 
 
@@ -8111,6 +8285,110 @@ def refresh_smart_playlist(smart_id):
         _save_smart_playlists(items)
         return jsonify({**item, 'playlist': result})
     return jsonify({'error': 'not_found'}), 404
+
+
+# ── Daily auto-generated playlists ────────────────────────────────────────────
+
+DAILY_STATE_PATH = os.path.join(DATA_DIR, 'daily_playlists.json')
+_DAILY_LOCK = threading.Lock()
+_daily_scheduler_started = False
+
+
+def _merge_playlist_meta(pid, updates):
+    if not pid:
+        return
+    with _PLAYLIST_META_LOCK:
+        meta = _load_playlist_meta()
+        cur = dict(meta.get(pid) or {})
+        cur.update(updates or {})
+        meta[pid] = cur
+        _save_playlist_meta(meta)
+
+
+def _regenerate_daily_playlists(force=False):
+    """Rebuild today's daily playlists (idempotent within a day unless forced)."""
+    import bock_daily
+    import bock_play_counts
+    with _DAILY_LOCK:
+        state = bock_daily.load_state(DAILY_STATE_PATH)
+        if not force and not bock_daily.is_stale(state):
+            return state
+        counts = (bock_play_counts.load_counts(PLAY_COUNTS_PATH) or {}).get('paths') or {}
+        return bock_daily.regenerate(
+            state_path=DAILY_STATE_PATH,
+            db_query=db_query,
+            persist_playlist=_persist_playlist,
+            new_id=lambda: str(uuid.uuid4()),
+            set_meta=_merge_playlist_meta,
+            play_counts=counts,
+        )
+
+
+def _daily_scheduler_loop():
+    # Regenerate shortly after boot, then check hourly for date rollover.
+    time.sleep(20)
+    while True:
+        try:
+            _regenerate_daily_playlists()
+        except Exception as e:
+            print(f'daily playlist scheduler error: {e}', flush=True)
+        time.sleep(3600)
+
+
+def _start_daily_scheduler():
+    global _daily_scheduler_started
+    if _daily_scheduler_started:
+        return
+    _daily_scheduler_started = True
+    threading.Thread(target=_daily_scheduler_loop, daemon=True, name='daily-playlists').start()
+
+
+@app.route('/api/daily-playlists')
+def api_daily_playlists():
+    import bock_daily
+    state = bock_daily.load_state(DAILY_STATE_PATH)
+    if bock_daily.is_stale(state):
+        try:
+            _regenerate_daily_playlists()
+        except Exception as e:
+            print(f'daily playlist generate error: {e}', flush=True)
+    return jsonify(bock_daily.list_daily(DAILY_STATE_PATH))
+
+
+@app.route('/api/daily-playlists/refresh', methods=['POST'])
+def api_daily_playlists_refresh():
+    state = _regenerate_daily_playlists(force=True)
+    return jsonify({'ok': True, 'generatedAt': (state or {}).get('generatedAt')})
+
+
+@app.route('/api/daily-playlists/<playlist_id>/save', methods=['POST'])
+def api_daily_playlist_save(playlist_id):
+    """Keep a daily playlist forever: drop it from the daily set and clear the
+    daily flag so the regenerator never overwrites it again."""
+    import bock_daily
+    root = _load_playlists_tree().getroot()
+    key, _entry = _find_playlist_key(root, playlist_id)
+    if key is None:
+        return jsonify({'error': 'not_found'}), 404
+
+    body = request.get_json(silent=True) or {}
+    new_name = (body.get('name') or '').strip()
+    if not new_name:
+        cur = xml_text(key, 'Name') or 'Saved playlist'
+        new_name = cur[len(bock_daily.NAME_PREFIX):].strip() if cur.startswith(bock_daily.NAME_PREFIX) else cur
+        new_name = f'{new_name}'.strip() or 'Saved playlist'
+
+    # Rename in place (keeps the same id, tracks, and m3u contents).
+    meta = _playlist_meta_from_key(key)
+    source = meta.get('source') or ''
+    paths = _playlist_paths_cached(playlist_id, source) if source else []
+    _persist_playlist(playlist_id, new_name, paths, create=False)
+
+    bock_daily.detach_saved(DAILY_STATE_PATH, playlist_id)
+    _merge_playlist_meta(playlist_id, {'daily': False, 'savedFromDaily': True})
+    _PLAYLIST_TRACKS_CACHE.pop(playlist_id, None)
+    _invalidate_playlist_cover(playlist_id)
+    return jsonify({'ok': True, 'id': playlist_id, 'name': new_name, 'trackCount': len(paths)})
 
 
 @app.route('/api/playlists/ai', methods=['POST'])
@@ -8641,6 +8919,14 @@ def current_track():
 _NP_DURATION_GRACE_SECONDS = 60        # tolerate ~1min of drift after track end
 _NP_FALLBACK_STALE_SECONDS = 10 * 60   # used when duration is unknown
 _NP_PAUSED_STALE_SECONDS = 30 * 60     # drop a paused row that's never resumed
+_NP_STOPPED_VISIBLE_SECONDS = 3 * 60   # show idle rows briefly (resume window)
+
+
+def _np_event_token_matches_state(event_token, state):
+    """True when an AudioPlayer lifecycle event belongs to the row we're tracking."""
+    if not event_token or not state:
+        return False
+    return event_token == state.get('token')
 
 def _expire_stale_playing(payload):
     now = time.time()
@@ -8714,11 +9000,13 @@ def nowplaying_sleep():
 
 @app.route('/api/nowplaying_devices')
 def nowplaying_devices():
-    payload = _canonicalize_np(_prune_np(_read_all_np() or {'devices': {}}))
-    _expire_stale_playing(payload)
-    if _expire_stale_client_playback(payload):
-        pass
-    _write_all_np(payload)
+    now = time.time()
+    with _NP_LOCK:
+        payload = _canonicalize_np(_prune_np(_read_all_np() or {'devices': {}}))
+        _expire_stale_playing(payload)
+        if _expire_stale_client_playback(payload):
+            pass
+        _write_all_np(payload)
     devices = payload.get('devices', {})
     known = set(_load_devices().keys())
     device_store = _load_devices()
@@ -8727,7 +9015,14 @@ def nowplaying_devices():
     mobile_view = bool(viewer_client_id)
     items = []
     for did, st in devices.items():
-        if not st.get('playing') and not st.get('paused'):
+        playing = bool(st.get('playing'))
+        paused = bool(st.get('paused')) and not playing
+        ts = st.get('timestamp') or 0
+        recently_stopped = (
+            not playing and not paused and st.get('token')
+            and ts and now - ts < _NP_STOPPED_VISIBLE_SECONDS
+        )
+        if not playing and not paused and not recently_stopped:
             continue
         if mobile_view and _is_client_device(did):
             continue
@@ -8758,7 +9053,8 @@ def nowplaying_devices():
             'timestamp':  st.get('timestamp'),
             'duration_ms': duration_ms,
             'offset_ms':   st.get('offset_ms') or 0,
-            'paused':     bool(st.get('paused')) and not st.get('playing'),
+            'paused':     paused,
+            'stopped':    not playing and not paused,
             'sleep':      _sleep_info_for_token(token),
             'upcoming':   _upcoming_tracks_for_token(token, limit=5),
             'playlist': src.get('playlist'),
@@ -8970,6 +9266,26 @@ def _np_play_path(path, token, *, offset_ms=0, previous_token=None,
                       title=title, subtitle=subtitle, artwork_url=artwork_url,
                       filepath=path)
 
+def _np_eager_track_state(path, token, prev_state=None):
+    """Refresh Now Playing metadata when issuing the next/prev track (before PlaybackStarted)."""
+    state = dict(prev_state or read_np_state() or {})
+    title, artist, album, _ = track_metadata_fast(path)
+    src = _np_source_fields(token, _np_device_id())
+    write_np_state({
+        **state,
+        'track': title,
+        'artist': artist,
+        'album': album,
+        'filepath': path,
+        'token': token,
+        'playing': True,
+        'paused': False,
+        'timestamp': time.time(),
+        'duration_ms': _duration_ms_for_path(path),
+        'offset_ms': 0,
+        **src,
+    })
+
 def _np_skip_next(playback_controller=False):
     """Advance to the next track in the active device queue."""
     state = read_np_state() or {}
@@ -8984,6 +9300,7 @@ def _np_skip_next(playback_controller=False):
     next_idx = (idx + 1) % len(tracks)
     next_path = tracks[next_idx]
     next_token = encode_token({**data, 'idx': next_idx})
+    _np_eager_track_state(next_path, next_token, prev_state=state)
     return _np_play_path(next_path, next_token)
 
 def _np_skip_previous(playback_controller=False):
@@ -9000,6 +9317,7 @@ def _np_skip_previous(playback_controller=False):
     prev_idx = max(idx - 1, 0)
     prev_path = tracks[prev_idx]
     prev_token = encode_token({**data, 'idx': prev_idx})
+    _np_eager_track_state(prev_path, prev_token, prev_state=state)
     return _np_play_path(prev_path, prev_token)
 
 def _np_arm_sleep(minutes=None, songs=None):
@@ -9117,6 +9435,17 @@ def _duration_ms_for_path(path):
     _DURATION_MS_CACHE[path] = (mtime, duration_ms)
     return duration_ms
 
+def _song_duration_seconds(path, db_seconds=None):
+    """Seconds of play time for API rows — DB value, else mutagen via _duration_ms_for_path."""
+    try:
+        dur = int(float(db_seconds or 0))
+    except (TypeError, ValueError):
+        dur = 0
+    if dur > 0:
+        return dur
+    ms = _duration_ms_for_path(path)
+    return max(0, ms // 1000)
+
 def _year_for_path(path):
     """Release year (int) for a file path from songs_cache, else None."""
     if not path:
@@ -9216,7 +9545,7 @@ def _start_playing_impl(tracks, shuffle=False, speech=None, loop=False,
     src = _np_source_fields(token)
     write_np_state({'track': None, 'artist': artist, 'album': album,
                     'filepath': first, 'token': token,
-                    'playing': False, 'timestamp': time.time(),
+                    'playing': True, 'paused': False, 'timestamp': time.time(),
                     **src})
     elapsed = time.time() - t0
     print(f'[ALEXA TIMING] start_playing lazy={use_lazy} tracks={len(queue)} '
@@ -9785,6 +10114,7 @@ def alexa_skill():
         if req_path and os.path.isfile(req_path):
             new_tracks = (tracks[:next_idx] + [req_path] + tracks[next_idx:])[:_QUEUE_TRACK_LIMIT]
             req_token = encode_token({**data, 'tracks': new_tracks, 'idx': next_idx})
+            _np_eager_track_state(req_path, req_token, prev_state=read_np_state())
             return _np_play_path(req_path, req_token,
                                  previous_token=token, play_behavior='ENQUEUE')
         if next_idx >= len(tracks):
@@ -9794,20 +10124,26 @@ def alexa_skill():
                 continued = _try_continue_queue(data, tracks, idx)
                 if continued:
                     next_path, next_token = continued
+                    _np_eager_track_state(next_path, next_token, prev_state=read_np_state())
                     return _np_play_path(next_path, next_token,
                                          previous_token=token, play_behavior='ENQUEUE')
                 return alexa_empty()
         if next_idx < len(tracks):
             next_path  = tracks[next_idx]
             next_token = encode_token({**data, 'idx': next_idx})
+            _np_eager_track_state(next_path, next_token, prev_state=read_np_state())
             return _np_play_path(next_path, next_token,
                                  previous_token=token, play_behavior='ENQUEUE')
         return alexa_empty()
 
     if rtype == 'AudioPlayer.PlaybackFinished':
+        # NearlyFinished often starts the next track before Finished arrives for
+        # the old one — ignore stale Finished events so multi-room playback stays
+        # visible and the active row keeps playing=True.
         state = read_np_state() or {}
-        state['playing'] = False
-        write_np_state(state)
+        if _np_event_token_matches_state(req.get('token', ''), state):
+            state['playing'] = False
+            write_np_state(state)
         return alexa_empty()
 
     if rtype == 'AudioPlayer.PlaybackFailed':
@@ -9840,7 +10176,7 @@ def alexa_skill():
         # Don't synthesize a row for a device we aren't already tracking, or a
         # stop/replace would leave a trackless stuck row.
         state = read_np_state()
-        if state and state.get('token'):
+        if state and _np_event_token_matches_state(req.get('token', ''), state):
             state['playing'] = False
             state['offset_ms'] = req.get('offsetInMilliseconds', 0)
             write_np_state(state)
@@ -10498,6 +10834,8 @@ register_bock_routes(app, globals())
 
 _start_automation_scheduler()
 _start_device_discovery_scheduler()
+_start_daily_scheduler()
+_start_playlist_cover_warm()
 
 if __name__ == '__main__':
     apply_logging()

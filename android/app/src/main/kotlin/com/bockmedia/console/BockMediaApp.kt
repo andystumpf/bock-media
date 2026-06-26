@@ -143,7 +143,7 @@ class BockMediaApp(private val appContext: Context) {
         LibraryCachePersistence.clear(appContext)
         AutomationSessionCache.invalidate()
         SearchBrowseSessionCache.invalidate()
-        BockImageLoader.reset()
+        BockImageLoader.reinstall(appContext, this)
     }
 
     /**
@@ -157,14 +157,18 @@ class BockMediaApp(private val appContext: Context) {
         ServerEndpointResolver.invalidate()
     }
 
-    suspend fun buildAuthenticatedHttpClient(): OkHttpClient {
-        val user = preferences.adminUser.first()
-        val pass = preferences.adminPass.first()
-        val token = preferences.mobileToken.first()
-        val local = preferences.getLocalServerUrlSync()
-        val external = preferences.getExternalServerUrlSync()
-        return buildHttpClient(user, pass, token, local, external)
-    }
+    suspend fun buildAuthenticatedHttpClient(): OkHttpClient = buildLiveAuthHttpClient()
+
+    /** Coil / artwork — re-read credentials on every request (survives cold-boot hydration). */
+    fun buildLiveAuthHttpClient(readTimeoutSec: Long = 30): OkHttpClient =
+        buildHttpClient(
+            userProvider = { preferences.adminUserNow() },
+            passProvider = { preferences.adminPassNow() },
+            tokenProvider = { preferences.mobileTokenNow() },
+            localUrlProvider = { preferences.localServerUrlNow() },
+            externalUrlProvider = { preferences.externalServerUrlNow() },
+            readTimeoutSec = readTimeoutSec,
+        )
 
     /** Longer read timeout for ExoPlayer streaming — default 30s gaps cause false skips. */
     suspend fun buildPlaybackHttpClient(): OkHttpClient {
@@ -197,13 +201,40 @@ class BockMediaApp(private val appContext: Context) {
         localUrl: String?,
         externalUrl: String?,
         readTimeoutSec: Long = 30,
+    ): OkHttpClient = buildHttpClient(
+        userProvider = { user?.trim()?.takeIf { it.isNotEmpty() } },
+        passProvider = { pass?.trim()?.takeIf { it.isNotEmpty() } },
+        tokenProvider = { token?.trim()?.takeIf { it.isNotEmpty() } },
+        localUrlProvider = { localUrl },
+        externalUrlProvider = { externalUrl },
+        readTimeoutSec = readTimeoutSec,
+    )
+
+    private fun buildHttpClient(
+        userProvider: () -> String?,
+        passProvider: () -> String?,
+        tokenProvider: () -> String?,
+        localUrlProvider: () -> String?,
+        externalUrlProvider: () -> String?,
+        readTimeoutSec: Long = 30,
     ): OkHttpClient {
-        val localHosts = AppPreferences.localHosts(localUrl, externalUrl)
         return OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(readTimeoutSec, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
-            .addInterceptor(BockAuthInterceptor({ localHosts }, { user }, { pass }, { token }))
+            .addInterceptor(
+                BockAuthInterceptor(
+                    {
+                        AppPreferences.localHosts(
+                            localUrlProvider()?.trim()?.takeIf { it.isNotBlank() },
+                            externalUrlProvider()?.trim()?.takeIf { it.isNotBlank() },
+                        )
+                    },
+                    userProvider,
+                    passProvider,
+                    tokenProvider,
+                ),
+            )
             .apply {
                 if (BuildConfig.DEBUG) {
                     addInterceptor(HttpLoggingInterceptor().apply {

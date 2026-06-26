@@ -11,14 +11,14 @@ enum HomeArtworkResolver {
     static func resolveURL(repository: BockMediaRepository, card: HomeCard) async -> URL? {
         if let cached = HomeArtworkCache.url(for: card.id) { return cached }
 
-        if let path = card.artPath, let url = await artworkURL(repository: repository, path: path) {
+        if let playlistId = card.playlistId,
+           let path = playlistPath(repository: repository, id: playlistId),
+           let url = await artworkURL(repository: repository, path: path) {
             HomeArtworkCache.store(cardId: card.id, url: url)
             return url
         }
 
-        if let playlistId = card.playlistId,
-           let path = playlistPath(repository: repository, id: playlistId),
-           let url = await artworkURL(repository: repository, path: path) {
+        if let path = card.artPath, let url = await artworkURL(repository: repository, path: path) {
             HomeArtworkCache.store(cardId: card.id, url: url)
             return url
         }

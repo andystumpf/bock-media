@@ -46,7 +46,10 @@ data class PlaylistCoverResponse(
 data class PlaylistCoversBatchRequest(val ids: List<String> = emptyList())
 
 @Serializable
-data class PlaylistCoversBatchResponse(val covers: Map<String, String> = emptyMap())
+data class PlaylistCoversBatchResponse(
+    val covers: Map<String, String> = emptyMap(),
+    val collages: Map<String, List<String>> = emptyMap(),
+)
 
 @Serializable
 data class RecentResponse(val items: List<RecentPlayRequestItem> = emptyList(), val total: Int = 0)
@@ -77,6 +80,26 @@ data class DashboardQuickResponse(
 
 @Serializable
 data class FavoritesResponse(val items: List<FavoriteItem> = emptyList())
+
+@Serializable
+data class RatingItem(
+    val kind: String = "",
+    val id: String = "",
+    val stars: Int = 0,
+    val title: String? = null,
+    val artist: String? = null,
+    val album: String? = null,
+)
+
+@Serializable
+data class RatingsResponse(val items: List<RatingItem> = emptyList())
+
+@Serializable
+data class RatingLookupResponse(
+    val kind: String = "",
+    val id: String = "",
+    val stars: Int = 0,
+)
 
 @Serializable
 data class FavoriteItem(
@@ -203,6 +226,7 @@ data class AutomationPreview(val id: String? = null, val name: String? = null, v
 
 @Serializable
 data class SearchResponse(
+    val query: String? = null,
     val playlists: List<SearchHit> = emptyList(),
     val artists: List<SearchHit> = emptyList(),
     val albums: List<SearchHit> = emptyList(),
@@ -211,6 +235,32 @@ data class SearchResponse(
     val smartPlaylists: List<SearchHit> = emptyList(),
     val rooms: List<SearchHit> = emptyList(),
     val messages: List<SearchHit> = emptyList(),
+    val radios: List<SearchRadioHit> = emptyList(),
+    val similar: List<SearchHit> = emptyList(),
+    val counts: Map<String, Int> = emptyMap(),
+    val preview: Int = 5,
+)
+
+@Serializable
+data class SearchRadioHit(
+    val kind: String? = null,
+    val name: String? = null,
+    val artist: String? = null,
+    val displayTitle: String? = null,
+    val path: String? = null,
+)
+
+@Serializable
+data class SearchPinsResponse(val pins: List<SearchPin> = emptyList())
+
+@Serializable
+data class SearchPin(
+    val kind: String = "",
+    val title: String? = null,
+    val name: String? = null,
+    val id: String? = null,
+    val artist: String? = null,
+    val path: String? = null,
 )
 
 @Serializable
@@ -222,6 +272,7 @@ data class SearchHit(
     val album: String? = null,
     val path: String? = null,
     val tracks: Int? = null,
+    val albums: Int? = null,
 )
 
 @Serializable
@@ -240,6 +291,7 @@ data class PlaylistSummary(
     val createDate: String? = null,
     val lastUsed: String? = null,
     val folderId: String? = null,
+    val artPath: String? = null,
 )
 
 @Serializable
@@ -251,6 +303,8 @@ data class PlaylistDetailResponse(
     val page: Int = 1,
     val source: String? = null,
     val sourceName: String? = null,
+    val daily: Boolean = false,
+    val dailyRecipe: String? = null,
 )
 
 @Serializable
@@ -278,6 +332,14 @@ data class SmartPlaylist(
 
 @Serializable
 data class ArtistsResponse(val items: List<ArtistItem> = emptyList(), val total: Int = 0)
+
+@Serializable
+data class ArtistPortraitResponse(
+    val artist: String = "",
+    @SerialName("art_path") val artPath: String? = null,
+    val source: String? = null,
+    val cached: Boolean = false,
+)
 
 @Serializable
 data class ArtistItem(
@@ -345,9 +407,11 @@ data class SongItem(
     val artist: String? = null,
     val album: String? = null,
     val path: String? = null,
-    val duration: Int? = null,
+    @SerialName("duration_seconds") val duration: Int? = null,
     val genre: String? = null,
     val year: Int? = null,
+    @SerialName("track_number") val trackNumber: Int? = null,
+    @SerialName("disc_number") val discNumber: Int? = null,
 )
 
 @Serializable

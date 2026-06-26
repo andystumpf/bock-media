@@ -100,6 +100,19 @@ final class AppPreferences: ObservableObject {
     func localHosts() -> Set<String> {
         ServerURL.localHosts(localURL: localServerURL)
     }
+
+    var searchAllLibraries: Bool {
+        get {
+            if defaults.object(forKey: "search_all_libraries") == nil { return true }
+            return defaults.bool(forKey: "search_all_libraries")
+        }
+        set { defaults.set(newValue, forKey: "search_all_libraries") }
+    }
+
+    var searchSourcePath: String? {
+        get { defaults.string(forKey: "search_source_path")?.nilIfBlank }
+        set { defaults.set(newValue, forKey: "search_source_path") }
+    }
 }
 
 private extension String {

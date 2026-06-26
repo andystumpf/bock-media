@@ -45,7 +45,19 @@ interface BockMediaApi {
     suspend fun rooms(): RoomsResponse
 
     @GET("api/search")
-    suspend fun search(@Query("q") q: String, @Query("limit") limit: Int = 30): SearchResponse
+    suspend fun search(
+        @Query("q") q: String,
+        @Query("limit") limit: Int = 30,
+        @Query("preview") preview: Int = 5,
+        @Query("section") section: String? = null,
+        @Query("source") source: String? = null,
+    ): SearchResponse
+
+    @GET("api/search/pins")
+    suspend fun searchPins(): SearchPinsResponse
+
+    @PUT("api/search/pins")
+    suspend fun saveSearchPins(@Body body: JsonObject): OkResponse
 
     @GET("api/search/suggest")
     suspend fun searchSuggest(@Query("q") q: String): SearchResponse
@@ -79,6 +91,9 @@ interface BockMediaApi {
 
     @POST("api/playlists/covers")
     suspend fun playlistCoversBatch(@Body body: PlaylistCoversBatchRequest): PlaylistCoversBatchResponse
+
+    @POST("api/daily-playlists/{id}/save")
+    suspend fun saveDailyPlaylist(@Path("id") id: String, @Body body: JsonObject): OkResponse
 
     @GET("api/playlists/{id}")
     suspend fun playlistDetail(
@@ -159,6 +174,9 @@ interface BockMediaApi {
         @Query("limit") limit: Int = 50,
         @Query("search") search: String = "",
     ): ArtistsResponse
+
+    @GET("api/artist-portrait")
+    suspend fun artistPortrait(@Query("artist") artist: String): ArtistPortraitResponse
 
     @GET("api/albums")
     suspend fun albums(
@@ -337,6 +355,15 @@ interface BockMediaApi {
 
     @HTTP(method = "DELETE", path = "api/favorites", hasBody = true)
     suspend fun removeFavorite(@Body body: JsonObject): OkResponse
+
+    @GET("api/ratings")
+    suspend fun ratings(): RatingsResponse
+
+    @GET("api/ratings/lookup")
+    suspend fun ratingLookup(@Query("kind") kind: String, @Query("id") id: String): RatingLookupResponse
+
+    @PUT("api/ratings")
+    suspend fun setRating(@Body body: JsonObject): OkResponse
 
     @GET("api/settings")
     suspend fun settings(): JsonObject

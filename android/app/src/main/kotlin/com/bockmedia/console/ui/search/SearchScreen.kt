@@ -1,12 +1,6 @@
 package com.bockmedia.console.ui.search
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -14,20 +8,20 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import com.bockmedia.console.ui.testing.BockTestTags
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.bockmedia.console.data.api.dto.SearchHit
+import com.bockmedia.console.data.api.dto.SearchPin
 import com.bockmedia.console.data.api.dto.SearchResponse
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.*
-import androidx.compose.material.icons.filled.PlaylistAdd
-import com.bockmedia.console.local.OfflineDownloadManager
 import com.bockmedia.console.local.SearchHistoryStore
+import com.bockmedia.console.local.SearchRecentSelection
 import com.bockmedia.console.ui.components.*
+import com.bockmedia.console.ui.discovery.AcquireIdeasDialog
+import com.bockmedia.console.ui.discovery.MixMuseDialog
+import com.bockmedia.console.ui.discovery.DiscoverySeed
+import com.bockmedia.console.ui.discovery.DiscoverySeedKind
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
-
-private enum class SearchView { Browse, NewReleases }
 
 @Composable
 fun SearchScreen(
@@ -45,48 +39,38 @@ fun SearchScreen(
     val historyStore = remember { SearchHistoryStore(context) }
     val scope = rememberCoroutineScope()
 
-    var query by remember { mutableStateOf("") }
-    var searchFocused by remember { mutableStateOf(false) }
-    var results by remember { mutableStateOf<SearchResponse?>(null) }
+    var query by remember { mutableStateOf(SearchResultsSessionCache.query) }
+    var results by remember { mutableStateOf(SearchResultsSessionCache.results) }
     var searchLoading by remember { mutableStateOf(false) }
-    var suggestions by remember { mutableStateOf<List<SearchSuggestion>>(emptyList()) }
-    var browseFeed by remember { mutableStateOf(SearchBrowseSessionCache.peek()) }
-    var browseLoading by remember { mutableStateOf(SearchBrowseSessionCache.peek() == null) }
-    var recentQueries by remember { mutableStateOf<List<String>>(emptyList()) }
-    var favoritePaths by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var browseView by remember { mutableStateOf(SearchView.Browse) }
+    var suggestions by remember {
+        mutableStateOf(
+            SearchResultsSessionCache.suggestions.ifEmpty {
+                SearchResultsSessionCache.results?.let { SearchBrowseLoader.suggestionsFromResponse(it) }
+                    ?: emptyList()
+            },
+        )
+    }
+    var recentSelections by remember { mutableStateOf<List<SearchRecentSelection>>(emptyList()) }
+    var songRatings by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
+    var searchPins by remember { mutableStateOf<List<SearchPin>>(emptyList()) }
+    var showPinEditor by remember { mutableStateOf(false) }
+    var rankingKind by remember { mutableStateOf<SearchRankingKind?>(null) }
+    var showSonicAdventure by remember { mutableStateOf(false) }
+    var showSonicSage by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        runCatching { favoritePaths = repository.favorites().map { it.path }.toSet() }
-        val cached = SearchBrowseSessionCache.getIfFresh()
-        if (cached != null) {
-            browseFeed = cached
-            browseLoading = false
-            scope.launch {
-                runCatching {
-                    val fresh = SearchBrowseLoader.load(repository)
-                    SearchBrowseSessionCache.put(fresh)
-                    browseFeed = fresh
-                }
-            }
-            return@LaunchedEffect
-        }
-        browseLoading = true
         runCatching {
-            val quick = SearchBrowseLoader.loadFast(repository)
-            if (quick.genres.isNotEmpty() || quick.newReleases.isNotEmpty()) {
-                browseFeed = quick
-                browseLoading = false
-            }
-            val full = SearchBrowseLoader.load(repository)
-            SearchBrowseSessionCache.put(full)
-            browseFeed = full
+            songRatings = repository.ratedSongMap()
+            searchPins = repository.searchPins()
         }
-        browseLoading = false
     }
 
     LaunchedEffect(historyStore) {
-        historyStore.queries.collectLatest { recentQueries = it }
+        historyStore.selections.collectLatest { recentSelections = it }
+    }
+
+    fun recordSelection(selection: SearchRecentSelection) {
+        scope.launch { historyStore.addSelection(selection) }
     }
 
     LaunchedEffect(query) {
@@ -96,37 +80,119 @@ fun SearchScreen(
             suggestions = emptyList()
             results = null
             searchLoading = false
+            SearchResultsSessionCache.clear()
             return@LaunchedEffect
         }
         if (trimmed.length < 2) {
             results = null
             searchLoading = false
             suggestions = SearchBrowseLoader.suggestOneChar(repository, trimmed)
+            SearchResultsSessionCache.saveSnapshot(trimmed, null, suggestions, null, true)
+            return@LaunchedEffect
+        }
+        if (SearchResultsSessionCache.hasFreshResults(trimmed, null, true)) {
+            results = SearchResultsSessionCache.results
+            suggestions = SearchResultsSessionCache.suggestions
+            searchLoading = false
             return@LaunchedEffect
         }
         searchLoading = true
         results = null
         val searchFor = trimmed
         runCatching {
-            val response = repository.search(searchFor, limit = 20)
+            val response = repository.search(
+                searchFor,
+                limit = 30,
+                preview = 5,
+                source = null,
+            )
             if (query.trim() == searchFor) {
                 results = response
                 suggestions = SearchBrowseLoader.suggestionsFromResponse(response)
-                historyStore.add(searchFor)
+                SearchResultsSessionCache.saveSnapshot(
+                    searchFor, response, suggestions, null, true,
+                )
             }
         }.onFailure {
             if (query.trim() == searchFor) {
                 results = SearchResponse()
                 suggestions = emptyList()
+                SearchResultsSessionCache.saveSnapshot(
+                    searchFor, SearchResponse(), emptyList(), null, true,
+                )
             }
         }
         if (query.trim() == searchFor) searchLoading = false
     }
 
+    LaunchedEffect(query, results, suggestions) {
+        val trimmed = query.trim()
+        if (trimmed.isNotEmpty()) {
+            SearchResultsSessionCache.saveSnapshot(
+                trimmed, results, suggestions, null, true,
+            )
+        }
+    }
+
+    if (showPinEditor) {
+        SearchPinsEditorSheet(
+            repository = repository,
+            initialPins = searchPins,
+            onDismiss = { showPinEditor = false },
+            onSaved = { searchPins = it },
+        )
+    }
+    if (showSonicAdventure) {
+        SearchSonicAdventureScreen(
+            repository = repository,
+            onBack = { showSonicAdventure = false },
+            onOpenAlbum = { album, artist ->
+                recordSelection(SearchRecentSelection.fromAlbum(album, artist))
+                showSonicAdventure = false
+                onOpenAlbum(album, artist)
+            },
+            onOpenGenre = { name ->
+                recordSelection(SearchRecentSelection.fromGenre(name))
+                showSonicAdventure = false
+                onOpenGenre(name)
+            },
+        )
+        return
+    }
+    if (showSonicSage) {
+        MixMuseDialog(
+            repository = repository,
+            seed = DiscoverySeed(
+                kind = DiscoverySeedKind.playlist,
+                title = "My library",
+            ),
+            onDismiss = { showSonicSage = false },
+            onPlaylistCreated = { _, _ -> },
+        )
+    }
+
+    rankingKind?.let { kind ->
+        SearchTopRankingScreen(
+            kind = kind,
+            repository = repository,
+            remoteOk = remoteOk,
+            onBack = { rankingKind = null },
+            onOpenArtist = { name ->
+                recordSelection(SearchRecentSelection.fromArtist(name))
+                onOpenArtist(name)
+            },
+            onOpenAlbum = { album, artist ->
+                recordSelection(SearchRecentSelection.fromAlbum(album, artist))
+                onOpenAlbum(album, artist)
+            },
+            onPlay = onPlay,
+        )
+        return
+    }
+
     val trimmedQuery = query.trim()
     val showResults = trimmedQuery.length >= 2
     val showSuggestions = trimmedQuery.length == 1
-    val showRecents = trimmedQuery.isEmpty() && searchFocused
 
     Column(Modifier.fillMaxSize()) {
         TabScreenHeader("Search") {
@@ -135,13 +201,11 @@ fun SearchScreen(
         SearchField(
             query,
             { query = it },
-            "What do you want to listen to?",
+            "Search…",
             modifier = Modifier
                 .padding(horizontal = 16.dp)
                 .testTag(BockTestTags.SEARCH_FIELD),
-            onFocusChanged = { searchFocused = it },
         )
-
         when {
             showResults -> when {
                 searchLoading && results == null -> LoadingBox(Modifier.weight(1f))
@@ -149,20 +213,39 @@ fun SearchScreen(
                     repository = repository,
                     results = results ?: SearchResponse(),
                     query = trimmedQuery,
-                remoteOk = remoteOk,
-                favoritePaths = favoritePaths,
-                onPlay = onPlay,
-                onOpenArtist = onOpenArtist,
-                onOpenAlbum = onOpenAlbum,
-                onOpenPlaylist = onOpenPlaylist,
-                snackbarHostState = snackbarHostState,
-                onFavoriteToggle = { path, hit, starred ->
-                    scope.launch {
-                        if (starred) repository.removeFavorite(path)
-                        else repository.addFavorite(path, hit.title, hit.artist, hit.album)
-                        favoritePaths = repository.favorites().map { it.path }.toSet()
-                    }
-                },
+                    searchSource = null,
+                    remoteOk = remoteOk,
+                    songRatings = songRatings,
+                    onPlay = onPlay,
+                    onOpenArtist = onOpenArtist,
+                    onOpenAlbum = onOpenAlbum,
+                    onOpenGenre = onOpenGenre,
+                    onOpenPlaylist = { id ->
+                        scope.launch {
+                            runCatching { repository.playlists(search = "", limit = 500) }
+                                .getOrNull()?.items?.find { it.id == id }?.let { pl ->
+                                    recordSelection(SearchRecentSelection.fromPlaylist(id, pl.name))
+                                }
+                        }
+                        onOpenPlaylist(id)
+                    },
+                    snackbarHostState = snackbarHostState,
+                    onRatingChange = { path, hit, stars ->
+                        scope.launch {
+                            runCatching {
+                                repository.setRating(
+                                    kind = com.bockmedia.console.ui.components.RatingKind.Song,
+                                    id = path,
+                                    stars = stars,
+                                    title = hit.title,
+                                    artist = hit.artist,
+                                    album = hit.album,
+                                )
+                            }
+                            songRatings = repository.ratedSongMap()
+                        }
+                    },
+                    onRecordSelection = ::recordSelection,
                 )
             }
             showSuggestions -> {
@@ -173,6 +256,7 @@ fun SearchScreen(
                         suggestions = suggestions,
                         repository = repository,
                         onSuggestionClick = { suggestion ->
+                            SearchRecentSelection.fromSuggestion(suggestion)?.let(::recordSelection)
                             if (suggestion.kind == SearchSuggestionKind.Playlist && suggestion.id != null) {
                                 onOpenPlaylist(suggestion.id)
                             } else {
@@ -182,259 +266,59 @@ fun SearchScreen(
                                         is PlayTarget.Album -> onOpenAlbum(target.name, target.artist)
                                         else -> onPlay(target)
                                     }
-                                } ?: run {
-                                    query = suggestion.title
-                                }
+                                } ?: run { query = suggestion.title }
                             }
-                            scope.launch { historyStore.add(suggestion.title) }
                         },
                     )
                 }
             }
-            showRecents -> SearchRecentQueriesSection(
-                queries = recentQueries,
-                onQueryClick = { query = it },
-                onRemove = { q -> scope.launch { historyStore.remove(q) } },
-            )
-            browseView == SearchView.NewReleases -> SearchNewReleasesList(
-                albums = browseFeed?.newReleases.orEmpty(),
-                repository = repository,
-                onAlbumClick = { album -> onOpenAlbum(album.name, album.artist) },
-                onBack = { browseView = SearchView.Browse },
-            )
-            browseLoading && browseFeed == null -> LoadingBox(Modifier.weight(1f))
             else -> BockLazyColumn(Modifier.weight(1f)) {
-                browseFeed?.pickedForYou?.let { picked ->
-                    item {
-                        SearchPickedForYouSection(
-                            cards = picked,
-                            repository = repository,
-                            onCardClick = { card ->
-                                card.playlistId?.let(onOpenPlaylist)
-                                    ?: onPlay(card.playTarget)
-                            },
-                            modifier = Modifier.padding(bottom = 16.dp),
-                        )
-                    }
-                }
                 item {
-                    SearchBrowseAllSection(
-                        newReleases = browseFeed?.newReleases.orEmpty(),
-                        genres = browseFeed?.genres.orEmpty(),
+                    SearchPlexampBrowse(
                         repository = repository,
-                        onNewReleasesClick = { browseView = SearchView.NewReleases },
-                        onGenreClick = { genre -> onOpenGenre(genre.name) },
-                        onGenreLongClick = { genre ->
-                            scope.launch {
-                                val seedArtist = runCatching {
-                                    repository.songs(page = 1, search = genre.name, limit = 8)
-                                        .items.mapNotNull { it.artist?.takeIf { a -> a.isNotBlank() } }
-                                        .firstOrNull()
-                                }.getOrNull() ?: genre.name
-                                onPlay(
+                        recentSelections = recentSelections,
+                        customPins = searchPins,
+                        onAuralFixation = { rankingKind = it },
+                        onSonicAdventure = { showSonicAdventure = true },
+                        onSonicSage = { showSonicSage = true },
+                        onEditShortcuts = { showPinEditor = true },
+                        onPinClick = { pin ->
+                            val title = pin.title ?: pin.name ?: "Shortcut"
+                            when (pin.kind.lowercase()) {
+                                "playlist" -> pin.id?.let(onOpenPlaylist)
+                                "genre" -> onOpenGenre(pin.name ?: title)
+                                "artist" -> onOpenArtist(pin.name ?: title)
+                                "album" -> onOpenAlbum(pin.name ?: title, pin.artist)
+                                "radio", "mix" -> onPlay(
                                     PlayTarget.Radio(
-                                        displayTitle = "${genre.name} Radio",
-                                        seedKind = PlayTarget.RadioSeedKind.Genre,
-                                        name = seedArtist,
+                                        title,
+                                        PlayTarget.RadioSeedKind.Artist,
+                                        pin.name ?: title,
+                                        pin.path,
                                     ),
                                 )
+                                else -> pin.path?.let { onPlay(PlayTarget.Song(it, title)) }
                             }
                         },
+                        onRecentClick = { item ->
+                            when (item.kind) {
+                                "artist" -> onOpenArtist(item.title)
+                                "album" -> onOpenAlbum(item.title, item.artist)
+                                "playlist" -> item.id?.let(onOpenPlaylist)
+                                "genre" -> onOpenGenre(item.title)
+                                "song" -> item.path?.let { onPlay(PlayTarget.Song(it, item.title)) }
+                            }
+                        },
+                        onRecentRemove = { item ->
+                            scope.launch { historyStore.removeSelection(item) }
+                        },
+                        onClearRecent = {
+                            scope.launch { historyStore.clearSelections() }
+                        },
+                        modifier = Modifier.padding(top = 8.dp, bottom = 24.dp),
                     )
                 }
             }
         }
     }
-}
-
-@Composable
-private fun SearchResultsList(
-    repository: BockMediaRepository,
-    results: SearchResponse,
-    query: String,
-    remoteOk: Boolean,
-    favoritePaths: Set<String>,
-    onPlay: (PlayTarget) -> Unit,
-    onOpenArtist: (String) -> Unit,
-    onOpenAlbum: (String, String?) -> Unit,
-    onOpenPlaylist: (String) -> Unit,
-    snackbarHostState: SnackbarHostState? = null,
-    onFavoriteToggle: (String, SearchHit, Boolean) -> Unit,
-) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var addToPlaylist by remember { mutableStateOf<Pair<String, String>?>(null) }
-
-    addToPlaylist?.let { (path, title) ->
-        AddToPlaylistSheet(
-            repository = repository,
-            trackPath = path,
-            trackTitle = title,
-            onDismiss = { addToPlaylist = null },
-            onAdded = { msg ->
-                scope.launch { snackbarHostState?.showSnackbar(msg) }
-            },
-        )
-    }
-
-    BockLazyColumn(Modifier.testTag(BockTestTags.SEARCH_RESULTS)) {
-        results.playlists.takeIf { it.isNotEmpty() }?.let { list ->
-            item { SearchSectionHeader("Playlists") }
-            items(list, key = { "pl-${it.id}" }) { hit ->
-                val id = hit.id ?: return@items
-                val target = PlayTarget.Playlist(id, hit.name ?: "")
-                SearchHitRow(
-                    repository = repository,
-                    kind = SearchSuggestionKind.Playlist,
-                    hit = hit,
-                    title = hit.name ?: "",
-                    subtitle = null,
-                    onClick = { onOpenPlaylist(id) },
-                    trailing = {
-                        PlayDownloadActions(playTarget = target, remoteOk = remoteOk, onPlay = { onPlay(target) })
-                    },
-                )
-            }
-        }
-        results.artists.takeIf { it.isNotEmpty() }?.let { list ->
-            item { SearchSectionHeader("Artists") }
-            items(list, key = { "ar-${it.name}" }) { hit ->
-                val name = hit.name ?: ""
-                val target = PlayTarget.Artist(name)
-                SearchHitRow(
-                    repository = repository,
-                    kind = SearchSuggestionKind.Artist,
-                    hit = hit,
-                    title = name,
-                    subtitle = null,
-                    onClick = { onOpenArtist(name) },
-                    trailing = {
-                        PlayDownloadActions(playTarget = target, remoteOk = remoteOk, onPlay = { onPlay(target) })
-                    },
-                )
-            }
-        }
-        results.albums.takeIf { it.isNotEmpty() }?.let { list ->
-            item { SearchSectionHeader("Albums") }
-            items(list, key = { "al-${it.name}-${it.artist}" }) { hit ->
-                val target = PlayTarget.Album(hit.name ?: "", hit.artist)
-                SearchHitRow(
-                    repository = repository,
-                    kind = SearchSuggestionKind.Album,
-                    hit = hit,
-                    title = hit.name ?: "",
-                    subtitle = hit.artist,
-                    onClick = { hit.name?.let { onOpenAlbum(it, hit.artist) } },
-                    trailing = {
-                        PlayDownloadActions(playTarget = target, remoteOk = remoteOk, onPlay = { onPlay(target) })
-                    },
-                )
-            }
-        }
-        results.songs.takeIf { it.isNotEmpty() }?.let { list ->
-            item { SearchSectionHeader("Songs") }
-            items(list, key = { "so-${it.path}" }) { hit ->
-                val path = hit.path.orEmpty()
-                val starred = path in favoritePaths
-                val target = PlayTarget.Song(path, hit.title ?: "")
-                val canPlay = remoteOk || OfflineDownloadManager.isDownloaded(target)
-                SearchHitRow(
-                    repository = repository,
-                    kind = SearchSuggestionKind.Song,
-                    hit = hit,
-                    title = hit.title ?: hit.name ?: "",
-                    subtitle = hit.artist,
-                    onClick = {
-                        if (remoteOk) onPlay(target)
-                        else scope.launch {
-                            val err = PhonePlayback.playLocally(context, target)
-                            err?.let { snackbarHostState?.showSnackbar(it) }
-                        }
-                    },
-                    trailing = {
-                        PlayDownloadActions(
-                            playTarget = target,
-                            remoteOk = canPlay,
-                            onPlay = {
-                                if (remoteOk) onPlay(target)
-                                else scope.launch {
-                                    val err = PhonePlayback.playLocally(context, target)
-                                    err?.let { snackbarHostState?.showSnackbar(it) }
-                                }
-                            },
-                            leading = {
-                                IconButton(onClick = { addToPlaylist = path to (hit.title ?: hit.name ?: "Track") }) {
-                                    Icon(Icons.Default.PlaylistAdd, contentDescription = "Add to playlist")
-                                }
-                                IconButton(onClick = { onFavoriteToggle(path, hit, starred) }) {
-                                    Icon(
-                                        if (starred) Icons.Default.Star else Icons.Default.StarBorder,
-                                        contentDescription = "Favorite",
-                                        tint = if (starred) MaterialTheme.colorScheme.primary
-                                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                            },
-                        )
-                    },
-                )
-            }
-        }
-        if (results.playlists.isEmpty() && results.artists.isEmpty() &&
-            results.albums.isEmpty() && results.songs.isEmpty()
-        ) {
-            item {
-                Box(Modifier.fillMaxWidth().padding(32.dp)) {
-                    Text("No results for \"$query\"", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SearchSectionHeader(title: String) {
-    Text(
-        title,
-        style = MaterialTheme.typography.titleSmall,
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-    )
-}
-
-@Composable
-private fun SearchHitRow(
-    repository: BockMediaRepository,
-    kind: SearchSuggestionKind,
-    hit: SearchHit,
-    title: String,
-    subtitle: String?,
-    onClick: () -> Unit,
-    trailing: @Composable () -> Unit,
-) {
-    val variantKey = hit.id ?: hit.path ?: title
-    val artUrl = rememberArtworkUrl(
-        repository = repository,
-        title = title,
-        artPath = hit.path,
-        playlistId = if (kind == SearchSuggestionKind.Playlist) hit.id else null,
-        artistName = if (kind == SearchSuggestionKind.Artist) title else null,
-        albumName = if (kind == SearchSuggestionKind.Album) title else null,
-        albumArtist = hit.artist,
-        variantKey = variantKey,
-    )
-    ListItem(
-        headlineContent = { Text(title) },
-        supportingContent = subtitle?.let { { Text(it) } },
-        leadingContent = {
-            BockArtwork(
-                model = artUrl,
-                title = title,
-                modifier = Modifier.size(48.dp),
-                shape = RoundedCornerShape(if (kind == SearchSuggestionKind.Artist) 24.dp else 6.dp),
-                fallbackFontSize = 16.sp,
-            )
-        },
-        trailingContent = trailing,
-        modifier = Modifier.clickable(onClick = onClick),
-    )
 }

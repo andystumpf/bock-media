@@ -33,6 +33,7 @@ import com.bockmedia.console.media.LocalPlaybackController
 import com.bockmedia.console.BockMediaApp
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.ui.components.BockLazyColumn
+import com.bockmedia.console.ui.components.TabScreenHeader
 import kotlinx.coroutines.launch
 
 private val SpotifySheetBg = Color(0xFF121212)
@@ -132,6 +133,9 @@ fun DownloadsManagementSection(
     }
 
     Column(modifier) {
+        if (!embedded) {
+            TabScreenHeader("Downloads")
+        }
         DownloadsStorageSummary(
             storageBytes = storageBytes,
             completeCount = sorted.count { it.state == DownloadState.Complete },

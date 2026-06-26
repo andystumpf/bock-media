@@ -13,8 +13,8 @@ android {
         applicationId = "com.bockmedia.console"
         minSdk = 26
         targetSdk = 35
-        versionCode = 13
-        versionName = "2.4.2"
+        versionCode = 36
+        versionName = "2.6.14"
         // Bock Media server endpoints (override via local.properties if needed)
         val localProps = rootProject.file("local.properties")
         fun prop(name: String) = if (localProps.exists()) {
@@ -24,11 +24,21 @@ android {
                 ?.trim()
                 ?: ""
         } else ""
+        fun configMobileApiToken(): String {
+            val config = rootProject.file("../config.json")
+            if (!config.exists()) return ""
+            return Regex(""""token"\s*:\s*"([^"]+)"""")
+                .find(config.readText())
+                ?.groupValues
+                ?.get(1)
+                ?.takeIf { it.isNotBlank() && !it.startsWith("SET_") && !it.startsWith("GENERATE_") }
+                ?: ""
+        }
         val localServerUrl = prop("bockmedia.localServerUrl")
             .ifBlank { "http://192.168.1.187:3001" }
         val externalServerUrl = prop("bockmedia.externalServerUrl")
             .ifBlank { "http://142.56.8.193:3001" }
-        val mobileApiToken = prop("bockmedia.mobileApiToken")
+        val mobileApiToken = prop("bockmedia.mobileApiToken").ifBlank { configMobileApiToken() }
         val adminUser = prop("bockmedia.adminUser")
         val adminPassword = prop("bockmedia.adminPassword")
         buildConfigField("String", "DEFAULT_LOCAL_SERVER_URL", "\"$localServerUrl\"")
@@ -79,7 +89,8 @@ android {
             isMinifyEnabled = false
             isShrinkResources = false
             matchingFallbacks += listOf("release")
-            signingConfig = null
+            // Must be signed — unsigned APKs fail INSTALL_PARSE_FAILED_NO_CERTIFICATES on device.
+            signingConfig = signingConfigs.getByName("debug")
         }
         debug {
             applicationIdSuffix = ".debug"

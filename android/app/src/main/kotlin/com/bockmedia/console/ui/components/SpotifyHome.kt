@@ -28,10 +28,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.bockmedia.console.data.repository.BockMediaRepository
-import com.bockmedia.console.data.network.NetworkReachability
-import com.bockmedia.console.domain.model.HomeArtworkCache
-import com.bockmedia.console.domain.model.HomeArtworkResolver
+import com.bockmedia.console.domain.model.HomeFeedRules
+import com.bockmedia.console.domain.model.HomeCardBrowse
 import com.bockmedia.console.domain.model.HomeCard
+import com.bockmedia.console.domain.model.linkedPlaylistId
 import com.bockmedia.console.domain.model.HomeFilter
 import com.bockmedia.console.domain.model.HomeSection
 import com.bockmedia.console.domain.model.HomeSectionKind
@@ -45,15 +45,11 @@ private val TileSize = 148.dp
 
 private fun openHomeCard(
     card: HomeCard,
-    onOpenPlaylist: (String) -> Unit,
-    onPlay: (HomeCard) -> Unit,
+    onBrowse: (HomeCard) -> Unit,
 ) {
-    val playlistId = card.playlistId ?: (card.playTarget as? PlayTarget.Playlist)?.id
-    if (playlistId != null) {
-        onOpenPlaylist(playlistId)
-        return
+    if (HomeCardBrowse.destination(card) != null) {
+        onBrowse(card)
     }
-    onPlay(card)
 }
 
 @Composable
@@ -130,10 +126,8 @@ fun HomePillFilters(
 fun HomeShortcutGrid(
     cards: List<HomeCard>,
     repository: BockMediaRepository,
-    remoteOk: Boolean,
     onPlay: (HomeCard) -> Unit,
     onLongPress: (HomeCard) -> Unit,
-    onOpenPlaylist: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     if (cards.isEmpty()) return
@@ -215,7 +209,7 @@ fun SpotifyHomeSection(
     remoteOk: Boolean,
     onPlay: (HomeCard) -> Unit,
     onLongPress: (HomeCard) -> Unit,
-    onOpenPlaylist: (String) -> Unit = {},
+    onBrowse: (HomeCard) -> Unit,
     modifier: Modifier = Modifier,
     onShowAll: ((HomeSection) -> Unit)? = null,
 ) {
@@ -262,7 +256,7 @@ fun SpotifyHomeSection(
                     card = card,
                     repository = repository,
                     remoteOk = remoteOk || card.kind == HomeSectionKind.Offline,
-                    onOpenPlaylist = onOpenPlaylist,
+                    onBrowse = onBrowse,
                     onPlay = onPlay,
                     onLongPress = { onLongPress(card) },
                     modifier = Modifier.width(TileSize),
@@ -349,7 +343,7 @@ fun HomeSectionShowAllSheet(
     remoteOk: Boolean,
     onDismiss: () -> Unit,
     onPlay: (HomeCard) -> Unit,
-    onOpenPlaylist: (String) -> Unit = {},
+    onBrowse: (HomeCard) -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(
@@ -386,7 +380,7 @@ fun HomeSectionShowAllSheet(
                 section.cards.forEach { card ->
                     ListItem(
                         modifier = Modifier.clickable {
-                            openHomeCard(card, onOpenPlaylist, onPlay)
+                            openHomeCard(card, onBrowse)
                         },
                         leadingContent = {
                             HomeCardArt(
@@ -438,16 +432,43 @@ private fun HomeCardArt(
     repository: BockMediaRepository,
     modifier: Modifier = Modifier,
 ) {
-    val netGen = NetworkReachability.generation
-    val baseUrl = remember(repository, netGen) { repository.peekBaseUrl() }
-    var artUrl by remember(card.id, baseUrl, netGen) {
-        mutableStateOf(HomeArtworkResolver.peekUrl(baseUrl, card))
+    val target = card.playTarget
+    val playlistId = card.linkedPlaylistId() ?: (target as? PlayTarget.Playlist)?.id
+    if (!playlistId.isNullOrBlank()) {
+        PlaylistTileArt(
+            repository = repository,
+            playlistId = playlistId,
+            title = card.title,
+            artPath = card.artPath,
+            modifier = modifier,
+            shape = ArtShape,
+            fallbackFontSize = 18.sp,
+            sizePx = TILE_ART_SIZE_PX,
+        )
+        return
     }
-    LaunchedEffect(card.id, baseUrl, netGen) {
-        artUrl = HomeArtworkResolver.peekUrl(baseUrl, card)
-        if (artUrl != null) return@LaunchedEffect
-        artUrl = HomeArtworkResolver.resolveUrl(repository, card)
-    }
+    val genreName = HomeFeedRules.mixGenreLabel(card.title)
+        ?: (target as? PlayTarget.Radio)?.takeIf { it.seedKind == PlayTarget.RadioSeedKind.Genre }?.let {
+            HomeFeedRules.mixGenreLabel(it.displayTitle) ?: HomeFeedRules.genreRadioLabel(it.displayTitle)
+        }
+    val artUrl = rememberArtworkUrl(
+        repository = repository,
+        title = card.title,
+        artPath = card.artPath,
+        playlistId = card.linkedPlaylistId(),
+        variantKey = card.id,
+        cardId = card.id,
+        playTarget = target,
+        genreName = genreName,
+        artistName = when (target) {
+            is PlayTarget.Artist -> target.name
+            is PlayTarget.Radio -> if (target.seedKind == PlayTarget.RadioSeedKind.Artist) target.name else null
+            else -> null
+        },
+        albumName = (target as? PlayTarget.Album)?.name,
+        albumArtist = (target as? PlayTarget.Album)?.artist,
+        sizePx = TILE_ART_SIZE_PX,
+    )
     BockArtwork(
         model = artUrl,
         title = card.title,
@@ -464,7 +485,7 @@ private fun HomeCollectionTile(
     card: HomeCard,
     repository: BockMediaRepository,
     remoteOk: Boolean,
-    onOpenPlaylist: (String) -> Unit,
+    onBrowse: (HomeCard) -> Unit,
     onPlay: (HomeCard) -> Unit,
     onLongPress: () -> Unit,
     modifier: Modifier = Modifier,
@@ -474,38 +495,28 @@ private fun HomeCollectionTile(
         Box(
             Modifier
                 .fillMaxWidth()
-                .aspectRatio(1f)
-                .combinedClickable(
-                    onClick = { openHomeCard(card, onOpenPlaylist, onPlay) },
-                    onLongClick = onLongPress,
-                ),
+                .aspectRatio(1f),
         ) {
-            HomeCardArt(
-                card = card,
-                repository = repository,
-                modifier = Modifier
+            Box(
+                Modifier
                     .fillMaxSize()
-                    .clip(tileShape),
+                    .clip(tileShape)
+                    .combinedClickable(
+                        onClick = { openHomeCard(card, onBrowse) },
+                        onLongClick = onLongPress,
+                    ),
+            ) {
+                HomeCardArt(
+                    card = card,
+                    repository = repository,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+            ArtworkTileOverlayActions(
+                playTarget = card.playTarget,
+                showDownload = card.kind != HomeSectionKind.Offline,
+                onPlay = { onPlay(card) },
             )
-            if (card.kind != HomeSectionKind.Offline) {
-                DownloadStatusControl(
-                    playTarget = card.playTarget,
-                    onArtwork = true,
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(4.dp),
-                )
-            }
-            if (remoteOk) {
-                CircularPlayButton(
-                    onClick = { onPlay(card) },
-                    size = 48.dp,
-                    elevated = true,
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(8.dp),
-                )
-            }
         }
         Spacer(Modifier.height(8.dp))
         Text(

@@ -35,7 +35,7 @@ internal fun resolveScreenHeader(
         }
         ROUTE_SONGS_ALBUM -> {
             val name = decodeNavArg(album)
-            ScreenHeader(name.ifBlank { "Songs" }, showBack = true)
+            ScreenHeader(name.ifBlank { "Album" }, showBack = true)
         }
         ROUTE_GENRE -> {
             val name = decodeNavArg(genre)
@@ -52,8 +52,8 @@ internal fun resolveScreenHeader(
                 ScreenHeader(name.ifBlank { "Songs" }, showBack = true)
             }
             route.startsWith("songs/album/") -> {
-                val name = decodeNavArg(route.removePrefix("songs/album/"))
-                ScreenHeader(name.ifBlank { "Songs" }, showBack = true)
+                val name = decodeNavArg(route.removePrefix("songs/album/").substringBefore('?'))
+                ScreenHeader(name.ifBlank { "Album" }, showBack = true)
             }
             route.startsWith("genre/") -> {
                 val name = decodeNavArg(route.removePrefix("genre/"))
@@ -93,7 +93,7 @@ fun isBottomNavRoute(route: String?): Boolean {
     return BockRoute.bottomNavRoutes.any { it.route == top }
 }
 
-/** True on Home / Search / Library / Automations tabs — no nested stack route. */
+/** True on Home / Search / Library / Downloads / Automations tabs — no nested stack route. */
 fun isBottomNavRoot(route: String?): Boolean {
     if (route.isNullOrBlank()) return true
     if (route.contains('/')) return false

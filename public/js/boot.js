@@ -54,7 +54,7 @@
   function bootSectionCard(card, covers, kind) {
     const grad = bootGradient(card.title);
     const cover = card.playlistId && covers[card.playlistId];
-    const url = card.artPath ? artUrl(card.artPath) : (cover ? artUrl(cover) : null);
+    const url = (cover ? artUrl(cover) : null) || (card.artPath ? artUrl(card.artPath) : null);
     if (kind === 'Radio' || card.playTarget?.kind === 'radio') {
       const disc = url
         ? `<img src="${url}" alt="" loading="eager">`

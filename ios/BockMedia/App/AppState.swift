@@ -120,7 +120,9 @@ final class AppState: ObservableObject {
 
     func playHomeCard(_ card: HomeCard) {
         HomeTileEngagement.recordSelection(cardId: card.id)
-        play(card.playTarget)
+        // Quick-access cards always open the device picker (parity with Android),
+        // rather than auto-playing on this iPhone.
+        pendingPlayTarget = card.playTarget
     }
 
     func refreshRemoteStatus() async {

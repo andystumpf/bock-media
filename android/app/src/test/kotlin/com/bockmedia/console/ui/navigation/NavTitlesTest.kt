@@ -42,6 +42,7 @@ class NavTitlesTest {
     fun resolveScreenHeader_hidesTitleForBottomNavTabs() {
         assertEquals("", resolveScreenHeader(route = BockRoute.Search.route).title)
         assertEquals("", resolveScreenHeader(route = BockRoute.Library.route).title)
+        assertEquals("", resolveScreenHeader(route = BockRoute.Downloads.route).title)
         assertEquals("", resolveScreenHeader(route = BockRoute.Automations.route).title)
     }
 
@@ -49,6 +50,7 @@ class NavTitlesTest {
     fun isBottomNavRoot_trueForTabRoutes() {
         assertTrue(isBottomNavRoot(BockRoute.Home.route))
         assertTrue(isBottomNavRoot(BockRoute.Search.route))
+        assertTrue(isBottomNavRoot(BockRoute.Downloads.route))
         assertFalse(isBottomNavRoot("albums/artist/Beatles"))
     }
 

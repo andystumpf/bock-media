@@ -38,15 +38,37 @@ if [[ "$GRADLE_VER" != "$NOTES_VER" ]]; then
 fi
 
 echo "Building Android v${GRADLE_VER} (sideload — full-size APK for /app)…"
+LOCAL_PROPS="$REPO_ROOT/android/local.properties"
+if ! grep -q '^bockmedia.mobileApiToken=' "$LOCAL_PROPS" 2>/dev/null; then
+  MOBILE_TOKEN="$(python3 - <<PY
+import json
+from pathlib import Path
+cfg = json.loads(Path("$REPO_ROOT/config.json").read_text(encoding="utf-8"))
+print(cfg.get("mobileApi", {}).get("token", "") or "")
+PY
+)"
+  if [[ -n "$MOBILE_TOKEN" && "$MOBILE_TOKEN" != SET_* && "$MOBILE_TOKEN" != GENERATE_* ]]; then
+    mkdir -p "$(dirname "$LOCAL_PROPS")"
+    printf '\nbockmedia.mobileApiToken=%s\n' "$MOBILE_TOKEN" >> "$LOCAL_PROPS"
+    echo "Injected mobile API token from config.json into android/local.properties for sideload build"
+  fi
+fi
 (cd "$REPO_ROOT/android" && ./gradlew assembleSideload)
 
-APK="$REPO_ROOT/android/app/build/outputs/apk/sideload/app-sideload-unsigned.apk"
+APK="$REPO_ROOT/android/app/build/outputs/apk/sideload/app-sideload.apk"
 if [[ ! -f "$APK" ]]; then
-  APK="$REPO_ROOT/android/app/build/outputs/apk/sideload/app-sideload.apk"
+  APK="$REPO_ROOT/android/app/build/outputs/apk/sideload/app-sideload-unsigned.apk"
 fi
 if [[ ! -f "$APK" ]]; then
   echo "APK not found after assembleSideload" >&2
   exit 1
+fi
+BUILD_TOOLS="$(ls -d "$HOME/Library/Android/sdk/build-tools/"* 2>/dev/null | sort -V | tail -1)"
+if [[ -n "$BUILD_TOOLS" && -x "$BUILD_TOOLS/apksigner" ]]; then
+  if ! "$BUILD_TOOLS/apksigner" verify --print-certs "$APK" >/dev/null 2>&1; then
+    echo "Refusing to deploy unsigned sideload APK (devices reject INSTALL_PARSE_FAILED_NO_CERTIFICATES)" >&2
+    exit 1
+  fi
 fi
 
 echo "Deploying to ${NAS}…"
@@ -55,9 +77,26 @@ ssh "$NAS" "printf '%s' '${GRADLE_VER}' > '${DATA_REMOTE}/bockmedia-console.vers
 scp "$NOTES" "${NAS}:${REPO_REMOTE}/app-release-notes.json"
 scp "$GRADLE" "${NAS}:${REPO_REMOTE}/android/app/build.gradle.kts"
 scp "$REPO_ROOT/server.py" "${NAS}:${REPO_REMOTE}/server.py"
+for mod in "$REPO_ROOT"/bock_*.py; do
+  scp "$mod" "${NAS}:${REPO_REMOTE}/$(basename "$mod")"
+done
 "$REPO_ROOT/scripts/deploy_web.sh" --no-restart
 
 ssh "$NAS" "sudo systemctl restart ourmedia"
 
 echo "Deployed v${GRADLE_VER} ($(du -h "$APK" | awk '{print $1}'))"
 echo "Verify: http://192.168.1.187:3001/app (download label and release notes should both say ${GRADLE_VER})"
+
+ADB_SERIAL="${ANDROID_DEVICE:-}"
+if [[ -z "$ADB_SERIAL" ]]; then
+  ADB_SERIAL="$(adb devices 2>/dev/null | awk '/device$/{print $1; exit}')"
+fi
+if [[ -n "$ADB_SERIAL" ]]; then
+  echo "Installing on ${ADB_SERIAL}…"
+  adb -s "$ADB_SERIAL" install -r "$APK"
+  adb -s "$ADB_SERIAL" shell am start -n com.bockmedia.console/com.bockmedia.console.MainActivity >/dev/null 2>&1 || true
+  echo "Phone install OK (${ADB_SERIAL})"
+else
+  echo "Phone: run from repo root after wireless pairing:"
+  echo "  adb connect 192.168.1.66:PORT && adb install -r android/app/build/outputs/apk/sideload/app-sideload.apk"
+fi

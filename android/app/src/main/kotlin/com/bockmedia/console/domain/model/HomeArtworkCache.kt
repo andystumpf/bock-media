@@ -6,6 +6,7 @@ import java.util.concurrent.ConcurrentHashMap
 object HomeArtworkCache {
     private val cardMediaPaths = ConcurrentHashMap<String, String>()
     private val playlistPaths = ConcurrentHashMap<String, String>()
+    private val collagePathsByPlaylistId = ConcurrentHashMap<String, List<String>>()
 
     @Volatile
     private var cachedAtMs: Long = 0L
@@ -17,16 +18,26 @@ object HomeArtworkCache {
         cards.isEmpty() || cards.all { mediaPathFor(it) != null }
 
     fun mediaPathFor(card: HomeCard): String? {
-        if (!fresh()) return null
+        card.linkedPlaylistId()?.let { id ->
+            playlistPaths[id]?.takeIf { it.isNotBlank() }?.let { return it }
+            // artPath is now the server's first-track cover (from /api/playlists), so it's
+            // accurate — paint it immediately instead of a per-tile cover lookup.
+            card.artPath?.takeIf { it.isNotBlank() }?.let { return it }
+            return null
+        }
+        // Inline art from composer/API — paint on cold start before the warm pass runs.
         card.artPath?.takeIf { it.isNotBlank() }?.let { return it }
+        if (!fresh()) return null
         cardMediaPaths[card.id]?.let { return it }
-        card.playlistId?.let { playlistPaths[it] }?.let { return it }
         return null
     }
 
     fun pathFor(cardId: String): String? = if (fresh()) cardMediaPaths[cardId] else null
 
-    fun playlistPath(id: String): String? = if (fresh()) playlistPaths[id] else null
+    fun playlistPath(id: String): String? = playlistPaths[id]?.takeIf { it.isNotBlank() }
+
+    fun playlistCollagePaths(id: String): List<String>? =
+        collagePathsByPlaylistId[id]?.filter { it.isNotBlank() }?.distinct()?.takeIf { it.isNotEmpty() }
 
     /** @deprecated Use mediaPathFor + current base URL. Kept for migration reads. */
     fun urlFor(cardId: String): String? = pathFor(cardId)
@@ -47,15 +58,37 @@ object HomeArtworkCache {
         playlistPaths[id] = path
     }
 
+    fun storePlaylistCollage(id: String, paths: List<String>) {
+        val cleaned = paths.filter { it.isNotBlank() }.distinct()
+        if (cleaned.isEmpty()) return
+        touch()
+        collagePathsByPlaylistId[id] = cleaned
+        playlistPaths[id] = cleaned.first()
+    }
+
     fun storePlaylistPaths(paths: Map<String, String>) {
         if (paths.isEmpty()) return
         touch()
         playlistPaths.putAll(paths)
+        paths.forEach { (id, path) -> collagePathsByPlaylistId.putIfAbsent(id, listOf(path)) }
+    }
+
+    fun storePlaylistCollages(collages: Map<String, List<String>>) {
+        if (collages.isEmpty()) return
+        touch()
+        collages.forEach { (id, paths) ->
+            val cleaned = paths.filter { it.isNotBlank() }.distinct()
+            if (cleaned.isEmpty()) return@forEach
+            collagePathsByPlaylistId[id] = cleaned
+            playlistPaths[id] = cleaned.first()
+        }
     }
 
     fun snapshotCardPaths(): Map<String, String> = HashMap(cardMediaPaths)
 
     fun snapshotPlaylistPaths(): Map<String, String> = HashMap(playlistPaths)
+
+    fun snapshotPlaylistCollagePaths(): Map<String, List<String>> = HashMap(collagePathsByPlaylistId)
 
     /** @deprecated */ fun snapshotCardUrls(): Map<String, String> = snapshotCardPaths()
 
@@ -82,6 +115,7 @@ object HomeArtworkCache {
     fun invalidate() {
         cardMediaPaths.clear()
         playlistPaths.clear()
+        collagePathsByPlaylistId.clear()
         cachedAtMs = 0L
     }
 

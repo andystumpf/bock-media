@@ -45,9 +45,11 @@ import com.bockmedia.console.media.isLocalPhoneDevice
 import com.bockmedia.console.media.toNowPlayingDevice
 import com.bockmedia.console.ui.alexaControlsAvailable
 import com.bockmedia.console.ui.components.BockArtwork
+import com.bockmedia.console.ui.components.CompactStarRatingBar
 import com.bockmedia.console.ui.components.ErrorText
 import com.bockmedia.console.ui.components.LoadingBox
 import com.bockmedia.console.ui.components.PaginationBar
+import com.bockmedia.console.ui.components.RatingKind
 import com.bockmedia.console.ui.components.UpNextSheet
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -99,7 +101,6 @@ fun NowPlayingScreen(
     var tick by remember { mutableIntStateOf(0) }
     var sleepDevice by remember { mutableStateOf<NowPlayingDeviceItem?>(null) }
     var showHistory by remember { mutableStateOf(false) }
-    var favoritePaths by remember { mutableStateOf<Set<String>>(emptySet()) }
     val volumes = remember { mutableStateMapOf<String, Int?>() }
     val shuffleOn = remember { mutableStateMapOf<String, Boolean>() }
     val volumeTimers = remember { mutableStateMapOf<String, kotlinx.coroutines.Job?>() }
@@ -134,7 +135,6 @@ fun NowPlayingScreen(
         var historyError: String? = null
         runCatching { refreshLive() }.onFailure { liveError = it.message }
         runCatching { loadHistory() }.onFailure { historyError = it.message }
-        runCatching { favoritePaths = repository.favorites().map { it.path }.toSet() }
         error = liveError ?: historyError
         loading = false
     }
@@ -269,33 +269,24 @@ fun NowPlayingScreen(
         error != null && items.isEmpty() && history.isEmpty() && !localState.active -> ErrorText(error!!) { scope.launch { loadAll() } }
         else -> {
             val devices = remember(items, alexaDevices, playbackFocusGeneration, localState) {
-                val remote = orderDevicesForDisplay(items, alexaDevices)
-                localState.toNowPlayingDevice()?.let { local ->
-                    listOf(local) + remote.filter { !isLocalPhoneDevice(it.deviceId) }
-                } ?: remote
+                mergeDevicesForDisplay(items, alexaDevices, localState)
             }
             val pagerState = rememberPagerState(
                 initialPage = PlaybackFocus.focusedIndex(devices).coerceIn(0, (devices.size - 1).coerceAtLeast(0)),
                 pageCount = { devices.size.coerceAtLeast(1) },
             )
-            val deviceIds = remember(devices) { devices.map { it.deviceId } }
 
-            LaunchedEffect(localState.active, deviceIds) {
-                if (!localState.active || devices.isEmpty()) return@LaunchedEffect
-                val localIdx = devices.indexOfFirst { isLocalPhoneDevice(it.deviceId) }
-                if (localIdx >= 0 && pagerState.currentPage != localIdx) {
-                    pagerState.scrollToPage(localIdx)
-                }
+            // Jump to the speaker the user just started — not on every poll (that blocks browsing others).
+            LaunchedEffect(playbackFocusGeneration) {
+                if (devices.isEmpty()) return@LaunchedEffect
+                val target = PlaybackFocus.focusedIndex(devices).coerceIn(0, devices.lastIndex)
+                pagerState.scrollToPage(target)
             }
 
-            LaunchedEffect(deviceIds, playbackFocusGeneration) {
+            LaunchedEffect(devices.size) {
                 if (devices.isEmpty()) return@LaunchedEffect
                 if (pagerState.currentPage >= devices.size) {
-                    pagerState.scrollToPage((devices.size - 1).coerceAtLeast(0))
-                }
-                val target = PlaybackFocus.focusedIndex(devices)
-                if (target in devices.indices && target != pagerState.currentPage) {
-                    pagerState.scrollToPage(target)
+                    pagerState.scrollToPage(devices.lastIndex)
                 }
             }
 
@@ -347,31 +338,8 @@ fun NowPlayingScreen(
                             onHistory = { showHistory = true },
                             onControl = { d, action -> scope.launch { runControl(d, action) } },
                             onSleep = { sleepDevice = it },
-                            favoritePaths = favoritePaths,
-                            onFavorite = { d ->
-                                scope.launch {
-                                    d.filepath?.let { path ->
-                                        val liked = path in favoritePaths
-                                        runCatching {
-                                            if (liked) {
-                                                repository.removeFavorite(path)
-                                                snackbarHostState.showSnackbar("Removed from Liked")
-                                            } else {
-                                                repository.addFavorite(path, d.track, d.artist, d.album)
-                                                snackbarHostState.showSnackbar("Added to Liked")
-                                            }
-                                            favoritePaths = repository.favorites().map { it.path }.toSet()
-                                        }.onFailure {
-                                            snackbarHostState.showSnackbar(
-                                                if (liked) "Failed to remove from Liked" else "Failed to add to Liked",
-                                            )
-                                        }
-                                    }
-                                }
-                            },
                         )
                     }
-
                     if (pagerDotsVisible) {
                         SpotifyDevicePagerHint(
                             currentPage = pagerState.currentPage,
@@ -386,6 +354,17 @@ fun NowPlayingScreen(
             }
         }
     }
+}
+
+/** Remote Echo rows plus local phone when actively playing (matches iOS NowPlayingMerge). */
+private fun mergeDevicesForDisplay(
+    items: List<NowPlayingDeviceItem>,
+    alexaDevices: List<AlexaDevice>,
+    localState: com.bockmedia.console.media.LocalPlaybackState,
+): List<NowPlayingDeviceItem> {
+    val remote = orderDevicesForDisplay(items, alexaDevices)
+    val local = localState.toNowPlayingDevice() ?: return remote
+    return listOf(local) + remote.filter { !isLocalPhoneDevice(it.deviceId) }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -545,8 +524,6 @@ private fun SpotifyNowPlayingPage(
     onHistory: () -> Unit,
     onControl: (NowPlayingDeviceItem, String) -> Unit,
     onSleep: (NowPlayingDeviceItem) -> Unit,
-    favoritePaths: Set<String>,
-    onFavorite: (NowPlayingDeviceItem) -> Unit,
 ) {
     val isLocal = isLocalPhoneDevice(dev.deviceId)
     val liveLocal by LocalPlaybackController.state.collectAsState()
@@ -745,8 +722,7 @@ private fun SpotifyNowPlayingPage(
                     SpotifyTrackInfoRow(
                         dev = displayDev,
                         year = year,
-                        isLiked = displayDev.filepath?.let { it in favoritePaths } == true,
-                        onFavorite = onFavorite,
+                        repository = repository,
                         modifier = Modifier.padding(horizontal = 24.dp),
                     )
 
@@ -944,10 +920,25 @@ private fun SpotifyPlayerTopBar(
 private fun SpotifyTrackInfoRow(
     dev: NowPlayingDeviceItem,
     year: Int?,
-    isLiked: Boolean,
-    onFavorite: (NowPlayingDeviceItem) -> Unit,
+    repository: BockMediaRepository,
     modifier: Modifier = Modifier,
 ) {
+    val scope = rememberCoroutineScope()
+    val path = dev.filepath
+    var stars by remember(path) { mutableIntStateOf(0) }
+    var loadingRating by remember(path) { mutableStateOf(path != null) }
+
+    LaunchedEffect(path) {
+        if (path == null) {
+            stars = 0
+            loadingRating = false
+            return@LaunchedEffect
+        }
+        loadingRating = true
+        stars = runCatching { repository.ratingStars(RatingKind.Song, path) }.getOrDefault(0)
+        loadingRating = false
+    }
+
     Row(
         modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -984,14 +975,27 @@ private fun SpotifyTrackInfoRow(
                 )
             }
         }
-        if (dev.filepath != null) {
-            IconButton(onClick = { onFavorite(dev) }) {
-                Icon(
-                    if (isLiked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                    contentDescription = if (isLiked) "Remove from Liked" else "Add to Liked",
-                    tint = if (isLiked) BockGreen else Color.White,
-                )
-            }
+        if (path != null) {
+            CompactStarRatingBar(
+                stars = stars,
+                loading = loadingRating,
+                tint = Color.White,
+                onStarsChange = { value ->
+                    stars = value
+                    scope.launch {
+                        runCatching {
+                            repository.setRating(
+                                kind = RatingKind.Song,
+                                id = path,
+                                stars = value,
+                                title = dev.track,
+                                artist = dev.artist,
+                                album = dev.album,
+                            )
+                        }
+                    }
+                },
+            )
         }
     }
 }

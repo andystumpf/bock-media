@@ -55,6 +55,7 @@ object BockUiHarness {
                     BockTestTags.NAV_HOME -> "Home"
                     BockTestTags.NAV_SEARCH -> "Search"
                     BockTestTags.NAV_LIBRARY -> "Library"
+                    BockTestTags.NAV_DOWNLOADS -> "Downloads"
                     BockTestTags.NAV_AUTOMATIONS -> "Automations"
                     else -> error("Unknown nav tag: $tag")
                 }

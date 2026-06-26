@@ -1,7 +1,9 @@
 package com.bockmedia.console.domain.model
 
 import com.bockmedia.console.domain.model.PlayTarget.Playlist
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -25,6 +27,34 @@ class HomeArtworkCacheTest {
     @Before
     fun reset() {
         HomeArtworkCache.invalidate()
+    }
+
+    @Test
+    fun mediaPathFor_playlistCardUsesInlineCoverThenCachedCover() {
+        // artPath now carries the server's first-track cover from /api/playlists, so a
+        // playlist tile paints from it immediately (no per-tile cover lookup).
+        val card = cardA.copy(artPath = "/list/first-track.mp3")
+        assertEquals("/list/first-track.mp3", HomeArtworkCache.mediaPathFor(card))
+        // A freshly fetched playlist cover takes precedence over the inline one.
+        HomeArtworkCache.storePlaylistPath("p1", "/fetched/cover.mp3")
+        assertEquals("/fetched/cover.mp3", HomeArtworkCache.mediaPathFor(card))
+    }
+
+    @Test
+    fun mediaPathFor_inlineArtPathBeforeWarm() {
+        val mix = HomeCard(
+            id = "mix-rock",
+            title = "Rock Mix",
+            artPath = "/mnt/bock/Music/rock-cover.mp3",
+            playTarget = PlayTarget.Artist("Some Artist"),
+            kind = HomeSectionKind.TopMixes,
+        )
+        assertEquals("/mnt/bock/Music/rock-cover.mp3", HomeArtworkCache.mediaPathFor(mix))
+    }
+
+    @Test
+    fun mediaPathFor_playlistCardWithoutArtIsNull() {
+        assertNull(HomeArtworkCache.mediaPathFor(cardB))
     }
 
     @Test

@@ -43,6 +43,48 @@ private let homeShortcutMixKinds: Set<HomeSectionKind> = [
 ]
 
 extension HomeCard {
+    /// Playlist id when this tile represents a library playlist (detail navigation).
+    var linkedPlaylistId: String? {
+        if let playlistId { return playlistId }
+        if case .playlist(let id, _) = playTarget { return id }
+        return nil
+    }
+
+    /// Genre behind a synthetic "<genre> Mix" tile (artist-seeded, no real playlist).
+    var mixGenre: String? {
+        guard kind == .topMixes, case .artist = playTarget, title.hasSuffix(" Mix") else { return nil }
+        let genre = String(title.dropLast(" Mix".count))
+        return genre.isEmpty ? nil : genre
+    }
+
+    var browseLibraryRoute: LibraryRoute? {
+        if kind == .offline { return nil }
+        if let id = linkedPlaylistId { return .playlistDetail(id) }
+        if mixGenre != nil { return nil }  // handled by browseSearchRoute (genre page)
+        switch playTarget {
+        case .playlist(let id, _):
+            return .playlistDetail(id)
+        case .artist(let name):
+            return .albums(artist: name)
+        case .album(let name, _):
+            return .songs(artist: nil, album: name)
+        case .radio(_, .artist, let seed, _):
+            return .albums(artist: seed)
+        default:
+            return nil
+        }
+    }
+
+    var browseSearchRoute: SearchRoute? {
+        if let genre = mixGenre { return .genre(genre) }
+        switch playTarget {
+        case .radio(_, .genre, let seed, _):
+            return .genre(seed)
+        default:
+            return nil
+        }
+    }
+
     /// Quick-access tiles: playlists and mixes only — never albums or individual tracks.
     var eligibleForHomeShortcut: Bool {
         switch playTarget {

@@ -103,12 +103,6 @@ object NowPlayingController {
         before: NowPlayingDeviceItem?,
     ) {
         NowPlayingController.fetchAndStore(context)
-        if (action == "next" && before != null) {
-            val item = NowPlayingSessionStore.snapshot?.items?.find { it.deviceId == deviceId }
-            if (item != null && item.track == before.track && item.filepath == before.filepath) {
-                NowPlayingSessionStore.applyOptimisticSkip(deviceId, forward = true)
-            }
-        }
         NowPlayingWidget.publishSession(context)
         if (action in TRACK_CHANGE_ACTIONS && before != null) {
             pollUntilTrackChange(context, deviceId, before.track, before.filepath)

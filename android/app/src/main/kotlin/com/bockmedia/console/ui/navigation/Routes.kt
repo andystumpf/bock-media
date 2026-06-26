@@ -32,7 +32,7 @@ sealed class BockRoute(val route: String, val title: String, val icon: ImageVect
     data object Albums : BockRoute("albums", "Albums", Icons.Default.Album)
     data object Artists : BockRoute("artists", "Artists", Icons.Default.Mic)
     data object Songs : BockRoute("songs", "Songs", Icons.Default.MusicNote)
-    data object Favorites : BockRoute("favorites", "Favorites", Icons.Default.Star)
+    data object Favorites : BockRoute("favorites", "Rated", Icons.Default.Star)
     data object Downloads : BockRoute("downloads", "Downloads", Icons.Default.Download)
     data object Routines : BockRoute("routines", "Routines", Icons.Default.Bolt)
     data object RecentRequests : BockRoute("recent", "Voice log", Icons.Default.RecordVoiceOver)
@@ -46,7 +46,7 @@ sealed class BockRoute(val route: String, val title: String, val icon: ImageVect
 
     companion object {
         val bottomNavRoutes: List<BockRoute> by lazy {
-            listOf(Home, Search, Library, Automations)
+            listOf(Home, Search, Library, Downloads, Automations)
         }
 
         val accountMenuRoutes: List<BockRoute> by lazy {
@@ -64,11 +64,19 @@ sealed class BockRoute(val route: String, val title: String, val icon: ImageVect
 const val ROUTE_PLAYLIST_DETAIL = "playlists/detail/{id}"
 const val ROUTE_ALBUMS_ARTIST = "albums/{artist}"
 const val ROUTE_SONGS_ARTIST = "songs/artist/{artist}"
-const val ROUTE_SONGS_ALBUM = "songs/album/{album}"
+const val ROUTE_SONGS_ALBUM = "songs/album/{album}?artist={artist}"
 const val ROUTE_GENRE = "genre/{name}"
 
 fun playlistDetailRoute(id: String) = "playlists/detail/$id"
 fun albumsArtistRoute(artist: String) = "albums/${java.net.URLEncoder.encode(artist, "UTF-8")}"
 fun songsArtistRoute(artist: String) = "songs/artist/${java.net.URLEncoder.encode(artist, "UTF-8")}"
-fun songsAlbumRoute(album: String) = "songs/album/${java.net.URLEncoder.encode(album, "UTF-8")}"
+fun songsAlbumRoute(album: String, artist: String? = null): String {
+    val encoded = java.net.URLEncoder.encode(album, "UTF-8")
+    val art = artist?.trim()?.takeIf { it.isNotEmpty() }
+    return if (art != null) {
+        "songs/album/$encoded?artist=${java.net.URLEncoder.encode(art, "UTF-8")}"
+    } else {
+        "songs/album/$encoded"
+    }
+}
 fun genreRoute(name: String) = "genre/${java.net.URLEncoder.encode(name, "UTF-8")}"

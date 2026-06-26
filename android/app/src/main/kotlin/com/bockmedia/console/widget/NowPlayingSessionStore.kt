@@ -54,24 +54,4 @@ object NowPlayingSessionStore {
         if (item.deviceName.isNullOrBlank()) return false
         return resolveSerial(item.deviceName) != null
     }
-
-    /** Show the next queued track immediately after skip (server may lag behind Alexa). */
-    fun applyOptimisticSkip(deviceId: String, forward: Boolean) {
-        val snap = snapshot ?: return
-        val updated = snap.items.map { item ->
-            if (item.deviceId != deviceId) return@map item
-            if (!forward) return@map item
-            val next = item.upcoming.firstOrNull() ?: return@map item
-            item.copy(
-                track = next.title?.takeIf { it.isNotBlank() } ?: item.track,
-                artist = next.artist ?: item.artist,
-                filepath = next.path ?: item.filepath,
-                timestamp = System.currentTimeMillis() / 1000.0,
-                offset_ms = 0,
-                paused = false,
-                upcoming = item.upcoming.drop(1),
-            )
-        }
-        snapshot = snap.copy(items = updated, updatedAtMs = System.currentTimeMillis())
-    }
 }

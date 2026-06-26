@@ -4,9 +4,15 @@ sealed class PlayTarget {
     abstract val label: String
     open val shuffleDefault: Boolean get() = false
 
-    data class Playlist(val id: String, val name: String) : PlayTarget() { override val label = name }
+    data class Playlist(val id: String, val name: String, val shuffle: Boolean = false) : PlayTarget() {
+        override val label = name
+        override val shuffleDefault: Boolean get() = shuffle
+    }
     data class Artist(val name: String) : PlayTarget() { override val label = name }
-    data class Album(val name: String, val artist: String? = null) : PlayTarget() { override val label = name }
+    data class Album(val name: String, val artist: String? = null, val shuffle: Boolean = false) : PlayTarget() {
+        override val label = name
+        override val shuffleDefault: Boolean get() = shuffle
+    }
     data class Song(val path: String, val title: String) : PlayTarget() { override val label = title }
 
     enum class RadioSeedKind { Artist, Song, Genre }

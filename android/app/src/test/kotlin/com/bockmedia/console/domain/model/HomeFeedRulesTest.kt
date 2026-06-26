@@ -1,5 +1,6 @@
 package com.bockmedia.console.domain.model
 
+import com.bockmedia.console.data.api.dto.PlaylistSummary
 import com.bockmedia.console.data.api.dto.StreamHistoryItem
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -42,6 +43,43 @@ class HomeFeedRulesTest {
             StreamHistoryItem(artist = "B", playlist = "Jazz Mix"),
         )
         assertEquals("B", HomeFeedRules.topArtistForGenre(history, "Jazz"))
+    }
+
+    @Test
+    fun isGenreMixPlaylistName_matchesRemixPlaylistsForGenre() {
+        assertTrue(HomeFeedRules.isGenreMixPlaylistName("Yacht Rock Remixes", "Rock"))
+        assertTrue(HomeFeedRules.isGenreMixPlaylistName("Trap Music 2024 Trap - Bass Remixes", "Trap"))
+        assertTrue(HomeFeedRules.isGenreMixPlaylistName("Rock Mix", "Rock"))
+        assertFalse(HomeFeedRules.isGenreMixPlaylistName("Yacht Rock Remixes", "Jazz"))
+    }
+
+    @Test
+    fun isGenreMixPlaylistName_rejectsEraSubstringFalsePositives() {
+        assertFalse(HomeFeedRules.isGenreMixPlaylistName("Generation X"))
+        assertFalse(HomeFeedRules.isGenreMixPlaylistName("Taylor Swift  The Eras Tour Official Setlist"))
+    }
+
+    @Test
+    fun bestGenreMixPlaylist_singleRemixPlaylistForRock() {
+        val all = listOf(PlaylistSummary(id = "remix-1", name = "Yacht Rock Remixes", tracks = 40))
+        assertTrue(HomeFeedRules.isGenreMixPlaylistName("Yacht Rock Remixes", "Rock"))
+        assertEquals("remix-1", HomeFeedRules.bestGenreMixPlaylist(all, "Rock")?.id)
+    }
+
+    @Test
+    fun bestGenreMixPlaylist_matchesRemixPlaylistForGenre() {
+        val all = listOf(
+            PlaylistSummary(id = "a", name = "Yacht Rock Remixes", tracks = 40),
+            PlaylistSummary(id = "b", name = "Rock Mix", tracks = 10),
+        )
+        assertTrue(HomeFeedRules.isGenreMixPlaylistName("Rock Mix", "Rock"))
+        assertEquals("b", HomeFeedRules.bestGenreMixPlaylist(all, "Rock")?.id)
+    }
+
+    @Test
+    fun hasMixLikeName_usesWordBoundaries() {
+        assertTrue(HomeFeedRules.hasMixLikeName("New Radicals Remix"))
+        assertFalse(HomeFeedRules.hasMixLikeName("Remastered Hits"))
     }
 
     @Test

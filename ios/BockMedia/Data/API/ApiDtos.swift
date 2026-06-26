@@ -160,6 +160,7 @@ struct StreamHistoryItem: Codable {
 }
 
 struct SearchResponse: Codable {
+    var query: String?
     var playlists: [SearchHit] = []
     var artists: [SearchHit] = []
     var albums: [SearchHit] = []
@@ -168,6 +169,35 @@ struct SearchResponse: Codable {
     var smartPlaylists: [SearchHit] = []
     var rooms: [SearchHit] = []
     var messages: [SearchHit] = []
+    var radios: [SearchRadioHit] = []
+    var similar: [SearchHit] = []
+    var counts: [String: Int] = [:]
+    var preview: Int = 5
+}
+
+struct SearchRadioHit: Codable, Identifiable {
+    var kind: String?
+    var name: String?
+    var artist: String?
+    var displayTitle: String?
+    var path: String?
+
+    var id: String { path ?? name ?? displayTitle ?? UUID().uuidString }
+}
+
+struct SearchPinsResponse: Codable {
+    var pins: [SearchPin] = []
+}
+
+struct SearchPin: Codable, Identifiable {
+    var kind: String = ""
+    var title: String?
+    var name: String?
+    var id: String?
+    var artist: String?
+    var path: String?
+
+    var displayId: String { id ?? path ?? name ?? title ?? UUID().uuidString }
 }
 
 struct SearchHit: Codable, Identifiable {
@@ -196,6 +226,7 @@ struct PlaylistSummary: Codable, Identifiable {
     var createDate: String?
     var lastUsed: String?
     var folderId: String?
+    var artPath: String?
 
     var tracks: Int { trackCount }
 }
@@ -207,6 +238,8 @@ struct PlaylistDetailResponse: Codable {
     var total: Int = 0
     var page: Int = 1
     var source: String?
+    var daily: Bool = false
+    var dailyRecipe: String?
 }
 
 struct PlaylistTrack: Codable, Identifiable {
@@ -234,6 +267,15 @@ struct ArtistItem: Codable, Identifiable {
     var name: String { artist }
     var tracks: Int { track_count }
     var albums: Int { album_count }
+    var artPath: String? { art_path }
+}
+
+struct ArtistPortraitResponse: Codable {
+    var artist: String = ""
+    var art_path: String?
+    var source: String?
+    var cached: Bool = false
+
     var artPath: String? { art_path }
 }
 

@@ -53,7 +53,7 @@ fun AlbumsScreen(
     artistFilter: String?,
     remoteOk: Boolean,
     onPlay: (PlayTarget) -> Unit,
-    onOpenAlbum: (String) -> Unit,
+    onOpenAlbum: (String, String?) -> Unit,
 ) {
     LibraryListScreen(
         repository = repository,
@@ -66,7 +66,7 @@ fun AlbumsScreen(
         sub = { "${it.artist ?: ""} · ${it.tracks} tracks" },
         remoteOk = remoteOk,
         onPlayItem = { onPlay(PlayTarget.Album(it.name, it.artist)) },
-        onOpen = { onOpenAlbum(it.name) },
+        onOpen = { onOpenAlbum(it.name, it.artist) },
         artPath = { it.artPath },
         albumName = { it.name },
         artistName = { it.artist },

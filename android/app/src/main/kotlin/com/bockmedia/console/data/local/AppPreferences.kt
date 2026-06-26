@@ -11,10 +11,33 @@ import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.runBlocking
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "bockmedia")
 
 class AppPreferences(private val context: Context) {
+    private val keySearchAllLibraries = booleanPreferencesKey("search_all_libraries")
+    private val keySearchSourcePath = stringPreferencesKey("search_source_path")
+
+    val searchAllLibraries: Flow<Boolean> = context.dataStore.data.map { it[keySearchAllLibraries] != false }
+    val searchSourcePath: Flow<String?> = context.dataStore.data.map { it[keySearchSourcePath] }
+
+    suspend fun isSearchAllLibrariesSync(): Boolean = searchAllLibraries.first()
+
+    suspend fun getSearchSourcePathSync(): String? = searchSourcePath.first()?.takeIf { it.isNotBlank() }
+
+    suspend fun setSearchAllLibraries(all: Boolean) {
+        context.dataStore.edit { prefs ->
+            if (all) prefs.remove(keySearchAllLibraries) else prefs[keySearchAllLibraries] = false
+        }
+    }
+
+    suspend fun setSearchSourcePath(path: String?) {
+        context.dataStore.edit { prefs ->
+            if (path.isNullOrBlank()) prefs.remove(keySearchSourcePath) else prefs[keySearchSourcePath] = path
+        }
+    }
+
     private val keyLocalUrl = stringPreferencesKey("local_server_url")
     private val keyExternalUrl = stringPreferencesKey("external_server_url")
     /** Legacy single-URL key — migrated to external on read. */
@@ -82,6 +105,17 @@ class AppPreferences(private val context: Context) {
 
     suspend fun isRememberMeSync(): Boolean =
         context.dataStore.data.first()[keyRememberMe] != false
+
+    /** Blocking read for OkHttp interceptors (background threads only). */
+    fun adminUserNow(): String? = runBlocking { adminUser.first()?.trim()?.takeIf { it.isNotEmpty() } }
+
+    fun adminPassNow(): String? = runBlocking { adminPass.first()?.trim()?.takeIf { it.isNotEmpty() } }
+
+    fun mobileTokenNow(): String? = runBlocking { mobileToken.first()?.trim()?.takeIf { it.isNotEmpty() } }
+
+    fun localServerUrlNow(): String? = runBlocking { getLocalServerUrlSync() }
+
+    fun externalServerUrlNow(): String? = runBlocking { getExternalServerUrlSync() }
 
     suspend fun isDownloadWifiOnlySync(): Boolean = downloadWifiOnly.first()
 

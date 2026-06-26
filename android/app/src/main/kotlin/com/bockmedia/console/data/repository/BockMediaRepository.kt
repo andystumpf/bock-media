@@ -5,10 +5,13 @@ import com.bockmedia.console.data.api.BockMediaApi
 import com.bockmedia.console.data.api.dto.*
 import com.bockmedia.console.data.local.AppPreferences
 import com.bockmedia.console.data.network.NetworkReachability
+import com.bockmedia.console.domain.model.ArtworkPaths
 import com.bockmedia.console.domain.model.HomeArtworkCache
+import com.bockmedia.console.domain.model.HomeFeedRules
 import com.bockmedia.console.domain.model.PlayTarget
 import com.bockmedia.console.domain.model.LocalTrack
 import com.bockmedia.console.domain.model.SearchSuggestion
+import com.bockmedia.console.ui.components.RatingKind
 import com.bockmedia.console.domain.model.SearchSuggestionKind
 import com.bockmedia.console.domain.model.filterSearchSongHits
 import com.bockmedia.console.media.PlaybackArtwork
@@ -37,8 +40,15 @@ class BockMediaRepository(
 
     private val playlistTrackPathsCache = ConcurrentHashMap<String, List<String>>()
     private val artistCoverPathsCache = ConcurrentHashMap<String, List<String>>()
+    private val artistPortraitPathCache = ConcurrentHashMap<String, String>()
+    private val artistPortraitMissCache = ConcurrentHashMap.newKeySet<String>()
+    private val ratingsCache = ConcurrentHashMap<String, Int>()
     private val albumCoverPathCache = ConcurrentHashMap<String, String>()
     @Volatile private var cachedBaseUrl: String? = null
+
+    /** Bumped when [primeBaseUrl] runs — artwork composables key off this to rebuild URLs. */
+    @Volatile var baseUrlEpoch: Int = 0
+        private set
 
     // Shared, short-TTL cache for the full playlist listing so Home, Library, and
     // Search don't each hit /playlists independently on cold launch (perf #7).
@@ -61,7 +71,10 @@ class BockMediaRepository(
     }
 
     fun primeBaseUrl(url: String?) {
-        url?.takeIf { it.isNotBlank() }?.let { cachedBaseUrl = AppPreferences.normalizeUrl(it) }
+        url?.takeIf { it.isNotBlank() }?.let {
+            cachedBaseUrl = AppPreferences.normalizeUrl(it)
+            baseUrlEpoch++
+        }
     }
 
     /** Fast cover lookup — reads only the first tracks from the playlist file on the server. */
@@ -78,15 +91,36 @@ class BockMediaRepository(
 
     suspend fun prefetchPlaylistCoverPaths(ids: Collection<String>) {
         val missing = ids.map { it.trim() }.filter { it.isNotBlank() }.distinct()
-            .filter { HomeArtworkCache.playlistPath(it) == null && playlistTrackPathsCache[it].isNullOrEmpty() }
+            .filter {
+                HomeArtworkCache.playlistPath(it) == null &&
+                    HomeArtworkCache.playlistCollagePaths(it).isNullOrEmpty() &&
+                    playlistTrackPathsCache[it].isNullOrEmpty()
+            }
         if (missing.isEmpty()) return
-        val covers = runCatching {
-            api().playlistCoversBatch(PlaylistCoversBatchRequest(missing)).covers
-        }.getOrDefault(emptyMap())
-        if (covers.isNotEmpty()) {
-            HomeArtworkCache.storePlaylistPaths(covers)
-            covers.forEach { (id, path) -> playlistTrackPathsCache[id] = listOf(path) }
+        val response = runCatching {
+            api().playlistCoversBatch(PlaylistCoversBatchRequest(missing))
+        }.getOrNull() ?: return
+        if (response.collages.isNotEmpty()) {
+            HomeArtworkCache.storePlaylistCollages(response.collages)
+            response.collages.forEach { (id, paths) -> playlistTrackPathsCache[id] = paths }
         }
+        if (response.covers.isNotEmpty()) {
+            HomeArtworkCache.storePlaylistPaths(response.covers)
+            response.covers.forEach { (id, path) ->
+                playlistTrackPathsCache.putIfAbsent(id, listOf(path))
+            }
+        }
+    }
+
+    suspend fun playlistCollageMediaPaths(playlistId: String): List<String> {
+        HomeArtworkCache.playlistCollagePaths(playlistId)?.let { return it }
+        playlistTrackPathsCache[playlistId]?.filter { it.isNotBlank() }?.distinct()
+            ?.takeIf { it.isNotEmpty() }?.let { return it }
+        prefetchPlaylistCoverPaths(listOf(playlistId))
+        return HomeArtworkCache.playlistCollagePaths(playlistId)
+            ?: playlistTrackPathsCache[playlistId].orEmpty().ifEmpty {
+                listOfNotNull(playlistCoverPath(playlistId))
+            }
     }
 
     suspend fun artworkUrlForPlaylist(playlistId: String, variantKey: String = playlistId, sizePx: Int? = null): String? =
@@ -106,8 +140,26 @@ class BockMediaRepository(
         return paths[kotlin.math.abs(pick) % paths.size]
     }
 
+    suspend fun artistPortraitPath(artistName: String): String? {
+        val key = artistName.trim().lowercase()
+        if (key.isEmpty()) return null
+        artistPortraitPathCache[key]?.let { return it.takeIf { p -> p.isNotBlank() } }
+        if (artistPortraitMissCache.contains(key)) return null
+        val path = runCatching {
+            api().artistPortrait(artistName).artPath?.takeIf { it.isNotBlank() }
+        }.getOrNull()
+        if (path != null) {
+            artistPortraitPathCache[key] = path
+            cacheArtistArtPath(artistName, path)
+            return path
+        }
+        artistPortraitMissCache.add(key)
+        return null
+    }
+
     suspend fun resolveArtistArtUrl(artistName: String, sizePx: Int? = null): String? =
-        artistCoverPathAt(artistName)?.let { artworkUrl(it, sizePx) }
+        artistPortraitPath(artistName)?.let { artworkUrl(it, sizePx) }
+            ?: artistCoverPathAt(artistName)?.let { artworkUrl(it, sizePx) }
 
     suspend fun resolveAlbumArtUrl(albumName: String, artist: String? = null, sizePx: Int? = null): String? =
         albumCoverPath(albumName, artist)?.let { artworkUrl(it, sizePx) }
@@ -146,10 +198,12 @@ class BockMediaRepository(
         artPath: String?,
         playlistId: String?,
         playTarget: PlayTarget,
+        sizePx: Int = ArtworkPaths.TILE_SIZE_PX,
     ): String? {
         val pick = kotlin.math.abs(cardId.hashCode())
-        artPath?.let { return artworkUrl(it) }
-        playlistId?.let { return artworkUrlForPlaylist(it, it) }
+        val linkedPlaylistId = playlistId ?: (playTarget as? PlayTarget.Playlist)?.id
+        linkedPlaylistId?.let { return artworkUrlForPlaylist(it, it, sizePx) }
+        artPath?.let { return artworkUrl(it, sizePx) }
         return when (playTarget) {
             is PlayTarget.Album -> {
                 runCatching {
@@ -157,12 +211,18 @@ class BockMediaRepository(
                         .items.mapNotNull { it.path?.takeIf { path -> path.isNotBlank() } }
                         .distinct()
                     paths.getOrNull(pick % paths.size.coerceAtLeast(1))
-                }.getOrNull()?.let { artworkUrl(it) }
+                }.getOrNull()?.let { artworkUrl(it, sizePx) }
             }
-            is PlayTarget.Artist -> artistCoverPathAt(playTarget.name, pick)?.let { artworkUrl(it) }
+            is PlayTarget.Artist -> artistCoverPathAt(playTarget.name, pick)?.let { artworkUrl(it, sizePx) }
             is PlayTarget.Radio -> {
-                playTarget.path?.let { return artworkUrl(it) }
-                artistCoverPathAt(playTarget.name, pick)?.let { artworkUrl(it) }
+                playTarget.path?.let { return artworkUrl(it, sizePx) }
+                if (playTarget.seedKind == PlayTarget.RadioSeedKind.Genre) {
+                    val genreLabel = HomeFeedRules.mixGenreLabel(playTarget.displayTitle)
+                        ?: HomeFeedRules.genreRadioLabel(playTarget.displayTitle)
+                    genreLabel?.let { resolveGenreArtByName(it, sizePx) }?.let { return it }
+                    return null
+                }
+                artistCoverPathAt(playTarget.name, pick)?.let { artworkUrl(it, sizePx) }
             }
             else -> null
         }
@@ -193,8 +253,12 @@ class BockMediaRepository(
 
     fun clearCaches() {
         cachedBaseUrl = null
+        baseUrlEpoch++
         playlistTrackPathsCache.clear()
         artistCoverPathsCache.clear()
+        artistPortraitPathCache.clear()
+        artistPortraitMissCache.clear()
+        ratingsCache.clear()
         albumCoverPathCache.clear()
         playlistsListCache = null
     }
@@ -213,8 +277,14 @@ class BockMediaRepository(
     }
     suspend fun streamHistory(page: Int, limit: Int) = api().streamHistory(page, limit)
     suspend fun rooms() = api().rooms()
-    suspend fun search(q: String, limit: Int = 30): SearchResponse {
-        val response = api().search(q, limit = limit)
+    suspend fun search(
+        q: String,
+        limit: Int = 30,
+        preview: Int = 5,
+        section: String? = null,
+        source: String? = null,
+    ): SearchResponse {
+        val response = api().search(q, limit = limit, preview = preview, section = section, source = source)
         val filtered = response.copy(songs = filterSearchSongHits(q, response.songs))
         filtered.artists.forEach { hit ->
             val name = hit.name ?: return@forEach
@@ -226,6 +296,28 @@ class BockMediaRepository(
         }
         return filtered
     }
+
+    suspend fun searchPins(): List<SearchPin> =
+        runCatching { api().searchPins().pins }.getOrDefault(emptyList())
+
+    suspend fun saveSearchPins(pins: List<SearchPin>): Boolean = runCatching {
+        api().saveSearchPins(
+            buildJsonObject {
+                putJsonArray("pins") {
+                    pins.forEach { pin ->
+                        add(buildJsonObject {
+                            put("kind", pin.kind)
+                            pin.title?.let { put("title", it) }
+                            pin.name?.let { put("name", it) }
+                            pin.id?.let { put("id", it) }
+                            pin.artist?.let { put("artist", it) }
+                            pin.path?.let { put("path", it) }
+                        })
+                    }
+                }
+            },
+        )
+    }.isSuccess
 
     suspend fun searchSuggest(q: String): SearchResponse = api().searchSuggest(q)
 
@@ -343,11 +435,20 @@ class BockMediaRepository(
         }
     }
 
-    suspend fun resolveGenreArtUrl(genre: com.bockmedia.console.data.api.dto.GenreItem): String? {
-        genre.artPath?.let { return artworkUrl(it) }
+    suspend fun resolveGenreArtUrl(genre: GenreItem, sizePx: Int = ArtworkPaths.TILE_SIZE_PX): String? {
+        genre.artPath?.let { return artworkUrl(it, sizePx) }
         return runCatching {
             songs(page = 1, search = genre.name, limit = 1).items.firstOrNull()?.path
-        }.getOrNull()?.let { artworkUrl(it) }
+        }.getOrNull()?.let { artworkUrl(it, sizePx) }
+    }
+
+    suspend fun resolveGenreArtByName(name: String, sizePx: Int = ArtworkPaths.TILE_SIZE_PX): String? {
+        val label = name.trim()
+        if (label.isBlank()) return null
+        return runCatching {
+            val items = genres(limit = 200).items
+            HomeFeedRules.matchingLibraryGenreForLabel(label, items)?.let { resolveGenreArtUrl(it, sizePx) }
+        }.getOrNull()
     }
 
     suspend fun resolveAlbumItemArtUrl(album: com.bockmedia.console.data.api.dto.AlbumItem): String? {
@@ -528,20 +629,41 @@ class BockMediaRepository(
         })
     }
 
-    suspend fun addFavorite(path: String, track: String?, artist: String?, album: String?) {
-        api().addFavorite(buildJsonObject {
-            put("path", path)
-            track?.let { put("title", it) }
+    suspend fun ratedSongs(): List<RatingItem> =
+        api().ratings().items.filter { it.kind == RatingKind.Song.apiValue && it.stars > 0 }
+
+    suspend fun ratedSongMap(): Map<String, Int> =
+        ratedSongs().associate { it.id to it.stars }
+
+    private fun ratingCacheKey(kind: RatingKind, id: String) = "${kind.apiValue}:${id.trim()}"
+
+    suspend fun ratingStars(kind: RatingKind, id: String): Int {
+        val key = ratingCacheKey(kind, id)
+        if (key.endsWith(":")) return 0
+        ratingsCache[key]?.let { return it }
+        val stars = runCatching { api().ratingLookup(kind.apiValue, id).stars }.getOrDefault(0)
+        ratingsCache[key] = stars
+        return stars
+    }
+
+    suspend fun setRating(
+        kind: RatingKind,
+        id: String,
+        stars: Int,
+        title: String? = null,
+        artist: String? = null,
+        album: String? = null,
+    ) {
+        api().setRating(buildJsonObject {
+            put("kind", kind.apiValue)
+            put("id", id)
+            put("stars", stars.coerceIn(0, 5))
+            title?.let { put("title", it) }
             artist?.let { put("artist", it) }
             album?.let { put("album", it) }
         })
+        ratingsCache[ratingCacheKey(kind, id)] = stars.coerceIn(0, 5)
     }
-
-    suspend fun removeFavorite(path: String) {
-        api().removeFavorite(buildJsonObject { put("path", path) })
-    }
-
-    suspend fun favorites(): List<FavoriteItem> = api().favorites().items
 
     suspend fun streamUrl(filepath: String?): String? {
         val base = runCatching { baseUrlProvider() }.getOrNull() ?: return null
@@ -567,6 +689,11 @@ class BockMediaRepository(
 
     suspend fun renamePlaylist(id: String, name: String) {
         api().renamePlaylist(buildJsonObject { put("id", id); put("name", name) })
+    }
+
+    /** Keep a daily playlist forever — stops the daily regenerator from overwriting it. */
+    suspend fun saveDailyPlaylist(id: String, name: String? = null) {
+        api().saveDailyPlaylist(id, buildJsonObject { name?.let { put("name", it) } })
     }
 
     suspend fun deletePlaylist(id: String) = api().deletePlaylist(id)

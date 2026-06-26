@@ -30,6 +30,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.*
+import com.bockmedia.console.ui.components.TILE_ART_SIZE_PX
+import com.bockmedia.console.ui.components.rememberArtworkUrl
 import com.bockmedia.console.local.DownloadState
 import com.bockmedia.console.local.OfflineDownloadManager
 import com.bockmedia.console.local.toPlayTarget
@@ -48,7 +50,7 @@ fun LibraryScreen(
     onPlay: (PlayTarget) -> Unit,
     onOpenPlaylist: (String) -> Unit,
     onOpenArtist: (String) -> Unit,
-    onOpenAlbum: (String) -> Unit,
+    onOpenAlbum: (String, String?) -> Unit,
     onOpenFavorites: () -> Unit,
     onOpenPlaylists: () -> Unit = {},
     onAccountNavigate: (String) -> Unit = {},
@@ -249,12 +251,15 @@ private fun handleLibraryClick(
     onPlay: (PlayTarget) -> Unit,
     onOpenPlaylist: (String) -> Unit,
     onOpenArtist: (String) -> Unit,
-    onOpenAlbum: (String) -> Unit,
+    onOpenAlbum: (String, String?) -> Unit,
 ) {
     when (item.kind) {
         LibraryItemKind.Playlist -> item.playlistId?.let(onOpenPlaylist)
         LibraryItemKind.Artist -> item.artistName?.let(onOpenArtist)
-        LibraryItemKind.Album -> item.albumName?.let(onOpenAlbum)
+        LibraryItemKind.Album -> {
+            val album = item.albumName ?: return
+            onOpenAlbum(album, item.artistName)
+        }
         LibraryItemKind.Downloaded -> onPlay(item.playTarget)
     }
 }
@@ -282,7 +287,7 @@ private fun LibraryHeader(
             modifier = Modifier.weight(1f),
         )
         IconButton(onClick = onOpenFavorites) {
-            Icon(Icons.Default.Star, contentDescription = "Favorites", tint = BockGreen)
+            Icon(Icons.Default.Star, contentDescription = "Rated", tint = BockGreen)
         }
         var sortMenu by remember { mutableStateOf(false) }
         TextButton(onClick = { sortMenu = true }) {
@@ -447,25 +452,11 @@ private fun LibraryGridTile(
                 shape = if (item.kind == LibraryItemKind.Artist) CircleShape else RoundedCornerShape(8.dp),
                 fallbackFontSize = 28.sp,
             )
-            if (item.kind != LibraryItemKind.Downloaded) {
-                DownloadStatusControl(
-                    playTarget = item.playTarget,
-                    onArtwork = true,
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(4.dp),
-                )
-            }
-            if (remoteOk) {
-                CircularPlayButton(
-                    onClick = onPlay,
-                    size = 48.dp,
-                    elevated = true,
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(8.dp),
-                )
-            }
+            ArtworkTileOverlayActions(
+                playTarget = item.playTarget,
+                showDownload = item.kind != LibraryItemKind.Downloaded,
+                onPlay = onPlay,
+            )
         }
         Spacer(Modifier.height(8.dp))
         Text(item.title, maxLines = 2, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
@@ -487,42 +478,43 @@ private fun LibraryItemArt(
     shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(6.dp),
     fallbackFontSize: androidx.compose.ui.unit.TextUnit = 20.sp,
 ) {
-    val baseUrl = remember(repository) { repository.peekBaseUrl() }
-    var artUrl by remember(item.id, baseUrl, item.artPath, item.playlistId) {
-        mutableStateOf(peekLibraryArtUrl(baseUrl, item))
-    }
-    LaunchedEffect(item.id, baseUrl, item.artPath, item.playlistId) {
-        artUrl = peekLibraryArtUrl(baseUrl, item)
-            ?: when (item.kind) {
-                LibraryItemKind.Playlist -> item.playlistId?.let {
-                    repository.artworkUrlForPlaylist(it, item.id)
-                }
-                LibraryItemKind.Artist -> item.artistName?.let { repository.resolveArtistArtUrl(it) }
-                LibraryItemKind.Album -> repository.resolveAlbumArtUrl(
-                    item.albumName ?: item.title,
-                    item.artistName,
-                )
-                LibraryItemKind.Downloaded -> repository.resolveOfflineManifestArtUrl(
-                    com.bockmedia.console.local.OfflineCollectionManifest(
-                        id = item.id.removePrefix("dl-"),
-                        title = item.title,
-                        coverArtPath = item.artPath,
-                        sourcePlaylistId = item.playlistId,
-                    ),
-                )
-            } ?: item.artPath?.let { repository.artworkUrl(it) }
-    }
     ArtworkWithUnplayedBadge(
         showUnplayed = item.kind == LibraryItemKind.Album && item.unplayed,
         modifier = modifier,
     ) {
-        BockArtwork(
-            model = artUrl,
-            title = item.title,
-            modifier = Modifier.fillMaxSize(),
-            shape = shape,
-            fallbackFontSize = fallbackFontSize,
-            crossfadeMs = 0,
-        )
+        when {
+            item.kind == LibraryItemKind.Playlist && !item.playlistId.isNullOrBlank() -> {
+                PlaylistTileArt(
+                    repository = repository,
+                    playlistId = item.playlistId,
+                    title = item.title,
+                    artPath = item.artPath,
+                    modifier = Modifier.fillMaxSize(),
+                    shape = shape,
+                    fallbackFontSize = fallbackFontSize,
+                    sizePx = TILE_ART_SIZE_PX,
+                )
+            }
+            else -> {
+                val artUrl = rememberArtworkUrl(
+                    repository = repository,
+                    title = item.title,
+                    artPath = item.artPath,
+                    playlistId = item.playlistId,
+                    variantKey = item.id,
+                    artistName = item.artistName,
+                    albumName = item.albumName,
+                    sizePx = TILE_ART_SIZE_PX,
+                )
+                BockArtwork(
+                    model = artUrl,
+                    title = item.title,
+                    modifier = Modifier.fillMaxSize(),
+                    shape = shape,
+                    fallbackFontSize = fallbackFontSize,
+                    crossfadeMs = 0,
+                )
+            }
+        }
     }
 }

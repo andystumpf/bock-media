@@ -12,7 +12,7 @@ enum HomeFeedLimits {
     static let recentPlaylists = 24
     static let radio = 16
     static let discover = 24
-    static let morePlaylists = 24
+    static let morePlaylists = 60
 }
 
 struct HomeFeedInput {
@@ -114,43 +114,7 @@ enum HomeFeedComposer {
         let topArtists = input.analytics?.topArtists ?? []
         let shuffledGeneric = HomeFeedRules.shuffledBrowsablePlaylists(input.allPlaylists, seed: input.shuffleSeed)
 
-        func resolvePlaylistArt(_ pl: PlaylistSummary, genreHint: String? = nil) -> String? {
-            if let path = Self.artPathForPlaylistSeed(input.history, pl.name),
-               let claimed = registry.claimArtPath(path) {
-                return claimed
-            }
-            if let path = HomeFeedRules.artPathForPlaylistDistinct(input.history, playlistName: pl.name, used: registry.usedArtPaths),
-               let claimed = registry.claimArtPath(path) {
-                return claimed
-            }
-            var genreHints: [String] = []
-            if let genreHint { genreHints.append(genreHint) }
-            for row in topGenres {
-                guard let g = row.name ?? row.label else { continue }
-                if pl.name.localizedCaseInsensitiveContains(g), !genreHints.contains(g) {
-                    genreHints.append(g)
-                }
-            }
-            for g in genreHints {
-                if let path = HomeFeedRules.artPathForGenreDistinct(input.history, genre: g, used: registry.usedArtPaths),
-                   let claimed = registry.claimArtPath(path) {
-                    return claimed
-                }
-            }
-            if let theme = HomeThemeCatalog.themesForDay(seed: input.shuffleSeed).first(where: { HomeFeedRules.playlistMatchesTheme(pl, theme: $0) }) {
-                if let artist = HomeFeedRules.topArtistForTheme(input.history, theme: theme),
-                   let path = HomeFeedRules.artPathForArtistDistinct(input.history, artist: artist, used: registry.usedArtPaths),
-                   let claimed = registry.claimArtPath(path) {
-                    return claimed
-                }
-                if let lib = input.libraryGenres.first(where: { HomeFeedRules.genreMatchesTheme($0.name, theme: theme) }),
-                   let path = lib.artPath,
-                   let claimed = registry.claimArtPath(path) {
-                    return claimed
-                }
-            }
-            return registry.claimArtPath(HomeFeedRules.nextDistinctArtPath(input.history, used: registry.usedArtPaths))
-        }
+        func resolvePlaylistArt(_ pl: PlaylistSummary, genreHint: String? = nil) -> String? { nil }
 
         func playlistCard(
             _ pl: PlaylistSummary,
@@ -162,7 +126,9 @@ enum HomeFeedComposer {
         ) -> HomeCard? {
             if HomeFeedRules.isAutomationPlaylistName(pl.name) { return nil }
             if claim, !registry.claimPlaylist(id: pl.id, name: pl.name) { return nil }
-            let resolvedArt = artPath.flatMap { registry.claimArtPath($0) } ?? resolvePlaylistArt(pl, genreHint: genreHint)
+            // Prefer the playlist's own cover (first track, from /api/playlists) so the tile
+            // renders from the cached feed without a per-tile cover lookup.
+            let resolvedArt = artPath.flatMap { registry.claimArtPath($0) } ?? pl.artPath ?? resolvePlaylistArt(pl, genreHint: genreHint)
             let card = HomeCard(
                 id: "pl-\(pl.id)",
                 title: pl.name,
@@ -198,11 +164,14 @@ enum HomeFeedComposer {
         }
 
         func resolveMixArt(genre: String, artist: String?, index: Int) -> String? {
+            if let lib = HomeFeedRules.matchingLibraryGenreForLabel(genre, libraryGenres: input.libraryGenres),
+               let path = lib.art_path?.trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty,
+               let p = registry.claimArtPath(path) { return p }
             if let p = registry.claimArtPath(HomeFeedRules.artPathForGenreDistinct(input.history, genre: genre, used: registry.usedArtPaths)) { return p }
             if let a = artist, let p = registry.claimArtPath(HomeFeedRules.artPathForArtistDistinct(input.history, artist: a, used: registry.usedArtPaths)) { return p }
             if let a = topArtists[safe: index]?.name ?? topArtists[safe: index]?.label,
                let p = registry.claimArtPath(HomeFeedRules.artPathForArtistDistinct(input.history, artist: a, used: registry.usedArtPaths)) { return p }
-            return registry.claimArtPath(HomeFeedRules.nextDistinctArtPath(input.history, used: registry.usedArtPaths))
+            return nil
         }
 
         let moodSections = HomeMoodSections.all().compactMap { mood -> HomeSection? in
@@ -245,7 +214,7 @@ enum HomeFeedComposer {
         for name in recentPlaylistNames {
             guard jumpBackIn.count < HomeFeedLimits.jumpBackIn else { break }
             guard let pl = playlistByName[name.lowercased()] else { continue }
-            if let card = playlistCard(pl, artPath: artByPlaylist[name.lowercased()], kind: .jumpBackIn, subtitle: "Recently played") {
+            if let card = playlistCard(pl, kind: .jumpBackIn, subtitle: "Recently played") {
                 jumpBackIn.append(card)
             }
         }
@@ -320,10 +289,12 @@ enum HomeFeedComposer {
                 genreMixes.append(card)
                 continue
             }
-            if let named = input.allPlaylists.first(where: { HomeFeedRules.isGenreMixPlaylistName($0.name, genre: genre) })
-                ?? input.allPlaylists.first(where: { $0.name.caseInsensitiveCompare("\(genre) Mix") == .orderedSame }),
-               let card = playlistCard(named, kind: .topMixes, subtitle: "\(genre) mix", genreHint: genre) {
-                genreMixes.append(card)
+            if let named = HomeFeedRules.bestGenreMixPlaylist(input.allPlaylists, genre: genre) {
+                // A real genre-mix playlist represents this genre — never synthesize a
+                // "\(genre) Mix" artist card, even if it already appears elsewhere.
+                if let card = playlistCard(named, kind: .topMixes, subtitle: "\(genre) mix", genreHint: genre) {
+                    genreMixes.append(card)
+                }
                 continue
             }
             guard let seed = HomeFeedRules.topArtistForGenre(input.history, genre: genre)
@@ -335,7 +306,7 @@ enum HomeFeedComposer {
                 subtitle: "Based on your listening",
                 artPath: resolveMixArt(genre: genre, artist: seed, index: index),
                 playlistId: nil,
-                playTarget: .artist(name: seed),
+                playTarget: .radio(displayTitle: "\(genre) Mix", seedKind: .genre, name: seed, path: nil),
                 kind: .topMixes
             )
             guard !registry.hasCard(id: card.id) else { continue }
@@ -376,7 +347,7 @@ enum HomeFeedComposer {
             }
         }
         let mixLikePool = input.allPlaylists.filter {
-            HomeFeedRules.isGenreMixPlaylistName($0.name) || $0.name.localizedCaseInsensitiveContains("mix")
+            HomeFeedRules.isGenreMixPlaylistName($0.name) || HomeFeedRules.hasMixLikeName($0.name)
         }.sorted { $0.tracks > $1.tracks }
         dailyMixes.append(contentsOf: fillPlaylists(
             from: mixLikePool + shuffledGeneric,
@@ -403,7 +374,7 @@ enum HomeFeedComposer {
         for name in recentPlaylistNames {
             guard recentPlaylists.count < HomeFeedLimits.recentPlaylists else { break }
             guard let pl = playlistByName[name.lowercased()] else { continue }
-            if let card = playlistCard(pl, artPath: artByPlaylist[name.lowercased()], kind: .recentPlaylists, subtitle: "Played recently") {
+            if let card = playlistCard(pl, kind: .recentPlaylists, subtitle: "Played recently") {
                 recentPlaylists.append(card)
             }
         }
@@ -479,11 +450,14 @@ enum HomeFeedComposer {
 
         // MARK: More playlists
 
+        // Catch-all so no library playlist is permanently hidden from home; the
+        // daily shuffle seed rotates which ones lead, and any not shown elsewhere land here.
+        let allRotated = HomeFeedRules.shuffledAllPlaylists(input.allPlaylists, seed: input.shuffleSeed)
         let morePlaylists = fillPlaylists(
-            from: shuffledGeneric + input.allPlaylists.sorted { $0.tracks > $1.tracks },
+            from: allRotated + input.allPlaylists.sorted { $0.tracks > $1.tracks },
             target: HomeFeedLimits.morePlaylists,
             kind: .recentPlaylists,
-            subtitle: { pl in "\(pl.tracks) tracks · Suggested for you" }
+            subtitle: { pl in "\(pl.tracks) tracks · From your library" }
         )
 
         var sections: [HomeSection] = [
@@ -501,7 +475,7 @@ enum HomeFeedComposer {
         sections.append(contentsOf: moodSections)
         sections.append(contentsOf: [
             section("explore-themes", "Explore genres & worlds", .exploreThemes, exploreThemes),
-            section("daily-mixes", "Daily mixes", .dailyMixes, dailyMixes),
+            section("daily-mixes", "New daily mixes", .dailyMixes, dailyMixes),
             section("recent-playlists", "Recent playlists", .recentPlaylists, recentPlaylists),
             section("radio", "Radio", .radio, radioCards),
             section("discover", "Discover", .discover, discoverCandidates),
@@ -691,8 +665,13 @@ enum HomeFeedComposer {
             guard cards.count < HomeFeedLimits.exploreThemes else { break }
 
             if let playlistMatch = input.allPlaylists
-                .filter({ HomeFeedRules.playlistMatchesTheme($0.name, theme: theme) && $0.tracks > 0 })
-                .max(by: { $0.tracks < $1.tracks }),
+                .filter({ HomeFeedRules.playlistMatchesTheme($0, theme: theme) && $0.tracks > 0 })
+                .max(by: { lhs, rhs in
+                    let ls = HomeFeedRules.playlistThemeScore(lhs, theme: theme)
+                    let rs = HomeFeedRules.playlistThemeScore(rhs, theme: theme)
+                    if ls != rs { return ls < rs }
+                    return lhs.tracks < rhs.tracks
+                }),
                let card = playlistCardForTheme(playlistMatch, subtitle: theme.subtitle) {
                 registerThemeCard(card)
                 continue

@@ -2,18 +2,17 @@ package com.bockmedia.console.ui.favorites
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import com.bockmedia.console.data.api.dto.FavoriteItem
+import com.bockmedia.console.data.api.dto.RatingItem
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.PlayTarget
 import com.bockmedia.console.ui.components.*
+import com.bockmedia.console.ui.components.RatingKind
 import kotlinx.coroutines.launch
 
 @Composable
@@ -27,13 +26,13 @@ fun FavoritesScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var items by remember { mutableStateOf<List<FavoriteItem>>(emptyList()) }
+    var items by remember { mutableStateOf<List<RatingItem>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var refreshing by remember { mutableStateOf(false) }
 
     suspend fun load() {
         if (items.isEmpty()) loading = true
-        runCatching { items = repository.favorites() }
+        runCatching { items = repository.ratedSongs() }
         loading = false
         refreshing = false
     }
@@ -53,7 +52,7 @@ fun FavoritesScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text(
-                    "Like tracks in Now Playing or Search.",
+                    "Rate tracks in Now Playing or Search.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(Modifier.height(16.dp))
@@ -63,29 +62,41 @@ fun FavoritesScreen(
                 }
             }
             else -> BockLazyColumn(Modifier.fillMaxSize().padding(horizontal = 8.dp)) {
-                items(items, key = { it.path }) { fav ->
-                    val target = PlayTarget.Song(fav.path, fav.track ?: "Favorite")
+                items(items, key = { it.id }) { rated ->
+                    val target = PlayTarget.Song(rated.id, rated.title ?: "Track")
+                    var stars by remember(rated.id) { mutableIntStateOf(rated.stars) }
                     LibraryArtListItem(
                         repository = repository,
-                        title = fav.track ?: "Favorite",
-                        subtitle = listOfNotNull(fav.artist, fav.album).joinToString(" · "),
-                        artPath = fav.path,
+                        title = rated.title ?: "Track",
+                        subtitle = listOfNotNull(rated.artist, rated.album).joinToString(" · "),
+                        artPath = rated.id,
                         trailing = {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                IconButton(onClick = {
-                                    scope.launch {
-                                        repository.removeFavorite(fav.path)
-                                        load()
-                                    }
-                                }) {
-                                    Icon(Icons.Default.Star, contentDescription = "Unstar", tint = MaterialTheme.colorScheme.primary)
-                                }
+                                CompactStarRatingBar(
+                                    stars = stars,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    onStarsChange = { value ->
+                                        stars = value
+                                        scope.launch {
+                                            runCatching {
+                                                repository.setRating(
+                                                    kind = RatingKind.Song,
+                                                    id = rated.id,
+                                                    stars = value,
+                                                    title = rated.title,
+                                                    artist = rated.artist,
+                                                    album = rated.album,
+                                                )
+                                            }
+                                            load()
+                                        }
+                                    },
+                                )
                                 PlayButton(
                                     onClick = {
                                         if (remoteOk) onPlay(target)
                                         else scope.launch {
-                                            val err = PhonePlayback.playLocally(context, target)
-                                            err?.let { /* silent or could show snackbar */ }
+                                            PhonePlayback.playLocally(context, target)
                                         }
                                     },
                                     enabled = remoteOk || true,

@@ -5,6 +5,8 @@ final class BockMediaRepository: ObservableObject {
     let preferences: AppPreferences
     private let api: BockMediaAPIClient
     private var resolvedBaseURL: String?
+    private var artistPortraitPathCache: [String: String] = [:]
+    private var artistPortraitMissCache: Set<String> = []
 
     init(preferences: AppPreferences) {
         self.preferences = preferences
@@ -15,6 +17,8 @@ final class BockMediaRepository: ObservableObject {
         resolvedBaseURL = nil
         api.invalidateBaseURL()
         HomeArtworkCache.invalidate()
+        artistPortraitPathCache.removeAll()
+        artistPortraitMissCache.removeAll()
         Task { await ServerEndpointResolver.shared.invalidate() }
     }
 
@@ -94,11 +98,28 @@ final class BockMediaRepository: ObservableObject {
         HomeArtworkCache.storePlaylistPaths(covers ?? [:])
     }
 
-    func search(q: String) async throws -> SearchResponse {
+    func search(
+        q: String,
+        limit: Int = 30,
+        preview: Int = 5,
+        section: String? = nil,
+        source: String? = nil
+    ) async throws -> SearchResponse {
         try await ensureAPI()
-        var response = try await api.search(q: q)
+        var response = try await api.search(
+            q: q,
+            limit: limit,
+            preview: preview,
+            section: section,
+            source: source
+        )
         response.songs = SearchSongFilter.filter(query: q, songs: response.songs)
         return response
+    }
+
+    func searchPins() async throws -> [SearchPin] {
+        try await ensureAPI()
+        return try await api.searchPins().pins
     }
 
     func favorites() async throws -> [FavoriteItem] {
@@ -455,6 +476,14 @@ final class BockMediaRepository: ObservableObject {
         _ = try await api.mergePlaylists(body: body)
     }
 
+    /// Keep a daily playlist forever — stops the daily regenerator from overwriting it.
+    func saveDailyPlaylist(id: String, name: String?) async throws {
+        try await ensureAPI()
+        var body: [String: Any] = [:]
+        if let name, !name.isEmpty { body["name"] = name }
+        _ = try await api.saveDailyPlaylist(id: id, body: body)
+    }
+
     func removePlaylistTrack(playlistId: String, path: String) async throws {
         try await ensureAPI()
         _ = try await api.removePlaylistTrack(id: playlistId, body: ["path": path])
@@ -716,6 +745,23 @@ final class BockMediaRepository: ObservableObject {
         return try await api.devices()
     }
 
+    func artistPortraitPath(for artistName: String) async -> String? {
+        let key = artistName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !key.isEmpty else { return nil }
+        if let cached = artistPortraitPathCache[key] { return cached.nilIfBlank }
+        if artistPortraitMissCache.contains(key) { return nil }
+        do {
+            try await ensureAPI()
+            let response = try await api.artistPortrait(artist: artistName)
+            if let path = response.artPath?.nilIfBlank {
+                artistPortraitPathCache[key] = path
+                return path
+            }
+        } catch {}
+        artistPortraitMissCache.insert(key)
+        return nil
+    }
+
     func resolveLibraryArtUrl(for item: LibraryItem) async -> URL? {
         if let path = item.artPath, let str = await artworkURL(for: path), let url = URL(string: str) {
             return url
@@ -728,6 +774,10 @@ final class BockMediaRepository: ObservableObject {
         }
         switch item.playTarget {
         case .artist(let name):
+            if let path = await artistPortraitPath(for: name),
+               let str = await artworkURL(for: path) {
+                return URL(string: str)
+            }
             if let path = try? await songs(page: 1, limit: 8, search: name, artist: name).items.first?.path,
                let str = await artworkURL(for: path) {
                 return URL(string: str)

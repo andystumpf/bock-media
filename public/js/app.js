@@ -157,6 +157,45 @@ function artworkUrl(filepath, sizePx) {
   return `/artwork/${encoded}${q}`;
 }
 
+const _artistPortraitCache = new Map();
+async function resolveArtistPortraitPath(name) {
+  const key = String(name || '').trim().toLowerCase();
+  if (!key) return null;
+  if (_artistPortraitCache.has(key)) return _artistPortraitCache.get(key);
+  try {
+    const res = await authFetch(`/api/artist-portrait?artist=${encodeURIComponent(name)}`);
+    if (!res?.ok) {
+      _artistPortraitCache.set(key, null);
+      return null;
+    }
+    const data = await res.json();
+    const path = data.art_path || null;
+    _artistPortraitCache.set(key, path);
+    return path;
+  } catch {
+    _artistPortraitCache.set(key, null);
+    return null;
+  }
+}
+
+function upgradeArtistPortraitImages(items) {
+  (items || []).slice(0, 24).forEach((a) => {
+    if ((a.art_path || '').includes('artist-portrait-')) return;
+    resolveArtistPortraitPath(a.artist).then((path) => {
+      if (!path) return;
+      const url = artworkUrl(path, 256);
+      if (!url) return;
+      document.querySelectorAll('.spotify-artist-card').forEach((card) => {
+        const title = card.querySelector('.spotify-card-title');
+        if (!title || title.textContent !== a.artist) return;
+        const wrap = card.querySelector('.spotify-card-media .spotify-card-art');
+        const img = wrap?.querySelector('img');
+        if (img) img.src = url;
+      });
+    });
+  });
+}
+
 function spotifyCardArtHtml(artPath, seed, icon, sizePx = 384, opts) {
   const unplayed = opts && opts.unplayed;
   const url = artPath ? artworkUrl(artPath, sizePx) : null;
@@ -232,9 +271,11 @@ async function fetchPlaylistsCached(search = '') {
 }
 
 async function refreshHomeCovers(feed, existingCovers = {}) {
-  const ids = typeof WebCache !== 'undefined'
-    ? WebCache.visibleHomeCoverIds(feed, 32)
-    : [...new Set((feed.sections || []).flatMap((s) => s.cards.slice(0, 8).map((c) => c.playlistId).filter(Boolean)))].slice(0, 32);
+  // Every playlist tile in the feed needs its cover — home cards no longer carry a
+  // history-seeded artPath, so a tile without a fetched cover renders as a placeholder.
+  // fetchPlaylistCovers chunks the request, so requesting the full set is cheap.
+  const ids = [...new Set((feed.sections || [])
+    .flatMap((s) => (s.cards || []).map((c) => c.playlistId).filter(Boolean)))].slice(0, 400);
   const missing = ids.filter((id) => !existingCovers[id]);
   if (!missing.length) return existingCovers;
   const fetched = await fetchPlaylistCovers(missing);
@@ -710,7 +751,7 @@ function renderLibraryPage() {
     'fa-list',
     p.name,
     canPlay ? `libPlayPlaylist(${i})` : null,
-    covers[p.id],
+    p.artPath || covers[p.id],
     { downloadOnclick: tileDownloadOnclick({ kind: 'playlist', id: p.id, name: p.name }) },
   )).join('');
 
@@ -1295,7 +1336,7 @@ function discoverWeeklyCardsFromApi(discover) {
 function renderDashboardUI(feed, covers, remote, opts = {}) {
   window._homeFeed = feed;
   const coverFor = (id) => (id && covers[id]) || null;
-  const artForCard = (card) => card.artPath || (card.playlistId && coverFor(card.playlistId)) || null;
+  const artForCard = (card) => (card.playlistId && coverFor(card.playlistId)) || card.artPath || null;
 
   const shortcutCards = HomeFeed.homeShortcutCards(feed, 8)
     .filter(HomeFeed.eligibleForHomeShortcut);
@@ -2863,10 +2904,12 @@ function renderPlaylistDetailBody() {
       </div>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         ${canPlay ? `<button class="btn-sm btn-primary" onclick="plPlayPlaylist()"><i class="fa fa-play"></i> Play</button>` : ''}
+        ${data.daily ? `<button class="btn-sm btn-success" onclick="plSaveDaily()" title="Keep this daily mix in your library"><i class="fa fa-bookmark"></i> Save to library</button>` : ''}
         ${actionBtn({ kind: 'edit', onclick: 'plRenameDetail()', title: 'Rename', icon: 'pen' })}
         ${data.sourceName === 'bockmedia' ? actionBtn({ kind: 'delete', onclick: 'plDeleteDetail()', title: 'Delete playlist', icon: 'trash' }) : ''}
       </div>
     </div>
+    ${data.daily ? `<p class="hint" style="margin:0 0 12px"><i class="fa fa-rotate"></i> Fresh daily mix — these songs change every day. Save it to keep today's set in your library.</p>` : ''}
     <p class="page-desc" style="margin:0 0 12px">
       Sorted by <b>${sortLabel}</b> ${sortArrow} — page ${_plDetailPage} of ${totalPages}
       (showing ${start + 1}–${Math.min(start + pageSize, total)}). Click column headers to re-sort.
@@ -2994,6 +3037,23 @@ async function plRenameDetail() {
   if (!res.ok) return showToast((await res.json().catch(() => ({}))).error || 'Rename failed', true);
   loadPlaylistDetail(d.id);
 }
+
+async function plSaveDaily() {
+  const d = window._plDetail;
+  if (!d) return;
+  const suggested = (d.name || '').replace(/^Daily Mix · /, '').trim() || d.name;
+  const name = prompt('Save this daily mix as', suggested);
+  if (name === null) return;
+  const res = await fetch(`/api/daily-playlists/${encodeURIComponent(d.id)}/save`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(name.trim() ? { name: name.trim() } : {}),
+  });
+  if (!res.ok) return showToast((await res.json().catch(() => ({}))).error || 'Save failed', true);
+  showToast('Saved to your library');
+  loadPlaylistDetail(d.id);
+}
+window.plSaveDaily = plSaveDaily;
 
 async function plDeleteDetail() {
   const d = window._plDetail;
@@ -3580,6 +3640,7 @@ async function loadArtists() {
     ${cards ? `<div class="spotify-browse-grid artists">${cards}</div>` : '<div class="empty-state"><i class="fa fa-microphone"></i><p>No artists found.</p></div>'}
     ${buildPagination(total, _arPage, 50, (p) => { _arPage = p; loadArtists(); })}
   `), { header: false });
+  requestAnimationFrame(() => upgradeArtistPortraitImages(items));
 }
 
 // ── Albums ───────────────────────────────────────────────────────────────────
@@ -5152,6 +5213,12 @@ register('search', async () => {
   syncTopbarSearch(window._lastSearchQ || '');
   const q = (window._lastSearchQ || '').trim();
   if (q.length >= 2) {
+    const el = document.getElementById('lib-search-results');
+    const scope = searchScopeQuery();
+    const cacheKey = `${q}\0${scope}`;
+    if (el && window._lastSearchRunKey === cacheKey && window._lastSearchData) {
+      renderSearchResultsUI(el, window._lastSearchData, q);
+    }
     libSearchDebounced(q);
   } else if (q.length === 1) {
     libSearchDebounced(q);
@@ -5260,83 +5327,259 @@ function libSearchHit(opts) {
   return `<div class="search-hit search-hit-${kind}">${thumb}${main}<div class="search-hit-actions row-actions">${extraActions}${playBtn}</div></div>`;
 }
 
+function searchScopeQuery() {
+  return '';
+}
+
+function searchScopeBarHtml() {
+  return '';
+}
+window.searchScopeBarHtml = searchScopeBarHtml;
+
+const SEARCH_RECENTS_KEY = 'searchRecentSelections';
+
+function loadSearchRecentSelections() {
+  try {
+    const raw = localStorage.getItem(SEARCH_RECENTS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function persistSearchRecentSelections(items) {
+  try { localStorage.setItem(SEARCH_RECENTS_KEY, JSON.stringify(items.slice(0, 12))); } catch (_) {}
+}
+
+function addSearchRecentSelection(item) {
+  const title = (item.title || '').trim();
+  if (!title) return;
+  const key = [item.kind, item.id, item.path, title, item.artist].join('|');
+  const next = loadSearchRecentSelections().filter((x) => (
+    [x.kind, x.id, x.path, x.title, x.artist].join('|') !== key
+  ));
+  next.unshift({ ...item, title });
+  persistSearchRecentSelections(next);
+}
+
+function removeSearchRecentSelection(item) {
+  const key = [item.kind, item.id, item.path, item.title, item.artist].join('|');
+  persistSearchRecentSelections(loadSearchRecentSelections().filter((x) => (
+    [x.kind, x.id, x.path, x.title, x.artist].join('|') !== key
+  )));
+}
+
+function clearSearchRecentSelections() {
+  try { localStorage.removeItem(SEARCH_RECENTS_KEY); } catch (_) {}
+}
+
+window.addSearchRecentSelection = addSearchRecentSelection;
+
 function renderSearchBrowseUI(el, data, remote) {
-  const recent = (data.quick && data.quick.recent) || [];
-  const favs = (data.quick && data.quick.favorites) || [];
-  const genreItems = (data.genres && data.genres.items) || (Array.isArray(data.genres) ? data.genres : []);
-  const plItems = data.playlists || [];
-  const covers = data.playlistCovers || {};
-  const newAlbums = (data.newAlbums && data.newAlbums.albums) || data.newAlbums || [];
-
-  const sec = (title, body) => body
-    ? `<section class="spotify-section search-browse-section"><div class="spotify-section-header"><h2 class="spotify-section-title home-greeting">${escHtml(title)}</h2></div>${body}</section>`
+  const recents = loadSearchRecentSelections();
+  const pinItems = data.pins || [];
+  window._searchBrowsePins = pinItems;
+  const sec = (title, body, extraHeader) => body
+    ? `<section class="spotify-section search-browse-section"><div class="spotify-section-header" style="display:flex;align-items:center;justify-content:space-between;gap:12px"><h2 class="spotify-section-title home-greeting">${escHtml(title)}</h2>${extraHeader || ''}</div>${body}</section>`
     : '';
 
-  const recentHtml = recent.length
-    ? `<div class="search-browse-list">${recent.slice(0, 8).map((r) => libSearchHit({
-      kind: 'song',
-      titleHtml: escHtml(r.track || 'Track'),
-      subtitle: r.artist ? escHtml(r.artist) : '',
-      artPath: r.filepath,
-      seed: r.track,
-      playOpts: songPlayOpts({ title: r.track, artist: r.artist, path: r.filepath, track: r.track }),
-      showPlay: !!(r.filepath),
-    })).join('')}</div>`
-    : '';
+  const linkRow = (label, onclick) => `<button type="button" class="search-browse-link-row" onclick="${onclick}"><span>${escHtml(label)}</span><i class="fa fa-chevron-right"></i></button>`;
 
-  const favHtml = favs.length
-    ? `<div class="search-browse-list">${favs.slice(0, 8).map((r) => libSearchHit({
-      kind: 'song',
-      titleHtml: escHtml(r.title || 'Track'),
-      subtitle: r.artist ? escHtml(r.artist) : '',
-      artPath: r.path,
-      seed: r.title,
-      playOpts: songPlayOpts(r),
-      showPlay: !!(r.path),
-    })).join('')}</div>`
-    : '';
+  const auralBody = `<div class="search-browse-list">
+    ${linkRow('Top Artists', 'openSearchRanking(\'artists\')')}
+    ${linkRow('Top Albums', 'openSearchRanking(\'albums\')')}
+    ${linkRow('Top Tracks', 'openSearchRanking(\'tracks\')')}
+    ${linkRow('Best Of…', 'openSearchRanking(\'bestof\')')}
+    ${pinItems.map((p, i) => linkRow(p.title || p.name || 'Shortcut', `openSearchPinByIndex(${i})`)).join('')}
+  </div>`;
 
-  const plHtml = plItems.length
-    ? `<div class="spotify-carousel search-playlist-carousel">${plItems.slice(0, 12).map((p) => {
-      const art = covers[p.id] || null;
-      const play = p.id
-        ? `searchPlayPlaylist('${String(p.id).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}','${String(p.name).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}')`
-        : null;
-      return spotifyMediaCard(
-        p.name,
-        `${fmtNum(p.trackCount || 0)} tracks`,
-        `#playlists/detail/${encodeURIComponent(p.id)}`,
-        'fa-list',
-        p.name,
-        play,
-        art,
-        { home: true },
-      );
+  const sonicBody = `<div class="search-browse-list">
+    ${linkRow('Sonic Adventure', 'openAcquireIdeasModal({explore:true})')}
+    ${linkRow('Sonic Sage', 'openMixMuseModal && openMixMuseModal()')}
+  </div>`;
+
+  const recentBody = recents.length
+    ? `<div class="search-browse-list">${recents.map((r, i) => {
+      window._searchBrowseRecents = recents;
+      const sub = r.subtitle ? `<span class="text-muted">${escHtml(r.subtitle)}</span>` : '';
+      return `<div class="search-browse-recent-row">
+        <button type="button" class="search-browse-recent-main" onclick="openSearchRecentByIndex(${i})">
+          <strong>${escHtml(r.title)}</strong>${sub}
+        </button>
+        <button type="button" class="btn-sm btn-default" onclick="removeSearchRecentByIndex(${i});loadSearchBrowse();" aria-label="Remove"><i class="fa fa-times"></i></button>
+      </div>`;
     }).join('')}</div>`
     : '';
 
-  const browseTiles = (newAlbums.length || genreItems.length)
-    ? `<div class="search-browse-tiles-row">
-        ${newAlbums.length ? searchNewReleasesTile(newAlbums) : ''}
-        ${genreItems.slice(0, 1).map((g) => searchGenreTileHtml(g)).join('')}
-      </div>
-      ${genreItems.length > 1 ? `<div class="search-genre-grid">${genreItems.slice(1, 13).map((g) => searchGenreTileHtml(g)).join('')}</div>` : ''}`
-    : '';
-
   el.innerHTML = [
-    `<section class="spotify-section search-browse-section">
-      <div class="spotify-section-header" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
-        <h2 class="spotify-section-title home-greeting">Music to seek out</h2>
-        <button class="btn-sm btn-default" onclick="openAcquireIdeasModal({explore:true})"><i class="fa fa-binoculars"></i> Explore</button>
-      </div>
-      <p class="hint" style="margin:0 0 8px;padding:0 4px">Discover artists you don&apos;t own yet — based on your library via MusicBrainz.</p>
-    </section>`,
-    browseTiles ? sec('Browse all', browseTiles) : '',
-    sec('Recent listens', recentHtml),
-    sec('Favorites', favHtml),
-    sec('Playlists', plHtml),
+    searchScopeBarHtml(),
+    sec('Aural fixations', auralBody, '<button type="button" class="btn-sm btn-default" onclick="editSearchPins()">Edit</button>'),
+    sec('Sonic explorations', sonicBody),
+    recentBody ? sec('Recent', recentBody, recents.length ? '<button type="button" class="btn-sm btn-default" onclick="clearSearchRecentSelections();loadSearchBrowse();">Clear</button>' : '') : '',
   ].filter(Boolean).join('') || '<div class="empty-state"><p>Nothing in your library yet.</p></div>';
 }
+
+async function openSearchRanking(kind, periodDelta) {
+  const el = document.getElementById('lib-search-results');
+  if (!el) return;
+  window._searchRankingKind = kind;
+  if (kind === 'bestof') {
+    window._searchRankingYear = window._searchRankingYear ?? new Date().getFullYear();
+    if (periodDelta != null) window._searchRankingYear += periodDelta;
+  } else {
+    window._searchRankingWeek = window._searchRankingWeek ?? 0;
+    if (periodDelta != null) window._searchRankingWeek += periodDelta;
+  }
+  el.innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
+  let from = '';
+  let to = '';
+  let periodHeader = '';
+  if (kind === 'bestof') {
+    const y = window._searchRankingYear;
+    from = `${y}-01-01`;
+    to = `${y}-12-31`;
+    const canForward = y < new Date().getFullYear();
+    periodHeader = `<div class="search-ranking-period">
+      <button type="button" class="btn-sm btn-default" onclick="openSearchRanking('bestof', -1)"><i class="fa fa-chevron-left"></i></button>
+      <div><strong>${y}</strong></div>
+      <button type="button" class="btn-sm btn-default" ${canForward ? '' : 'disabled'} onclick="openSearchRanking('bestof', 1)"><i class="fa fa-chevron-right"></i></button>
+    </div>`;
+  } else {
+    const offset = window._searchRankingWeek;
+    const range = weekRangeForOffset(offset);
+    from = range.start;
+    to = range.end;
+    const canForward = offset < 0;
+    periodHeader = `<div class="search-ranking-period">
+      <button type="button" class="btn-sm btn-default" onclick="openSearchRanking('${kind}', -1)"><i class="fa fa-chevron-left"></i></button>
+      <div><strong>Weekly</strong><div class="hint">${escHtml(range.label)}</div></div>
+      <button type="button" class="btn-sm btn-default" ${canForward ? '' : 'disabled'} onclick="openSearchRanking('${kind}', 1)"><i class="fa fa-chevron-right"></i></button>
+    </div>`;
+  }
+  const qs = from ? `?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}` : '';
+  const analytics = await API(`/api/analytics${qs}`).catch(() => null);
+  if (!analytics) {
+    el.innerHTML = `${searchScopeBarHtml()}<p class="hint" style="padding:12px">Analytics unavailable.</p>`;
+    return;
+  }
+  const rows = kind === 'artists' ? analytics.topArtists
+    : kind === 'albums' ? analytics.topAlbums
+      : kind === 'tracks' ? analytics.topTracks
+        : analytics.topTracks;
+  const title = kind === 'artists' ? 'Top Artists'
+    : kind === 'albums' ? 'Top Albums'
+      : kind === 'tracks' ? 'Top Tracks'
+        : 'Best Of…';
+  const playLabel = (n) => (n === 1 ? '1 play' : `${n} plays`);
+  const body = (rows || []).slice(0, 50).map((row, index) => {
+    const name = row.name || row.label || '—';
+    const artist = row.artist || '';
+    const plays = playLabel(row.count || 0);
+    let headline = name;
+    let subtitle = '';
+    let thumbKind = 'artist';
+    if (kind === 'albums') {
+      headline = artist || name;
+      subtitle = artist ? name : '';
+      thumbKind = 'album';
+    } else if (kind === 'tracks' || kind === 'bestof') {
+      headline = name;
+      subtitle = artist;
+      thumbKind = 'album';
+    } else {
+      thumbKind = 'artist';
+    }
+    const seed = kind === 'albums' ? name : (artist || name);
+    const artPath = row.path || null;
+    const thumb = searchThumbHtml(thumbKind, artPath, seed, 'fa-music', false);
+    const href = kind === 'artists' ? `#songs/artist/${encodeURIComponent(name)}`
+      : kind === 'albums' ? `#songs/album/${encodeURIComponent(name)}`
+        : null;
+    const main = href
+      ? `<a href="${href}" class="search-ranking-main"><div class="search-ranking-text"><strong>${escHtml(headline)}</strong>${subtitle ? `<span>${escHtml(subtitle)}</span>` : ''}<span class="hint">${escHtml(plays)}</span></div></a>`
+      : `<div class="search-ranking-main"><div class="search-ranking-text"><strong>${escHtml(headline)}</strong>${subtitle ? `<span>${escHtml(subtitle)}</span>` : ''}<span class="hint">${escHtml(plays)}</span></div></div>`;
+    return `<div class="search-ranking-row"><span class="search-ranking-rank">${index + 1}</span>${thumb}${main}</div>`;
+  }).join('');
+  el.innerHTML = `${searchScopeBarHtml()}
+    <section class="search-browse-section">
+      <button type="button" class="btn-sm btn-default" onclick="loadSearchBrowse()" style="margin:8px 12px"><i class="fa fa-arrow-left"></i> Back</button>
+      <h2 class="search-section-title home-greeting" style="padding:0 12px">${escHtml(title)}</h2>
+      ${periodHeader}
+      <div class="search-browse-list search-ranking-list">${body || '<p class="hint" style="padding:12px">No data yet.</p>'}</div>
+    </section>`;
+}
+
+function weekRangeForOffset(offset) {
+  const now = new Date();
+  const day = now.getDay();
+  const mondayOffset = day === 0 ? -6 : 1 - day;
+  const monday = new Date(now);
+  monday.setHours(0, 0, 0, 0);
+  monday.setDate(now.getDate() + mondayOffset + offset * 7);
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  const fmt = (d) => d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  return { start: monday.toISOString().slice(0, 10), end: sunday.toISOString().slice(0, 10), label: `${fmt(monday)} - ${fmt(sunday)}` };
+}
+window.weekRangeForOffset = weekRangeForOffset;
+window.openSearchRanking = openSearchRanking;
+
+function openSearchRecentSelection(item) {
+  if (!item) return;
+  switch (item.kind) {
+    case 'artist': location.hash = `#songs/artist/${encodeURIComponent(item.title)}`; break;
+    case 'album': location.hash = `#songs/album/${encodeURIComponent(item.title)}`; break;
+    case 'playlist': if (item.id) location.hash = `#playlists/detail/${encodeURIComponent(item.id)}`; break;
+    case 'genre': location.hash = '#genres'; break;
+    case 'song': if (item.path) playSong(item.path, item.title, item.artist); break;
+    default: break;
+  }
+}
+window.openSearchRecentSelection = openSearchRecentSelection;
+window.removeSearchRecentSelection = removeSearchRecentSelection;
+window.clearSearchRecentSelections = clearSearchRecentSelections;
+
+async function editSearchPins() {
+  const cur = (await API('/api/search/pins').catch(() => ({ pins: [] }))).pins || [];
+  const raw = prompt('Edit shortcuts (JSON array of {kind,title,name,id,artist,path})', JSON.stringify(cur, null, 2));
+  if (raw == null) return;
+  let pins;
+  try { pins = JSON.parse(raw); } catch (_) { alert('Invalid JSON'); return; }
+  await fetch('/api/search/pins', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pins }),
+  });
+  loadSearchBrowse();
+}
+window.editSearchPins = editSearchPins;
+
+function openSearchRecentByIndex(index) {
+  openSearchRecentSelection((window._searchBrowseRecents || [])[index]);
+}
+window.openSearchRecentByIndex = openSearchRecentByIndex;
+
+function removeSearchRecentByIndex(index) {
+  removeSearchRecentSelection((window._searchBrowseRecents || [])[index]);
+}
+window.removeSearchRecentByIndex = removeSearchRecentByIndex;
+
+function openSearchPinByIndex(index) {
+  openSearchPin((window._searchBrowsePins || [])[index]);
+}
+window.openSearchPinByIndex = openSearchPinByIndex;
+
+function openSearchPin(pin) {
+  const title = pin.title || pin.name || 'Shortcut';
+  switch ((pin.kind || '').toLowerCase()) {
+    case 'playlist': if (pin.id) location.hash = `#playlists/detail/${encodeURIComponent(pin.id)}`; break;
+    case 'genre': playArtistRadio(pin.name || title); break;
+    case 'artist': location.hash = `#songs/artist/${encodeURIComponent(pin.name || title)}`; break;
+    case 'album': location.hash = `#songs/album/${encodeURIComponent(pin.name || title)}`; break;
+    default: if (pin.path) playSong(pin.path, title); break;
+  }
+}
+window.openSearchPin = openSearchPin;
 
 async function loadSearchBrowse() {
   const el = document.getElementById('lib-search-results');
@@ -5347,16 +5590,17 @@ async function loadSearchBrowse() {
   } else {
     el.innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
   }
-  const [quick, genres, plItems, newAlbums, remote] = await Promise.all([
+  const [quick, genres, plItems, newAlbums, remote, pins] = await Promise.all([
     cached?.quick ? Promise.resolve(cached.quick) : API('/api/dashboard/quick').catch(() => ({ recent: [], favorites: [] })),
     cached?.genres ? Promise.resolve(cached.genres) : API('/api/genres?limit=16').catch(() => ({ items: [] })),
     cached?.playlists ? Promise.resolve(cached.playlists) : fetchPlaylistsCached('').catch(() => []),
     cached?.newAlbums ? Promise.resolve(cached.newAlbums) : API('/api/library/new?since=30d&limit=12').catch(() => ({ albums: [] })),
     ensureAlexaRemoteStatus().catch(() => ({})),
+    API('/api/search/pins').catch(() => ({ pins: [] })),
   ]);
   const plIds = plItems.slice(0, 12).map((p) => p.id).filter(Boolean);
   const playlistCovers = plIds.length ? await fetchPlaylistCovers(plIds) : {};
-  const data = { quick, genres, playlists: plItems, newAlbums, playlistCovers };
+  const data = { quick, genres, playlists: plItems, newAlbums, playlistCovers, pins: pins?.pins || [] };
   if (typeof WebCache !== 'undefined') WebCache.putSearchBrowse(data);
   renderSearchBrowseUI(el, data, remote);
 }
@@ -5469,6 +5713,14 @@ function setupSearchDelegation() {
       const artist = starBtn.getAttribute('data-fav-artist') || '';
       if (!path) return;
       libFavorite(path, title, artist);
+      return;
+    }
+    const showAllBtn = e.target.closest('.search-show-all');
+    if (showAllBtn) {
+      e.preventDefault();
+      const section = showAllBtn.getAttribute('data-section');
+      const q = showAllBtn.getAttribute('data-q');
+      if (section && q) libSearchExpandSection(section, q);
     }
   });
 }
@@ -5481,76 +5733,41 @@ async function libSearchRun(q) {
     loadSearchBrowse();
     return;
   }
-  el.innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
-  const data = await API(`/api/search?q=${encodeURIComponent(q)}&limit=20`).catch(() => null);
-  if (!data) {
-    el.innerHTML = '<p class="hint" style="padding:12px">Search failed — try again.</p>';
+  const scope = searchScopeQuery();
+  const cacheKey = `${q}\0${scope}`;
+  if (window._lastSearchRunKey === cacheKey && window._lastSearchData) {
+    renderSearchResultsUI(el, window._lastSearchData, q);
     return;
   }
+  el.innerHTML = `${searchScopeBarHtml()}<div class="spinner-wrap"><div class="spinner"></div></div>`;
+  const data = await API(`/api/search?q=${encodeURIComponent(q)}&limit=30&preview=5${scope}`).catch(() => null);
+  if (!data) {
+    el.innerHTML = `${searchScopeBarHtml()}<p class="hint" style="padding:12px">Search failed — try again.</p>`;
+    return;
+  }
+  window._lastSearchRunKey = cacheKey;
+  window._lastSearchData = data;
+  renderSearchResultsUI(el, data, q);
+}
+window.libSearchRun = libSearchRun;
+
+async function libSearchExpandSection(section, q) {
+  const scope = searchScopeQuery();
+  const data = await API(`/api/search?q=${encodeURIComponent(q)}&section=${encodeURIComponent(section)}&limit=50&preview=50${scope}`).catch(() => null);
+  if (!data) return;
+  window._lastSearchExpanded = window._lastSearchExpanded || {};
+  window._lastSearchExpanded[section] = data;
+  const el = document.getElementById('lib-search-results');
+  if (el && window._lastSearchData) renderSearchResultsUI(el, window._lastSearchData, q);
+}
+
+function renderSearchResultsUI(el, data, q) {
   const plIds = (data.playlists || []).map((p) => p.id).filter(Boolean);
   const smartIds = (data.smartPlaylists || []).map((s) => s.id).filter(Boolean);
-  const covers = plIds.length || smartIds.length
-    ? await fetchPlaylistCovers([...new Set(plIds.concat(smartIds))])
-    : {};
+  const expanded = window._lastSearchExpanded || {};
+  const preview = data.preview || 5;
 
-  const sec = (title, rows) => rows
-    ? `<section class="search-results-section"><h2 class="search-section-title home-greeting">${escHtml(title)}</h2><div class="search-browse-list">${rows}</div></section>`
-    : '';
-
-  const pl = (data.playlists || []).map((p) => {
-    const href = p.id ? `#playlists/detail/${encodeURIComponent(p.id)}` : null;
-    return libSearchHit({
-      kind: 'playlist',
-      titleHtml: escHtml(p.name),
-      artPath: p.id ? covers[p.id] : null,
-      seed: p.name,
-      href,
-      playOpts: p.id ? { kind: 'playlist', name: p.name, id: p.id } : null,
-      showPlay: !!p.id,
-    });
-  }).join('');
-
-  const smart = (data.smartPlaylists || []).map((s) => libSearchHit({
-    kind: 'playlist',
-    titleHtml: `${escHtml(s.name)} <span class="text-muted">· smart</span>`,
-    artPath: s.id ? covers[s.id] : null,
-    seed: s.name,
-    href: s.id ? `#playlists/detail/${encodeURIComponent(s.id)}` : null,
-    playOpts: s.id ? { kind: 'playlist', name: s.name, id: s.id } : null,
-    showPlay: !!s.id,
-  })).join('');
-
-  const ar = (data.artists || []).map((a) => libSearchHit({
-    kind: 'artist',
-    titleHtml: escHtml(a.name),
-    artPath: a.path,
-    seed: a.name,
-    href: `#songs/artist/${encodeURIComponent(a.name)}`,
-    playOpts: { kind: 'artist', name: a.name },
-    showPlay: true,
-  })).join('');
-
-  const al = (data.albums || []).map((a) => libSearchHit({
-    kind: 'album',
-    titleHtml: escHtml(a.name),
-    subtitle: a.artist ? escHtml(a.artist) : '',
-    artPath: a.path,
-    seed: a.name,
-    href: `#songs/album/${encodeURIComponent(a.name)}`,
-    playOpts: { kind: 'album', name: a.name, artist: a.artist || '' },
-    showPlay: true,
-  })).join('');
-
-  const gn = (data.genres || []).map((g) => libSearchHit({
-    kind: 'genre',
-    titleHtml: escHtml(g.name),
-    artPath: g.path,
-    seed: g.name,
-    href: '#genres',
-    showPlay: false,
-  })).join('');
-
-  const sg = (data.songs || []).map((s) => {
+  const songRows = (items) => (items || []).map((s) => {
     const star = `<button type="button" class="action-btn action-muted lib-search-star" data-fav-path="${escHtml(s.path || '')}" data-fav-title="${escHtml(s.title || '')}" data-fav-artist="${escHtml(s.artist || '')}" title="Star" aria-label="Star"><i class="fa fa-star"></i></button>`;
     return libSearchHit({
       kind: 'song',
@@ -5564,16 +5781,106 @@ async function libSearchRun(q) {
     });
   }).join('');
 
-  const body = [
-    sec('Playlists', pl),
-    sec('Smart playlists', smart),
-    sec('Artists', ar),
-    sec('Albums', al),
-    sec('Genres', gn),
-    sec('Songs', sg),
-  ].filter(Boolean).join('');
-  el.innerHTML = body || '<p class="hint" style="padding:12px">No matches.</p>';
+  const playlistRows = (items) => (items || []).map((p) => libSearchHit({
+    kind: 'playlist',
+    titleHtml: escHtml(p.name),
+    artPath: p.id ? (window._searchPlaylistCovers || {})[p.id] : null,
+    seed: p.name,
+    href: p.id ? `#playlists/detail/${encodeURIComponent(p.id)}` : null,
+    playOpts: p.id ? { kind: 'playlist', name: p.name, id: p.id } : null,
+    showPlay: !!p.id,
+  })).join('');
+
+  const smartRows = (items) => (items || []).map((s) => libSearchHit({
+    kind: 'playlist',
+    titleHtml: `${escHtml(s.name)} <span class="text-muted">· smart</span>`,
+    artPath: s.id ? (window._searchPlaylistCovers || {})[s.id] : null,
+    seed: s.name,
+    href: s.id ? `#playlists/detail/${encodeURIComponent(s.id)}` : null,
+    playOpts: s.id ? { kind: 'playlist', name: s.name, id: s.id } : null,
+    showPlay: !!s.id,
+  })).join('');
+
+  const artistRows = (items) => (items || []).map((a) => libSearchHit({
+    kind: 'artist',
+    titleHtml: escHtml(a.name),
+    artPath: a.path,
+    seed: a.name,
+    href: `#songs/artist/${encodeURIComponent(a.name)}`,
+    playOpts: { kind: 'artist', name: a.name },
+    showPlay: true,
+  })).join('');
+
+  const albumRows = (items) => (items || []).map((a) => libSearchHit({
+    kind: 'album',
+    titleHtml: escHtml(a.name),
+    subtitle: a.artist ? escHtml(a.artist) : '',
+    artPath: a.path,
+    seed: a.name,
+    href: `#songs/album/${encodeURIComponent(a.name)}`,
+    playOpts: { kind: 'album', name: a.name, artist: a.artist || '' },
+    showPlay: true,
+  })).join('');
+
+  const genreRows = (items) => (items || []).map((g) => libSearchHit({
+    kind: 'genre',
+    titleHtml: escHtml(g.name),
+    artPath: g.path,
+    seed: g.name,
+    href: '#genres',
+    showPlay: false,
+  })).join('');
+
+  const sectionTitle = (key) => ({
+    songs: 'Tracks',
+    artists: 'Artists',
+    albums: 'Albums',
+    similar: 'Sonically similar',
+    smartPlaylists: 'Smart playlists',
+    messages: 'Messages',
+    radios: 'Radio',
+  }[key] || key.charAt(0).toUpperCase() + key.slice(1));
+
+  const sectionHtml = (key, rowsFn, items) => {
+    if (!items || !items.length) return '';
+    const total = (data.counts && data.counts[key]) || items.length;
+    const body = expanded[key] ? rowsFn(expanded[key][key] || items) : rowsFn(items);
+    const more = !expanded[key] && total > preview
+      ? `<button type="button" class="btn-sm btn-default search-show-all" data-section="${escHtml(key)}" data-q="${escHtml(q)}">Show all ${total}</button>`
+      : '';
+    return `<section class="search-results-section"><h2 class="search-section-title home-greeting">${escHtml(sectionTitle(key))}</h2><div class="search-browse-list">${body}</div>${more}</section>`;
+  };
+
+  Promise.all([
+    plIds.length || smartIds.length ? fetchPlaylistCovers([...new Set(plIds.concat(smartIds))]) : Promise.resolve({}),
+  ]).then(([covers]) => {
+    window._searchPlaylistCovers = covers || {};
+    const radio = (data.radios || []).map((r) => libSearchHit({
+      kind: 'song',
+      titleHtml: escHtml(r.displayTitle || `${r.name} Radio`),
+      subtitle: 'Radio',
+      artPath: r.path,
+      seed: r.name,
+      playOpts: { kind: 'artist', name: r.name || '' },
+      showPlay: true,
+    })).join('');
+
+    const body = [
+      sectionHtml('songs', songRows, data.songs),
+      sectionHtml('artists', artistRows, data.artists),
+      sectionHtml('albums', albumRows, data.albums),
+      sectionHtml('radios', () => radio, data.radios),
+      sectionHtml('similar', songRows, data.similar),
+      sectionHtml('playlists', playlistRows, data.playlists),
+      sectionHtml('smartPlaylists', smartRows, data.smartPlaylists),
+      sectionHtml('genres', genreRows, data.genres),
+      sectionHtml('messages', songRows, data.messages),
+    ].filter(Boolean).join('');
+    el.innerHTML = `${searchScopeBarHtml()}${body || '<p class="hint" style="padding:12px">No matches.</p>'}`;
+  });
 }
+window.renderSearchResultsUI = renderSearchResultsUI;
+window.libSearchExpandSection = libSearchExpandSection;
 
 async function libFavorite(path, title, artist) {
   const res = await fetch('/api/favorites', {

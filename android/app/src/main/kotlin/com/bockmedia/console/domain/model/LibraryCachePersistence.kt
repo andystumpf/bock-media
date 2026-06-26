@@ -13,7 +13,7 @@ object LibraryCachePersistence {
     private const val FILE_NAME = "library_cache.json"
     private const val MAX_AGE_MS = 24 * 60 * 60 * 1000L
     /** Bump when bucket shape changes so stale playlist-only snapshots are discarded. */
-    private const val CACHE_VERSION = 2
+    private const val CACHE_VERSION = 3
 
     @Serializable
     private data class PlayTargetDto(

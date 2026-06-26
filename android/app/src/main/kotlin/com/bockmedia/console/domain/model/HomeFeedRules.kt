@@ -18,7 +18,12 @@ import kotlin.random.Random
 object HomeFeedRules {
     private val dailyMixPattern = Regex("(?i)daily mix|daylist")
     private val discoverPattern = Regex("(?i)discover weekly|new release|fresh find|new to you")
-    private val genreMixPattern = Regex("(?i)\\bmix\\b|essentials|decade|era|hits|party|focus|favorites")
+    /** Word-boundary mix markers — avoids false positives like "Generation" (era) or "Remix" substring-only. */
+    private val genreMixPattern = Regex(
+        "(?i)\\bmix\\b|\\bmixes\\b|\\bremix\\b|\\bremixes\\b|essentials|" +
+            "\\bdecade\\b|\\bera\\b|\\bhits\\b|\\bparty\\b|\\bfocus\\b|\\bfavorites\\b",
+    )
+    private val mixLikeNamePattern = Regex("(?i)\\bmix\\b|\\bmixes\\b|\\bremix\\b|\\bremixes\\b")
     private val explicitRadioPlaylistPattern = Regex("(?i)\\bradio\\b|\\bstation\\b")
     private val mixLikePlaylistPattern = Regex("(?i)\\bmix\\b|daily|discover weekly|essentials|station")
 
@@ -29,7 +34,36 @@ object HomeFeedRules {
     fun isGenreMixPlaylistName(name: String, genre: String? = null): Boolean {
         if (isDailyMixName(name) || isDiscoverName(name)) return false
         if (!genreMixPattern.containsMatchIn(name)) return false
-        return genre == null || name.contains(genre, ignoreCase = true)
+        return genre == null || nameContainsGenre(name, genre)
+    }
+
+    /** True when the playlist name looks mix/remix-like (not bare "Remix" substring inside unrelated words). */
+    fun hasMixLikeName(name: String): Boolean = mixLikeNamePattern.containsMatchIn(name)
+
+    fun nameContainsGenre(name: String, genre: String): Boolean {
+        val g = genre.trim()
+        if (g.isBlank()) return false
+        if (name.contains(g, ignoreCase = true)) return true
+        // Multi-word genres: require every token to appear (e.g. "Hip Hop" in playlist title).
+        val tokens = g.split(Regex("\\s+")).filter { it.length > 1 }
+        return tokens.size > 1 && tokens.all { name.contains(it, ignoreCase = true) }
+    }
+
+    /** Best library playlist for a top-genre mix row — prefers exact "${genre} Mix" over loose matches. */
+    fun bestGenreMixPlaylist(all: List<PlaylistSummary>, genre: String): PlaylistSummary? {
+        val g = genre.trim()
+        if (g.isBlank()) return null
+        return all.filter { it.tracks > 0 && isGenreMixPlaylistName(it.name, g) }
+            .maxByOrNull { genreMixNameScore(it.name, g) * 10_000 + it.tracks }
+    }
+
+    private fun genreMixNameScore(name: String, genre: String): Int {
+        var score = 0
+        if (name.equals("$genre Mix", ignoreCase = true)) score += 100
+        if (name.startsWith(genre, ignoreCase = true)) score += 40
+        if (Regex("(?i)\\b${Regex.escape(genre)}\\b").containsMatchIn(name)) score += 30
+        else if (name.contains(genre, ignoreCase = true)) score += 10
+        return score
     }
 
     /** Named playlist stations only — not “Rock Mix” / “Daily Mix” style rows. */
@@ -129,6 +163,24 @@ object HomeFeedRules {
     fun matchingLibraryGenre(theme: HomeTheme, libraryGenres: List<GenreItem>): String? =
         libraryGenres.firstOrNull { genreMatchesTheme(it.name, theme) }?.name
 
+    /** Genre label from a synthetic home tile title (e.g. "Classical Era Mix" → "Classical Era"). */
+    fun mixGenreLabel(title: String): String? =
+        title.removeSuffix(" Mix").takeIf { it.isNotBlank() && it.length < title.length }
+
+    /** Genre label from a genre-radio tile (e.g. "Jazz Radio" → "Jazz"). */
+    fun genreRadioLabel(displayTitle: String): String? =
+        displayTitle.removeSuffix(" Radio").takeIf { it.isNotBlank() && it.length < displayTitle.length }
+
+    /** Match analytics / mix label (e.g. "Classical Era") to a library genre row for stable cover art. */
+    fun matchingLibraryGenreForLabel(label: String, libraryGenres: List<GenreItem>): GenreItem? {
+        val g = label.trim()
+        if (g.isBlank()) return null
+        libraryGenres.firstOrNull { it.name.equals(g, ignoreCase = true) }?.let { return it }
+        return libraryGenres.firstOrNull {
+            nameContainsGenre(it.name, g) || nameContainsGenre(g, it.name)
+        }
+    }
+
     fun playlistThemeScore(playlist: PlaylistSummary, theme: HomeTheme): Int =
         playlistThemeScore(playlistSearchText(playlist), theme)
 
@@ -185,5 +237,20 @@ object HomeFeedRules {
     fun shuffledBrowsablePlaylists(all: List<PlaylistSummary>, seed: Long): List<PlaylistSummary> {
         val safeSeed = if (seed == 0L) 0x4d595449L else seed
         return browsablePlaylists(all).shuffled(Random(safeSeed))
+    }
+
+    /**
+     * Every playlist eligible for the home catch-all row: anything with tracks,
+     * excluding scheduled automations and the server's auto-generated daily mixes
+     * (those have their own row). Special genre/mix/radio names are kept so they
+     * can still surface in the catch-all when their dedicated rows are full.
+     */
+    fun allHomePlaylists(all: List<PlaylistSummary>): List<PlaylistSummary> =
+        all.filter { it.tracks > 0 && !isAutomationPlaylistName(it.name) && !isDailyMixName(it.name) }
+
+    /** Daily-rotated full playlist set so the home teaser eventually surfaces them all. */
+    fun shuffledAllPlaylists(all: List<PlaylistSummary>, seed: Long): List<PlaylistSummary> {
+        val safeSeed = if (seed == 0L) 0x4d595449L else seed
+        return allHomePlaylists(all).shuffled(Random(safeSeed))
     }
 }

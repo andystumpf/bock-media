@@ -6,6 +6,7 @@ object BockTestTags {
     const val NAV_HOME = "bock_nav_home"
     const val NAV_SEARCH = "bock_nav_search"
     const val NAV_LIBRARY = "bock_nav_library"
+    const val NAV_DOWNLOADS = "bock_nav_downloads"
     const val NAV_AUTOMATIONS = "bock_nav_automations"
 
     const val SCREEN_LOADING = "bock_screen_loading"

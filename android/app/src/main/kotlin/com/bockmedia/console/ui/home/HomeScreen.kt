@@ -32,7 +32,7 @@ fun HomeScreen(
     onPlay: (PlayTarget) -> Unit,
     onAccountNavigate: (String) -> Unit,
     onOpenDownloads: () -> Unit = {},
-    onOpenPlaylist: (String) -> Unit = {},
+    onBrowseHomeCard: (HomeCard) -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -259,9 +259,9 @@ fun HomeScreen(
             repository = repository,
             remoteOk = remoteOk,
             onDismiss = { showAllSection = null },
-            onOpenPlaylist = { id ->
+            onBrowse = { card ->
                 showAllSection = null
-                onOpenPlaylist(id)
+                onBrowseHomeCard(card)
             },
             onPlay = { card ->
                 HomeTileEngagement.recordSelection(card.id)
@@ -309,13 +309,11 @@ fun HomeScreen(
                         HomeShortcutGrid(
                             cards = shortcutCards,
                             repository = repository,
-                            remoteOk = remoteOk,
                             onPlay = { card ->
                                 HomeTileEngagement.recordSelection(card.id)
                                 onPlay(card.playTarget)
                             },
                             onLongPress = { actionCard = it },
-                            onOpenPlaylist = onOpenPlaylist,
                         )
                     }
                 }
@@ -332,7 +330,7 @@ fun HomeScreen(
                                 onPlay(card.playTarget)
                             },
                             onLongPress = { actionCard = it },
-                            onOpenPlaylist = onOpenPlaylist,
+                            onBrowse = onBrowseHomeCard,
                             onShowAll = { showAllSection = it },
                         )
                     }

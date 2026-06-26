@@ -10,19 +10,20 @@ import com.bockmedia.console.data.api.dto.ResumeEntry
 import com.bockmedia.console.data.api.dto.SmartPlaylist
 import com.bockmedia.console.data.api.dto.StreamHistoryItem
 object HomeFeedLimits {
-    const val JUMP_BACK_IN = 24
-    const val FAVORITES = 16
-    const val TOP_MIXES = 16
-    const val MOOD_SECTION_MIN = 8
+    const val JUMP_BACK_IN = 36
+    const val FAVORITES = 24
+    const val TOP_MIXES = 24
+    const val MOOD_SECTION_MIN = 12
     /** Mood rows include every keyword-matching playlist; cap only guards runaway libraries. */
     const val MOOD_SECTION_CARDS = 500
-    const val EXPLORE_THEMES = 18
-    const val LIBRARY_GENRE_EXTRAS = 6
-    const val DAILY_MIXES = 12
-    const val RECENT_PLAYLISTS = 24
-    const val RADIO = 16
-    const val DISCOVER = 24
-    const val MORE_PLAYLISTS = 24
+    const val EXPLORE_THEMES = 24
+    const val LIBRARY_GENRE_EXTRAS = 10
+    const val DAILY_MIXES = 20
+    const val RECENT_PLAYLISTS = 36
+    const val RADIO = 24
+    const val DISCOVER = 36
+    // Catch-all home row — large + daily-rotated so the full library surfaces over time.
+    const val MORE_PLAYLISTS = 100
 }
 
 data class HomeFeedInput(
@@ -102,40 +103,7 @@ object HomeFeedComposer {
             }
         }
 
-        fun resolvePlaylistArt(pl: PlaylistSummary, genreHint: String? = null): String? {
-            artPathForPlaylistSeed(input.history, pl.name)?.let { path ->
-                registry.claimArtPath(path)?.let { return it }
-            }
-            HomeFeedRules.artPathForPlaylistDistinct(input.history, pl.name, registry.usedArtPaths)
-                ?.let { path -> registry.claimArtPath(path)?.let { return it } }
-            val genreHints = buildList {
-                genreHint?.let { add(it) }
-                for (row in topGenres) {
-                    val g = row.name ?: row.label ?: continue
-                    if (pl.name.contains(g, ignoreCase = true)) add(g)
-                }
-            }.distinct()
-            for (g in genreHints) {
-                registry.claimArtPath(
-                    HomeFeedRules.artPathForGenreDistinct(input.history, g, registry.usedArtPaths),
-                )?.let { return it }
-            }
-            HomeThemeCatalog.themesForDay(input.shuffleSeed)
-                .firstOrNull { HomeFeedRules.playlistMatchesTheme(pl, it) }
-                ?.let { theme ->
-                    HomeFeedRules.topArtistForTheme(input.history, theme)?.let { artist ->
-                        registry.claimArtPath(
-                            HomeFeedRules.artPathForArtistDistinct(input.history, artist, registry.usedArtPaths),
-                        )?.let { return it }
-                    }
-                    input.libraryGenres.firstOrNull { HomeFeedRules.genreMatchesTheme(it.name, theme) }
-                        ?.artPath
-                        ?.let { path -> registry.claimArtPath(path)?.let { return it } }
-                }
-            return registry.claimArtPath(
-                HomeFeedRules.nextDistinctArtPath(input.history, registry.usedArtPaths),
-            )
-        }
+        fun resolvePlaylistArt(pl: PlaylistSummary, genreHint: String? = null): String? = null
 
         fun playlistCard(
             pl: PlaylistSummary,
@@ -147,7 +115,9 @@ object HomeFeedComposer {
         ): HomeCard? {
             if (HomeFeedRules.isAutomationPlaylistName(pl.name)) return null
             if (claim && !registry.claimPlaylist(pl.id, pl.name)) return null
-            val resolvedArt = artPath?.let { registry.claimArtPath(it) } ?: resolvePlaylistArt(pl, genreHint)
+            // Prefer the playlist's own cover (first track, from /api/playlists) so the tile
+            // renders from the cached feed without a per-tile cover lookup.
+            val resolvedArt = artPath?.let { registry.claimArtPath(it) } ?: pl.artPath ?: resolvePlaylistArt(pl, genreHint)
             val card = HomeCard(
                 id = "pl-${pl.id}",
                 title = pl.name,
@@ -177,14 +147,19 @@ object HomeFeedComposer {
         }
 
         fun resolveMixArt(genre: String, artist: String?, index: Int): String? {
-            registry.claimArtPath(HomeFeedRules.artPathForGenreDistinct(input.history, genre, registry.usedArtPaths))?.let { return it }
-            artist?.let { a ->
-                registry.claimArtPath(HomeFeedRules.artPathForArtistDistinct(input.history, a, registry.usedArtPaths))?.let { return it }
-            }
-            topArtists.getOrNull(index)?.name?.let { a ->
-                registry.claimArtPath(HomeFeedRules.artPathForArtistDistinct(input.history, a, registry.usedArtPaths))?.let { return it }
-            }
-            return registry.claimArtPath(HomeFeedRules.nextDistinctArtPath(input.history, registry.usedArtPaths))
+            HomeFeedRules.matchingLibraryGenreForLabel(genre, input.libraryGenres)
+                ?.artPath?.takeIf { it.isNotBlank() }
+                ?.let { path ->
+                    registry.claimArtPath(path)
+                    return path
+                }
+            HomeFeedRules.artPathForGenreDistinct(input.history, genre, registry.usedArtPaths)
+                ?.let { path ->
+                    registry.claimArtPath(path)
+                    return path
+                }
+            // Never fall back to seed artist / top-artist history — that paints the wrong album on genre mixes.
+            return null
         }
 
         val moodSections = HomeMoodSections.all().mapNotNull { mood ->
@@ -228,7 +203,7 @@ object HomeFeedComposer {
             for (name in recentPlaylistNames) {
                 if (size >= HomeFeedLimits.JUMP_BACK_IN) break
                 val pl = playlistByName[name.lowercase()] ?: continue
-                playlistCard(pl, artByPlaylist[name.lowercase()], HomeSectionKind.JumpBackIn, "Recently played")?.let { add(it) }
+                playlistCard(pl, kind = HomeSectionKind.JumpBackIn, subtitle = "Recently played")?.let { add(it) }
             }
             val seenAlbums = mutableSetOf<String>()
             for (row in input.history) {
@@ -270,8 +245,8 @@ object HomeFeedComposer {
                 if (size >= HomeFeedLimits.FAVORITES) break
                 val card = HomeCard(
                     id = "fav-${fav.path}",
-                    title = fav.track ?: "Favorite",
-                    subtitle = fav.artist ?: "Liked song",
+                    title = fav.track ?: "Track",
+                    subtitle = fav.artist ?: "Rated track",
                     artPath = fav.path,
                     playTarget = PlayTarget.Song(fav.path, fav.track ?: "Favorite"),
                     kind = HomeSectionKind.Favorites,
@@ -303,9 +278,10 @@ object HomeFeedComposer {
                         continue
                     }
                 }
-                val named = input.allPlaylists.firstOrNull { HomeFeedRules.isGenreMixPlaylistName(it.name, genre) }
-                    ?: input.allPlaylists.firstOrNull { it.name.equals("$genre Mix", ignoreCase = true) }
+                val named = HomeFeedRules.bestGenreMixPlaylist(input.allPlaylists, genre)
                 if (named != null) {
+                    // A real genre-mix playlist represents this genre — never synthesize a
+                    // "$genre Mix" artist card, even if the playlist already appears elsewhere.
                     playlistCard(
                         named,
                         kind = HomeSectionKind.TopMixes,
@@ -323,7 +299,11 @@ object HomeFeedComposer {
                     title = "$genre Mix",
                     subtitle = "Based on your listening",
                     artPath = resolveMixArt(genre, seedArtist, index),
-                    playTarget = PlayTarget.Artist(seedArtist),
+                    playTarget = PlayTarget.Radio(
+                        displayTitle = "$genre Mix",
+                        seedKind = PlayTarget.RadioSeedKind.Genre,
+                        name = seedArtist,
+                    ),
                     kind = HomeSectionKind.TopMixes,
                 )
                 if (!registry.hasCard(card.id)) {
@@ -352,7 +332,7 @@ object HomeFeedComposer {
                 playlistCard(pl, kind = HomeSectionKind.DailyMixes, subtitle = "Daily mix")?.let { add(it) }
             }
             val mixLike = input.allPlaylists.filter {
-                HomeFeedRules.isGenreMixPlaylistName(it.name) || it.name.contains("mix", ignoreCase = true)
+                HomeFeedRules.isGenreMixPlaylistName(it.name) || HomeFeedRules.hasMixLikeName(it.name)
             }.sortedByDescending { it.tracks }
             addAll(
                 fillPlaylists(mixLike + shuffledGeneric, HomeFeedLimits.DAILY_MIXES - size, HomeSectionKind.DailyMixes) { "Mix playlist" },
@@ -373,7 +353,7 @@ object HomeFeedComposer {
             for (name in recentPlaylistNames) {
                 if (size >= HomeFeedLimits.RECENT_PLAYLISTS) break
                 val pl = playlistByName[name.lowercase()] ?: continue
-                playlistCard(pl, artByPlaylist[name.lowercase()], HomeSectionKind.RecentPlaylists, "Played recently")?.let { add(it) }
+                playlistCard(pl, kind = HomeSectionKind.RecentPlaylists, subtitle = "Played recently")?.let { add(it) }
             }
             addAll(
                 fillPlaylists(
@@ -405,11 +385,15 @@ object HomeFeedComposer {
             )
         }.distinctBy { it.id }.take(HomeFeedLimits.DISCOVER)
 
+        // Catch-all so no library playlist is permanently hidden from home; the
+        // daily shuffle seed rotates which ones lead, and any not shown elsewhere
+        // (including genre/mix-named ones whose dedicated rows were full) land here.
+        val allRotated = HomeFeedRules.shuffledAllPlaylists(input.allPlaylists, input.shuffleSeed)
         val morePlaylists = fillPlaylists(
-            shuffledGeneric + input.allPlaylists.sortedByDescending { it.tracks },
+            allRotated + input.allPlaylists.sortedByDescending { it.tracks },
             HomeFeedLimits.MORE_PLAYLISTS,
             HomeSectionKind.RecentPlaylists,
-        ) { "${it.tracks} tracks · Suggested for you" }
+        ) { "${it.tracks} tracks · From your library" }
 
         val releaseRadar = buildList {
             input.releaseRadarLabel?.let { label ->
@@ -430,13 +414,13 @@ object HomeFeedComposer {
 
         val sections = listOfNotNull(
             section("jump-back-in", "Jump back in", HomeSectionKind.JumpBackIn, jumpBackIn),
-            section("favorites", "Your favorites", HomeSectionKind.Favorites, favoriteCards),
+            section("favorites", "Highly rated", HomeSectionKind.Favorites, favoriteCards),
             section("top-mixes", "Your top mixes", HomeSectionKind.TopMixes, genreMixes),
         ) + moodSections + listOfNotNull(
             section("release-radar", "Release Radar", HomeSectionKind.Discover, releaseRadar),
             section("discover-weekly", "Discover Weekly", HomeSectionKind.Discover, input.discoverWeeklyCards),
             section("explore-themes", "Explore genres & worlds", HomeSectionKind.ExploreThemes, exploreThemes),
-            section("daily-mixes", "Daily mixes", HomeSectionKind.DailyMixes, dailyMixes),
+            section("daily-mixes", "New daily mixes", HomeSectionKind.DailyMixes, dailyMixes),
             section("recent-playlists", "Recent playlists", HomeSectionKind.RecentPlaylists, recentPlaylists),
             section("radio", "Radio", HomeSectionKind.Radio, radioCards),
             section("discover", "Discover", HomeSectionKind.Discover, discoverCandidates),
@@ -611,8 +595,11 @@ object HomeFeedComposer {
             if (size >= HomeFeedLimits.EXPLORE_THEMES) break
 
             val playlistMatch = input.allPlaylists
-                .filter { HomeFeedRules.playlistMatchesTheme(it.name, theme) && it.tracks > 0 }
-                .maxByOrNull { it.tracks }
+                .filter { HomeFeedRules.playlistMatchesTheme(it, theme) && it.tracks > 0 }
+                .maxWithOrNull(
+                    compareByDescending<PlaylistSummary> { HomeFeedRules.playlistThemeScore(it, theme) }
+                        .thenByDescending { it.tracks },
+                )
             if (playlistMatch != null) {
                 playlistCard(
                     playlistMatch,
@@ -755,7 +742,7 @@ object HomeFeedComposer {
                 id = cardId,
                 title = pl.name,
                 subtitle = subtitle,
-                artPath = null,
+                artPath = pl.artPath,
                 playlistId = pl.id,
                 playTarget = PlayTarget.Playlist(pl.id, pl.name),
                 kind = kind,

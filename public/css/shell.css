@@ -1122,6 +1122,58 @@ a { text-decoration: none; color: inherit; }
   flex-direction: column;
   gap: 2px;
 }
+.search-ranking-period {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 16px 12px;
+  text-align: center;
+}
+.search-ranking-period .hint {
+  font-size: 0.8125rem;
+  margin-top: 2px;
+}
+.search-ranking-list {
+  gap: 0;
+}
+.search-ranking-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+}
+.search-ranking-rank {
+  flex: 0 0 28px;
+  font-size: 1.25rem;
+  font-weight: 700;
+  line-height: 1;
+}
+.search-ranking-main {
+  flex: 1;
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+.search-ranking-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.search-ranking-text strong {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.search-ranking-text span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.75;
+  font-size: 0.875rem;
+}
 
 /* Search page */
 .search-page {

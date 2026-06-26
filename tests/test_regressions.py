@@ -60,6 +60,18 @@ class TestStuckNowPlaying:
         assert server.read_np_state_for_device(did) is None
         assert client.get('/api/nowplaying_devices').get_json()['items'] == []
 
+    def test_playback_finished_ignores_stale_token(self, client, post_alexa, sample_track, isolated_paths):
+        """Regression: Finished for track N must not clear playing on track N+1."""
+        did = 'amzn1.ask.device.FINISHSTALE'
+        _register(client, post_alexa, did, 'Office Show')
+        t0 = server.encode_token({'tracks': [sample_track['path'], sample_track['path']], 'idx': 0})
+        t1 = server.encode_token({'tracks': [sample_track['path'], sample_track['path']], 'idx': 1})
+        post_alexa('AudioPlayer.PlaybackStarted', token=t1, device_id=did)
+        post_alexa('AudioPlayer.PlaybackFinished', token=t0, device_id=did)
+        st = server.read_np_state_for_device(did)
+        assert st is not None
+        assert st.get('playing') is True
+
     def test_stop_intent_removes_now_playing_row(self, client, post_alexa, sample_track, isolated_paths):
         """Regression: stop left playing=False rows that never expired."""
         did = 'amzn1.ask.device.STOPREMOVE'
@@ -148,6 +160,53 @@ class TestPlayIntentCorrelation:
         server._record_play_intent([('SERIAL-OFFICE', 'Office')])
         server._correlate_play_intent(did)
         assert server._load_devices()[did]['serial'] == 'SERIAL-OFFICE'
+
+    def test_fifo_correlates_back_to_back_plays(self, isolated_paths):
+        """Two quick plays on different rooms each bind their own deviceId."""
+        kitchen = 'amzn1.ask.device.KITCHENNEW01'
+        office = 'amzn1.ask.device.OFFICENEW01'
+        server.register_device(kitchen)
+        server.register_device(office)
+        server._record_play_intent([('SERIAL-K', 'Kitchen Show')])
+        server._record_play_intent([('SERIAL-O', 'Office show')])
+        assert server._correlate_play_intent(kitchen) is True
+        store = server._load_devices()
+        assert store[kitchen]['name'] == 'Kitchen Show'
+        assert store[kitchen]['serial'] == 'SERIAL-K'
+        assert server._correlate_play_intent(office) is True
+        store = server._load_devices()
+        assert store[office]['name'] == 'Office show'
+        assert store[office]['serial'] == 'SERIAL-O'
+
+    def test_auto_merge_skipped_while_play_intent_pending(self, isolated_paths):
+        """Echo Shows share fingerprints — don't fold a new room onto the active one."""
+        office = 'amzn1.ask.device.OFFICEPRIMARY'
+        kitchen_new = 'amzn1.ask.device.KITCHENROT01'
+        server.register_device(office, default_name='Office show')
+        store = server._load_devices()
+        store[office]['fingerprint'] = 'AudioPlayer,Display'
+        store[office]['lastSeen'] = time.time()
+        server._save_devices(store)
+        server._record_play_intent([('SERIAL-KITCHEN', 'Kitchen Show')])
+        server.register_device(
+            kitchen_new,
+            supported_interfaces={'AudioPlayer': {}, 'Display': {}},
+        )
+        assert server._load_devices()[kitchen_new].get('aliasOf') is None
+
+    def test_correlate_peels_wrong_auto_merge(self, isolated_paths):
+        office = 'amzn1.ask.device.OFFICEPRIMARY'
+        kitchen_new = 'amzn1.ask.device.KITCHENROT02'
+        server.register_device(office, default_name='Office show')
+        store = server._load_devices()
+        server._alias_to(kitchen_new, office, store)
+        server._save_devices(store)
+        server._record_play_intent([('SERIAL-KITCHEN', 'Kitchen Show')])
+        assert server._correlate_play_intent(kitchen_new) is True
+        store = server._load_devices()
+        assert store[kitchen_new].get('aliasOf') is None
+        assert store[kitchen_new]['name'] == 'Kitchen Show'
+        assert store[kitchen_new]['serial'] == 'SERIAL-KITCHEN'
 
 
 class TestSerialIndexedAliasing:
@@ -619,3 +678,58 @@ class TestSkipBackIntents:
         directives = resp.get('response', {}).get('directives', []) or []
         speech = (resp.get('response', {}).get('outputSpeech', {}) or {}).get('text', '')
         assert directives or speech, 'SkipIntent should advance or speak'
+
+    def test_remote_next_does_not_optimistically_advance_queue(
+        self, client, sample_track, isolated_paths, monkeypatch,
+    ):
+        """Remote skip uses voice → SkipIntent; optimistic idx advance caused double-skip."""
+        import alexa_remote
+        monkeypatch.setattr(alexa_remote, 'device_control', lambda *a, **k: {'spoken': True})
+
+        did = 'amzn1.ask.device.REMOTENEXT'
+        paths = [sample_track['path'], sample_track['path'], sample_track['path']]
+        token = server.encode_token({'tracks': paths, 'idx': 0})
+        server.register_device(did, default_name='Office Show')
+        server.write_np_state_for_device(did, {
+            'track': sample_track['title'],
+            'artist': sample_track['artist'],
+            'filepath': paths[0],
+            'token': token,
+            'playing': True,
+        })
+
+        resp = client.post('/api/alexa_remote/control', json={
+            'deviceId': did,
+            'serial': 'SERIAL-OFFICE',
+            'action': 'next',
+        })
+        assert resp.status_code == 200
+
+        st = server.read_np_state_for_device(did)
+        assert st is not None
+        data = server.decode_token(st['token']) or {}
+        assert data.get('idx') == 0, 'control must not advance idx before SkipIntent runs'
+
+    def test_skip_intent_eagerly_updates_now_playing(
+        self, client, post_alexa, sample_track, isolated_paths,
+    ):
+        """SkipIntent must update NP metadata immediately, not only on PlaybackStarted."""
+        did = 'amzn1.ask.device.SKIPEAGER'
+        paths = [sample_track['path'], sample_track['path']]
+        _register(client, post_alexa, did)
+        token = server.encode_token({'tracks': paths, 'idx': 0})
+        with server.app.test_request_context('/'):
+            server.g.device_id = did
+            server.g.raw_device_id = did
+            server.write_np_state({
+                'track': 'First',
+                'filepath': paths[0],
+                'token': token,
+                'playing': True,
+            })
+        post_alexa('IntentRequest', 'SkipIntent', device_id=did)
+        st = server.read_np_state_for_device(did)
+        assert st is not None
+        data = server.decode_token(st['token']) or {}
+        assert data.get('idx') == 1
+        assert st.get('filepath') == paths[1]

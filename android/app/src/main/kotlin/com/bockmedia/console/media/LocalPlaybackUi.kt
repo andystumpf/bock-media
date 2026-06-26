@@ -8,6 +8,7 @@ const val LOCAL_PHONE_DEVICE_ID = "local-phone"
 fun isLocalPhoneDevice(deviceId: String): Boolean = deviceId == LOCAL_PHONE_DEVICE_ID
 
 fun LocalPlaybackState.toNowPlayingDevice(): NowPlayingDeviceItem? {
+    if (!active) return null
     val track = current ?: return null
     return NowPlayingDeviceItem(
         deviceId = LOCAL_PHONE_DEVICE_ID,

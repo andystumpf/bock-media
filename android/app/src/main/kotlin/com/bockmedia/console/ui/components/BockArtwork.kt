@@ -60,8 +60,6 @@ fun BockArtwork(
         val key = stableArtCacheKey(model)
         ImageRequest.Builder(context)
             .data(model)
-            // Half-size bitmaps for opaque artwork — big memory/decode win on lists (perf #2).
-            .allowRgb565(true)
             .crossfade(crossfadeMs)
             .memoryCacheKey(key)
             .diskCacheKey(key)
@@ -70,13 +68,20 @@ fun BockArtwork(
     // AsyncImage avoids the per-tile subcomposition that makes SubcomposeAsyncImage
     // janky in long lists, and auto-sizes the decode to the composable bounds (perf #2).
     var isError by remember(model) { mutableStateOf(false) }
+    var isLoaded by remember(model) { mutableStateOf(false) }
     Box(clippedModifier) {
+        if (!isLoaded && !isError) {
+            ArtGradientFallback(title, Modifier.fillMaxSize(), fallbackFontSize)
+        }
         AsyncImage(
             model = request,
             contentDescription = title,
             modifier = Modifier.fillMaxSize(),
             contentScale = contentScale,
-            onState = { state -> isError = state is AsyncImagePainter.State.Error },
+            onState = { state ->
+                isLoaded = state is AsyncImagePainter.State.Success
+                isError = state is AsyncImagePainter.State.Error
+            },
         )
         if (isError) {
             ArtGradientFallback(title, Modifier.fillMaxSize(), fallbackFontSize)

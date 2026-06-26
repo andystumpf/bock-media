@@ -5,6 +5,8 @@ import java.net.URLDecoder
 
 /** Host-independent media paths for artwork (survives LAN ↔ external IP switches). */
 object ArtworkPaths {
+    /** Grid/list tile thumbnail request — matches web `/artwork/...?size=384`. */
+    const val TILE_SIZE_PX = 384
     fun extractMediaPath(urlOrPath: String?): String? {
         val raw = urlOrPath?.trim().orEmpty()
         if (raw.isBlank()) return null

@@ -2,6 +2,200 @@
   "_comment": "Update this file whenever you upload a new APK/IPA to /app. Shown on GET /app.",
   "releases": [
     {
+      "version": "2.6.14",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "ui", "text": "Bottom nav shows icons only — Home, Search, Library, Downloads, Automations"}
+      ]
+    },
+    {
+      "version": "2.6.13",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "feat", "text": "Star ratings replace heart favorites — Now Playing, Search, Rated screen, and Home highly-rated row"},
+        {"kind": "feat", "text": "5-star ratings on songs via /api/ratings (favorites API now backed by ratings on server)"}
+      ]
+    },
+    {
+      "version": "2.6.12",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "feat", "text": "Home & Library playlist tiles use 2×2 track collage art (same as playlist detail)"},
+        {"kind": "feat", "text": "More playlists per home row — Jump Back In, Mixes, Discover, and More Playlists expanded"}
+      ]
+    },
+    {
+      "version": "2.6.11",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "fix", "text": "Library Artists/Albums: load full catalog, not capped at 100"},
+        {"kind": "fix", "text": "Play on playlist, album, artist opens device picker (phone or Alexa)"}
+      ]
+    },
+    {
+      "version": "2.6.10",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "feat", "text": "Playlist detail: Plexamp layout — collage art, track summary, art rows, immersive backdrop"},
+        {"kind": "fix", "text": "Artist page: popular tracks load with album-artist fallback when tags differ"}
+      ]
+    },
+    {
+      "version": "2.6.9",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "feat", "text": "Artist page: Plexamp layout — albums, singles/EPs, track pager, similar artists, styles"},
+        {"kind": "feat", "text": "Album detail: immersive backdrop, disc tracklist, duration fix, artist tag fallback"}
+      ]
+    },
+    {
+      "version": "2.6.8",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "feat", "text": "Search: watch-folder source picker, pin editor, Sonic Adventure browse, messages in results"},
+        {"kind": "feat", "text": "Web + iOS: Plexamp idle browse, selection-based recents, analytics rankings parity"}
+      ]
+    },
+    {
+      "version": "2.6.7",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "feat", "text": "Search idle: Plexamp Aural Fixations + Sonic Explorations + recent selections (not query strings)"},
+        {"kind": "feat", "text": "Top Artists/Albums/Tracks/Best Of from your listening analytics"}
+      ]
+    },
+    {
+      "version": "2.6.6",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "fix", "text": "Search albums: match [year] Gish titles and albums by artist (smashing → Pumpkins albums)"}
+      ]
+    },
+    {
+      "version": "2.6.5",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "feat", "text": "Search: Plexamp-style sections (Tracks, Artists, Albums) with album counts"},
+        {"kind": "feat", "text": "Album view: art + year header, play album button, track count & duration, disc tracklist"}
+      ]
+    },
+    {
+      "version": "2.6.4",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "fix", "text": "Search: back from artist/album/playlist returns to the same results (not empty browse)"}
+      ]
+    },
+    {
+      "version": "2.6.3",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "fix", "text": "Search: prefix + fuzzy matching (rem → R.E.M.); no mid-word matches (Premjee excluded)"}
+      ]
+    },
+    {
+      "version": "2.6.2",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "feat", "text": "Plexamp-style Search: grouped results (Radio, Sonically similar, Playlists, Smart, Artists, Albums, Genres, Songs)"},
+        {"kind": "feat", "text": "Search: Show all per section, recent searches on idle, All libraries / Current source toggle"},
+        {"kind": "feat", "text": "Search: Resonance similar tracks and radio launch points from top matches"},
+        {"kind": "feat", "text": "Search: Aural fixations shortcuts via /api/search/pins"}
+      ]
+    },
+    {
+      "version": "2.6.1",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "fix", "text": "Remove debug version label from Home greeting"}
+      ]
+    },
+    {
+      "version": "2.6.0",
+      "date": "2026-06-24",
+      "items": [
+        {"kind": "fix", "text": "Home quick-access cards: tap goes straight to device select to play (no Play/Download buttons on the small cards)"}
+      ]
+    },
+    {
+      "version": "2.5.9",
+      "date": "2026-06-24",
+      "items": [
+        {"kind": "fix", "text": "Show app version under the Home greeting so installed build is easy to confirm"}
+      ]
+    },
+    {
+      "version": "2.5.8",
+      "date": "2026-06-24",
+      "items": [
+        {"kind": "fix", "text": "/app sideload APK is now signed — unsigned builds failed to install on Android (you may have been stuck on an old build)"},
+        {"kind": "fix", "text": "Artwork auth re-reads the mobile token on every image request (fixes missing covers on fresh install / external URL)"},
+        {"kind": "fix", "text": "Home shortcut rows now show Play and Download like Library tiles"}
+      ]
+    },
+    {
+      "version": "2.5.7",
+      "date": "2026-06-24",
+      "items": [
+        {"kind": "fix", "text": "Fresh install: Coil image loader now starts after credentials are hydrated, and rebuilds after sign-in — fixes missing artwork and stuck placeholder tiles"},
+        {"kind": "fix", "text": "Sideload APK embeds mobile API token from config.json when local.properties is absent"}
+      ]
+    },
+    {
+      "version": "2.5.6",
+      "date": "2026-06-24",
+      "items": [
+        {"kind": "fix", "text": "Home & Library playlist tiles: use server 384px artwork thumbnails (matches web), warm inline cover paths on load, and fix JPEG decode on tiles"}
+      ]
+    },
+    {
+      "version": "2.5.5",
+      "date": "2026-06-24",
+      "items": [
+        {"kind": "fix", "text": "Fresh install / reinstall: artwork URLs refresh when the server endpoint resolves (no stuck placeholder tiles)"},
+        {"kind": "fix", "text": "Home playlist tiles: Play and Download overlays render as direct tile children (matches Library grid)"}
+      ]
+    },
+    {
+      "version": "2.5.4",
+      "date": "2026-06-24",
+      "items": [
+        {"kind": "fix", "text": "Home playlist tiles: Play and Download overlays now render on top of artwork (same shared component as Library grid)"}
+      ]
+    },
+    {
+      "version": "2.5.3",
+      "date": "2026-06-24",
+      "items": [
+        {"kind": "fix", "text": "Home & Library tiles always show the green Play button and Download control (Play works on this phone even when the Alexa remote isn't available)"}
+      ]
+    },
+    {
+      "version": "2.5.2",
+      "date": "2026-06-24",
+      "items": [
+        {"kind": "fix", "text": "Home: tapping a genre Mix now opens that genre (not the seed artist); tap a playlist to open it, Play to pick a speaker, Download to save offline"}
+      ]
+    },
+    {
+      "version": "2.5.1",
+      "date": "2026-06-24",
+      "items": [
+        {"kind": "fix", "text": "Artwork: home & library tiles load cover art instantly from the playlist list (no per-tile fetch) and stay put when navigating"},
+        {"kind": "fix", "text": "Server caches each playlist's cover art so it loads fast on any network and survives restarts"}
+      ]
+    },
+    {
+      "version": "2.5.0",
+      "date": "2026-06-24",
+      "items": [
+        {"kind": "feat", "text": "New daily mixes: fresh auto-built playlists (Discovery, Rotation, Throwback, Energy, Chill, Genre) that change every day — Save any to keep it in your library"},
+        {"kind": "fix", "text": "Home: far more of your playlists now appear and rotate daily so the whole library surfaces over time"},
+        {"kind": "fix", "text": "Home tiles open the track list (like Library); only Play/Download start playback or pick a speaker"},
+        {"kind": "fix", "text": "Home & playlist artwork now uses the playlist's first track instead of stale listening history"}
+      ]
+    },
+    {
       "version": "2.4.2",
       "date": "2026-06-22",
       "items": [
