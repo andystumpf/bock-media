@@ -8,6 +8,10 @@ enum HomeLoadCoordinator {
         lastSuccessfulLoadMs = Int64(Date().timeIntervalSince1970 * 1000)
     }
 
+    static func resetReloadWindow() {
+        lastSuccessfulLoadMs = 0
+    }
+
     static func shouldSkipReload() -> Bool {
         guard let cached = HomeFeedCache.getIfFresh(), cached.hasCurrentHomeLayout() else { return false }
         return Int64(Date().timeIntervalSince1970 * 1000) - lastSuccessfulLoadMs < minReloadMs

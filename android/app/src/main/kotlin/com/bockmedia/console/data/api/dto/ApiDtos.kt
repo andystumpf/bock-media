@@ -6,7 +6,13 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 
 @Serializable
-data class OkResponse(val ok: Boolean = false, val error: String? = null, val code: String? = null)
+data class OkResponse(
+    val ok: Boolean = false,
+    val error: String? = null,
+    val code: String? = null,
+    val memberId: String? = null,
+    val deviceId: String? = null,
+)
 
 @Serializable
 data class SummaryResponse(

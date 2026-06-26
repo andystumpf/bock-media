@@ -360,6 +360,16 @@ final class BockMediaAPIClient {
         try await post("api/clients/bind", body: body)
     }
 
+    func clientPrefs(clientId: String, memberId: String?) async throws -> ClientPrefsResponse {
+        var query = ["clientId": clientId]
+        if let memberId, !memberId.isEmpty { query["memberId"] = memberId }
+        return try await get("api/clients/prefs", query: query)
+    }
+
+    func putClientPrefs(body: [String: Any]) async throws -> ClientPrefsResponse {
+        try await request(path: "api/clients/prefs", method: "PUT", query: [:], body: body)
+    }
+
     func setDeviceOwner(id: String, body: [String: Any]) async throws -> OkResponse {
         try await post("api/devices/\(id)/owner", body: body)
     }

@@ -85,6 +85,10 @@
 		A8D179B7C2082462CA89A7D9 /* DrivingModeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 157E488304B98DA74883C5AB /* DrivingModeView.swift */; };
 		ACC8589CD40480784B8BC324 /* WidgetSnapshotLogicTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85BB314B6D62FD8D1ADDCF53 /* WidgetSnapshotLogicTests.swift */; };
 		AFAA29475F05613F5F4E9F93 /* ClientIdStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FC852CD46A080C980D30EE8 /* ClientIdStore.swift */; };
+		B1A2C3D4E5F60718293A4B5C /* ClientPrefsSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4B5D /* ClientPrefsSync.swift */; };
+		C2B3D4E5F60718293A4B5C6D /* InstallIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E5F60718293A4B5C6E /* InstallIdentity.swift */; };
+		D3C4E5F60718293A4B5C6D7E /* ProfilePickerGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3D4E5F60718293A4B5C6D7F /* ProfilePickerGate.swift */; };
+		E4D5F60718293A4B5C6D7E8F /* ClientPrefsSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4E5F60718293A4B5C6D7E90 /* ClientPrefsSyncTests.swift */; };
 		B2DD174504029CB640DBF51F /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57B51F1C9BF51FC30010B8D6 /* AppDelegate.swift */; };
 		B5DF2AD0BBF011A3DD81FDF1 /* NowPlayingMerge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D0B49F3C20B8CDBFB80CBC1 /* NowPlayingMerge.swift */; };
 		B7E9D9F389185C6CBE2CAB19 /* LibraryRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5412ABEB39FE2F1F122A1282 /* LibraryRoute.swift */; };
@@ -232,6 +236,10 @@
 		7E6FE8FBF84701EB0A867015 /* AutomationFormSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationFormSheet.swift; sourceTree = "<group>"; };
 		7ED17398AC3EEF37ED51E26B /* BockMedia.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = BockMedia.entitlements; sourceTree = "<group>"; };
 		7FC852CD46A080C980D30EE8 /* ClientIdStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientIdStore.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60718293A4B5D /* ClientPrefsSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientPrefsSync.swift; sourceTree = "<group>"; };
+		B2C3D4E5F60718293A4B5C6E /* InstallIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallIdentity.swift; sourceTree = "<group>"; };
+		C3D4E5F60718293A4B5C6D7F /* ProfilePickerGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfilePickerGate.swift; sourceTree = "<group>"; };
+		D4E5F60718293A4B5C6D7E90 /* ClientPrefsSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientPrefsSyncTests.swift; sourceTree = "<group>"; };
 		82202651825B73007E32E231 /* BockMediaAPIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BockMediaAPIClient.swift; sourceTree = "<group>"; };
 		8317F9DC988C7C9E9B14698E /* SearchRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchRoute.swift; sourceTree = "<group>"; };
 		8361ADD76AF979428D070D34 /* OfflineAndNetworkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfflineAndNetworkTests.swift; sourceTree = "<group>"; };
@@ -359,6 +367,8 @@
 			children = (
 				4465FBF1515BEBB133A583F0 /* AppPreferences.swift */,
 				7FC852CD46A080C980D30EE8 /* ClientIdStore.swift */,
+				A1B2C3D4E5F60718293A4B5D /* ClientPrefsSync.swift */,
+				B2C3D4E5F60718293A4B5C6E /* InstallIdentity.swift */,
 				8D4E7E75FA02E42DBFAD55FD /* KeychainStore.swift */,
 				B350117AF72C140B8A579E96 /* PinnedDevicesStore.swift */,
 				C51FFAC3FD71ACC30A5AF4C8 /* SearchHistoryStore.swift */,
@@ -654,6 +664,7 @@
 			isa = PBXGroup;
 			children = (
 				C52F69774C7ECCBEF39BBA50 /* HomeFeedComposerGoldenTests.swift */,
+				D4E5F60718293A4B5C6D7E90 /* ClientPrefsSyncTests.swift */,
 				6BE03322B94FC96A776A3088 /* ModelsTests.swift */,
 				8361ADD76AF979428D070D34 /* OfflineAndNetworkTests.swift */,
 				85BB314B6D62FD8D1ADDCF53 /* WidgetSnapshotLogicTests.swift */,
@@ -743,6 +754,7 @@
 			isa = PBXGroup;
 			children = (
 				F4DBDC562D4072CA85EE50F7 /* FamilyView.swift */,
+				C3D4E5F60718293A4B5C6D7F /* ProfilePickerGate.swift */,
 				E7E5019CF471B241196ADC3A /* RoomPolicySheet.swift */,
 			);
 			path = Family;
@@ -965,6 +977,8 @@
 				026B65418C1AB62F63EA8BFB /* BuildConfig.swift in Sources */,
 				4716D60367A71BC18BB01A7F /* CarPlayCoordinator.swift in Sources */,
 				AFAA29475F05613F5F4E9F93 /* ClientIdStore.swift in Sources */,
+				B1A2C3D4E5F60718293A4B5C /* ClientPrefsSync.swift in Sources */,
+				C2B3D4E5F60718293A4B5C6D /* InstallIdentity.swift in Sources */,
 				9178AB99693D3238E97F6711 /* DeepLink.swift in Sources */,
 				A4F81A6C81D93A2CF3E80244 /* DeviceAnalyticsReporter.swift in Sources */,
 				CC1720D8493D4B0016481405 /* DeviceCatalog.swift in Sources */,
@@ -975,6 +989,7 @@
 				5C71F4B173C3842353B23163 /* DownloadsView.swift in Sources */,
 				A8D179B7C2082462CA89A7D9 /* DrivingModeView.swift in Sources */,
 				14A24FDD605EB4A63E3DE1A7 /* FamilyView.swift in Sources */,
+				D3C4E5F60718293A4B5C6D7E /* ProfilePickerGate.swift in Sources */,
 				30C44F98B388EAD20F32685C /* FavoritesView.swift in Sources */,
 				C27F81088F1300D8F92CF36C /* GenreDetailView.swift in Sources */,
 				6B206DA4D24BA79EECE918D7 /* HomeArtwork.swift in Sources */,
@@ -1053,6 +1068,7 @@
 			files = (
 				798F4FF6F4430ED78EE5232B /* HomeFeedComposerGoldenTests.swift in Sources */,
 				4BC61D484F1E01E3C62E044A /* ModelsTests.swift in Sources */,
+				E4D5F60718293A4B5C6D7E8F /* ClientPrefsSyncTests.swift in Sources */,
 				F71AA7A58EA30D7016EA38E1 /* OfflineAndNetworkTests.swift in Sources */,
 				ACC8589CD40480784B8BC324 /* WidgetSnapshotLogicTests.swift in Sources */,
 			);

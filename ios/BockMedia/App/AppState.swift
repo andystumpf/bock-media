@@ -19,6 +19,7 @@ final class AppState: ObservableObject {
 
     init() {
         repository = BockMediaRepository(preferences: preferences)
+        ClientPrefsSync.configure(repository: repository)
         OfflineDownloadManager.shared.configure(repository: repository, preferences: preferences)
         NowPlayingPollService.shared.configure(repository: repository)
     }
@@ -48,6 +49,7 @@ final class AppState: ObservableObject {
             isConnected = true
             DeviceAnalyticsReporter.reportConnect(repository: repository)
             await refreshRemoteStatus()
+            await ClientPrefsSync.pullAndApply(repository: repository)
         case .success(.failure), .timedOut:
             if wasConnected && (preferences.localServerURL != nil || preferences.externalServerURL != nil) {
                 isConnected = true
@@ -67,6 +69,7 @@ final class AppState: ObservableObject {
             isConnected = true
             DeviceAnalyticsReporter.reportConnect(repository: repository)
             await refreshRemoteStatus()
+            await ClientPrefsSync.pullAndApply(repository: repository)
         case .failure(let error):
             throw error
         }
@@ -120,6 +123,7 @@ final class AppState: ObservableObject {
 
     func playHomeCard(_ card: HomeCard) {
         HomeTileEngagement.recordSelection(cardId: card.id)
+        ClientPrefsSync.schedulePush()
         // Quick-access cards always open the device picker (parity with Android),
         // rather than auto-playing on this iPhone.
         pendingPlayTarget = card.playTarget

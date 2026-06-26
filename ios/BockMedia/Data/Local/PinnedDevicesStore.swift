@@ -18,6 +18,7 @@ enum PinnedDevicesStore {
         } else {
             UserDefaults.standard.set(trimmed.joined(separator: "|"), forKey: key)
         }
+        ClientPrefsSync.schedulePush()
     }
 
     static func toggle(_ serial: String) {

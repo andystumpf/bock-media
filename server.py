@@ -38,6 +38,7 @@ import bock_artist_art
 import bock_client_prefs
 import bock_library_health
 import bock_ratings
+import bock_member_backup
 from bock_routes import register as register_bock_routes
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -55,6 +56,37 @@ _LAST_ALEXA_HIT = 0.0
 #   OURMEDIA_MUSIC_ROOT – root of the music library that gets streamed
 DB_PATH = os.environ.get('OURMEDIA_DB_PATH', '/mnt/bock/Music/music_organizer.db')
 DATA_DIR = os.environ.get('OURMEDIA_DATA_DIR', '/home/plex/.bockmedia')
+
+_MEMBER_DATA_BASENAMES = frozenset({
+    'ratings.json', 'client_prefs.json', 'household.json', 'favorites.json',
+})
+
+
+def _migrate_ratings_to_data_dir():
+    """Keep ratings with other household state under DATA_DIR (not the git repo)."""
+    dest = bock_ratings.ratings_path(DATA_DIR)
+    legacy = bock_ratings.ratings_path(HERE)
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        if os.path.isfile(legacy) and not os.path.isfile(dest):
+            shutil.copy2(legacy, dest)
+            print(f'[RATINGS] migrated {legacy} -> {dest}', flush=True)
+        if os.path.isfile(dest):
+            return dest
+    except OSError as ex:
+        print(f'[RATINGS] using legacy path ({ex})', flush=True)
+    return legacy if os.path.isfile(legacy) else dest
+
+
+RATINGS_PATH = _migrate_ratings_to_data_dir()
+FAVORITES_PATH = os.path.join(DATA_DIR, 'favorites.json')
+try:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    _legacy_favorites = os.path.join(HERE, 'favorites.json')
+    if os.path.isfile(_legacy_favorites) and not os.path.isfile(FAVORITES_PATH):
+        shutil.copy2(_legacy_favorites, FAVORITES_PATH)
+except OSError:
+    FAVORITES_PATH = os.path.join(HERE, 'favorites.json')
 
 import bock_search as _bock_search_mod
 _bock_search_mod.configure(DATA_DIR)
@@ -851,6 +883,38 @@ def app_info():
     """Mobile app builds + release notes for the web console download page."""
     return jsonify(_app_download_payload(issue_token=True))
 
+
+def _atomic_binary_write(path, data):
+    """Write binary atomically (APK/IPA uploads)."""
+    tmp = path + '.tmp'
+    with open(tmp, 'wb') as fh:
+        fh.write(data)
+    os.replace(tmp, path)
+
+
+@app.route('/api/admin/mobile-app/android', methods=['PUT'])
+def admin_upload_android_apk():
+    """Upload sideload APK + version sidecar (mobile API token; works off-LAN)."""
+    if not _mobile_api_token_ok():
+        return _forbidden()
+    version = (request.headers.get('X-App-Version') or request.args.get('version') or '').strip()
+    if not version:
+        return jsonify({'error': 'version required (X-App-Version header or ?version=)'}), 400
+    data = request.get_data()
+    if len(data) < 100_000:
+        return jsonify({'error': 'APK body too small'}), 400
+    apk_path = os.path.join(DATA_DIR, 'bockmedia-console.apk')
+    ver_path = os.path.join(DATA_DIR, 'bockmedia-console.version')
+    try:
+        _atomic_binary_write(apk_path, data)
+        with open(ver_path, 'w', encoding='utf-8') as fh:
+            fh.write(version)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    print(f'mobile-app upload: android v{version} ({len(data)} bytes) -> {apk_path}', flush=True)
+    return jsonify({'ok': True, 'version': version, 'sizeMb': round(len(data) / (1024 * 1024), 1)})
+
+
 @app.route('/download/bockmedia-console.apk')
 def app_download_apk():
     apk = _app_apk_path()
@@ -1448,8 +1512,6 @@ def plex_sync_status():
 
 # ── Favorites (starred tracks) ───────────────────────────────────────────────
 
-RATINGS_PATH = bock_ratings.ratings_path(HERE)
-FAVORITES_PATH = os.path.join(HERE, 'favorites.json')
 _FAVORITES_LOCK = threading.Lock()
 
 def _rated_songs_as_favorites(limit=200, member_id=''):
@@ -4083,6 +4145,11 @@ def _atomic_json_write(path, data, **dump_kwargs):
     writers — e.g. two members of a device group whose Echoes hit the skill at
     the same instant — never share a temp file and clobber each other's replace.
     """
+    if os.path.basename(path) in _MEMBER_DATA_BASENAMES:
+        try:
+            bock_member_backup.maybe_backup(path, DATA_DIR)
+        except Exception as ex:
+            print(f'[BACKUP] skipped {path}: {ex}', flush=True)
     tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.{os.urandom(4).hex()}.tmp"
     try:
         with open(tmp, 'w') as f:
@@ -4698,7 +4765,7 @@ _VALID_ROLES = ('parent', 'kid')
 
 
 def _household_defaults():
-    return {'members': [], 'clientBindings': {}, 'deviceOwners': {}}
+    return {'members': [], 'clientBindings': {}, 'deviceOwners': {}, 'phoneBindings': {}}
 
 
 def _load_household():
@@ -4717,6 +4784,8 @@ def _load_household():
         base['clientBindings'] = {}
     if not isinstance(base['deviceOwners'], dict):
         base['deviceOwners'] = {}
+    if not isinstance(base.get('phoneBindings'), dict):
+        base['phoneBindings'] = {}
     return base
 
 
@@ -4806,6 +4875,39 @@ def member_for_client(client_id, household=None):
         return None
     h = household or _load_household()
     return h.get('clientBindings', {}).get(did)
+
+
+def _normalize_phone_id(raw):
+    pid = (raw or '').strip().lower()
+    if not pid or len(pid) < 8:
+        return ''
+    return pid[:128]
+
+
+def member_for_phone(phone_id, household=None):
+    pid = _normalize_phone_id(phone_id)
+    if not pid:
+        return None
+    h = household or _load_household()
+    return (h.get('phoneBindings') or {}).get(pid)
+
+
+def _rebind_client_from_phone(client_id, phone_id):
+    """After reinstall: map new clientId → member via stable phone hardware id."""
+    pid = _normalize_phone_id(phone_id)
+    if not pid:
+        return None
+    with _HOUSEHOLD_LOCK:
+        h = _load_household()
+        member_id = (h.get('phoneBindings') or {}).get(pid)
+        if not member_id or not _member_by_id(member_id, h):
+            return None
+        did = _client_device_id(client_id)
+        if not did:
+            return None
+        h.setdefault('clientBindings', {})[did] = member_id
+        _save_household(h)
+        return member_id
 
 
 def member_for_device(device_id, household=None):
@@ -4975,6 +5077,7 @@ def household_bind_client():
     body = request.get_json(silent=True) or {}
     client_id = (body.get('clientId') or '').strip()
     member_id = (body.get('memberId') or '').strip()
+    phone_id = _normalize_phone_id(body.get('phoneId'))
     did = _client_device_id(client_id)
     if not did:
         return jsonify({'error': 'clientId required'}), 400
@@ -4984,6 +5087,8 @@ def household_bind_client():
             return jsonify({'error': 'unknown memberId'}), 400
         if member_id:
             h['clientBindings'][did] = member_id
+            if phone_id:
+                h.setdefault('phoneBindings', {})[phone_id] = member_id
         else:
             h['clientBindings'].pop(did, None)
         _save_household(h)
@@ -5697,7 +5802,12 @@ def client_report():
 
     if event == 'connect':
         _record_client_connect(did)
-        return jsonify({'ok': True, 'deviceId': did})
+        restored = _rebind_client_from_phone(client_id, body.get('phoneId'))
+        return jsonify({
+            'ok': True,
+            'deviceId': did,
+            'memberId': restored,
+        })
 
     if event == 'play':
         track = (body.get('track') or '').strip()

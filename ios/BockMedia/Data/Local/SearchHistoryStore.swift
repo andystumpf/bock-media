@@ -72,12 +72,17 @@ enum SearchHistoryStore {
         return (try? JSONDecoder().decode([SearchRecentSelection].self, from: data)) ?? []
     }
 
+    static func replaceSelections(_ items: [SearchRecentSelection]) {
+        saveSelections(Array(items.prefix(maxItems)))
+    }
+
     static func addSelection(_ selection: SearchRecentSelection) {
         let trimmed = selection.title.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
         var current = selections().filter { $0.selectionKey != selection.selectionKey }
         current.insert(selection, at: 0)
         saveSelections(Array(current.prefix(maxItems)))
+        ClientPrefsSync.schedulePush()
     }
 
     static func removeSelection(_ selection: SearchRecentSelection) {

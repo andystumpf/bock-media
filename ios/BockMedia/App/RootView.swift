@@ -12,7 +12,9 @@ struct RootView: View {
             case false:
                 SetupView(appState: appState)
             case true:
-                MainTabView(appState: appState)
+                ProfilePickerGate(appState: appState) {
+                    MainTabView(appState: appState)
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -23,6 +25,9 @@ struct RootView: View {
             case .active:
                 NowPlayingPollService.shared.setForeground(true)
                 NotificationCenter.default.post(name: .widgetSessionShouldRefresh, object: nil)
+                if appState.isConnected == true {
+                    Task { await ClientPrefsSync.pullAndApply(repository: appState.repository) }
+                }
             case .background:
                 NowPlayingPollService.shared.setForeground(false)
                 BackgroundDownloadScheduler.schedule()

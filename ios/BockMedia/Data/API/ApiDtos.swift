@@ -6,6 +6,54 @@ struct OkResponse: Codable {
     var ok: Bool = false
     var error: String?
     var code: String?
+    var memberId: String?
+    var deviceId: String?
+}
+
+struct ClientPrefsResponse: Codable {
+    var v: Int = 1
+    var memberId: String?
+    var clientDeviceId: String?
+    var ok: Bool = false
+    var merged: [String: AnyCodable] = [:]
+
+    var mergedDict: [String: Any] {
+        merged.mapValues { $0.value }
+    }
+}
+
+/// Lightweight JSON value for client prefs merge payloads.
+struct AnyCodable: Codable {
+    let value: Any
+
+    init(_ value: Any) { self.value = value }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let b = try? container.decode(Bool.self) { value = b; return }
+        if let i = try? container.decode(Int.self) { value = i; return }
+        if let d = try? container.decode(Double.self) { value = d; return }
+        if let s = try? container.decode(String.self) { value = s; return }
+        if let arr = try? container.decode([AnyCodable].self) { value = arr.map(\.value); return }
+        if let dict = try? container.decode([String: AnyCodable].self) {
+            value = dict.mapValues { $0.value }
+            return
+        }
+        value = NSNull()
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch value {
+        case let b as Bool: try container.encode(b)
+        case let i as Int: try container.encode(i)
+        case let d as Double: try container.encode(d)
+        case let s as String: try container.encode(s)
+        case let arr as [Any]: try container.encode(arr.map { AnyCodable($0) })
+        case let dict as [String: Any]: try container.encode(dict.mapValues { AnyCodable($0) })
+        default: try container.encodeNil()
+        }
+    }
 }
 
 struct SummaryResponse: Codable {

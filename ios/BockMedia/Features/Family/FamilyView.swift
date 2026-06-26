@@ -68,7 +68,13 @@ struct FamilyView: View {
             }
             .onChange(of: activeMemberId) { _, newValue in
                 ActiveProfileStore.setActiveMember(newValue.isEmpty ? nil : newValue)
-                Task { await loadMessages() }
+                Task {
+                    await ClientPrefsSync.onActiveMemberChanged(
+                        repository: appState.repository,
+                        memberId: newValue.isEmpty ? nil : newValue
+                    )
+                    await loadMessages()
+                }
             }
         } footer: {
             Text("Attributes your plays and is used when sending messages, sharing playlists, and approving requests.")

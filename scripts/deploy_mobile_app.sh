@@ -71,18 +71,69 @@ if [[ -n "$BUILD_TOOLS" && -x "$BUILD_TOOLS/apksigner" ]]; then
   fi
 fi
 
-echo "Deploying to ${NAS}…"
-scp "$APK" "${NAS}:${DATA_REMOTE}/bockmedia-console.apk"
-ssh "$NAS" "printf '%s' '${GRADLE_VER}' > '${DATA_REMOTE}/bockmedia-console.version'"
-scp "$NOTES" "${NAS}:${REPO_REMOTE}/app-release-notes.json"
-scp "$GRADLE" "${NAS}:${REPO_REMOTE}/android/app/build.gradle.kts"
-scp "$REPO_ROOT/server.py" "${NAS}:${REPO_REMOTE}/server.py"
-for mod in "$REPO_ROOT"/bock_*.py; do
-  scp "$mod" "${NAS}:${REPO_REMOTE}/$(basename "$mod")"
-done
-"$REPO_ROOT/scripts/deploy_web.sh" --no-restart
+mobile_api_token() {
+  python3 - <<PY
+import json, re
+from pathlib import Path
+root = Path("$REPO_ROOT")
+props = root / "android/local.properties"
+if props.exists():
+    m = re.search(r'^bockmedia\\.mobileApiToken=(.+)$', props.read_text(), re.M)
+    if m and m.group(1).strip():
+        print(m.group(1).strip())
+        raise SystemExit(0)
+cfg = json.loads((root / "config.json").read_text(encoding="utf-8"))
+print(cfg.get("mobileApi", {}).get("token", "") or "")
+PY
+}
 
-ssh "$NAS" "sudo systemctl restart ourmedia"
+remote_api_base() {
+  python3 - <<PY
+from pathlib import Path
+props = Path("$REPO_ROOT/android/local.properties")
+if props.exists():
+    for line in props.read_text().splitlines():
+        if line.startswith("bockmedia.externalServerUrl="):
+            print(line.split("=", 1)[1].strip().rstrip("/"))
+            raise SystemExit(0)
+print("http://142.56.8.193:3001")
+PY
+}
+
+upload_apk_remote() {
+  local token base
+  token="$(mobile_api_token)"
+  base="$(remote_api_base)"
+  if [[ -z "$token" ]]; then
+    echo "No mobile API token for remote upload" >&2
+    return 1
+  fi
+  echo "SSH unavailable — uploading APK via ${base}…"
+  curl -fS --max-time 600 \
+    -X PUT \
+    -H "Authorization: Bearer ${token}" \
+    -H "X-App-Version: ${GRADLE_VER}" \
+    -H "Content-Type: application/vnd.android.package-archive" \
+    --data-binary "@${APK}" \
+    "${base}/api/admin/mobile-app/android"
+}
+
+echo "Deploying to ${NAS}…"
+if scp "$APK" "${NAS}:${DATA_REMOTE}/bockmedia-console.apk" \
+  && ssh "$NAS" "printf '%s' '${GRADLE_VER}' > '${DATA_REMOTE}/bockmedia-console.version'" \
+  && scp "$NOTES" "${NAS}:${REPO_REMOTE}/app-release-notes.json" \
+  && scp "$GRADLE" "${NAS}:${REPO_REMOTE}/android/app/build.gradle.kts" \
+  && scp "$REPO_ROOT/server.py" "${NAS}:${REPO_REMOTE}/server.py" \
+  && { for mod in "$REPO_ROOT"/bock_*.py; do scp "$mod" "${NAS}:${REPO_REMOTE}/$(basename "$mod")"; done; true; } \
+  && "$REPO_ROOT/scripts/deploy_web.sh" --no-restart \
+  && ssh "$NAS" "sudo systemctl restart ourmedia"; then
+  :
+elif upload_apk_remote; then
+  echo "Remote APK upload OK (release notes / server.py not synced — run full deploy on LAN when available)"
+else
+  echo "Deploy failed: NAS SSH unreachable and remote upload unavailable (update server.py on NAS first)." >&2
+  exit 1
+fi
 
 echo "Deployed v${GRADLE_VER} ($(du -h "$APK" | awk '{print $1}'))"
 echo "Verify: http://192.168.1.187:3001/app (download label and release notes should both say ${GRADLE_VER})"

@@ -556,12 +556,22 @@ class BockMediaRepository(
             api().setDeviceOwner(deviceId, buildJsonObject { put("memberId", memberId) })
         }
 
-    suspend fun bindClient(clientId: String, memberId: String?) {
+    suspend fun bindClient(clientId: String, memberId: String?, phoneId: String? = null) {
         api().bindClient(buildJsonObject {
             put("clientId", clientId)
             if (!memberId.isNullOrBlank()) put("memberId", memberId)
+            if (!phoneId.isNullOrBlank()) put("phoneId", phoneId)
         })
     }
+
+    suspend fun connectInstall(phoneId: String, deviceName: String, clientId: String): String? =
+        api().reportClientEvent(buildJsonObject {
+            put("clientId", clientId)
+            put("platform", "android")
+            put("deviceName", deviceName)
+            put("event", "connect")
+            if (phoneId.isNotBlank()) put("phoneId", phoneId)
+        }).memberId?.takeIf { it.isNotBlank() }
 
     suspend fun clientPrefs(clientId: String, memberId: String?) =
         api().clientPrefs(clientId, memberId?.takeIf { it.isNotBlank() })

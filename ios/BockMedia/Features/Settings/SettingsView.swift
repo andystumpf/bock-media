@@ -42,7 +42,10 @@ struct SettingsView: View {
             Section("Downloads") {
                 Toggle("Wi‑Fi only", isOn: Binding(
                     get: { appState.preferences.downloadWifiOnly },
-                    set: { appState.preferences.downloadWifiOnly = $0 }
+                    set: {
+                        appState.preferences.downloadWifiOnly = $0
+                        ClientPrefsSync.schedulePush()
+                    }
                 ))
             }
             Section("This Phone playback") {
@@ -55,7 +58,10 @@ struct SettingsView: View {
                     Slider(
                         value: Binding(
                             get: { Double(appState.preferences.crossfadeSeconds) },
-                            set: { appState.preferences.crossfadeSeconds = Int($0.rounded()) }
+                            set: {
+                                appState.preferences.crossfadeSeconds = Int($0.rounded())
+                                ClientPrefsSync.schedulePush()
+                            }
                         ),
                         in: 0...20,
                         step: 1
@@ -63,7 +69,10 @@ struct SettingsView: View {
                 }
                 Picker("When queue ends", selection: Binding(
                     get: { appState.preferences.continueAfterQueue },
-                    set: { appState.preferences.continueAfterQueue = $0 }
+                    set: {
+                        appState.preferences.continueAfterQueue = $0
+                        ClientPrefsSync.schedulePush()
+                    }
                 )) {
                     Text("Stop").tag("off")
                     Text("Similar songs").tag("similar")

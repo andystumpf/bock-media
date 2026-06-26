@@ -309,9 +309,9 @@ final class BockMediaRepository: ObservableObject {
         _ = try await api.deleteSmartPlaylist(id: id)
     }
 
-    func reportClientEvent(_ body: [String: Any]) async throws {
+    func reportClientEvent(_ body: [String: Any]) async throws -> OkResponse {
         try await ensureAPI()
-        _ = try await api.reportClientEvent(body: body)
+        return try await api.reportClientEvent(body: body)
     }
 
     // MARK: - Household / Family
@@ -341,6 +341,46 @@ final class BockMediaRepository: ObservableObject {
         var body: [String: Any] = ["pin": pin]
         if let currentPin, !currentPin.isEmpty { body["currentPin"] = currentPin }
         return try await api.setMemberPin(id: id, body: body)
+    }
+
+    func bindClient(clientId: String, memberId: String?, phoneId: String? = nil) async throws {
+        try await ensureAPI()
+        var body: [String: Any] = ["clientId": clientId]
+        if let memberId, !memberId.isEmpty { body["memberId"] = memberId }
+        if let phoneId, !phoneId.isEmpty { body["phoneId"] = phoneId }
+        _ = try await api.bindClient(body: body)
+    }
+
+    func connectInstall(phoneId: String, deviceName: String, clientId: String) async throws -> String? {
+        try await ensureAPI()
+        var body: [String: Any] = [
+            "clientId": clientId,
+            "platform": "ios",
+            "deviceName": deviceName,
+            "event": "connect",
+        ]
+        if !phoneId.isEmpty { body["phoneId"] = phoneId }
+        let response = try await api.reportClientEvent(body: body)
+        return response.memberId?.nilIfBlank
+    }
+
+    func clientPrefs(clientId: String, memberId: String?) async throws -> ClientPrefsResponse {
+        try await ensureAPI()
+        return try await api.clientPrefs(clientId: clientId, memberId: memberId)
+    }
+
+    func putClientPrefs(
+        clientId: String,
+        memberId: String?,
+        memberPrefs: [String: Any],
+        clientPrefs: [String: Any]
+    ) async throws -> ClientPrefsResponse {
+        try await ensureAPI()
+        var body: [String: Any] = ["clientId": clientId]
+        if let memberId, !memberId.isEmpty { body["memberId"] = memberId }
+        if !memberPrefs.isEmpty { body["memberPrefs"] = memberPrefs }
+        if !clientPrefs.isEmpty { body["clientPrefs"] = clientPrefs }
+        return try await api.putClientPrefs(body: body)
     }
 
     func setDeviceOwner(deviceId: String, memberId: String?) async throws {

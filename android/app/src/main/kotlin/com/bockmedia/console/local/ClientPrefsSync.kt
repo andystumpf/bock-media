@@ -51,12 +51,19 @@ object ClientPrefsSync {
             val repository = app.repository
             val prefs = app.preferences
             val clientId = ClientIdStore.clientId(context)
+            rebindFromPhone(context, repository, clientId)
             val restored = restoreActiveMember(context, repository, clientId)
             val memberId = ActiveProfileStore.activeMemberId(context)
             val remote = repository.clientPrefs(clientId, memberId)
             applyMerged(context, prefs, remote)
             if (!memberId.isNullOrBlank()) {
-                runCatching { repository.bindClient(clientId, memberId) }
+                runCatching {
+                    repository.bindClient(
+                        clientId,
+                        memberId,
+                        InstallIdentity.phoneId(context),
+                    )
+                }
             }
             repository.clearRatingsCache()
             if (restored || shouldRefreshHomeForProfile(context)) {
@@ -65,6 +72,24 @@ object ClientPrefsSync {
             }
         } finally {
             pulling = false
+        }
+    }
+
+    private suspend fun rebindFromPhone(
+        context: Context,
+        repository: BockMediaRepository,
+        clientId: String,
+    ) {
+        if (!ActiveProfileStore.activeMemberId(context).isNullOrBlank()) return
+        val phoneId = InstallIdentity.phoneId(context)
+        if (phoneId.isBlank()) return
+        val model = android.os.Build.MODEL?.trim().orEmpty()
+        val label = if (model.isNotBlank()) "Android · $model" else "This phone"
+        val memberId = runCatching {
+            repository.connectInstall(phoneId, label, clientId)
+        }.getOrNull()
+        if (!memberId.isNullOrBlank()) {
+            ActiveProfileStore.setActiveMember(context, memberId)
         }
     }
 
@@ -100,7 +125,7 @@ object ClientPrefsSync {
         app.repository.clearRatingsCache()
         HomeFeedCache.invalidate()
         HomeLoadCoordinator.resetReloadWindow()
-        runCatching { app.repository.bindClient(clientId, memberId) }
+        runCatching { app.repository.bindClient(clientId, memberId, InstallIdentity.phoneId(context)) }
         runCatching { push(context) }
         runCatching { pullAndApply(context) }
     }
@@ -122,36 +147,14 @@ object ClientPrefsSync {
             return true
         }
         val members = household.members
+        if (members.isEmpty()) return false
         if (members.size == 1) {
             val only = members[0].id.takeIf { it.isNotBlank() } ?: return false
             ActiveProfileStore.setActiveMember(context, only)
             return true
         }
-        if (members.isEmpty()) return false
-        // Reinstall loses clientBindings — pick the profile with saved server prefs.
-        val best = members.maxByOrNull { member ->
-            runCatching {
-                repository.clientPrefs(clientId, member.id).merged.size
-            }.getOrDefault(0)
-        } ?: return false
-        val prefCount = runCatching {
-            repository.clientPrefs(clientId, best.id).merged.size
-        }.getOrDefault(0)
-        if (prefCount > 0) {
-            ActiveProfileStore.setActiveMember(context, best.id)
-            return true
-        }
-        // Prefs empty but ratings may exist (e.g. rated songs without changing settings).
-        val byRatings = members.maxByOrNull { member ->
-            runCatching {
-                repository.ratingCountForMember(member.id)
-            }.getOrDefault(0)
-        } ?: return false
-        if (runCatching { repository.ratingCountForMember(byRatings.id) }.getOrDefault(0) <= 0) {
-            return false
-        }
-        ActiveProfileStore.setActiveMember(context, byRatings.id)
-        return true
+        // Multi-member: wait for ProfilePickerGate — do not guess another profile.
+        return false
     }
 
     private suspend fun collectMemberPrefs(
@@ -209,7 +212,9 @@ object ClientPrefsSync {
             prefs.setRememberMe(it)
         }
         merged["activeMemberId"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }?.let {
-            ActiveProfileStore.setActiveMember(context, it)
+            if (ActiveProfileStore.activeMemberId(context).isNullOrBlank()) {
+                ActiveProfileStore.setActiveMember(context, it)
+            }
         }
         decodeSearchSelections(merged["searchSelections"])?.let { items ->
             SearchHistoryStore(context).replaceSelections(items)

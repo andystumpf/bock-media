@@ -45,6 +45,21 @@ enum HomeTileEngagement {
             map[cardId] = TileEngagementEntry(firstSeenMs: now, lastSelectedMs: now)
         }
         save(map)
+        ClientPrefsSync.schedulePush()
+    }
+
+    static func exportJson() -> String? {
+        let map = load()
+        if map.isEmpty { return nil }
+        guard let data = try? JSONEncoder().encode(map) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    static func importJson(_ raw: String) {
+        guard !raw.isEmpty,
+              let data = raw.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode([String: TileEngagementEntry].self, from: data) else { return }
+        save(decoded)
     }
 
     static func isStale(cardId: String, nowMs: Int64 = Int64(Date().timeIntervalSince1970 * 1000)) -> Bool {

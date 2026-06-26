@@ -22,8 +22,10 @@ if str(HERE) not in sys.path:
 
 import bock_ratings  # noqa: E402
 
-RATINGS_PATH = HERE / 'ratings.json'
-FAVORITES_PATH = HERE / 'favorites.json'
+DATA_DIR = Path(os.environ.get('OURMEDIA_DATA_DIR', os.path.expanduser('~/.bockmedia')))
+RATINGS_PATH = DATA_DIR / 'ratings.json'
+LEGACY_RATINGS_PATH = HERE / 'ratings.json'
+FAVORITES_PATH = DATA_DIR / 'favorites.json'
 
 
 def _load_json(path: Path):

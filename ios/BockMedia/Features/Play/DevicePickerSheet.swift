@@ -178,6 +178,7 @@ struct DevicePickerSheet: View {
         defer { playing = false }
         await onPlay(value, shuffle, option.label)
         repository.preferences.lastDevice = value
+        ClientPrefsSync.schedulePush(repository: repository)
         onDismiss()
     }
 

@@ -49,6 +49,7 @@ import com.bockmedia.console.ui.routines.RoutinesScreen
 import com.bockmedia.console.ui.devices.DevicesScreen
 import com.bockmedia.console.ui.driving.DrivingModeScreen
 import com.bockmedia.console.ui.family.FamilyScreen
+import com.bockmedia.console.ui.family.ProfilePickerGate
 import com.bockmedia.console.ui.home.HomeScreen
 import com.bockmedia.console.ui.library.AlbumDetailScreen
 import com.bockmedia.console.ui.library.AlbumsScreen
@@ -169,6 +170,7 @@ fun BockApp(repository: BockMediaRepository, deepLinkRoute: String? = null) {
     val isPlaylistDetail = navBackStackEntry?.destination?.route == ROUTE_PLAYLIST_DETAIL
     val isImmersiveDetail = isAlbumDetail || isArtistDetail || isPlaylistDetail
 
+    ProfilePickerGate(repository) {
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         containerColor = if (isImmersiveDetail) Color.Transparent else MaterialTheme.colorScheme.background,
@@ -280,6 +282,7 @@ fun BockApp(repository: BockMediaRepository, deepLinkRoute: String? = null) {
                 )
             }
         }
+    }
     }
 }
 
