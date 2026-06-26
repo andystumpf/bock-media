@@ -35,7 +35,7 @@ test('compose matches Android section groups from library-only input', () => {
   });
   assert.ok(feed.sections.length > 0);
   const moodCount = feed.sections.filter((s) => s.kind === 'Mood').length;
-  assert.ok(moodCount >= 8, `expected mood rows, got ${moodCount}`);
+  assert.ok(moodCount >= 9, `expected mood rows, got ${moodCount}`);
   const titles = feed.sections.map((s) => s.title);
   assert.ok(titles.includes('Jump back in'));
   assert.ok(titles.includes('Your top mixes'));

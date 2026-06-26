@@ -13,8 +13,8 @@ android {
         applicationId = "com.bockmedia.console"
         minSdk = 26
         targetSdk = 35
-        versionCode = 36
-        versionName = "2.6.18"
+        versionCode = 40
+        versionName = "2.6.24"
         // Bock Media server endpoints (override via local.properties if needed)
         val localProps = rootProject.file("local.properties")
         fun prop(name: String) = if (localProps.exists()) {

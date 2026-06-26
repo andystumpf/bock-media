@@ -16,6 +16,7 @@ import com.bockmedia.console.ui.alexaRemotePlayMessage
 import com.bockmedia.console.ui.rememberAlexaRemoteStatus
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.*
+import com.bockmedia.console.local.ActiveProfileStore
 import com.bockmedia.console.local.OfflineDownloadManager
 import com.bockmedia.console.local.downloadId
 import com.bockmedia.console.ui.components.*
@@ -48,6 +49,14 @@ fun HomeScreen(
     val downloadStatuses by OfflineDownloadManager.statuses.collectAsState()
     val alexaStatus by rememberAlexaRemoteStatus(repository)
     val alexaBanner = alexaRemotePlayMessage(alexaStatus).takeIf { !remoteOk }
+    var profileBanner by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) {
+        if (!ActiveProfileStore.activeMemberId(context).isNullOrBlank()) return@LaunchedEffect
+        val members = runCatching { repository.household().members }.getOrDefault(emptyList())
+        if (members.isNotEmpty()) {
+            profileBanner = "Select your profile in Family to restore ratings and settings."
+        }
+    }
 
     suspend fun prefetchHomeArt(homeFeed: HomeFeed) {
         val base = repository.peekBaseUrl() ?: return
@@ -102,10 +111,10 @@ fun HomeScreen(
         error = null
         try {
             runCatching {
-                var fresh = withTimeout(60_000) { HomeFeedLoader.load(repository) }
+                var fresh = withTimeout(60_000) { HomeFeedLoader.load(context, repository) }
                 if (fresh.sections.isEmpty() && !repository.testConnection().isSuccess) {
                     BockMediaApp.get(context).invalidateEndpoint()
-                    fresh = withTimeout(60_000) { HomeFeedLoader.load(repository) }
+                    fresh = withTimeout(60_000) { HomeFeedLoader.load(context, repository) }
                 }
                 if (fresh.sections.isNotEmpty()) {
                     HomeFeedCache.put(fresh)
@@ -165,7 +174,12 @@ fun HomeScreen(
     }
 
     suspend fun bootstrapHome() {
+        val profileLinked = !ActiveProfileStore.activeMemberId(context).isNullOrBlank()
         HomeFeedCache.peek()?.let { cached ->
+            if (!cached.isUsableHomeCache(profileLinked)) {
+                HomeFeedCache.invalidate()
+                return@let
+            }
             feed = cached
             loading = false
             HomeLoadCoordinator.markLoaded()
@@ -174,7 +188,7 @@ fun HomeScreen(
                 warmArtwork(cached)
             }
         } ?: HomeCachePersistence.load(context)?.let { snap ->
-            if (snap.feed.hasCurrentHomeLayout()) {
+            if (snap.feed.isUsableHomeCache(profileLinked)) {
                 HomeArtworkCache.restore(snap.cardMediaPaths, snap.playlistPaths)
                 HomeFeedCache.put(snap.feed)
                 feed = snap.feed
@@ -190,7 +204,10 @@ fun HomeScreen(
             scope.launch { runCatching { DeviceCatalog.refresh(repository, probe = false) } }
         }
         scope.launch { OfflineDownloadManager.refresh(context) }
-        if (HomeLoadCoordinator.shouldSkipReload()) {
+        if (HomeLoadCoordinator.shouldSkipReload {
+                repository.ratedSongs().isNotEmpty()
+            }
+        ) {
             loadOffline()
             warmLibraryInBackground()
             warmOtherTabsInBackground()
@@ -300,6 +317,15 @@ fun HomeScreen(
                         Text(
                             alexaBanner,
                             color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                        )
+                    }
+                }
+                if (profileBanner != null) {
+                    item {
+                        Text(
+                            profileBanner!!,
+                            color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                         )
                     }

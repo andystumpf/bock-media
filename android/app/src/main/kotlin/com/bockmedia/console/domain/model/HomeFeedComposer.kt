@@ -17,6 +17,7 @@ object HomeFeedLimits {
     const val MOOD_SECTION_MIN = 12
     /** Mood rows include every keyword-matching playlist; cap only guards runaway libraries. */
     const val MOOD_SECTION_CARDS = 500
+    const val BROWSE_GENRES = 16
     const val EXPLORE_THEMES = 24
     const val LIBRARY_GENRE_EXTRAS = 10
     const val DAILY_MIXES = 20
@@ -325,6 +326,8 @@ object HomeFeedComposer {
             )
         }.distinctBy { it.id }.take(HomeFeedLimits.DAILY_MIXES)
 
+        val browseGenres = buildBrowseGenreCards(input.libraryGenres, registry)
+
         val exploreThemes = buildExploreThemeCards(
             input = input,
             registry = registry,
@@ -401,6 +404,7 @@ object HomeFeedComposer {
         val sections = listOfNotNull(
             section("jump-back-in", "Jump back in", HomeSectionKind.JumpBackIn, jumpBackIn),
             section("rated-songs", "Rated Songs", HomeSectionKind.RatedSongs, ratedSongCards),
+            section("browse-genres", "Browse by genre", HomeSectionKind.BrowseGenres, browseGenres),
             section("top-mixes", "Your top mixes", HomeSectionKind.TopMixes, genreMixes),
         ) + moodSections + listOfNotNull(
             section("release-radar", "Release Radar", HomeSectionKind.Discover, releaseRadar),
@@ -419,6 +423,32 @@ object HomeFeedComposer {
     private fun section(id: String, title: String, kind: HomeSectionKind, cards: List<HomeCard>): HomeSection? {
         if (cards.isEmpty()) return null
         return HomeSection(id, title, kind, cards)
+    }
+
+    private fun buildBrowseGenreCards(
+        libraryGenres: List<GenreItem>,
+        registry: HomeFeedRegistry,
+    ): List<HomeCard> = buildList {
+        for (genre in libraryGenres.sortedByDescending { it.tracks }) {
+            if (size >= HomeFeedLimits.BROWSE_GENRES) break
+            if (genre.tracks < 8 || genre.name.isBlank()) continue
+            val cardId = "browse-genre-${genre.name}"
+            if (registry.hasCard(cardId)) continue
+            val card = HomeCard(
+                id = cardId,
+                title = genre.name,
+                subtitle = "${genre.tracks} tracks",
+                artPath = registry.claimArtPath(genre.artPath),
+                playTarget = PlayTarget.Radio(
+                    "${genre.name} Radio",
+                    PlayTarget.RadioSeedKind.Genre,
+                    genre.name,
+                ),
+                kind = HomeSectionKind.BrowseGenres,
+            )
+            registry.registerCard(card)
+            add(card)
+        }
     }
 
     private fun buildRatedSongCards(
@@ -697,33 +727,6 @@ object HomeFeedComposer {
                 ),
                 kind = HomeSectionKind.ExploreThemes,
             )
-            registerThemeCard(card)
-        }
-
-        for (genre in input.libraryGenres) {
-            if (size >= HomeFeedLimits.EXPLORE_THEMES + HomeFeedLimits.LIBRARY_GENRE_EXTRAS) break
-            if (genre.tracks < 8) continue
-            val key = genre.name.lowercase()
-            if (key in coveredGenreKeys) continue
-            if (themes.any { HomeFeedRules.genreMatchesTheme(genre.name, it) }) continue
-            val cardId = "library-genre-${genre.name}"
-            if (registry.hasCard(cardId)) continue
-            val seedArtist = HomeFeedRules.topArtistForGenre(input.history, genre.name)
-                ?: topArtists.firstOrNull()?.name
-                ?: genre.name
-            val card = HomeCard(
-                id = cardId,
-                title = genre.name,
-                subtitle = "${genre.tracks} tracks · From your library",
-                artPath = registry.claimArtPath(genre.artPath),
-                playTarget = PlayTarget.Radio(
-                    "${genre.name} Radio",
-                    PlayTarget.RadioSeedKind.Genre,
-                    seedArtist,
-                ),
-                kind = HomeSectionKind.ExploreThemes,
-            )
-            coveredGenreKeys.add(key)
             registerThemeCard(card)
         }
     }.distinctBy { it.id }

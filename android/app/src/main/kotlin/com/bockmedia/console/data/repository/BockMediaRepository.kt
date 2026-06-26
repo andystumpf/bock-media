@@ -424,6 +424,14 @@ class BockMediaRepository(
 
     suspend fun genres(limit: Int = 20) = api().genres(limit = limit)
 
+    suspend fun libraryHealth() = api().libraryHealth()
+
+    suspend fun mergeArtists(from: List<String>, to: String) =
+        api().mergeArtists(buildJsonObject {
+            put("to", to)
+            putJsonArray("from") { from.forEach { add(JsonPrimitive(it)) } }
+        })
+
     suspend fun resolveSearchHitArtUrl(
         kind: SearchSuggestionKind,
         hit: SearchHit,
@@ -624,6 +632,7 @@ class BockMediaRepository(
         artist: String? = null,
         shuffle: Boolean = false,
     ): PlayResponse {
+        val (memberId, clientId) = ratingsScope()
         val body = buildJsonObject {
             put("device", device)
             put("kind", kind)
@@ -632,6 +641,8 @@ class BockMediaRepository(
             path?.let { put("path", it) }
             artist?.let { put("artist", it) }
             put("shuffle", shuffle)
+            memberId?.let { put("memberId", it) }
+            clientId?.let { put("clientId", it) }
         }
         return api().playOnDevice(body)
     }
@@ -669,6 +680,12 @@ class BockMediaRepository(
         return api().ratings(memberId = memberId, clientId = clientId).items
             .filter { it.kind == RatingKind.Song.apiValue && it.stars > 0 }
     }
+
+    suspend fun ratingCountForMember(memberId: String): Int =
+        api().ratings(
+            memberId = memberId.takeIf { it.isNotBlank() },
+            clientId = clientIdProvider().trim().takeIf { it.isNotBlank() },
+        ).items.count { it.kind == RatingKind.Song.apiValue && it.stars > 0 }
 
     suspend fun ratedSongMap(): Map<String, Int> =
         ratedSongs().associate { it.id to it.stars }

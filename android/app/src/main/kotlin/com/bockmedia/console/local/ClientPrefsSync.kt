@@ -6,6 +6,9 @@ import com.bockmedia.console.data.api.bockJson
 import com.bockmedia.console.data.api.dto.ClientPrefsResponse
 import com.bockmedia.console.data.local.AppPreferences
 import com.bockmedia.console.data.repository.BockMediaRepository
+import com.bockmedia.console.domain.model.HomeFeedCache
+import com.bockmedia.console.domain.model.HomeLoadCoordinator
+import com.bockmedia.console.domain.model.HomeSectionKind
 import com.bockmedia.console.domain.model.HomeTileEngagement
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -26,7 +29,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
-/** Syncs phone settings and preferences to the server (per profile + install). */
+/** Syncs phone settings and preferences to the server (per household profile). */
 object ClientPrefsSync {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var pushJob: Job? = null
@@ -48,16 +51,33 @@ object ClientPrefsSync {
             val repository = app.repository
             val prefs = app.preferences
             val clientId = ClientIdStore.clientId(context)
-            restoreMemberFromHousehold(context, repository, clientId)
+            val restored = restoreActiveMember(context, repository, clientId)
             val memberId = ActiveProfileStore.activeMemberId(context)
             val remote = repository.clientPrefs(clientId, memberId)
             applyMerged(context, prefs, remote)
             if (!memberId.isNullOrBlank()) {
                 runCatching { repository.bindClient(clientId, memberId) }
             }
+            repository.clearRatingsCache()
+            if (restored || shouldRefreshHomeForProfile(context)) {
+                HomeFeedCache.invalidate()
+                HomeLoadCoordinator.resetReloadWindow()
+            }
         } finally {
             pulling = false
         }
+    }
+
+    /** Link this install to a household profile when missing (e.g. after reinstall). */
+    suspend fun ensureProfileLinked(context: Context): Boolean {
+        val app = BockMediaApp.get(context)
+        return restoreActiveMember(context, app.repository, ClientIdStore.clientId(context))
+    }
+
+    private fun shouldRefreshHomeForProfile(context: Context): Boolean {
+        if (ActiveProfileStore.activeMemberId(context).isNullOrBlank()) return false
+        val cached = HomeFeedCache.peek() ?: return false
+        return cached.sections.none { it.kind == HomeSectionKind.RatedSongs }
     }
 
     suspend fun push(context: Context) {
@@ -78,23 +98,60 @@ object ClientPrefsSync {
         val app = BockMediaApp.get(context)
         val clientId = ClientIdStore.clientId(context)
         app.repository.clearRatingsCache()
+        HomeFeedCache.invalidate()
+        HomeLoadCoordinator.resetReloadWindow()
         runCatching { app.repository.bindClient(clientId, memberId) }
         runCatching { push(context) }
         runCatching { pullAndApply(context) }
     }
 
-    private suspend fun restoreMemberFromHousehold(
+    /** Re-bind this install to a household profile after reinstall (new client id). Returns true if set. */
+    private suspend fun restoreActiveMember(
         context: Context,
         repository: BockMediaRepository,
         clientId: String,
-    ) {
-        if (!ActiveProfileStore.activeMemberId(context).isNullOrBlank()) return
+    ): Boolean {
+        if (!ActiveProfileStore.activeMemberId(context).isNullOrBlank()) return false
+        val household = runCatching { repository.household() }.getOrNull() ?: return false
         val deviceId = repository.clientDeviceId()
-        val household = runCatching { repository.household() }.getOrNull() ?: return
-        val bound = household.clientBindings.firstOrNull {
+        val fromBinding = household.clientBindings.firstOrNull {
             it.clientDeviceId == deviceId || it.clientDeviceId == clientId
-        }?.memberId?.takeIf { it.isNotBlank() } ?: return
-        ActiveProfileStore.setActiveMember(context, bound)
+        }?.memberId?.takeIf { it.isNotBlank() }
+        if (fromBinding != null) {
+            ActiveProfileStore.setActiveMember(context, fromBinding)
+            return true
+        }
+        val members = household.members
+        if (members.size == 1) {
+            val only = members[0].id.takeIf { it.isNotBlank() } ?: return false
+            ActiveProfileStore.setActiveMember(context, only)
+            return true
+        }
+        if (members.isEmpty()) return false
+        // Reinstall loses clientBindings — pick the profile with saved server prefs.
+        val best = members.maxByOrNull { member ->
+            runCatching {
+                repository.clientPrefs(clientId, member.id).merged.size
+            }.getOrDefault(0)
+        } ?: return false
+        val prefCount = runCatching {
+            repository.clientPrefs(clientId, best.id).merged.size
+        }.getOrDefault(0)
+        if (prefCount > 0) {
+            ActiveProfileStore.setActiveMember(context, best.id)
+            return true
+        }
+        // Prefs empty but ratings may exist (e.g. rated songs without changing settings).
+        val byRatings = members.maxByOrNull { member ->
+            runCatching {
+                repository.ratingCountForMember(member.id)
+            }.getOrDefault(0)
+        } ?: return false
+        if (runCatching { repository.ratingCountForMember(byRatings.id) }.getOrDefault(0) <= 0) {
+            return false
+        }
+        ActiveProfileStore.setActiveMember(context, byRatings.id)
+        return true
     }
 
     private suspend fun collectMemberPrefs(
@@ -111,14 +168,17 @@ object ClientPrefsSync {
         memberId?.let { put("activeMemberId", it) }
         put("searchSelections", encodeSearchSelections(SearchHistoryStore(context).selectionsSync()))
         HomeTileEngagement.exportJson()?.let { put("homeTileEngagement", JsonPrimitive(it)) }
+        if (!memberId.isNullOrBlank()) {
+            LastDeviceStore(context).lastDeviceSync()?.let { put("lastDevice", it) }
+            val pinned = PinnedDevicesStore(context).pinnedValuesSync()
+            if (pinned.isNotEmpty()) {
+                put("pinnedDevices", buildJsonArray { pinned.forEach { add(JsonPrimitive(it)) } })
+            }
+        }
     }
 
     private suspend fun collectClientPrefs(context: Context): JsonObject = buildJsonObject {
-        LastDeviceStore(context).lastDeviceSync()?.let { put("lastDevice", it) }
-        val pinned = PinnedDevicesStore(context).pinnedValuesSync()
-        if (pinned.isNotEmpty()) {
-            put("pinnedDevices", buildJsonArray { pinned.forEach { add(JsonPrimitive(it)) } })
-        }
+        // Device playback prefs live on the household member (survive reinstall).
     }
 
     private suspend fun applyMerged(

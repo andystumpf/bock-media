@@ -4,7 +4,7 @@ enum HomeFeedLimits {
     static let jumpBackIn = 24
     static let favorites = 16
     static let topMixes = 16
-    static let moodSectionMin = 8
+    static let moodSectionMin = 9
     static let moodSectionCards = 500
     static let exploreThemes = 18
     static let libraryGenreExtras = 6

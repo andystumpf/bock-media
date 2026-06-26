@@ -3,6 +3,7 @@ package com.bockmedia.console.domain.model
 import android.content.Context
 import com.bockmedia.console.data.api.dto.FavoriteItem
 import com.bockmedia.console.data.repository.BockMediaRepository
+import com.bockmedia.console.local.ClientPrefsSync
 import com.bockmedia.console.local.OfflineDownloadManager
 import com.bockmedia.console.local.OfflineDownloadStore
 import com.bockmedia.console.local.toPlayTarget
@@ -26,6 +27,7 @@ enum class HomeSectionKind {
     Favorites,
     RatedSongs,
     TopMixes,
+    BrowseGenres,
     ExploreThemes,
     Mood,
     DailyMixes,
@@ -62,6 +64,13 @@ data class HomeFeed(
 
 fun HomeFeed.hasCurrentHomeLayout(): Boolean =
     sections.count { it.kind == HomeSectionKind.Mood } >= HomeMoodSections.all().size
+
+/** True when a cached feed is safe to paint (layout matches app + profile-specific rows). */
+fun HomeFeed.isUsableHomeCache(activeProfileLinked: Boolean): Boolean {
+    if (!hasCurrentHomeLayout()) return false
+    if (activeProfileLinked && sections.none { it.kind == HomeSectionKind.RatedSongs }) return false
+    return true
+}
 
 private val homeShortcutMixKinds = setOf(
     HomeSectionKind.TopMixes,
@@ -105,7 +114,8 @@ object HomeFeedLoader {
     private const val PLAYLIST_LIMIT = 500
     private const val ANALYTICS_TIMEOUT_MS = 4_000L
 
-    suspend fun load(repository: BockMediaRepository): HomeFeed = coroutineScope {
+    suspend fun load(context: Context, repository: BockMediaRepository): HomeFeed = coroutineScope {
+        runCatching { ClientPrefsSync.ensureProfileLinked(context) }
         val historyDef = async { runCatching { repository.streamHistory(1, HISTORY_LIMIT) }.getOrNull() }
         val analyticsDef = async {
             withTimeoutOrNull(ANALYTICS_TIMEOUT_MS) {
@@ -187,6 +197,7 @@ fun HomeFilter.matches(kind: HomeSectionKind): Boolean = when (this) {
     HomeFilter.Recents -> kind == HomeSectionKind.JumpBackIn || kind == HomeSectionKind.RecentPlaylists
     HomeFilter.Playlists -> kind == HomeSectionKind.JumpBackIn || kind == HomeSectionKind.RecentPlaylists || kind == HomeSectionKind.Favorites || kind == HomeSectionKind.RatedSongs
     HomeFilter.Mixes -> kind == HomeSectionKind.TopMixes ||
+        kind == HomeSectionKind.BrowseGenres ||
         kind == HomeSectionKind.ExploreThemes ||
         kind == HomeSectionKind.Mood ||
         kind == HomeSectionKind.DailyMixes

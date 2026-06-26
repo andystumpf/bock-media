@@ -35,11 +35,24 @@ data class LibraryItem(
     val albumName: String? = null,
     val sortDate: Long = 0L,
     val unplayed: Boolean = false,
+    val year: Int? = null,
+    val avgStars: Double? = null,
 )
 
 object LibraryLoader {
     private const val BROWSE_PLAYLIST_LIMIT = 500
     private const val PAGE_SIZE = 200
+
+    private fun albumSubtitle(album: com.bockmedia.console.data.api.dto.AlbumItem): String {
+        val parts = mutableListOf<String>()
+        album.year?.takeIf { it > 0 }?.let { parts.add(it.toString()) }
+        album.artist?.takeIf { it.isNotBlank() }?.let { parts.add(it) }
+        album.avgStars?.takeIf { it > 0 }?.let { stars ->
+            parts.add("★ ${"%.1f".format(stars)}")
+        }
+        if (parts.isEmpty() && album.tracks > 0) parts.add("${album.tracks} tracks")
+        return parts.joinToString(" · ")
+    }
 
     private suspend fun BockMediaRepository.fetchAllArtists(search: String = ""): List<com.bockmedia.console.data.api.dto.ArtistItem> {
         val all = mutableListOf<com.bockmedia.console.data.api.dto.ArtistItem>()
@@ -116,13 +129,15 @@ object LibraryLoader {
                 LibraryItem(
                     id = "al-${album.name}\u0000${album.artist.orEmpty()}",
                     title = album.name,
-                    subtitle = listOfNotNull(album.artist, album.year?.toString()).joinToString(" · "),
+                    subtitle = albumSubtitle(album),
                     kind = LibraryItemKind.Album,
                     playTarget = PlayTarget.Album(album.name, album.artist),
                     albumName = album.name,
                     artistName = album.artist,
                     artPath = album.artPath,
                     unplayed = album.unplayed,
+                    year = album.year,
+                    avgStars = album.avgStars,
                 )
             }
         }
@@ -202,13 +217,15 @@ object LibraryLoader {
                     LibraryItem(
                         id = "al-${album.name}\u0000${album.artist.orEmpty()}",
                         title = album.name,
-                        subtitle = listOfNotNull(album.artist, album.year?.toString()).joinToString(" · "),
+                        subtitle = albumSubtitle(album),
                         kind = LibraryItemKind.Album,
                         playTarget = PlayTarget.Album(album.name, album.artist),
                         albumName = album.name,
                         artistName = album.artist,
                         artPath = album.artPath,
                         unplayed = album.unplayed,
+                        year = album.year,
+                        avgStars = album.avgStars,
                     )
                 }
             }

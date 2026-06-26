@@ -57,12 +57,21 @@ private suspend fun coldBootFast(context: android.content.Context): ColdBootStat
     app.preferences.applyBuildServerUrls()
     app.preferences.clearCredentialsIfNotRemembered()
     app.preferences.applyBuildDefaultsIfEmpty()
-    SessionDiskHydrator.hydrate(context)
     NetworkReachability.update(context)
     app.configuredEndpointUrl()?.let { app.repository.primeBaseUrl(it) }
     val remember = app.preferences.isRememberMeSync()
     val wasConnected = app.preferences.hasConnectedBefore()
-    return ColdBootState(showApp = (remember || wasConnected) && wasConnected && app.hasServerUrl())
+    val showApp = (remember || wasConnected) && wasConnected && app.hasServerUrl()
+    // Link household profile before hydrating home cache — ratings are per-profile.
+    if (showApp) {
+        runCatching {
+            if (app.repository.testConnection().isSuccess) {
+                com.bockmedia.console.local.ClientPrefsSync.pullAndApply(context)
+            }
+        }
+    }
+    SessionDiskHydrator.hydrate(context)
+    return ColdBootState(showApp = showApp)
 }
 
 class MainActivity : ComponentActivity() {

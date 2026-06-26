@@ -31,7 +31,7 @@ class HomeFeedComposerTest {
         assertFalse(feed.sections.isEmpty())
         assertTrue(
             "expected mood rows on home",
-            feed.sections.count { it.kind == HomeSectionKind.Mood } >= 8,
+            feed.sections.count { it.kind == HomeSectionKind.Mood } >= 9,
         )
         val playlistCards = feed.sections.flatMap { it.cards }.mapNotNull { it.playlistId }
         assertTrue(playlistCards.size >= 20)
@@ -78,12 +78,43 @@ class HomeFeedComposerTest {
         )
         val feed = HomeFeedComposer.compose(input)
         val moodSections = feed.sections.filter { it.kind == HomeSectionKind.Mood }
-        assertEquals(8, moodSections.size)
+        assertEquals(9, moodSections.size)
         assertTrue(moodSections.all { it.cards.isNotEmpty() })
         val french = moodSections.first { it.title == "French music" }
         assertEquals(1, french.cards.size)
         val italian = moodSections.first { it.title == "Italian music" }
         assertEquals(1, italian.cards.size)
+        val italianIdx = moodSections.indexOfFirst { it.title == "Italian music" }
+        val yachtIdx = moodSections.indexOfFirst { it.title == "Yacht Rock" }
+        assertTrue(yachtIdx > italianIdx)
+    }
+
+    @Test
+    fun compose_yachtRockSection_listsAllYachtPlaylists() {
+        val playlists = listOf(
+            PlaylistSummary(id = "y1", name = "Yacht Rock", tracks = 40),
+            PlaylistSummary(id = "y2", name = "80's yacht rock", tracks = 30),
+            PlaylistSummary(id = "y3", name = "Sunset vibes 80s yacht Rock", tracks = 25),
+            PlaylistSummary(id = "n1", name = "Yacht Or Nyacht? Essentials", tracks = 20),
+            PlaylistSummary(id = "x1", name = "Daily Music", tracks = 50),
+        )
+        val input = HomeFeedInput(
+            history = emptyList(),
+            analytics = null,
+            allPlaylists = playlists,
+            smartPlaylists = emptyList(),
+            favorites = emptyList(),
+            dashboard = null,
+            shuffleSeed = 1,
+        )
+        val feed = HomeFeedComposer.compose(input)
+        val yacht = feed.sections.filter { it.kind == HomeSectionKind.Mood }
+            .first { it.title == "Yacht Rock" }
+        assertEquals(4, yacht.cards.size)
+        assertEquals(
+            setOf("y1", "y2", "y3", "n1"),
+            yacht.cards.mapNotNull { it.playlistId }.toSet(),
+        )
     }
 
     @Test

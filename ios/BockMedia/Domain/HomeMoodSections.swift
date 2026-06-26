@@ -40,6 +40,17 @@ enum HomeMoodSections {
             genreKeywords: ["italian", "italiano", "italia"]
         )
     )
+    static let yachtRock = HomeMoodSection(
+        id: "yacht-rock",
+        title: "Yacht Rock",
+        theme: HomeTheme(
+            id: "yacht-rock",
+            title: "Yacht Rock",
+            subtitle: "Smooth sailing & soft rock",
+            playlistKeywords: ["yacht"],
+            genreKeywords: ["yacht rock", "soft rock"]
+        )
+    )
     static let workFromHome = HomeMoodSection(
         id: "work-from-home",
         title: "Work from home",
@@ -97,6 +108,6 @@ enum HomeMoodSections {
     )
 
     static func all() -> [HomeMoodSection] {
-        [dinner, french, italian, workFromHome, roadTrip, sundayMorning, party, windDown]
+        [dinner, french, italian, yachtRock, workFromHome, roadTrip, sundayMorning, party, windDown]
     }
 }

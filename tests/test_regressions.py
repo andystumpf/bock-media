@@ -277,14 +277,14 @@ class TestCollisionSafePlayText:
         assert 'ask bock media to start album token' in text
         assert 'the album Rumours' not in text
 
-    def test_playlist_with_id_uses_playlist_token(self, isolated_paths, monkeypatch):
+    def test_playlist_with_id_uses_file_token(self, isolated_paths, monkeypatch):
         monkeypatch.setattr(server, '_alexa_alias', lambda: 'bock media')
         monkeypatch.setattr(server, '_msp_playlist_by_id', lambda pid: ('Mamma Mia', '/x/mamma.m3u'))
         text = server._build_play_text(
             'playlist', 'Mamma Mia', shuffle=False,
             playlist_id='PL123', playlist_source='/x/mamma.m3u',
         )
-        assert 'ask bock media to start playlist token' in text
+        assert 'ask bock media to start file token' in text
         assert 'the Mamma Mia playlist' not in text
 
 
@@ -343,6 +343,45 @@ class TestPlaylistAlbumCollision:
         )
         from tests.test_alexa import _audio_play
         assert _audio_play(resp), resp
+
+    def test_play_rated_playlist_token_starts_audio(self, post_alexa, isolated_paths, monkeypatch, sample_track, tmp_path):
+        ratings_path = str(tmp_path / 'ratings.json')
+        monkeypatch.setattr(server, 'RATINGS_PATH', ratings_path)
+        import bock_ratings
+        bock_ratings.set_rating(
+            ratings_path, 'song', sample_track['path'], 5, None,
+            title='Rated', member_id='andy',
+        )
+        token = server._register_play_playlist_token(
+            'rated-stars-5', '5 stars', '', shuffle=False,
+            tracks=[sample_track['path']],
+        )
+        resp = post_alexa(
+            'IntentRequest',
+            'PlayFileTokenIntent',
+            slots={'FileToken': f'file token {token}'},
+        )
+        from tests.test_alexa import _audio_play
+        assert _audio_play(resp), resp
+
+    def test_build_play_text_rated_playlist_materializes_tracks(self, isolated_paths, monkeypatch, sample_track, tmp_path):
+        ratings_path = str(tmp_path / 'ratings.json')
+        monkeypatch.setattr(server, 'RATINGS_PATH', ratings_path)
+        monkeypatch.setattr(server, '_alexa_alias', lambda: 'bock media')
+        monkeypatch.setattr(server, '_ratings_member_from_request', lambda: 'andy')
+        import bock_ratings
+        bock_ratings.set_rating(
+            ratings_path, 'song', sample_track['path'], 4, None,
+            title='Starred', member_id='andy',
+        )
+        text = server._build_play_text(
+            'playlist', '4★ songs', shuffle=False,
+            playlist_id='rated-stars-4', playlist_source='',
+        )
+        assert 'ask bock media to start file token' in text
+        digits = __import__('re').sub(r'[^0-9]', '', text.split('token', 1)[1])
+        entry = server._consume_play_playlist_token(digits)
+        assert entry and entry.get('tracks') == [sample_track['path']]
 
 
 # ─────────────────────────── static cache busting ──────────────────────────────
@@ -494,6 +533,146 @@ class TestSleepTimer:
         r = client.post('/api/nowplaying/sleep', json={'deviceId': did, 'minutes': 30})
         assert r.status_code == 200
         assert r.get_json()['sleep']['type'] == 'time'
+
+
+# ─────────────────────────── queue auto-advance ────────────────────────────────
+
+class TestQueueAutoAdvance:
+    @staticmethod
+    def _fake_tracks(tmp_path, n=3):
+        paths = []
+        for i in range(n):
+            p = tmp_path / f'track{i}.mp3'
+            p.write_bytes(b'fake')
+            paths.append(str(p))
+        return paths
+
+    def test_lazy_queue_nearly_finished_advances(self, post_alexa, isolated_paths, tmp_path, monkeypatch):
+        paths = self._fake_tracks(tmp_path, 3)
+        monkeypatch.setattr(server, '_playlist_paths_cached', lambda pid, src: paths)
+        qid = server._store_queue_lazy('PL-LAZY', '/fake/playlist.m3u', shuffle=False)
+        r = post_alexa('AudioPlayer.PlaybackNearlyFinished', token=f'{qid}:0')
+        play = next(
+            (d for d in r.get('response', {}).get('directives', []) if d.get('type') == 'AudioPlayer.Play'),
+            None,
+        )
+        assert play, r
+        assert play['playBehavior'] == 'ENQUEUE'
+        assert play['audioItem']['stream']['token'] == f'{qid}:1'
+
+    def test_nearly_finished_keeps_state_on_current_track(self, post_alexa, isolated_paths, tmp_path):
+        """ENQUEUE must not advance NP state early — Finished fallback depends on it."""
+        did = 'amzn1.ask.device.NFSTATE'
+        paths = self._fake_tracks(tmp_path, 3)
+        token = server.encode_token({'tracks': paths, 'idx': 0})
+        server.register_device(did)
+        server.write_np_state_for_device(did, {
+            'filepath': paths[0],
+            'token': token,
+            'playing': True,
+        })
+        post_alexa('AudioPlayer.PlaybackNearlyFinished', token=token, device_id=did)
+        st = server.read_np_state_for_device(did)
+        assert st['token'] == token
+
+    def test_finished_after_failed_enqueue_advances(self, post_alexa, isolated_paths, tmp_path):
+        """NearlyFinished ENQUEUE + failed playback → Finished still advances."""
+        from tests.test_alexa import _audio_play
+        did = 'amzn1.ask.device.ENQFAIL'
+        paths = self._fake_tracks(tmp_path, 2)
+        token = server.encode_token({'tracks': paths, 'idx': 0})
+        server.register_device(did)
+        server.write_np_state_for_device(did, {
+            'filepath': paths[0],
+            'token': token,
+            'playing': True,
+        })
+        post_alexa('AudioPlayer.PlaybackNearlyFinished', token=token, device_id=did)
+        resp = post_alexa('AudioPlayer.PlaybackFinished', token=token, device_id=did)
+        play = _audio_play(resp)
+        assert play, resp
+        assert play['playBehavior'] == 'REPLACE_ALL'
+        assert play['audioItem']['stream']['token'].endswith(':1')
+
+    def test_finished_fallback_advances_queue(self, post_alexa, isolated_paths, tmp_path):
+        """When NearlyFinished never fires, Finished should still advance."""
+        from tests.test_alexa import _audio_play
+        did = 'amzn1.ask.device.FINADV'
+        paths = self._fake_tracks(tmp_path, 2)
+        token = server.encode_token({'tracks': paths, 'idx': 0})
+        server.register_device(did)
+        server.write_np_state_for_device(did, {
+            'filepath': paths[0],
+            'token': token,
+            'playing': True,
+        })
+        resp = post_alexa('AudioPlayer.PlaybackFinished', token=token, device_id=did)
+        play = _audio_play(resp)
+        assert play, resp
+        assert play['playBehavior'] == 'REPLACE_ALL'
+        assert play['audioItem']['stream']['token'].endswith(':1')
+
+    def test_advance_watch_fires_remote_next_when_stuck(self, isolated_paths, tmp_path, monkeypatch):
+        import time as _time
+        paths = self._fake_tracks(tmp_path, 3)
+        token = server.encode_token({'tracks': paths, 'idx': 0})
+        did = 'amzn1.ask.device.WATCH'
+        server.register_device(did)
+        store = server._load_devices()
+        store[did]['serial'] = 'TESTSERIAL123'
+        server._save_devices(store)
+        server.write_np_state_for_device(did, {
+            'filepath': paths[0],
+            'token': token,
+            'playing': True,
+            'duration_ms': 5000,
+            'timestamp': _time.time(),
+        })
+        calls = []
+        monkeypatch.setattr(server, 'read_np_state_for_device', lambda d: {
+            'filepath': paths[0], 'token': token, 'playing': True,
+        })
+        import alexa_remote
+        monkeypatch.setattr(alexa_remote, 'device_control', lambda s, a: calls.append((s, a)))
+        watch = server._NP_ADVANCE_WATCH[did]
+        server._np_advance_watch_fire(watch)
+        assert calls == [('TESTSERIAL123', 'next')]
+
+    def test_play_sets_progress_report_without_apl(self, client, sample_artist, isolated_paths):
+        body = {
+            'version': '1.0',
+            'context': {
+                'System': {
+                    'device': {
+                        'deviceId': 'amzn1.ask.device.AUDIOONLY',
+                        'supportedInterfaces': {'AudioPlayer': {}},
+                    },
+                    'application': {'applicationId': server.EXPECTED_SKILL_APP_ID},
+                    'user': {'userId': 'amzn1.ask.account.TEST'},
+                },
+            },
+            'request': {
+                'type': 'IntentRequest',
+                'requestId': 'prog-test',
+                'locale': 'en-US',
+                'intent': {
+                    'name': 'PlayArtistIntent',
+                    'confirmationStatus': 'NONE',
+                    'slots': {
+                        'ArtistName': {'name': 'ArtistName', 'value': sample_artist, 'confirmationStatus': 'NONE'},
+                    },
+                },
+            },
+        }
+        rv = client.post('/alexa', data=json.dumps(body), content_type='application/json')
+        assert rv.status_code == 200
+        play = next(
+            (d for d in rv.get_json().get('response', {}).get('directives', [])
+             if d.get('type') == 'AudioPlayer.Play'),
+            None,
+        )
+        assert play
+        assert play['audioItem']['stream'].get('progressReportingIntervalInMilliseconds') == server._NP_PROGRESS_REPORT_MS
 
 
 # ─────────────────────────── service health endpoint ───────────────────────────

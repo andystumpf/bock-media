@@ -10,6 +10,7 @@
     FAVORITES: 16,
     TOP_MIXES: 16,
     MOOD_SECTION_CARDS: 500,
+    BROWSE_GENRES: 16,
     EXPLORE_THEMES: 18,
     LIBRARY_GENRE_EXTRAS: 6,
     DAILY_MIXES: 12,
@@ -261,6 +262,8 @@
       ['french', 'français', 'francais', 'france', 'chanson', 'paris'], ['french', 'français', 'francais', 'chanson']) },
     { id: 'italian', title: 'Italian music', theme: theme('italian', 'Italian classics', 'Pop, opera & la dolce vita',
       ['italian', 'italiano', 'italia', 'italy', 'canzone', 'rome'], ['italian', 'italiano', 'italia']) },
+    { id: 'yacht-rock', title: 'Yacht Rock', theme: theme('yacht-rock', 'Yacht Rock', 'Smooth sailing & soft rock',
+      ['yacht'], ['yacht rock', 'soft rock']) },
     { id: 'work-from-home', title: 'Work from home', theme: theme('work-from-home', 'Focus flow', 'Deep work & concentration',
       ['work', 'focus', 'wfh', 'concentration', 'office', 'productivity', 'coding', 'study', 'deep work', 'instrumental'],
       ['ambient', 'classical', 'electronic', 'instrumental']) },
@@ -673,33 +676,32 @@
       });
     }
 
-    for (const genre of (input.libraryGenres || [])) {
-      if (cards.length >= LIMITS.EXPLORE_THEMES + LIMITS.LIBRARY_GENRE_EXTRAS) break;
-      if ((genre.tracks ?? genre.track_count ?? 0) < 8) continue;
-      const key = genre.name.toLowerCase();
-      if (coveredGenreKeys.has(key)) continue;
-      if (themes.some((th) => Rules.genreMatchesTheme(genre.name, th))) continue;
-      const cardId = `library-genre-${genre.name}`;
+    return cards.filter((c, i, a) => a.findIndex((x) => x.id === c.id) === i);
+  }
+
+  function buildBrowseGenreCards(libraryGenres, registry) {
+    const cards = [];
+    const sorted = [...(libraryGenres || [])].sort(
+      (a, b) => (b.tracks ?? b.track_count ?? 0) - (a.tracks ?? a.track_count ?? 0),
+    );
+    for (const genre of sorted) {
+      if (cards.length >= LIMITS.BROWSE_GENRES) break;
+      const tracks = genre.tracks ?? genre.track_count ?? 0;
+      if (tracks < 8 || !genre.name) continue;
+      const cardId = `browse-genre-${genre.name}`;
       if (registry.hasCard(cardId)) continue;
-      const seedArtist = Rules.topArtistForGenre(input.history, genre.name) ||
-        topArtists[0]?.name || topArtists[0]?.label || genre.name;
-      registerThemeCard({
+      const card = {
         id: cardId,
         title: genre.name,
-        subtitle: `${genre.tracks ?? genre.track_count ?? 0} tracks · From your library`,
+        subtitle: `${tracks} tracks`,
         artPath: registry.claimArtPath(genre.artPath),
-        playTarget: ptRadio(`${genre.name} Radio`, 'genre', seedArtist),
-        kind: 'ExploreThemes',
-      });
-      coveredGenreKeys.add(key);
+        playTarget: ptRadio(`${genre.name} Radio`, 'genre', genre.name),
+        kind: 'BrowseGenres',
+      };
+      registry.registerCard(card);
+      cards.push(card);
     }
-
-    const seen = new Set();
-    return cards.filter((c) => {
-      if (seen.has(c.id)) return false;
-      seen.add(c.id);
-      return true;
-    });
+    return cards;
   }
 
   function compose(input) {
@@ -927,6 +929,8 @@
     ));
     const dailyMixesFinal = dailyMixes.filter((c, i, a) => a.findIndex((x) => x.id === c.id) === i).slice(0, LIMITS.DAILY_MIXES);
 
+    const browseGenres = buildBrowseGenreCards(input.libraryGenres || [], registry);
+
     const exploreThemes = buildExploreThemeCards(
       { ...input, allPlaylists },
       registry,
@@ -1007,6 +1011,7 @@
     const sections = [
       section('jump-back-in', 'Jump back in', 'JumpBackIn', jumpBackInFinal),
       section('rated-songs', 'Rated Songs', 'RatedSongs', ratedSongCards),
+      section('browse-genres', 'Browse by genre', 'BrowseGenres', browseGenres),
       section('top-mixes', 'Your top mixes', 'TopMixes', genreMixes),
       ...moodSections,
       section('release-radar', 'Release Radar', 'Discover', releaseRadar),
@@ -1022,7 +1027,7 @@
     return { sections };
   }
 
-  const homeShortcutMixKinds = new Set(['TopMixes', 'Mood', 'DailyMixes', 'ExploreThemes', 'RecentPlaylists']);
+  const homeShortcutMixKinds = new Set(['TopMixes', 'BrowseGenres', 'Mood', 'DailyMixes', 'ExploreThemes', 'RecentPlaylists']);
 
   function eligibleForHomeShortcut(card) {
     const t = card.playTarget;
@@ -1072,8 +1077,9 @@
     if (t.kind === 'artist') return `#songs/artist/${encodeURIComponent(t.name)}`;
     if (t.kind === 'radio') {
       if (t.seedKind === 'artist') return `#songs/artist/${encodeURIComponent(t.seed)}`;
-      if (t.seedKind === 'genre') return `#genres`;
+      if (t.seedKind === 'genre') return `#genres/${encodeURIComponent(t.seed)}`;
     }
+    if (card.kind === 'BrowseGenres') return `#genres/${encodeURIComponent(card.title)}`;
     if (card.kind === 'Offline') return '#download';
     return '#search';
   }

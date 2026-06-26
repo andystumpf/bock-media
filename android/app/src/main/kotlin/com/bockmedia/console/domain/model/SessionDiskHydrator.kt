@@ -3,6 +3,7 @@ package com.bockmedia.console.domain.model
 import android.content.Context
 import com.bockmedia.console.BockMediaApp
 import com.bockmedia.console.data.network.NetworkReachability
+import com.bockmedia.console.local.ActiveProfileStore
 import com.bockmedia.console.ui.components.ArtworkPrefetch
 
 /** Loads disk snapshots into in-memory session caches before the first frame paints. */
@@ -34,7 +35,9 @@ object SessionDiskHydrator {
 
     private suspend fun hydrateHome(context: Context) {
         if (HomeFeedCache.peek() != null) return
+        val linked = !ActiveProfileStore.activeMemberId(context).isNullOrBlank()
         HomeCachePersistence.load(context)?.let { snap ->
+            if (!snap.feed.isUsableHomeCache(linked)) return@let
             HomeArtworkCache.restore(snap.cardMediaPaths, snap.playlistPaths)
             HomeFeedCache.put(snap.feed)
             HomeLoadCoordinator.markLoaded()

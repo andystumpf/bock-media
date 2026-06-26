@@ -13,6 +13,7 @@ object HomeCardBrowse {
 
     fun destination(card: HomeCard): Destination? {
         if (card.kind == HomeSectionKind.Offline) return Destination.Downloads
+        if (card.kind == HomeSectionKind.BrowseGenres) return Destination.Genre(card.title)
         card.linkedPlaylistId()?.let { return Destination.Playlist(it) }
         // Synthetic "<genre> Mix" tiles seed playback from an artist, but tapping should
         // open the genre — not the artist page (whose header would be the artist name).

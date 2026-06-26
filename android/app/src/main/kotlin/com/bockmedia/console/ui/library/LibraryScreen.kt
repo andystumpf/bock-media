@@ -65,6 +65,11 @@ fun LibraryScreen(
     var viewMode by rememberSaveable { mutableStateOf(LibraryViewMode.Grid) }
     var sort by rememberSaveable { mutableStateOf(LibrarySort.Recents) }
     var search by remember { mutableStateOf("") }
+    var libraryHealth by remember { mutableStateOf<com.bockmedia.console.data.api.dto.LibraryHealthResponse?>(null) }
+
+    suspend fun loadHealth() {
+        libraryHealth = runCatching { repository.libraryHealth() }.getOrNull()
+    }
 
     // Downloads are read live from the offline store, not the cached LibraryData
     // bucket — otherwise a freshly downloaded playlist won't appear here until the
@@ -143,6 +148,7 @@ fun LibraryScreen(
     LaunchedEffect(Unit) {
         OfflineDownloadManager.refresh(context)
         bootstrapLibrary()
+        loadHealth()
     }
 
     LaunchedEffect(filter) {
@@ -198,12 +204,28 @@ fun LibraryScreen(
                 Text("Manage playlists")
             }
         }
+        if (search.isBlank() && libraryHealth != null) {
+            LibraryHealthBanner(
+                health = libraryHealth!!,
+                repository = repository,
+                onMerged = {
+                    LibrarySessionCache.invalidate()
+                    scope.launch {
+                        refreshFromNetwork()
+                        loadHealth()
+                    }
+                },
+            )
+        }
         BockPullRefresh(
             isRefreshing = refreshing,
             onRefresh = {
                 refreshing = true
                 LibrarySessionCache.invalidate()
-                scope.launch { refreshFromNetwork() }
+                scope.launch {
+                    refreshFromNetwork()
+                    loadHealth()
+                }
             },
             modifier = Modifier.weight(1f).fillMaxWidth(),
         ) {
@@ -457,6 +479,23 @@ private fun LibraryGridTile(
                 showDownload = item.kind != LibraryItemKind.Downloaded,
                 onPlay = onPlay,
             )
+            if (item.kind == LibraryItemKind.Album && item.avgStars != null && item.avgStars > 0) {
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(6.dp),
+                    shape = RoundedCornerShape(4.dp),
+                    color = Color.Black.copy(alpha = 0.62f),
+                ) {
+                    Text(
+                        "★ ${"%.1f".format(item.avgStars)}",
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                        color = Color.White,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
         }
         Spacer(Modifier.height(8.dp))
         Text(item.title, maxLines = 2, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)

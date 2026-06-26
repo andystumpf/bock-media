@@ -371,6 +371,8 @@ data class AlbumItem(
     val year: Int? = null,
     @SerialName("art_path") val artPath: String? = null,
     val played: Boolean = true,
+    @SerialName("avg_stars") val avgStars: Double? = null,
+    @SerialName("rated_count") val ratedCount: Int = 0,
 ) {
     val unplayed: Boolean get() = !played
 }
@@ -383,6 +385,34 @@ data class GenreItem(
     val name: String = "",
     @SerialName("track_count") val tracks: Int = 0,
     @SerialName("art_path") val artPath: String? = null,
+)
+
+@Serializable
+data class LibraryHealthResponse(
+    val summary: LibraryHealthSummary = LibraryHealthSummary(),
+    @SerialName("attentionFolders") val attentionFolders: List<LibraryAttentionFolder> = emptyList(),
+    @SerialName("duplicateArtists") val duplicateArtists: List<DuplicateArtistGroup> = emptyList(),
+)
+
+@Serializable
+data class LibraryHealthSummary(
+    @SerialName("totalTracks") val totalTracks: Int = 0,
+    @SerialName("missingGenre") val missingGenre: Int = 0,
+    @SerialName("missingAlbumArtist") val missingAlbumArtist: Int = 0,
+    @SerialName("needsAttention") val needsAttention: Int = 0,
+)
+
+@Serializable
+data class LibraryAttentionFolder(
+    val path: String = "",
+    @SerialName("trackCount") val trackCount: Int = 0,
+)
+
+@Serializable
+data class DuplicateArtistGroup(
+    val canonical: String = "",
+    val variants: List<String> = emptyList(),
+    @SerialName("totalTracks") val totalTracks: Int = 0,
 )
 
 @Serializable

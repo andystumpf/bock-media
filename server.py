@@ -36,6 +36,7 @@ import bock_continue
 import bock_folders
 import bock_artist_art
 import bock_client_prefs
+import bock_library_health
 import bock_ratings
 from bock_routes import register as register_bock_routes
 
@@ -89,6 +90,19 @@ def db_query(sql, params=()):
 def db_one(sql, params=()):
     rows = db_query(sql, params)
     return rows[0] if rows else {}
+
+
+def db_execute(sql, params=()):
+    try:
+        conn = get_db_rw()
+        cur = conn.execute(sql, params)
+        conn.commit()
+        n = cur.rowcount
+        conn.close()
+        return n if n >= 0 else 0
+    except Exception as e:
+        print(f'DB execute error: {e}')
+        return 0
 
 # ── Albums aggregate (fast /api/albums on large libraries) ───────────────────
 
@@ -1978,7 +1992,19 @@ def _new_playlist_token_id():
     return str(random.randint(10_000_000, 99_999_999))
 
 
-def _register_play_playlist_token(playlist_id, name, source, shuffle=False):
+def _resolve_rated_playlist(playlist_id, member_id=''):
+    """Virtual rated-stars-N playlists have no .m3u — return (name, track paths)."""
+    stars = bock_ratings.parse_rated_playlist_id(playlist_id)
+    if stars is None:
+        return None
+    paths = [
+        s['id'] for s in bock_ratings.songs_at_stars(RATINGS_PATH, stars, member_id=member_id or '')
+        if s.get('id')
+    ]
+    return bock_ratings.rated_playlist_name(stars), paths
+
+
+def _register_play_playlist_token(playlist_id, name, source, shuffle=False, tracks=None):
     src = (source or '').strip()
     if not src and playlist_id:
         _, looked = _msp_playlist_by_id(playlist_id)
@@ -1988,7 +2014,7 @@ def _register_play_playlist_token(playlist_id, name, source, shuffle=False):
     with _PLAYLIST_TOKEN_LOCK:
         for k in [k for k, v in _PLAYLIST_TOKENS.items() if v.get('exp', 0) < now]:
             del _PLAYLIST_TOKENS[k]
-        _PLAYLIST_TOKENS[token] = {
+        entry = {
             'kind': 'playlist',
             'id': str(playlist_id),
             'name': name or '',
@@ -1996,8 +2022,14 @@ def _register_play_playlist_token(playlist_id, name, source, shuffle=False):
             'shuffle': bool(shuffle),
             'exp': now + _PLAYLIST_TOKEN_TTL,
         }
+        if tracks is not None:
+            entry['tracks'] = _filter_ignored_queue(
+                normalize_track_queue_fast(tracks),
+            )[:_QUEUE_TRACK_LIMIT]
+        _PLAYLIST_TOKENS[token] = entry
         _save_playlist_tokens()
-    print(f'[PLAY TOKEN] registered {token} playlist={name!r} shuffle={shuffle}', flush=True)
+    n = len(entry.get('tracks') or [])
+    print(f'[PLAY TOKEN] registered {token} playlist={name!r} shuffle={shuffle} tracks={n}', flush=True)
     return token
 
 
@@ -2049,15 +2081,29 @@ def _start_playlist_token_entry(token_entry, shuffle=None):
     name = token_entry.get('name') or 'playlist'
     pid = token_entry.get('id')
     source = token_entry.get('source')
+    inline = token_entry.get('tracks')
     if pid:
-        looked_name, looked_src = _msp_playlist_by_id(pid)
-        if looked_name:
-            name = looked_name
-        if not source and looked_src:
-            source = looked_src
+        rated = _resolve_rated_playlist(pid)
+        if rated:
+            rname, _ = rated
+            if rname:
+                name = rname
+        else:
+            looked_name, looked_src = _msp_playlist_by_id(pid)
+            if looked_name:
+                name = looked_name
+            if not source and looked_src:
+                source = looked_src
     do_shuffle = token_entry.get('shuffle', False) if shuffle is None else shuffle
-    speech = f"Shuffling {name}." if do_shuffle else f"Playing {name}."
-    return start_playing(None, shuffle=do_shuffle, speech=speech,
+    if inline:
+        queue = _filter_ignored_queue(normalize_track_queue_fast(inline))
+        if not queue:
+            return alexa_speak("Sorry, I couldn't find any tracks to play.")
+        return start_playing(queue, shuffle=do_shuffle, speech=None,
+                            playlist=name, playlist_id=pid)
+    # App-initiated token plays: skip TTS — outputSpeech + AudioPlayer on Echo
+    # Show often drops lifecycle events (no NearlyFinished → no auto-advance).
+    return start_playing(None, shuffle=do_shuffle, speech=None,
                         playlist=name, playlist_id=pid, source=source)
 
 
@@ -2145,15 +2191,21 @@ def _build_play_text(kind, name, shuffle, artist=None, path=None, playlist_id=No
         pid = (playlist_id or '').strip()
         src = (playlist_source or '').strip()
         if pid:
-            resolved_name, src_lookup = _msp_playlist_by_id(pid)
-            if not src:
-                src = src_lookup
-            if resolved_name:
-                name = resolved_name
-            token = _register_play_playlist_token(pid, name, src, shuffle=shuffle)
-            # Explicit "playlist token" routes to PlayFileTokenIntent and avoids
-            # album/artist intents grabbing bare titles like "Mamma Mia".
-            phrase = f"playlist token {token}"
+            rated = _resolve_rated_playlist(pid, _ratings_member_from_request())
+            if rated:
+                rname, paths = rated
+                if rname:
+                    name = rname
+                token = _register_play_playlist_token(pid, name, '', shuffle=shuffle, tracks=paths)
+                phrase = f"file token {token}"
+            else:
+                resolved_name, src_lookup = _msp_playlist_by_id(pid)
+                if not src:
+                    src = src_lookup
+                if resolved_name:
+                    name = resolved_name
+                token = _register_play_playlist_token(pid, name, src, shuffle=shuffle)
+                phrase = f"file token {token}"
         else:
             phrase = f"the {name} playlist"
     return f"ask {alias} to {verb} {phrase}"
@@ -2407,11 +2459,20 @@ def play_on_device():
         return jsonify({'error': 'device required'}), 400
     playlist_source = None
     if kind == 'playlist' and pid:
-        resolved_name, playlist_source = _msp_playlist_by_id(pid)
-        if resolved_name:
-            name = resolved_name
-        elif not name:
-            name = resolved_name or ''
+        member_id = _ratings_member_from_request()
+        rated = _resolve_rated_playlist(pid, member_id)
+        if rated:
+            resolved_name, paths = rated
+            if resolved_name:
+                name = resolved_name
+            if not paths:
+                return jsonify({'error': 'empty_playlist', 'code': 'empty_playlist'}), 400
+        else:
+            resolved_name, playlist_source = _msp_playlist_by_id(pid)
+            if resolved_name:
+                name = resolved_name
+            elif not name:
+                name = resolved_name or ''
     elif not name:
         return jsonify({'error': 'name or id required'}), 400
     if not name:
@@ -3334,9 +3395,18 @@ def albums():
         params + [limit, offset]
     )
     played = _albums_played_flags(rows)
+    member_id = _ratings_member_from_request()
+    star_map = bock_library_health.album_star_averages(RATINGS_PATH, member_id, db_query)
     for row in rows:
         key = (row['album'], row.get('artist') or '')
         row['played'] = played.get(key, False)
+        stats = star_map.get(key)
+        if stats:
+            row['avg_stars'] = stats['avgStars']
+            row['rated_count'] = stats['ratedCount']
+        else:
+            row['avg_stars'] = None
+            row['rated_count'] = 0
     total_row = db_one(f'SELECT COUNT(*) as total FROM albums_agg WHERE {where}', params)
     return jsonify({'items': rows, 'total': total_row.get('total', 0)})
 
@@ -3365,6 +3435,34 @@ def genres_list():
             'art_path': art_row.get('path') if art_row else None,
         })
     return jsonify({'items': items, 'total': len(items)})
+
+
+@app.route('/api/library/health')
+def library_health():
+    """Metadata coverage, Picard attention folders, duplicate artist spellings."""
+    limit = min(max(int(request.args.get('attentionLimit', 5) or 5), 1), 20)
+    dup_limit = min(max(int(request.args.get('duplicateLimit', 10) or 10), 1), 50)
+    return jsonify(bock_library_health.library_health(
+        DB_PATH, db_query, attention_limit=limit, duplicate_limit=dup_limit,
+    ))
+
+
+@app.route('/api/library/artists/merge', methods=['POST'])
+def library_merge_artists():
+    body = request.get_json(silent=True) or {}
+    to_name = (body.get('to') or '').strip()
+    from_raw = body.get('from') or body.get('fromNames') or []
+    if isinstance(from_raw, str):
+        from_raw = [from_raw]
+    if not isinstance(from_raw, list):
+        return jsonify({'error': 'from must be an array'}), 400
+    try:
+        out = bock_library_health.merge_artists(db_execute, from_raw, to_name)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    if out.get('rowsUpdated', 0) > 0:
+        threading.Thread(target=refresh_albums_agg, daemon=True, name='albums-agg-merge').start()
+    return jsonify(out)
 
 # ── API: Songs ───────────────────────────────────────────────────────────────
 
@@ -7052,6 +7150,8 @@ def _store_queue_lazy(playlist_id, source, shuffle=False, shuffle_seed=None, loo
         return qid
 
 _QUEUE_TRACK_LIMIT = 300
+# Alexa emits PlaybackNearlyFinished when this interval is set on the stream.
+_NP_PROGRESS_REPORT_MS = 15000
 
 def _resolve_queue_tracks(entry):
     """Materialize track list for a queue entry (lazy playlist refs or inline tracks)."""
@@ -7059,6 +7159,8 @@ def _resolve_queue_tracks(entry):
         return entry.get('tracks') or []
     pid = entry.get('playlist_id')
     source = entry.get('source')
+    if not source and pid:
+        _, source = _msp_playlist_by_id(pid)
     if not pid or not source:
         return []
     paths = _playlist_paths_cached(pid, source)
@@ -7921,8 +8023,11 @@ def _tracks_from_source(source):
     return parse_m3u(source, verify_exists=False) if source and os.path.isfile(source) else []
 
 
-def _tracks_for_playlist(playlist_id, source):
+def _tracks_for_playlist(playlist_id, source, member_id=''):
     """Load playlist tracks using the enriched cache when an id is known."""
+    rated = _resolve_rated_playlist(playlist_id, member_id)
+    if rated:
+        return rated[1]
     if playlist_id and source:
         return _playlist_paths_cached(playlist_id, source)
     return _tracks_from_source(source)
@@ -8948,6 +9053,7 @@ def write_np_state(data):
             devices[did] = data
         _canonicalize_np(_prune_np(payload))
         _write_all_np(payload)
+    _np_on_state_written(did, data)
 
 def read_np_state():
     payload = _canonicalize_np(_read_all_np())
@@ -8976,6 +9082,87 @@ def write_np_state_for_device(device_id, data):
         else:
             devices[did] = data
         _write_all_np(_canonicalize_np(_prune_np(payload)))
+    _np_on_state_written(did, data)
+
+# ── Track-end watcher (Echo Show often skips AudioPlayer lifecycle events) ────
+_NP_ADVANCE_WATCH = {}
+_NP_WATCH_LOCK = threading.RLock()
+
+def _np_cancel_advance_watch(device_id):
+    if not device_id or device_id == 'default':
+        return
+    with _NP_WATCH_LOCK:
+        ent = _NP_ADVANCE_WATCH.pop(device_id, None)
+    if ent and ent.get('timer'):
+        ent['timer'].cancel()
+
+def _np_serial_for_device(device_id):
+    store = _load_devices()
+    primary = _resolve_device_id(device_id, store)
+    return (store.get(primary) or {}).get('serial') or ''
+
+def _np_advance_watch_fire(watch):
+    did = watch.get('device_id')
+    token = watch.get('token')
+    path = watch.get('path')
+    with _NP_WATCH_LOCK:
+        if _NP_ADVANCE_WATCH.get(did) is not watch:
+            return
+        _NP_ADVANCE_WATCH.pop(did, None)
+    st = read_np_state_for_device(did) or {}
+    if st.get('token') != token or st.get('filepath') != path:
+        return
+    if not st.get('playing') or st.get('paused'):
+        return
+    serial = _np_serial_for_device(did)
+    if not serial:
+        print(f'[NP WATCH] no serial for device {did[-12:]}', flush=True)
+        return
+    print(f'[NP WATCH] lifecycle silent — remote next serial={serial} token={token!r}', flush=True)
+    try:
+        import alexa_remote
+        alexa_remote.device_control(serial, 'next')
+    except Exception as ex:
+        print(f'[NP WATCH] remote next failed: {ex}', flush=True)
+
+def _np_schedule_advance_watch(device_id, state):
+    """Fallback auto-advance when Alexa never sends NearlyFinished/Finished."""
+    _np_cancel_advance_watch(device_id)
+    if not state or not state.get('playing') or state.get('paused'):
+        return
+    token = state.get('token') or ''
+    path = state.get('filepath') or ''
+    if not token or not path:
+        return
+    data = decode_token(token) or {}
+    tracks = data.get('tracks') or []
+    idx = int(data.get('idx') or 0)
+    if not tracks or (idx + 1 >= len(tracks) and not data.get('loop')):
+        return
+    duration_ms = int(state.get('duration_ms') or 0) or _duration_ms_for_path(path)
+    if duration_ms <= 0:
+        duration_ms = 180_000
+    offset_ms = int(state.get('offset_ms') or 0)
+    remaining_s = max(8.0, (duration_ms - offset_ms) / 1000.0 + 4.0)
+    watch = {'token': token, 'path': path, 'device_id': device_id}
+
+    def _fire():
+        _np_advance_watch_fire(watch)
+
+    t = threading.Timer(remaining_s, _fire)
+    t.daemon = True
+    watch['timer'] = t
+    with _NP_WATCH_LOCK:
+        _NP_ADVANCE_WATCH[device_id] = watch
+    t.start()
+
+def _np_on_state_written(device_id, data):
+    if not device_id or device_id == 'default':
+        return
+    if data:
+        _np_schedule_advance_watch(device_id, data)
+    else:
+        _np_cancel_advance_watch(device_id)
 
 def remove_np_state():
     payload = _canonicalize_np(_read_all_np() or {'devices': {}})
@@ -9025,6 +9212,22 @@ def _np_event_token_matches_state(event_token, state):
     if not event_token or not state:
         return False
     return event_token == state.get('token')
+
+def _np_stalled_after_enqueue(event_token, state):
+    """NearlyFinished ENQUEUE advanced state but Alexa never started the next track."""
+    if not event_token or not state:
+        return False
+    state_token = state.get('token', '')
+    if ':' not in event_token or ':' not in state_token:
+        return False
+    eqid, eidx_s = event_token.split(':', 1)
+    sqid, sidx_s = state_token.split(':', 1)
+    if eqid != sqid:
+        return False
+    try:
+        return int(sidx_s) == int(eidx_s) + 1
+    except ValueError:
+        return False
 
 def _expire_stale_playing(payload):
     now = time.time()
@@ -9317,8 +9520,9 @@ def alexa_play(stream_url, token, offset_ms=0, previous_token=None,
     except Exception as ex:
         print(f'[APL] play_apl_directives skipped: {ex}', flush=True)
         apl_directives, apl_on = [], False
-    if apl_on:
-        audio_item['stream']['progressReportingIntervalInMilliseconds'] = alexa_apl.PROGRESS_REPORT_MS
+    audio_item['stream']['progressReportingIntervalInMilliseconds'] = (
+        alexa_apl.PROGRESS_REPORT_MS if apl_on else _NP_PROGRESS_REPORT_MS
+    )
 
     directives = list(apl_directives) + [{
         'type': 'AudioPlayer.Play',
@@ -9383,6 +9587,62 @@ def _np_eager_track_state(path, token, prev_state=None):
         'offset_ms': 0,
         **src,
     })
+
+def _np_advance_at_boundary(token, *, previous_token=None, play_behavior='ENQUEUE'):
+    """Advance the active queue at a track boundary (NearlyFinished / Finished fallback).
+
+    Returns an Alexa Play response, or None when the queue has ended or a sleep timer fired.
+    """
+    data = decode_token(token) or {}
+    tracks = data.get('tracks', [])
+    if not tracks:
+        print(f'[ALEXA] queue advance skipped: empty tracks token={token!r}', flush=True)
+        return None
+    idx = data.get('idx', 0)
+    next_idx = idx + 1
+    stop_at = data.get('stopAt')
+    stop_after_idx = data.get('stopAfterIdx')
+    if stop_at and time.time() >= float(stop_at):
+        return None
+    if stop_after_idx is not None and next_idx > int(stop_after_idx):
+        return None
+    qid = data.get('qid')
+    if qid:
+        _touch_queue(qid)
+    req_path = _consume_next_request(_room_key(_np_device_id()))
+    if req_path and os.path.isfile(req_path):
+        new_tracks = (tracks[:next_idx] + [req_path] + tracks[next_idx:])[:_QUEUE_TRACK_LIMIT]
+        req_token = encode_token({**data, 'tracks': new_tracks, 'idx': next_idx})
+        if play_behavior != 'ENQUEUE':
+            _np_eager_track_state(req_path, req_token, prev_state=read_np_state())
+        return _np_play_path(req_path, req_token,
+                            previous_token=previous_token or token,
+                            play_behavior=play_behavior)
+    if next_idx >= len(tracks):
+        if data.get('loop'):
+            next_idx = 0
+        else:
+            continued = _try_continue_queue(data, tracks, idx)
+            if continued:
+                next_path, next_token = continued
+                if play_behavior != 'ENQUEUE':
+                    _np_eager_track_state(next_path, next_token, prev_state=read_np_state())
+                return _np_play_path(next_path, next_token,
+                                     previous_token=previous_token or token,
+                                     play_behavior=play_behavior)
+            return None
+    if next_idx < len(tracks):
+        next_path = tracks[next_idx]
+        next_token = encode_token({**data, 'idx': next_idx})
+        # ENQUEUE at NearlyFinished: keep state on the current track until
+        # PlaybackStarted for the next one — otherwise Finished fallback is
+        # ignored when Alexa fails to start the enqueued stream.
+        if play_behavior != 'ENQUEUE':
+            _np_eager_track_state(next_path, next_token, prev_state=read_np_state())
+        return _np_play_path(next_path, next_token,
+                             previous_token=previous_token or token,
+                             play_behavior=play_behavior)
+    return None
 
 def _np_skip_next(playback_controller=False):
     """Advance to the next track in the active device queue."""
@@ -9622,9 +9882,9 @@ def _start_playing_impl(tracks, shuffle=False, speech=None, loop=False,
         if not queue:
             return alexa_speak("Sorry, I couldn't find any tracks to play.")
         first = queue[0]
-        qid = _store_queue_lazy(
-            playlist_id, source, shuffle=shuffle, shuffle_seed=shuffle_seed,
-            loop=loop, playlist=playlist, context=context,
+        qid = _store_queue(
+            queue, shuffle=shuffle, loop=loop,
+            playlist=playlist, playlist_id=playlist_id, context=context,
         )
         token = f"{qid}:0"
     else:
@@ -10194,44 +10454,9 @@ def alexa_skill():
 
     if rtype == 'AudioPlayer.PlaybackNearlyFinished':
         token = req.get('token', '')
-        data  = decode_token(token) or {}
-        tracks = data.get('tracks', [])
-        idx    = data.get('idx', 0)
-        next_idx = idx + 1
-        # Sleep timer / stop-after-N: enforced at the track boundary so the
-        # current song finishes, then we simply stop enqueuing.
-        stop_at = data.get('stopAt')
-        stop_after_idx = data.get('stopAfterIdx')
-        if stop_at and time.time() >= float(stop_at):
-            return alexa_empty()
-        if stop_after_idx is not None and next_idx > int(stop_after_idx):
-            return alexa_empty()
-        # Shared up-next: a household member's approved request plays next,
-        # spliced into the queue so the original playlist resumes after it.
-        req_path = _consume_next_request(_room_key(_np_device_id()))
-        if req_path and os.path.isfile(req_path):
-            new_tracks = (tracks[:next_idx] + [req_path] + tracks[next_idx:])[:_QUEUE_TRACK_LIMIT]
-            req_token = encode_token({**data, 'tracks': new_tracks, 'idx': next_idx})
-            _np_eager_track_state(req_path, req_token, prev_state=read_np_state())
-            return _np_play_path(req_path, req_token,
-                                 previous_token=token, play_behavior='ENQUEUE')
-        if next_idx >= len(tracks):
-            if data.get('loop'):
-                next_idx = 0
-            else:
-                continued = _try_continue_queue(data, tracks, idx)
-                if continued:
-                    next_path, next_token = continued
-                    _np_eager_track_state(next_path, next_token, prev_state=read_np_state())
-                    return _np_play_path(next_path, next_token,
-                                         previous_token=token, play_behavior='ENQUEUE')
-                return alexa_empty()
-        if next_idx < len(tracks):
-            next_path  = tracks[next_idx]
-            next_token = encode_token({**data, 'idx': next_idx})
-            _np_eager_track_state(next_path, next_token, prev_state=read_np_state())
-            return _np_play_path(next_path, next_token,
-                                 previous_token=token, play_behavior='ENQUEUE')
+        advanced = _np_advance_at_boundary(token, previous_token=token, play_behavior='ENQUEUE')
+        if advanced is not None:
+            return advanced
         return alexa_empty()
 
     if rtype == 'AudioPlayer.PlaybackFinished':
@@ -10239,9 +10464,18 @@ def alexa_skill():
         # the old one — ignore stale Finished events so multi-room playback stays
         # visible and the active row keeps playing=True.
         state = read_np_state() or {}
-        if _np_event_token_matches_state(req.get('token', ''), state):
-            state['playing'] = False
-            write_np_state(state)
+        event_token = req.get('token', '')
+        if _np_event_token_matches_state(event_token, state):
+            advanced = _np_advance_at_boundary(event_token, play_behavior='REPLACE_ALL')
+            if advanced is not None:
+                return advanced
+        elif _np_stalled_after_enqueue(event_token, state) and state.get('filepath'):
+            advanced = _np_play_path(state['filepath'], state['token'],
+                                     play_behavior='REPLACE_ALL')
+            if advanced is not None:
+                return advanced
+        state['playing'] = False
+        write_np_state(state)
         return alexa_empty()
 
     if rtype == 'AudioPlayer.PlaybackFailed':

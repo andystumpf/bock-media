@@ -2,6 +2,52 @@
   "_comment": "Update this file whenever you upload a new APK/IPA to /app. Shown on GET /app.",
   "releases": [
     {
+      "version": "2.6.24",
+      "date": "2026-06-26",
+      "items": [
+        {"kind": "fix", "text": "Rated Songs Alexa play — virtual playlists now materialize your profile’s tracks; app sends member context"}
+      ]
+    },
+    {
+      "version": "2.6.23",
+      "date": "2026-06-26",
+      "items": [
+        {"kind": "fix", "text": "Alexa playlist auto-advance from app — track-end fallback when Echo Show drops lifecycle events; file-token routing"}
+      ]
+    },
+    {
+      "version": "2.6.22",
+      "date": "2026-06-26",
+      "items": [
+        {"kind": "fix", "text": "Alexa playlists auto-advance reliably — Finished fallback when ENQUEUE fails; queue materialized at play start"}
+      ]
+    },
+    {
+      "version": "2.6.21",
+      "date": "2026-06-26",
+      "items": [
+        {"kind": "feat", "text": "Home Yacht Rock row after Italian music — all playlists with “yacht” in the name"},
+        {"kind": "fix", "text": "Profile restore after reinstall — Andy/settings/rated songs reload from server; stale home cache cleared"},
+        {"kind": "fix", "text": "Alexa playlists auto-advance to the next track without manual skip"}
+      ]
+    },
+    {
+      "version": "2.6.20",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "fix", "text": "Pinned Alexa devices and last-played speaker now sync per profile — restored after reinstall"}
+      ]
+    },
+    {
+      "version": "2.6.19",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "feat", "text": "Home Browse by genre row — top library genres as tiles (tap opens genre)"},
+        {"kind": "feat", "text": "Library Needs attention banner — Picard folders, duplicate artists, one-tap merge"},
+        {"kind": "feat", "text": "Album tiles show year + your average star rating; merge artists API for cleaner browse"}
+      ]
+    },
+    {
       "version": "2.6.18",
       "date": "2026-06-25",
       "items": [

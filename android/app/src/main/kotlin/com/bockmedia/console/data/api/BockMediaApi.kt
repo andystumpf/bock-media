@@ -384,6 +384,14 @@ interface BockMediaApi {
     @PUT("api/ratings")
     suspend fun setRating(@Body body: JsonObject): OkResponse
 
+    @GET("api/library/health")
+    suspend fun libraryHealth(
+        @Query("attentionLimit") attentionLimit: Int = 5,
+    ): LibraryHealthResponse
+
+    @POST("api/library/artists/merge")
+    suspend fun mergeArtists(@Body body: JsonObject): OkResponse
+
     @GET("api/settings")
     suspend fun settings(): JsonObject
 

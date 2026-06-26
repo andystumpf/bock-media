@@ -44,6 +44,17 @@ object HomeMoodSections {
             genreKeywords = listOf("italian", "italiano", "italia"),
         ),
     )
+    val yachtRock = HomeMoodSection(
+        id = "yacht-rock",
+        title = "Yacht Rock",
+        theme = HomeTheme(
+            id = "yacht-rock",
+            title = "Yacht Rock",
+            subtitle = "Smooth sailing & soft rock",
+            playlistKeywords = listOf("yacht"),
+            genreKeywords = listOf("yacht rock", "soft rock"),
+        ),
+    )
     val workFromHome = HomeMoodSection(
         id = "work-from-home",
         title = "Work from home",
@@ -119,6 +130,7 @@ object HomeMoodSections {
         dinner,
         french,
         italian,
+        yachtRock,
         workFromHome,
         roadTrip,
         sundayMorning,
