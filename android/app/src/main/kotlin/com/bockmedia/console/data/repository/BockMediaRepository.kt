@@ -35,6 +35,7 @@ class BockMediaRepository(
     private val baseUrlProvider: suspend () -> String,
     private val preferences: AppPreferences,
     private val clientIdProvider: () -> String = { "" },
+    private val memberIdProvider: () -> String? = { null },
 ) {
     private suspend fun api() = apiProvider()
 
@@ -399,7 +400,19 @@ class BockMediaRepository(
         q: String? = null,
         sortBy: String? = null,
         order: String? = null,
-    ) = api().playlistDetail(id, page = page, limit = limit, q = q, sortBy = sortBy, order = order)
+    ): PlaylistDetailResponse {
+        val (memberId, clientId) = ratingsScope()
+        return api().playlistDetail(
+            id,
+            page = page,
+            limit = limit,
+            q = q,
+            sortBy = sortBy,
+            order = order,
+            memberId = memberId,
+            clientId = clientId,
+        )
+    }
 
     suspend fun smartPlaylists() = api().smartPlaylists()
     suspend fun artists(page: Int, search: String, limit: Int = 50) =
@@ -535,6 +548,28 @@ class BockMediaRepository(
             api().setDeviceOwner(deviceId, buildJsonObject { put("memberId", memberId) })
         }
 
+    suspend fun bindClient(clientId: String, memberId: String?) {
+        api().bindClient(buildJsonObject {
+            put("clientId", clientId)
+            if (!memberId.isNullOrBlank()) put("memberId", memberId)
+        })
+    }
+
+    suspend fun clientPrefs(clientId: String, memberId: String?) =
+        api().clientPrefs(clientId, memberId?.takeIf { it.isNotBlank() })
+
+    suspend fun putClientPrefs(
+        clientId: String,
+        memberId: String?,
+        memberPrefs: JsonObject,
+        clientPrefs: JsonObject,
+    ) = api().putClientPrefs(buildJsonObject {
+        put("clientId", clientId)
+        if (!memberId.isNullOrBlank()) put("memberId", memberId)
+        if (memberPrefs.isNotEmpty()) put("memberPrefs", memberPrefs)
+        if (clientPrefs.isNotEmpty()) put("clientPrefs", clientPrefs)
+    })
+
     suspend fun roomPolicy(deviceId: String) = api().roomPolicy(deviceId)
 
     suspend fun setRoomPolicy(deviceId: String, body: JsonObject) =
@@ -629,11 +664,24 @@ class BockMediaRepository(
         })
     }
 
-    suspend fun ratedSongs(): List<RatingItem> =
-        api().ratings().items.filter { it.kind == RatingKind.Song.apiValue && it.stars > 0 }
+    suspend fun ratedSongs(): List<RatingItem> {
+        val (memberId, clientId) = ratingsScope()
+        return api().ratings(memberId = memberId, clientId = clientId).items
+            .filter { it.kind == RatingKind.Song.apiValue && it.stars > 0 }
+    }
 
     suspend fun ratedSongMap(): Map<String, Int> =
         ratedSongs().associate { it.id to it.stars }
+
+    fun clearRatingsCache() {
+        ratingsCache.clear()
+    }
+
+    private fun ratingsScope(): Pair<String?, String?> {
+        val memberId = memberIdProvider()?.trim()?.takeIf { it.isNotBlank() }
+        val clientId = clientIdProvider().trim().takeIf { it.isNotBlank() }
+        return memberId to clientId
+    }
 
     private fun ratingCacheKey(kind: RatingKind, id: String) = "${kind.apiValue}:${id.trim()}"
 
@@ -641,7 +689,10 @@ class BockMediaRepository(
         val key = ratingCacheKey(kind, id)
         if (key.endsWith(":")) return 0
         ratingsCache[key]?.let { return it }
-        val stars = runCatching { api().ratingLookup(kind.apiValue, id).stars }.getOrDefault(0)
+        val (memberId, clientId) = ratingsScope()
+        val stars = runCatching {
+            api().ratingLookup(kind.apiValue, id, memberId = memberId, clientId = clientId).stars
+        }.getOrDefault(0)
         ratingsCache[key] = stars
         return stars
     }
@@ -654,6 +705,7 @@ class BockMediaRepository(
         artist: String? = null,
         album: String? = null,
     ) {
+        val (memberId, clientId) = ratingsScope()
         api().setRating(buildJsonObject {
             put("kind", kind.apiValue)
             put("id", id)
@@ -661,6 +713,8 @@ class BockMediaRepository(
             title?.let { put("title", it) }
             artist?.let { put("artist", it) }
             album?.let { put("album", it) }
+            memberId?.let { put("memberId", it) }
+            clientId?.let { put("clientId", it) }
         })
         ratingsCache[ratingCacheKey(kind, id)] = stars.coerceIn(0, 5)
     }

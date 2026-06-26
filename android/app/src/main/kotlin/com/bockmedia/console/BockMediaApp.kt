@@ -9,6 +9,7 @@ import com.bockmedia.console.BuildConfig
 import com.bockmedia.console.data.network.NetworkReachability
 import com.bockmedia.console.data.network.ServerEndpointResolver
 import com.bockmedia.console.data.repository.BockMediaRepository
+import com.bockmedia.console.local.ActiveProfileStore
 import com.bockmedia.console.local.ClientIdStore
 import com.bockmedia.console.domain.model.AutomationSessionCache
 import com.bockmedia.console.domain.model.HomeArtworkCache
@@ -48,6 +49,7 @@ class BockMediaApp(private val appContext: Context) {
             baseUrlProvider = { resolveBaseUrl() },
             preferences = preferences,
             clientIdProvider = { ClientIdStore.clientId(appContext) },
+            memberIdProvider = { ActiveProfileStore.activeMemberId(appContext) },
         )
     }
 

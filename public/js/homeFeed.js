@@ -365,6 +365,37 @@
     return { id, title, kind, cards };
   }
 
+  function buildRatedSongCards(ratedItems, registry) {
+    const byStar = {};
+    for (const row of ratedItems || []) {
+      if (row.kind !== 'song') continue;
+      const stars = Number(row.stars || 0);
+      if (stars < 1 || stars > 5) continue;
+      (byStar[stars] ||= []).push(row);
+    }
+    const cards = [];
+    for (const stars of [5, 4, 3, 2, 1]) {
+      const songs = byStar[stars] || [];
+      if (!songs.length) continue;
+      const playlistId = `rated-stars-${stars}`;
+      const title = `${stars}★ songs`;
+      const card = {
+        id: `rated-${stars}`,
+        title,
+        subtitle: `${songs.length} tracks`,
+        artPath: songs[0].id,
+        playlistId,
+        playTarget: { kind: 'playlist', id: playlistId, name: title },
+        kind: 'RatedSongs',
+      };
+      if (!registry.hasCard(card.id)) {
+        registry.registerCard(card);
+        cards.push(card);
+      }
+    }
+    return cards;
+  }
+
   function dashboardJumpCards(dashboard, playlistByName, artByPlaylist) {
     const items = dashboard?.recent || [];
     return items.map((item) => {
@@ -821,21 +852,7 @@
     const jumpBackInFinal = jumpBackIn.filter((c, i, a) => a.findIndex((x) => x.id === c.id) === i).slice(0, LIMITS.JUMP_BACK_IN);
 
     const favoriteCards = [];
-    for (const fav of (input.favorites || [])) {
-      if (favoriteCards.length >= LIMITS.FAVORITES) break;
-      const card = {
-        id: `fav-${fav.path}`,
-        title: fav.track || fav.title || 'Favorite',
-        subtitle: fav.artist || 'Liked song',
-        artPath: fav.path,
-        playTarget: ptSong(fav.path, fav.track || fav.title || 'Favorite'),
-        kind: 'Favorites',
-      };
-      if (!registry.hasCard(card.id)) {
-        registry.registerCard(card);
-        favoriteCards.push(card);
-      }
-    }
+    const ratedSongCards = buildRatedSongCards(input.ratedSongItems || [], registry);
 
     const genreMixes = [];
     for (let index = 0; index < topGenres.length; index++) {
@@ -989,7 +1006,7 @@
 
     const sections = [
       section('jump-back-in', 'Jump back in', 'JumpBackIn', jumpBackInFinal),
-      section('favorites', 'Your favorites', 'Favorites', favoriteCards),
+      section('rated-songs', 'Rated Songs', 'RatedSongs', ratedSongCards),
       section('top-mixes', 'Your top mixes', 'TopMixes', genreMixes),
       ...moodSections,
       section('release-radar', 'Release Radar', 'Discover', releaseRadar),

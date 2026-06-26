@@ -4,6 +4,7 @@ import com.bockmedia.console.data.api.dto.AnalyticsResponse
 import com.bockmedia.console.data.api.dto.CountRow
 import com.bockmedia.console.data.api.dto.DashboardQuickResponse
 import com.bockmedia.console.data.api.dto.FavoriteItem
+import com.bockmedia.console.data.api.dto.RatingItem
 import com.bockmedia.console.data.api.dto.GenreItem
 import com.bockmedia.console.data.api.dto.PlaylistSummary
 import com.bockmedia.console.data.api.dto.ResumeEntry
@@ -11,7 +12,7 @@ import com.bockmedia.console.data.api.dto.SmartPlaylist
 import com.bockmedia.console.data.api.dto.StreamHistoryItem
 object HomeFeedLimits {
     const val JUMP_BACK_IN = 36
-    const val FAVORITES = 24
+    const val RATED_SONGS = 5
     const val TOP_MIXES = 24
     const val MOOD_SECTION_MIN = 12
     /** Mood rows include every keyword-matching playlist; cap only guards runaway libraries. */
@@ -32,6 +33,7 @@ data class HomeFeedInput(
     val allPlaylists: List<PlaylistSummary>,
     val smartPlaylists: List<SmartPlaylist>,
     val favorites: List<FavoriteItem>,
+    val ratedSongItems: List<RatingItem> = emptyList(),
     val dashboard: DashboardQuickResponse?,
     val libraryGenres: List<GenreItem> = emptyList(),
     val shuffleSeed: Long,
@@ -240,23 +242,7 @@ object HomeFeedComposer {
             )
         }.distinctBy { it.id }.take(HomeFeedLimits.JUMP_BACK_IN)
 
-        val favoriteCards = buildList {
-            for (fav in input.favorites) {
-                if (size >= HomeFeedLimits.FAVORITES) break
-                val card = HomeCard(
-                    id = "fav-${fav.path}",
-                    title = fav.track ?: "Track",
-                    subtitle = fav.artist ?: "Rated track",
-                    artPath = fav.path,
-                    playTarget = PlayTarget.Song(fav.path, fav.track ?: "Favorite"),
-                    kind = HomeSectionKind.Favorites,
-                )
-                if (!registry.hasCard(card.id)) {
-                    registry.registerCard(card)
-                    add(card)
-                }
-            }
-        }
+        val ratedSongCards = buildRatedSongCards(input.ratedSongItems, registry)
 
         val genreMixes = buildList {
             for ((index, row) in topGenres.withIndex()) {
@@ -414,7 +400,7 @@ object HomeFeedComposer {
 
         val sections = listOfNotNull(
             section("jump-back-in", "Jump back in", HomeSectionKind.JumpBackIn, jumpBackIn),
-            section("favorites", "Highly rated", HomeSectionKind.Favorites, favoriteCards),
+            section("rated-songs", "Rated Songs", HomeSectionKind.RatedSongs, ratedSongCards),
             section("top-mixes", "Your top mixes", HomeSectionKind.TopMixes, genreMixes),
         ) + moodSections + listOfNotNull(
             section("release-radar", "Release Radar", HomeSectionKind.Discover, releaseRadar),
@@ -433,6 +419,34 @@ object HomeFeedComposer {
     private fun section(id: String, title: String, kind: HomeSectionKind, cards: List<HomeCard>): HomeSection? {
         if (cards.isEmpty()) return null
         return HomeSection(id, title, kind, cards)
+    }
+
+    private fun buildRatedSongCards(
+        ratedItems: List<RatingItem>,
+        registry: HomeFeedRegistry,
+    ): List<HomeCard> = buildList {
+        val byStar = ratedItems
+            .filter { it.kind == "song" && it.stars in 1..5 }
+            .groupBy { it.stars }
+        for (stars in RatedSongPlaylists.starLevelsDescending) {
+            val songs = byStar[stars].orEmpty()
+            if (songs.isEmpty()) continue
+            val playlistId = RatedSongPlaylists.id(stars)
+            val title = RatedSongPlaylists.title(stars)
+            val card = HomeCard(
+                id = "rated-$stars",
+                title = title,
+                subtitle = "${songs.size} tracks",
+                artPath = songs.firstOrNull()?.id,
+                playlistId = playlistId,
+                playTarget = RatedSongPlaylists.playTarget(stars),
+                kind = HomeSectionKind.RatedSongs,
+            )
+            if (!registry.hasCard(card.id)) {
+                registry.registerCard(card)
+                add(card)
+            }
+        }
     }
 
     private fun parseSortDate(raw: String?): Long {

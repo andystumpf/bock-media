@@ -35,6 +35,7 @@ import bock_loudness
 import bock_continue
 import bock_folders
 import bock_artist_art
+import bock_client_prefs
 import bock_ratings
 from bock_routes import register as register_bock_routes
 
@@ -1437,10 +1438,10 @@ RATINGS_PATH = bock_ratings.ratings_path(HERE)
 FAVORITES_PATH = os.path.join(HERE, 'favorites.json')
 _FAVORITES_LOCK = threading.Lock()
 
-def _rated_songs_as_favorites(limit=200):
+def _rated_songs_as_favorites(limit=200, member_id=''):
     """Song ratings (1–5 stars) in legacy favorites list shape."""
     out = []
-    for row in bock_ratings.list_ratings(RATINGS_PATH):
+    for row in bock_ratings.list_ratings(RATINGS_PATH, member_id):
         if row.get('kind') != 'song':
             continue
         out.append({
@@ -1453,8 +1454,8 @@ def _rated_songs_as_favorites(limit=200):
             break
     return out
 
-def _load_favorites():
-    rated = _rated_songs_as_favorites()
+def _load_favorites(member_id=''):
+    rated = _rated_songs_as_favorites(member_id=member_id)
     if rated:
         return rated
     with _FAVORITES_LOCK:
@@ -1472,7 +1473,8 @@ def _save_favorites(items):
 
 @app.route('/api/favorites', methods=['GET'])
 def list_favorites():
-    return jsonify({'items': _load_favorites()})
+    member_id = _ratings_member_from_request()
+    return jsonify({'items': _load_favorites(member_id)})
 
 @app.route('/api/favorites', methods=['POST'])
 def add_favorite():
@@ -1481,12 +1483,14 @@ def add_favorite():
     if not path:
         return jsonify({'error': 'path required'}), 400
     title, artist, album, _ = track_metadata(path)
+    member_id = _ratings_member_from_request()
     try:
         row = bock_ratings.set_rating(
             RATINGS_PATH, 'song', path, 5, _atomic_json_write,
             title=body.get('title') or title,
             artist=body.get('artist') or artist,
             album=body.get('album') or album,
+            member_id=member_id,
         )
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
@@ -1504,15 +1508,21 @@ def remove_favorite():
     path = (body.get('path') or '').strip()
     if not path:
         return jsonify({'error': 'path required'}), 400
+    member_id = _ratings_member_from_request()
     try:
-        bock_ratings.set_rating(RATINGS_PATH, 'song', path, 0, _atomic_json_write)
+        bock_ratings.set_rating(RATINGS_PATH, 'song', path, 0, _atomic_json_write,
+                                 member_id=member_id)
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     return jsonify({'ok': True})
 
 @app.route('/api/ratings')
 def ratings_list():
-    return jsonify({'items': bock_ratings.list_ratings(RATINGS_PATH)})
+    member_id = _ratings_member_from_request()
+    return jsonify({
+        'items': bock_ratings.list_ratings(RATINGS_PATH, member_id),
+        'memberId': member_id or None,
+    })
 
 @app.route('/api/ratings/lookup')
 def ratings_lookup():
@@ -1520,7 +1530,13 @@ def ratings_lookup():
     item_id = (request.args.get('id') or '').strip()
     if not kind or not item_id:
         return jsonify({'error': 'kind and id required'}), 400
-    return jsonify({'kind': kind, 'id': item_id, 'stars': bock_ratings.get_rating(RATINGS_PATH, kind, item_id)})
+    member_id = _ratings_member_from_request()
+    return jsonify({
+        'kind': kind,
+        'id': item_id,
+        'stars': bock_ratings.get_rating(RATINGS_PATH, kind, item_id, member_id),
+        'memberId': member_id or None,
+    })
 
 @app.route('/api/ratings', methods=['PUT'])
 def ratings_set():
@@ -1531,10 +1547,12 @@ def ratings_set():
         stars = int(body.get('stars', 0))
     except (TypeError, ValueError):
         return jsonify({'error': 'stars must be 0–5'}), 400
+    member_id = _ratings_member_from_request()
     try:
         row = bock_ratings.set_rating(
             RATINGS_PATH, kind, item_id, stars, _atomic_json_write,
             title=body.get('title'), artist=body.get('artist'), album=body.get('album'),
+            member_id=member_id,
         )
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
@@ -4723,6 +4741,19 @@ def resolve_play_member(*, device_id=None, client_id=None, explicit_member=None,
     return ''
 
 
+def _ratings_member_from_request():
+    """Resolve household member for star ratings (explicit → client binding)."""
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        body = {}
+    explicit = (request.args.get('memberId') or body.get('memberId') or '').strip() or None
+    client_id = (request.args.get('clientId') or body.get('clientId') or '').strip() or None
+    member_id = resolve_play_member(client_id=client_id, explicit_member=explicit)
+    if member_id:
+        bock_ratings.migrate_legacy_to_member(RATINGS_PATH, member_id, _atomic_json_write)
+    return member_id or ''
+
+
 @app.route('/api/household')
 def household_get():
     """Members (public), client/device bindings with friendly labels."""
@@ -4859,6 +4890,41 @@ def household_bind_client():
             h['clientBindings'].pop(did, None)
         _save_household(h)
     return jsonify({'ok': True, 'clientDeviceId': did, 'memberId': member_id or None})
+
+
+CLIENT_PREFS_PATH = os.path.join(DATA_DIR, 'client_prefs.json')
+
+
+@app.route('/api/clients/prefs', methods=['GET'])
+def client_prefs_get():
+    client_id = (request.args.get('clientId') or '').strip()
+    member_id = (request.args.get('memberId') or '').strip() or None
+    did = _client_device_id(client_id)
+    if not did and not member_id:
+        return jsonify({'error': 'clientId or memberId required'}), 400
+    return jsonify(bock_client_prefs.get_prefs(
+        CLIENT_PREFS_PATH, member_id=member_id, client_device_id=did or None,
+    ))
+
+
+@app.route('/api/clients/prefs', methods=['PUT'])
+def client_prefs_put():
+    body = request.get_json(silent=True) or {}
+    client_id = (body.get('clientId') or '').strip()
+    member_id = (body.get('memberId') or '').strip() or None
+    did = _client_device_id(client_id)
+    try:
+        out = bock_client_prefs.put_prefs(
+            CLIENT_PREFS_PATH,
+            member_id=member_id,
+            client_device_id=did or None,
+            member_prefs=body.get('memberPrefs'),
+            client_prefs=body.get('clientPrefs'),
+            atomic_write=_atomic_json_write,
+        )
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'ok': True, **out})
 
 
 @app.route('/api/devices/<device_id>/owner', methods=['POST', 'DELETE'])
@@ -7716,6 +7782,12 @@ def _playlist_cover_path_from_tree(root, playlist_id, avoid_paths=None):
 @app.route('/api/playlists/<playlist_id>/cover')
 def playlist_cover(playlist_id):
     """Fast cover art path for a playlist — reads only the first few .m3u entries."""
+    rated_stars = bock_ratings.parse_rated_playlist_id(playlist_id)
+    if rated_stars is not None:
+        member_id = _ratings_member_from_request()
+        songs = bock_ratings.songs_at_stars(RATINGS_PATH, rated_stars, member_id=member_id)
+        art_path = songs[0]['id'] if songs else None
+        return jsonify({'playlistId': playlist_id, 'path': art_path})
     root = _load_playlists_tree().getroot()
     art_path = _playlist_cover_path_from_tree(root, playlist_id)
     if art_path is None and _find_playlist_key(root, playlist_id)[0] is None:
@@ -7744,7 +7816,18 @@ def playlist_covers_batch():
     covers = {}
     collages = {}
     used_paths = set()
+    rated_member_id = _ratings_member_from_request()
     for pid in ids:
+        rated_stars = bock_ratings.parse_rated_playlist_id(pid)
+        if rated_stars is not None:
+            songs = bock_ratings.songs_at_stars(
+                RATINGS_PATH, rated_stars, member_id=rated_member_id)
+            paths = [s['id'] for s in songs[:4] if s.get('id')]
+            if paths:
+                collages[pid] = paths
+                covers[pid] = paths[0]
+                used_paths.add(paths[0])
+            continue
         collage = _playlist_collage_paths_from_tree(root, pid)
         if collage:
             collages[pid] = collage
@@ -7767,10 +7850,25 @@ def playlist_detail(playlist_id):
     order = (request.args.get('order') or 'asc').strip().lower()
     if sort_by in ('track',):
         sort_by = 'title'
-    if sort_by not in ('title', 'artist', 'album', 'path'):
+    if sort_by not in ('title', 'artist', 'album', 'path', 'updated'):
         sort_by = 'title'
     if order not in ('asc', 'desc'):
         order = 'asc'
+    q = (request.args.get('q') or '').strip()
+
+    rated_stars = bock_ratings.parse_rated_playlist_id(playlist_id)
+    if rated_stars is not None:
+        member_id = _ratings_member_from_request()
+        detail = bock_ratings.rated_playlist_detail(
+            RATINGS_PATH, rated_stars, page=page, limit=limit,
+            sort_by=sort_by, order=order, q=q, member_id=member_id,
+        )
+        paths = [t['path'] for t in detail['tracks'] if t.get('path')]
+        detail['tracks'] = _enrich_track_paths(paths)
+        return jsonify(detail)
+
+    if sort_by not in ('title', 'artist', 'album', 'path'):
+        sort_by = 'title'
 
     key, _entry = _find_playlist_key(_load_playlists_tree().getroot(), playlist_id)
     if key is None:

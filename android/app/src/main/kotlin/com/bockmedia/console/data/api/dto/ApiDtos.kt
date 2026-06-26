@@ -102,6 +102,17 @@ data class RatingLookupResponse(
 )
 
 @Serializable
+data class ClientPrefsResponse(
+    val v: Int = 1,
+    val memberId: String? = null,
+    val clientDeviceId: String? = null,
+    val memberPrefs: JsonObject = JsonObject(emptyMap()),
+    val clientPrefs: JsonObject = JsonObject(emptyMap()),
+    val merged: JsonObject = JsonObject(emptyMap()),
+    val ok: Boolean = false,
+)
+
+@Serializable
 data class FavoriteItem(
     val path: String = "",
     @SerialName("title") val track: String? = null,

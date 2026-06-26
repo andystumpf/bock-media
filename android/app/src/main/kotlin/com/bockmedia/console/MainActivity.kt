@@ -108,6 +108,7 @@ class MainActivity : ComponentActivity() {
                                 app.preferences.setHasConnected(true)
                                 com.bockmedia.console.data.analytics.DeviceAnalyticsReporter
                                     .reportConnect(this@MainActivity)
+                                com.bockmedia.console.local.ClientPrefsSync.pullAndApply(this@MainActivity)
                             }
                         }
                         return@LaunchedEffect
@@ -126,6 +127,7 @@ class MainActivity : ComponentActivity() {
                                     app.preferences.setHasConnected(true)
                                     com.bockmedia.console.data.analytics.DeviceAnalyticsReporter
                                         .reportConnect(this@MainActivity)
+                                    com.bockmedia.console.local.ClientPrefsSync.pullAndApply(this@MainActivity)
                                 }
                             }
                             return@LaunchedEffect
@@ -135,6 +137,7 @@ class MainActivity : ComponentActivity() {
                             hasServer = true
                             com.bockmedia.console.data.analytics.DeviceAnalyticsReporter
                                 .reportConnect(this@MainActivity)
+                            com.bockmedia.console.local.ClientPrefsSync.pullAndApply(this@MainActivity)
                             return@LaunchedEffect
                         }
                         // Server slow/down — don't force re-login if user already connected once.

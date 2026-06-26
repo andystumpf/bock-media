@@ -5,6 +5,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.bockmedia.console.data.api.bockJson
+import com.bockmedia.console.local.ClientPrefsSync
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -37,6 +38,10 @@ class SearchHistoryStore(private val context: Context) {
         save(current.take(maxItems))
     }
 
+    suspend fun replaceSelections(items: List<SearchRecentSelection>) {
+        save(items.take(maxItems))
+    }
+
     suspend fun removeSelection(selection: SearchRecentSelection) {
         save(selectionsSync().filterNot { it.key == selection.key })
     }
@@ -56,6 +61,7 @@ class SearchHistoryStore(private val context: Context) {
             if (items.isEmpty()) prefs.remove(keySelections)
             else prefs[keySelections] = bockJson.encodeToString(listSerializer, items)
         }
+        ClientPrefsSync.schedulePush(context)
     }
 
     private fun decode(raw: String?): List<SearchRecentSelection> {

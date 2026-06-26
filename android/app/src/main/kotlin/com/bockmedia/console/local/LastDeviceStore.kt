@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.bockmedia.console.local.ClientPrefsSync
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
@@ -19,5 +20,6 @@ class LastDeviceStore(private val context: Context) {
         val trimmed = value.trim()
         if (trimmed.isEmpty()) return
         context.lastDeviceStore.edit { it[key] = trimmed }
+        ClientPrefsSync.schedulePush(context)
     }
 }

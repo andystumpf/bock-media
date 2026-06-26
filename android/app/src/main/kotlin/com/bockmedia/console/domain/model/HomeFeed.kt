@@ -24,6 +24,7 @@ enum class HomeFilter(val label: String) {
 enum class HomeSectionKind {
     JumpBackIn,
     Favorites,
+    RatedSongs,
     TopMixes,
     ExploreThemes,
     Mood,
@@ -166,6 +167,7 @@ object HomeFeedLoader {
             allPlaylists = allPlaylists,
             smartPlaylists = smartPlaylists,
             favorites = favorites,
+            ratedSongItems = ratedItems,
             dashboard = dashboard,
             libraryGenres = libraryGenres,
             shuffleSeed = shuffleSeed,
@@ -183,7 +185,7 @@ fun HomeFilter.matches(kind: HomeSectionKind): Boolean = when (this) {
     HomeFilter.All -> kind != HomeSectionKind.Offline
     HomeFilter.Offline -> false
     HomeFilter.Recents -> kind == HomeSectionKind.JumpBackIn || kind == HomeSectionKind.RecentPlaylists
-    HomeFilter.Playlists -> kind == HomeSectionKind.JumpBackIn || kind == HomeSectionKind.RecentPlaylists || kind == HomeSectionKind.Favorites
+    HomeFilter.Playlists -> kind == HomeSectionKind.JumpBackIn || kind == HomeSectionKind.RecentPlaylists || kind == HomeSectionKind.Favorites || kind == HomeSectionKind.RatedSongs
     HomeFilter.Mixes -> kind == HomeSectionKind.TopMixes ||
         kind == HomeSectionKind.ExploreThemes ||
         kind == HomeSectionKind.Mood ||

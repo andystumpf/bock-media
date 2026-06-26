@@ -248,7 +248,7 @@ async function fetchPlaylistCovers(ids) {
       const r = await authFetch('/api/playlists/covers', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids: chunk }),
+        body: JSON.stringify({ ids: chunk, memberId: activeMemberId() || undefined }),
       });
       if (!r.ok) continue;
       const data = await r.json().catch(() => ({}));
@@ -1440,12 +1440,13 @@ async function loadDashboard(opts = {}) {
   renderDashboardUI(partialFeed, covers, remote, { refreshing: true });
 
   const needFavorites = !(dashboard && dashboard.favorites && dashboard.favorites.length);
-  const [analytics, genres, libraryNew, discover, favData] = await Promise.all([
+  const [analytics, genres, libraryNew, discover, favData, ratingsData] = await Promise.all([
     analyticsP,
     API('/api/genres?limit=40').catch(() => ({ items: [] })),
     API('/api/library/new?since=7d&limit=50').catch(() => ({ albums: [] })),
     API('/api/recommendations/discover-weekly').catch(() => ({ sections: [] })),
     needFavorites ? API('/api/favorites').catch(() => []) : Promise.resolve([]),
+    API(`/api/ratings${ratingsScopeQuery()}`).catch(() => ({ items: [] })),
   ]);
 
   const newAlbums = (libraryNew && libraryNew.albums) || [];
@@ -1462,6 +1463,7 @@ async function loadDashboard(opts = {}) {
     allPlaylists,
     smartPlaylists: (smartData && smartData.items) || [],
     favorites,
+    ratedSongItems: (ratingsData && ratingsData.items) || [],
     dashboard,
     libraryGenres: (genres && genres.items) || [],
     shuffleSeed,
@@ -6592,6 +6594,13 @@ function dismissBanner() {
 // ── Family (household profiles, room ownership, kid-safe, analytics) ──────────
 
 function activeMemberId() { return localStorage.getItem('bock_active_member') || ''; }
+function ratingsScopeQuery() {
+  const q = new URLSearchParams();
+  const memberId = activeMemberId();
+  if (memberId) q.set('memberId', memberId);
+  const s = q.toString();
+  return s ? `?${s}` : '';
+}
 function setActiveMember(id) {
   if (id) localStorage.setItem('bock_active_member', id);
   else localStorage.removeItem('bock_active_member');

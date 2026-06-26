@@ -345,6 +345,7 @@ private fun BockNavHost(
                 repository = repository,
                 remoteOk = remoteOk,
                 onPlay = onPlay,
+                onOpenPlaylist = { id -> navController.navigate(playlistDetailRoute(id)) },
                 onBrowseSearch = { navController.navigate(BockRoute.Search.route) },
                 onOpenLibrary = { navController.navigate(BockRoute.Library.route) },
             )

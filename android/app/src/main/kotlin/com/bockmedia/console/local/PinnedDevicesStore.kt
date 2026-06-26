@@ -28,6 +28,7 @@ class PinnedDevicesStore(private val context: Context) {
             if (values.isEmpty()) prefs.remove(keyPinned)
             else prefs[keyPinned] = values.joinToString("|")
         }
+        ClientPrefsSync.schedulePush(context)
     }
 
     suspend fun toggle(value: String) {

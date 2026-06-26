@@ -20,6 +20,7 @@ import com.bockmedia.console.ui.components.LibraryStatsCard
 import com.bockmedia.console.ui.components.LoadingBox
 import com.bockmedia.console.BockMediaApp
 import com.bockmedia.console.ui.downloads.DownloadsManagementSection
+import com.bockmedia.console.local.ClientPrefsSync
 import com.bockmedia.console.ui.watchfolders.WatchFoldersSection
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonPrimitive
@@ -89,7 +90,10 @@ fun SettingsScreen(
                         checked = wifiOnlyDownloads,
                         onCheckedChange = { checked ->
                             wifiOnlyDownloads = checked
-                            scope.launch { app.preferences.setDownloadWifiOnly(checked) }
+                            scope.launch {
+                                app.preferences.setDownloadWifiOnly(checked)
+                                ClientPrefsSync.schedulePush(context)
+                            }
                         },
                     )
                 }
@@ -119,6 +123,7 @@ fun SettingsScreen(
                         onValueChangeFinished = {
                             scope.launch {
                                 app.preferences.setCrossfadeSeconds(crossfadeSeconds.toInt())
+                                ClientPrefsSync.schedulePush(context)
                             }
                         },
                         valueRange = 0f..20f,
@@ -130,7 +135,10 @@ fun SettingsScreen(
                         Row(
                             Modifier.fillMaxWidth().clickable {
                                 continueAfterQueue = value
-                                scope.launch { app.preferences.setContinueAfterQueue(value) }
+                                scope.launch {
+                                    app.preferences.setContinueAfterQueue(value)
+                                    ClientPrefsSync.schedulePush(context)
+                                }
                             }.padding(vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
@@ -138,7 +146,10 @@ fun SettingsScreen(
                                 selected = continueAfterQueue == value,
                                 onClick = {
                                     continueAfterQueue = value
-                                    scope.launch { app.preferences.setContinueAfterQueue(value) }
+                                    scope.launch {
+                                        app.preferences.setContinueAfterQueue(value)
+                                        ClientPrefsSync.schedulePush(context)
+                                    }
                                 },
                             )
                             Text(label)

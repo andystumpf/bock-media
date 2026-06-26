@@ -43,7 +43,7 @@ object HomeTileRotation {
     }
 
     private fun isRotatable(kind: HomeSectionKind): Boolean = when (kind) {
-        HomeSectionKind.Favorites, HomeSectionKind.Offline -> false
+        HomeSectionKind.Favorites, HomeSectionKind.RatedSongs, HomeSectionKind.Offline -> false
         else -> true
     }
 

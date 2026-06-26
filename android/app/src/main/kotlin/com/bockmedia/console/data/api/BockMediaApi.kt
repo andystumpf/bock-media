@@ -103,6 +103,8 @@ interface BockMediaApi {
         @Query("sortBy") sortBy: String? = null,
         @Query("order") order: String? = null,
         @Query("q") q: String? = null,
+        @Query("memberId") memberId: String? = null,
+        @Query("clientId") clientId: String? = null,
     ): PlaylistDetailResponse
 
     @POST("api/playlists")
@@ -300,6 +302,15 @@ interface BockMediaApi {
     @POST("api/clients/bind")
     suspend fun bindClient(@Body body: JsonObject): OkResponse
 
+    @GET("api/clients/prefs")
+    suspend fun clientPrefs(
+        @Query("clientId") clientId: String,
+        @Query("memberId") memberId: String? = null,
+    ): ClientPrefsResponse
+
+    @PUT("api/clients/prefs")
+    suspend fun putClientPrefs(@Body body: JsonObject): ClientPrefsResponse
+
     @POST("api/devices/{id}/owner")
     suspend fun setDeviceOwner(@Path("id") id: String, @Body body: JsonObject): OkResponse
 
@@ -357,10 +368,18 @@ interface BockMediaApi {
     suspend fun removeFavorite(@Body body: JsonObject): OkResponse
 
     @GET("api/ratings")
-    suspend fun ratings(): RatingsResponse
+    suspend fun ratings(
+        @Query("memberId") memberId: String? = null,
+        @Query("clientId") clientId: String? = null,
+    ): RatingsResponse
 
     @GET("api/ratings/lookup")
-    suspend fun ratingLookup(@Query("kind") kind: String, @Query("id") id: String): RatingLookupResponse
+    suspend fun ratingLookup(
+        @Query("kind") kind: String,
+        @Query("id") id: String,
+        @Query("memberId") memberId: String? = null,
+        @Query("clientId") clientId: String? = null,
+    ): RatingLookupResponse
 
     @PUT("api/ratings")
     suspend fun setRating(@Body body: JsonObject): OkResponse

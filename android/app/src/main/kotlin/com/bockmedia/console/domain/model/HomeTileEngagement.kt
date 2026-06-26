@@ -1,6 +1,7 @@
 package com.bockmedia.console.domain.model
 
 import android.content.Context
+import com.bockmedia.console.local.ClientPrefsSync
 import org.json.JSONObject
 
 data class TileEngagementEntry(
@@ -66,6 +67,7 @@ object HomeTileEngagement {
             )
         }
         prefs().edit().putString(KEY, obj.toString()).apply()
+        appContext?.let { ClientPrefsSync.schedulePush(it) }
     }
 
     private fun isActive(): Boolean = appContext != null || inMemoryStore != null
@@ -118,5 +120,37 @@ object HomeTileEngagement {
         val map = load()
         map[cardId] = entry
         save(map)
+    }
+
+    fun exportJson(): String? {
+        if (!isActive()) return null
+        val map = load()
+        if (map.isEmpty()) return null
+        val obj = JSONObject()
+        for ((id, entry) in map) {
+            obj.put(
+                id,
+                JSONObject()
+                    .put("firstSeenMs", entry.firstSeenMs)
+                    .put("lastSelectedMs", entry.lastSelectedMs ?: 0L),
+            )
+        }
+        return obj.toString()
+    }
+
+    fun importJson(raw: String) {
+        if (!isActive() || raw.isBlank()) return
+        runCatching {
+            val obj = JSONObject(raw)
+            val map = mutableMapOf<String, TileEngagementEntry>()
+            for (key in obj.keys()) {
+                val entry = obj.getJSONObject(key)
+                map[key] = TileEngagementEntry(
+                    firstSeenMs = entry.getLong("firstSeenMs"),
+                    lastSelectedMs = entry.optLong("lastSelectedMs", 0L).takeIf { it > 0L },
+                )
+            }
+            save(map)
+        }
     }
 }

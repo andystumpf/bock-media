@@ -19,6 +19,7 @@ import androidx.compose.ui.unit.dp
 import com.bockmedia.console.data.api.dto.*
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.local.ActiveProfileStore
+import com.bockmedia.console.local.ClientPrefsSync
 import com.bockmedia.console.ui.theme.BockGreen
 import com.bockmedia.console.ui.theme.BockMuted
 import kotlinx.coroutines.launch
@@ -86,7 +87,10 @@ fun FamilyScreen(repository: BockMediaRepository) {
                     ) { id ->
                         activeMemberId = id
                         ActiveProfileStore.setActiveMember(context, id.ifBlank { null })
-                        scope.launch { loadMessages() }
+                        scope.launch {
+                            ClientPrefsSync.onActiveMemberChanged(context, id.ifBlank { null })
+                            loadMessages()
+                        }
                     }
                     Text(
                         "Attributes your plays and is used for messages, sharing, and approvals.",

@@ -32,7 +32,7 @@ sealed class BockRoute(val route: String, val title: String, val icon: ImageVect
     data object Albums : BockRoute("albums", "Albums", Icons.Default.Album)
     data object Artists : BockRoute("artists", "Artists", Icons.Default.Mic)
     data object Songs : BockRoute("songs", "Songs", Icons.Default.MusicNote)
-    data object Favorites : BockRoute("favorites", "Rated", Icons.Default.Star)
+    data object Favorites : BockRoute("favorites", "Rated Songs", Icons.Default.Star)
     data object Downloads : BockRoute("downloads", "Downloads", Icons.Default.Download)
     data object Routines : BockRoute("routines", "Routines", Icons.Default.Bolt)
     data object RecentRequests : BockRoute("recent", "Voice log", Icons.Default.RecordVoiceOver)
