@@ -113,6 +113,16 @@ class TestStuckNowPlaying:
         client.get('/api/nowplaying_devices')
         assert client.get('/api/nowplaying_devices').get_json()['items'] == []
 
+    def test_stop_after_blocks_skip(self, client, post_alexa, sample_track, isolated_paths):
+        """Stop-after-N must apply to SkipIntent, not only natural track boundaries."""
+        did = 'amzn1.ask.device.STOPAFTERSKIP'
+        _register(client, post_alexa, did, 'Kitchen')
+        tracks = [sample_track['path'], sample_track['path']]
+        token = server.encode_token({'tracks': tracks, 'idx': 0, 'stopAfterIdx': 0})
+        post_alexa('AudioPlayer.PlaybackStarted', token=token, device_id=did)
+        post_alexa('IntentRequest', 'SkipIntent', device_id=did)
+        assert server.read_np_state_for_device(did) is None
+
 
 # ─────────────────────────── device correlation ──────────────────────────────
 

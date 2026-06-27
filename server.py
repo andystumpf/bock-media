@@ -20,6 +20,8 @@ import threading
 import uuid
 import hashlib
 import hmac
+import fcntl
+import contextlib
 import alexa_apl
 import ipaddress
 from logging.handlers import RotatingFileHandler
@@ -1121,8 +1123,8 @@ def summary():
     except:
         pass
     try:
-        pl = ET.parse(os.path.join(DATA_DIR, 'ServerPlaylists.xml'))
-        playlists = len(pl.getroot().findall('Entry'))
+        tree = _load_playlists_tree()
+        playlists = len(tree.getroot().findall('Entry'))
     except:
         pass
 
@@ -1206,7 +1208,7 @@ def playlists():
     pl_meta = _load_playlist_meta()
     household = _load_household() if member_filter else None
     try:
-        tree = ET.parse(os.path.join(DATA_DIR, 'ServerPlaylists.xml'))
+        tree = _load_playlists_tree()
         all_playlists = []
         for entry in tree.getroot().findall('Entry'):
             key = entry.find('Key')
@@ -1276,10 +1278,7 @@ def rename_playlist():
     if not new_name:
         return jsonify({'error': 'name required'}), 400
     try:
-        path = os.path.join(DATA_DIR, 'ServerPlaylists.xml')
-        ET.register_namespace('xsd', 'http://www.w3.org/2001/XMLSchema')
-        ET.register_namespace('xsi', 'http://www.w3.org/2001/XMLSchema-instance')
-        tree = ET.parse(path)
+        tree = _load_playlists_tree()
         root = tree.getroot()
         target = None
         for entry in root.findall('Entry'):
@@ -1296,7 +1295,7 @@ def rename_playlist():
             name_el = ET.SubElement(target, 'Name')
         old = name_el.text or ''
         name_el.text = new_name
-        tree.write(path, xml_declaration=True, encoding='utf-8')
+        _save_playlists_tree(tree)
         return jsonify({'ok': True, 'id': pid, 'oldName': old, 'name': new_name})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -4177,6 +4176,18 @@ def clear_cache():
 
 DEVICES_PATH = os.path.join(HERE, 'devices.json')
 
+@contextlib.contextmanager
+def _cross_process_flock(lock_path, *, shared=False):
+    """fcntl flock for JSON files touched from multiple processes (gunicorn + scripts)."""
+    os.makedirs(os.path.dirname(lock_path) or '.', exist_ok=True)
+    fh = open(lock_path, 'w')
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        fh.close()
+
 def _atomic_json_write(path, data, **dump_kwargs):
     """Write JSON atomically: write to a unique .tmp then os.replace.
 
@@ -4991,11 +5002,16 @@ def resolve_play_member(*, device_id=None, client_id=None, explicit_member=None,
 
 def _ratings_member_from_request():
     """Resolve household member for star ratings (explicit memberId → client binding)."""
-    body = request.get_json(silent=True) or {}
+    try:
+        body = request.get_json(silent=True) or {}
+        explicit = (request.args.get('memberId') or body.get('memberId') or '').strip() or None
+        client_id = (request.args.get('clientId') or body.get('clientId') or '').strip() or None
+    except RuntimeError:
+        body = {}
+        explicit = None
+        client_id = None
     if not isinstance(body, dict):
         body = {}
-    explicit = (request.args.get('memberId') or body.get('memberId') or '').strip() or None
-    client_id = (request.args.get('clientId') or body.get('clientId') or '').strip() or None
     if explicit:
         member_id = explicit
     else:
@@ -7254,19 +7270,24 @@ _QUEUE_TTL_SECONDS = 24 * 3600
 # Serialize read-modify-write of queues.json so concurrent group-fanout plays
 # don't lose each other's queue entries (last-write-wins on the whole dict).
 _QUEUES_LOCK = threading.RLock()
+_QUEUES_FLOCK_PATH = os.path.join(HERE, '.queues.lock')
 
 def _load_queues():
-    try:
-        with open(QUEUES_PATH) as f:
-            return json.load(f)
-    except:
-        return {}
+    with _QUEUES_LOCK:
+        with _cross_process_flock(_QUEUES_FLOCK_PATH):
+            try:
+                with open(QUEUES_PATH) as f:
+                    return json.load(f)
+            except:
+                return {}
 
 def _save_queues(queues):
-    try:
-        _atomic_json_write(QUEUES_PATH, queues)
-    except Exception as e:
-        print(f'Queue save error: {e}')
+    with _QUEUES_LOCK:
+        with _cross_process_flock(_QUEUES_FLOCK_PATH):
+            try:
+                _atomic_json_write(QUEUES_PATH, queues)
+            except Exception as e:
+                print(f'Queue save error: {e}')
 
 def _new_queue_id():
     return base64.urlsafe_b64encode(os.urandom(9)).decode().rstrip('=')
@@ -7497,6 +7518,13 @@ def parse_m3u(filepath, verify_exists=True):
     _M3U_PARSE_CACHE[cache_key] = tracks
     return tracks
 
+def _m3u_has_track(m3u_path, track_path):
+    """True when track_path is already listed (path-normalized, no substring false positives)."""
+    if not m3u_path or not track_path:
+        return False
+    target = os.path.normpath(track_path)
+    return any(os.path.normpath(p) == target for p in parse_m3u(m3u_path, verify_exists=False))
+
 # ── Playlist library (create / merge / sort / AI) ────────────────────────────
 
 PLAYLISTS_XML = os.path.join(DATA_DIR, 'ServerPlaylists.xml')
@@ -7505,7 +7533,6 @@ BOCK_PLAYLIST_DIR = os.path.join(
     'exportedPlaylists', 'bockmedia',
 )
 BOCK_SOURCE_NAME = 'bockmedia'
-_PLAYLIST_XML_LOCK = threading.Lock()
 # Enriched track lists for large playlists (keyed by playlist id + m3u mtime).
 _PLAYLIST_TRACKS_CACHE = {}
 _XSI = 'http://www.w3.org/2001/XMLSchema-instance'
@@ -7521,15 +7548,49 @@ def _backup_playlists_xml():
 
 
 def _load_playlists_tree():
+    from playlist_xml_lock import playlist_xml_lock
     ET.register_namespace('xsd', _XSD)
     ET.register_namespace('xsi', _XSI)
-    return ET.parse(PLAYLISTS_XML)
+    with playlist_xml_lock(DATA_DIR, shared=True):
+        return ET.parse(PLAYLISTS_XML)
 
 
 def _save_playlists_tree(tree):
-    with _PLAYLIST_XML_LOCK:
+    from playlist_xml_lock import playlist_xml_lock
+    with playlist_xml_lock(DATA_DIR, exclusive=True):
         _backup_playlists_xml()
-        tree.write(PLAYLISTS_XML, xml_declaration=True, encoding='utf-8')
+        tmp = PLAYLISTS_XML + '.tmp'
+        tree.write(tmp, xml_declaration=True, encoding='utf-8')
+        os.replace(tmp, PLAYLISTS_XML)
+
+
+def _write_m3u_file(path, track_paths):
+    os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+    tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.{os.urandom(4).hex()}.tmp"
+    try:
+        with open(tmp, 'w', encoding='utf-8') as f:
+            f.write('#EXTM3U\n')
+            for p in track_paths:
+                if p and os.path.isfile(p):
+                    f.write(p + '\n')
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+
+def _append_m3u_track(m3u_path, track_path):
+    """Append a track if not already present (path-normalized, no substring match)."""
+    if not m3u_path or not track_path:
+        return False
+    if _m3u_has_track(m3u_path, track_path):
+        return False
+    with open(m3u_path, 'a', encoding='utf-8') as f:
+        f.write(f'\n{track_path}')
+    return True
 
 
 def _find_playlist_key(root, pid):
@@ -7560,15 +7621,6 @@ def _playlist_meta_from_key(key):
 def _safe_playlist_filename(name):
     s = re.sub(r'[^\w\-. ]', '_', (name or '').strip()) or 'playlist'
     return s[:120]
-
-
-def _write_m3u_file(path, track_paths):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, 'w', encoding='utf-8') as f:
-        f.write('#EXTM3U\n')
-        for p in track_paths:
-            if p and os.path.isfile(p):
-                f.write(p + '\n')
 
 
 def _music_root_abs():
@@ -7708,10 +7760,9 @@ def _update_playlist_key(key, name, m3u_path, track_count):
 
 
 def _persist_playlist(pid, name, track_paths, *, create=False):
-    """Write .m3u + ServerPlaylists.xml entry for a Bock-managed playlist."""
+    """Write ServerPlaylists.xml entry first, then .m3u (crash-safe ordering)."""
     paths = [p for p in track_paths if p and os.path.isfile(p)]
     m3u_path = _m3u_path_for_bock(pid, name)
-    _write_m3u_file(m3u_path, paths)
     tree = _load_playlists_tree()
     root = tree.getroot()
     key, entry = _find_playlist_key(root, pid)
@@ -7722,6 +7773,7 @@ def _persist_playlist(pid, name, track_paths, *, create=False):
     else:
         _update_playlist_key(key, name, m3u_path, len(paths))
     _save_playlists_tree(tree)
+    _write_m3u_file(m3u_path, paths)
     _invalidate_playlist_cover(pid)
     _save_playlist_cover_cache()
     return {'id': pid, 'name': name, 'source': m3u_path, 'trackCount': len(paths)}
@@ -8099,8 +8151,9 @@ def playlist_covers_batch():
         collage = _playlist_collage_paths_from_tree(root, pid)
         if collage:
             collages[pid] = collage
-            covers[pid] = collage[0]
-            used_paths.add(collage[0])
+            pick = next((p for p in collage if p not in used_paths), collage[0])
+            covers[pid] = pick
+            used_paths.add(pick)
             continue
         path = _playlist_cover_path_from_tree(root, pid, avoid_paths=used_paths)
         if path:
@@ -8238,7 +8291,8 @@ def merge_playlists():
         meta = _playlist_meta_from_key(key)
         names.append(meta.get('name') or sid)
         for p in _tracks_from_source(meta.get('source')):
-            if p not in merged_paths:
+            np = os.path.normpath(p)
+            if np not in {os.path.normpath(x) for x in merged_paths}:
                 merged_paths.append(p)
     if not merged_paths:
         return jsonify({'error': 'no_tracks'}), 400
@@ -8248,7 +8302,7 @@ def merge_playlists():
             return jsonify({'error': 'target_not_found'}), 404
         existing = _tracks_from_source(xml_text(key, 'SourceID'))
         for p in merged_paths:
-            if p not in existing:
+            if os.path.normpath(p) not in {os.path.normpath(x) for x in existing}:
                 existing.append(p)
         name = new_name or xml_text(key, 'Name')
         result = _persist_playlist(target_id, name, existing, create=False)
@@ -8280,9 +8334,10 @@ def update_playlist(playlist_id):
         source = meta.get('source') or ''
         if not source:
             return jsonify({'error': 'not_editable'}), 403
-        _write_m3u_file(source, track_paths)
-        _update_playlist_key(key, name, source, len([p for p in track_paths if os.path.isfile(p)]))
+        count = len([p for p in track_paths if os.path.isfile(p)])
+        _update_playlist_key(key, name, source, count)
         _save_playlists_tree(tree)
+        _write_m3u_file(source, track_paths)
         _PLAYLIST_TRACKS_CACHE.pop(playlist_id, None)
         _invalidate_playlist_cover(playlist_id)
         return jsonify({'id': playlist_id, 'name': name, 'trackCount': len(track_paths)})
@@ -8311,9 +8366,9 @@ def sort_playlist(playlist_id):
     if meta.get('sourceName') == BOCK_SOURCE_NAME:
         result = _persist_playlist(playlist_id, meta.get('name'), sorted_paths, create=False)
     else:
-        _write_m3u_file(source, sorted_paths)
         _update_playlist_key(key, meta.get('name'), source, len(sorted_paths))
         _save_playlists_tree(tree)
+        _write_m3u_file(source, sorted_paths)
         result = {'id': playlist_id, 'name': meta.get('name'), 'trackCount': len(sorted_paths)}
     _PLAYLIST_TRACKS_CACHE.pop(playlist_id, None)
     _invalidate_playlist_cover(playlist_id)
@@ -8336,9 +8391,9 @@ def remove_playlist_track(playlist_id):
     if meta.get('sourceName') == BOCK_SOURCE_NAME:
         _persist_playlist(playlist_id, meta.get('name'), paths, create=False)
     elif source:
-        _write_m3u_file(source, paths)
         _update_playlist_key(key, meta.get('name'), source, len(paths))
         _save_playlists_tree(tree)
+        _write_m3u_file(source, paths)
     _PLAYLIST_TRACKS_CACHE.pop(playlist_id, None)
     _invalidate_playlist_cover(playlist_id)
     return jsonify({'ok': True, 'trackCount': len(paths)})
@@ -8372,9 +8427,9 @@ def move_playlist_track(playlist_id):
     if meta.get('sourceName') == BOCK_SOURCE_NAME:
         _persist_playlist(playlist_id, meta.get('name'), paths, create=False)
     elif source:
-        _write_m3u_file(source, paths)
         _update_playlist_key(key, meta.get('name'), source, len(paths))
         _save_playlists_tree(tree)
+        _write_m3u_file(source, paths)
     else:
         return jsonify({'error': 'not_editable'}), 403
     _PLAYLIST_TRACKS_CACHE.pop(playlist_id, None)
@@ -8881,7 +8936,7 @@ def _load_playlist_entries():
     """[(id, name, source), …] from ServerPlaylists.xml."""
     entries = []
     try:
-        tree = ET.parse(os.path.join(DATA_DIR, 'ServerPlaylists.xml'))
+        tree = _load_playlists_tree()
         for e in tree.getroot().findall('Entry'):
             key = e.find('Key')
             if key is None:
@@ -9114,6 +9169,7 @@ def general_search_tracks(query, limit=300):
 # ── Now Playing State ─────────────────────────────────────────────────────────
 
 NP_STATE_PATH = os.path.join(HERE, 'nowplaying_state.json')
+_NP_FLOCK_PATH = os.path.join(HERE, '.nowplaying_state.lock')
 # Serialize the read-modify-write of nowplaying_state.json. Without this, two
 # group members' PlaybackStarted events race: both read the same snapshot, each
 # adds only its own device, and the last write drops the other device's row.
@@ -9181,20 +9237,24 @@ def _np_device_id():
     return 'default'
 
 def _read_all_np():
-    try:
-        with open(NP_STATE_PATH) as f:
-            data = json.load(f)
-    except:
-        return {}
-    if isinstance(data, dict) and 'devices' in data:
-        return data
+    with _NP_LOCK:
+        with _cross_process_flock(_NP_FLOCK_PATH, shared=True):
+            try:
+                with open(NP_STATE_PATH) as f:
+                    data = json.load(f)
+            except Exception:
+                return {}
+            if isinstance(data, dict) and 'devices' in data:
+                return data
     return {}
 
 def _write_all_np(payload):
-    try:
-        _atomic_json_write(NP_STATE_PATH, payload)
-    except Exception as e:
-        print(f'NP write error: {e}', flush=True)
+    with _NP_LOCK:
+        with _cross_process_flock(_NP_FLOCK_PATH):
+            try:
+                _atomic_json_write(NP_STATE_PATH, payload)
+            except Exception as e:
+                print(f'NP write error: {e}', flush=True)
 
 def _clear_nowplaying_on_boot():
     """
@@ -9519,11 +9579,11 @@ def nowplaying_devices():
     now = time.time()
     with _NP_LOCK:
         payload = _canonicalize_np(_prune_np(_read_all_np() or {'devices': {}}))
-        _expire_stale_playing(payload)
-        if _expire_stale_client_playback(payload):
-            pass
-        _write_all_np(payload)
-    devices = payload.get('devices', {})
+    # Expire stale rows for display only — never persist from a GET (avoids races).
+    display = json.loads(json.dumps(payload))
+    _expire_stale_playing(display)
+    _expire_stale_client_playback(display)
+    devices = display.get('devices', {})
     known = set(_load_devices().keys())
     device_store = _load_devices()
     # Mobile apps pass viewerClientId to hide other phones/tablets; web omits it.
@@ -9859,6 +9919,20 @@ def _np_advance_at_boundary(token, *, previous_token=None, play_behavior='ENQUEU
                              play_behavior=play_behavior)
     return None
 
+def _np_queue_limit_reached(data, next_idx, *, playback_controller=False):
+    """Sleep timer / stop-after-N guard shared by auto-advance and manual skip."""
+    stop_at = data.get('stopAt')
+    if stop_at and time.time() >= float(stop_at):
+        write_np_state(None)
+        msg = "Stopping playback."
+        return alexa_empty() if playback_controller else alexa_speak(msg)
+    stop_after_idx = data.get('stopAfterIdx')
+    if stop_after_idx is not None and next_idx > int(stop_after_idx):
+        write_np_state(None)
+        msg = "Stopping after the requested number of songs."
+        return alexa_empty() if playback_controller else alexa_speak(msg)
+    return None
+
 def _np_skip_next(playback_controller=False):
     """Advance to the next track in the active device queue."""
     state = read_np_state() or {}
@@ -9871,6 +9945,9 @@ def _np_skip_next(playback_controller=False):
     if not tracks:
         return alexa_empty() if playback_controller else alexa_speak("There are no more tracks.")
     next_idx = (idx + 1) % len(tracks)
+    blocked = _np_queue_limit_reached(data, next_idx, playback_controller=playback_controller)
+    if blocked:
+        return blocked
     next_path = tracks[next_idx]
     next_token = encode_token({**data, 'idx': next_idx})
     _np_eager_track_state(next_path, next_token, prev_state=state)
@@ -10257,7 +10334,9 @@ def _msp_playlist_by_id(pid):
     if not pid:
         return None, None
     try:
-        tree = ET.parse(os.path.join(DATA_DIR, 'ServerPlaylists.xml'))
+        from playlist_xml_lock import playlist_xml_lock
+        with playlist_xml_lock(DATA_DIR, shared=True):
+            tree = ET.parse(os.path.join(DATA_DIR, 'ServerPlaylists.xml'))
         for e in tree.getroot().findall('Entry'):
             key = e.find('Key')
             if key is not None and (key.findtext('ID') or '') == str(pid):
@@ -11203,13 +11282,32 @@ def alexa_skill():
                     plex_ok = plex_client.add_track_to_playlist(pl_rk, current_path)
             except Exception as e:
                 print(f'AddToPlaylist Plex write-back error: {e}', flush=True)
+            added = False
             try:
-                with open(source, 'a') as f:
-                    f.write(f'\n{current_path}')
+                added = _append_m3u_track(source, current_path)
+                if added:
+                    tree = _load_playlists_tree()
+                    root = tree.getroot()
+                    src_norm = os.path.normpath(source)
+                    for entry in root.findall('Entry'):
+                        key = entry.find('Key')
+                        if key is None:
+                            continue
+                        if os.path.normpath(xml_text(key, 'SourceID') or '') != src_norm:
+                            continue
+                        tc = key.find('TrackCount')
+                        count = int((tc.text if tc is not None else '0') or 0) + 1
+                        if tc is None:
+                            tc = ET.SubElement(key, 'TrackCount')
+                        tc.text = str(count)
+                        _save_playlists_tree(tree)
+                        break
             except Exception as e:
                 print(f'AddToPlaylist error: {e}', flush=True)
-                if not plex_ok:
+                if not plex_ok and not added:
                     return alexa_speak(f"Sorry, I couldn't add to {name}.")
+            if not added and not plex_ok:
+                return alexa_speak(f"That track is already in {name}.")
             return alexa_speak(f"Added {track_name} to {name}.")
 
         # ── Skip / Back (one-shot transport, collision-safe) ────────────────
@@ -11249,6 +11347,9 @@ def alexa_skill():
             if current_path:
                 add_ignored(current_path)
             next_idx = idx + 1
+            blocked = _np_queue_limit_reached(data, next_idx)
+            if blocked:
+                return blocked
             if next_idx < len(tracks):
                 next_path  = tracks[next_idx]
                 next_token = encode_token({**data, 'idx': next_idx})

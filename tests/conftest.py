@@ -86,6 +86,7 @@ def isolated_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(server, 'RECOMMENDATIONS_CACHE_PATH', str(state_dir / 'recommendations_cache.json'))
     monkeypatch.setattr(server, 'PLAY_COUNTS_PATH', str(state_dir / 'play_counts.json'))
     monkeypatch.setattr(server, 'CLIENT_PREFS_PATH', str(mma_dir / 'client_prefs.json'))
+    monkeypatch.setattr(server, 'PLAYLISTS_XML', str(mma_dir / 'ServerPlaylists.xml'))
     notes_src = os.path.join(REPO_ROOT, 'app-release-notes.json')
     if os.path.isfile(notes_src):
         shutil.copy2(notes_src, state_dir / 'app-release-notes.json')

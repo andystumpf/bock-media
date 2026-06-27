@@ -804,7 +804,7 @@ class TestAppDownload:
         assert data['android']['available'] is True
         assert data['android']['version'] == '2.4.2'
         assert data['android']['downloadHref'].startswith('/download/bockmedia-console.apk?t=')
-        assert data['releases'][0]['version'] == '2.4.2'
+        assert data['releases'][0]['version']  # latest from app-release-notes.json
         assert any('Mix Muse' in (it.get('text') or '') for rel in data['releases'] for it in rel.get('items', []))
 
     def test_app_info_uses_sidecar_over_gradle(self, client, isolated_paths):

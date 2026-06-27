@@ -130,10 +130,46 @@ def m3u_path_for(name, rating_key):
 
 
 def write_m3u(path, tracks):
-    with open(path, 'w', encoding='utf-8') as f:
+    os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+    tmp = path + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
         f.write('#EXTM3U\n')
         for t in tracks:
             f.write(t + '\n')
+    os.replace(tmp, path)
+
+
+def referenced_m3u_paths(root):
+    paths = set()
+    for entry in root.findall('Entry'):
+        key = entry.find('Key')
+        if key is None:
+            continue
+        src = (key.findtext('SourceID') or '').strip()
+        if src.lower().endswith('.m3u'):
+            paths.add(os.path.normpath(src))
+    return paths
+
+
+def prune_orphan_m3us(root, playlist_dir):
+    """Drop .m3u files under playlist_dir not listed in ServerPlaylists.xml."""
+    if not os.path.isdir(playlist_dir):
+        return 0
+    valid = referenced_m3u_paths(root)
+    removed = 0
+    for fn in os.listdir(playlist_dir):
+        if not fn.lower().endswith('.m3u'):
+            continue
+        full = os.path.normpath(os.path.join(playlist_dir, fn))
+        if full in valid:
+            continue
+        try:
+            os.remove(full)
+            removed += 1
+            log(f'  - ORPHAN  {fn}')
+        except OSError:
+            pass
+    return removed
 
 
 def stable_id(rating_key):
@@ -215,6 +251,8 @@ def main():
     new_state = {}
     entries = []          # (name, xml_string)
     synced_names = set()
+    pending_m3u_writes = {}   # path -> tracks (deferred until XML is committed)
+    pending_m3u_removals = set()
 
     for p in pls:
         key, title, leaf, upd = p['key'], p['title'], p['leafCount'], p['updatedAt']
@@ -230,19 +268,15 @@ def main():
             tracks = [t for t in fetch_tracks(key, token) if os.path.isfile(t)]
             if len(tracks) < args.min_tracks:
                 skipped += 1
-                # Dropped below the threshold: delete the stale .m3u and leave
-                # it out of new_state so its <Entry> is pruned from the XML.
-                if not args.dry_run and prev and prev.get('m3u') and os.path.isfile(prev['m3u']):
-                    try: os.remove(prev['m3u'])
-                    except OSError: pass
+                # Dropped below the threshold: defer removal until XML is committed.
+                if not args.dry_run and prev and prev.get('m3u'):
+                    pending_m3u_removals.add(os.path.normpath(prev['m3u']))
                 continue
             track_count = len(tracks)
             if not args.dry_run:
-                # Plex title may have changed -> remove the old m3u path.
-                if prev and prev.get('m3u') and prev['m3u'] != m3u and os.path.isfile(prev['m3u']):
-                    try: os.remove(prev['m3u'])
-                    except OSError: pass
-                write_m3u(m3u, tracks)
+                if prev and prev.get('m3u') and os.path.normpath(prev['m3u']) != os.path.normpath(m3u):
+                    pending_m3u_removals.add(os.path.normpath(prev['m3u']))
+                pending_m3u_writes[os.path.normpath(m3u)] = tracks
             if prev is None:
                 created += 1; log(f'  + CREATE  {title}  ({track_count} tracks)')
             else:
@@ -263,9 +297,8 @@ def main():
             deleted += 1
             log(f'  - DELETE  {prev.get("name", key)}')
             mp = prev.get('m3u')
-            if mp and os.path.isfile(mp) and not args.dry_run:
-                try: os.remove(mp)
-                except OSError: pass
+            if mp and not args.dry_run:
+                pending_m3u_removals.add(os.path.normpath(mp))
 
     vlog(f'Plex playlists: {len(pls)} (created {created}, updated {updated}, '
          f'unchanged {unchanged}, skipped {skipped}, deleted {deleted}).')
@@ -316,6 +349,19 @@ def main():
             log(f'Wrote ServerPlaylists.xml ({len(root.findall("Entry"))} entries). Backup: {bak}')
         else:
             vlog('No playlist changes; ServerPlaylists.xml left untouched.')
+
+        if pending_m3u_removals or pending_m3u_writes:
+            for rm in pending_m3u_removals:
+                if os.path.isfile(rm):
+                    try:
+                        os.remove(rm)
+                    except OSError:
+                        pass
+            for m3u_path, tracks in pending_m3u_writes.items():
+                write_m3u(m3u_path, tracks)
+        orphans = prune_orphan_m3us(root, PLAYLIST_DIR)
+        if orphans:
+            log(f'Pruned {orphans} orphan .m3u file(s).')
         # Save the cache only after the XML is on disk, so a crash can't leave
         # the cache ahead of the XML (which would skip the re-sync next run).
         save_state(new_state)
