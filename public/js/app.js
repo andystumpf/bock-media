@@ -425,6 +425,8 @@ const BOTTOM_TAB_ROUTES = {
   automations: ['automation'],
 };
 
+const LIBRARY_ROUTES = new Set(BOTTOM_TAB_ROUTES.library);
+
 function bottomTabForRoute(route) {
   const root = (route || 'dashboard').split('/')[0];
   for (const [tab, names] of Object.entries(BOTTOM_TAB_ROUTES)) {
@@ -861,9 +863,19 @@ async function loadGenresPage() {
 function navigate(hash) {
   const [route, ...rest] = (hash || 'dashboard').split('/');
   const params = rest.join('/');
+  if (route === 'library' && !params && typeof ClientPrefsSync !== 'undefined') {
+    const saved = ClientPrefsSync.getLibraryTab();
+    if (saved && saved !== 'library' && LIBRARY_ROUTES.has(saved)) {
+      window.location.hash = saved;
+      return;
+    }
+  }
   currentRoute = route;
   updateShellForRoute(route);
   if (route === 'playlists' || route === 'library') refreshSidebarPlaylists();
+  if (LIBRARY_ROUTES.has(route) && typeof ClientPrefsSync !== 'undefined') {
+    ClientPrefsSync.setLibraryTab(route);
+  }
 
   document.querySelectorAll('.drawer-link').forEach((a) => {
     const href = (a.getAttribute('href') || '').replace('#', '').split('/')[0];
@@ -2484,6 +2496,7 @@ function plListSort(by) {
     _plListSort = { by, order: 'asc' };
   }
   _plPage = 1;
+  if (typeof ClientPrefsSync !== 'undefined') ClientPrefsSync.persistLibraryListSort();
   const label = by === 'trackCount' ? 'Tracks' : 'Name';
   const arrow = _plListSort.order === 'desc' ? 'Z→A' : 'A→Z';
   showToast(`Sorted by ${label} (${arrow})`);
@@ -3270,6 +3283,7 @@ function buildAlexaRemoteSettingsSection(remote, localIp) {
 }
 
 async function loadPlaylists(showSpinner) {
+  if (typeof ClientPrefsSync !== 'undefined') ClientPrefsSync.applyLibraryListSortFromPrefs();
   if (showSpinner && document.querySelector('.playlists-table')) {
     document.querySelector('.playlists-table').style.opacity = '0.55';
   }

@@ -27,6 +27,24 @@ final class ClientPrefsSyncTests: XCTestCase {
         XCTAssertEqual(PinnedDevicesStore.pinned(), ["Kitchen Echo", "Office Echo"])
     }
 
+    func testApplyMergedLibraryPrefs() {
+        let prefs = AppPreferences()
+        LibraryPrefsStore.save(filter: .all, viewMode: .list, sort: .recents, prefs: prefs, push: false)
+
+        ClientPrefsSync.applyMerged(prefs: prefs, merged: [
+            "libraryTab": "albums",
+            "libraryViewMode": "grid",
+            "librarySortBy": "name",
+            "librarySortOrder": "asc",
+        ])
+
+        let loaded = LibraryPrefsStore.load(from: prefs)
+        XCTAssertEqual(loaded.filter, .albums)
+        XCTAssertEqual(loaded.viewMode, .grid)
+        XCTAssertEqual(loaded.sort, .name)
+        XCTAssertEqual(prefs.librarySortOrder, "asc")
+    }
+
     func testApplyMergedSearchSelections() {
         let prefs = AppPreferences()
         SearchHistoryStore.clearSelections()

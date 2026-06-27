@@ -11,6 +11,10 @@
     lastDevice: 'bock_pref_last_device',
     pinnedDevices: 'bock_pref_pinned_devices',
     continueAfterQueue: 'bock_pref_continue_after_queue',
+    libraryViewMode: 'bock_pref_library_view_mode',
+    librarySortBy: 'bock_pref_library_sort_by',
+    librarySortOrder: 'bock_pref_library_sort_order',
+    libraryTab: 'bock_pref_library_tab',
   };
   const SEARCH_RECENTS_KEY = 'searchRecentSelections';
   const ENGAGEMENT_KEY = 'bock_home_tile_engagement';
@@ -128,6 +132,65 @@
     if (push) schedulePush();
   }
 
+  function getLibraryViewMode() {
+    const v = localStorage.getItem(PREF.libraryViewMode);
+    return v === 'list' ? 'list' : 'grid';
+  }
+
+  function setLibraryViewMode(mode, { push = true } = {}) {
+    localStorage.setItem(PREF.libraryViewMode, mode === 'list' ? 'list' : 'grid');
+    if (push) schedulePush();
+  }
+
+  function getLibrarySortBy() {
+    const v = localStorage.getItem(PREF.librarySortBy);
+    if (v === 'trackCount' || v === 'recents') return v;
+    return 'name';
+  }
+
+  function setLibrarySortBy(by, { push = true } = {}) {
+    const v = by === 'trackCount' || by === 'recents' ? by : 'name';
+    localStorage.setItem(PREF.librarySortBy, v);
+    if (push) schedulePush();
+  }
+
+  function getLibrarySortOrder() {
+    return localStorage.getItem(PREF.librarySortOrder) === 'desc' ? 'desc' : 'asc';
+  }
+
+  function setLibrarySortOrder(order, { push = true } = {}) {
+    localStorage.setItem(PREF.librarySortOrder, order === 'desc' ? 'desc' : 'asc');
+    if (push) schedulePush();
+  }
+
+  function getLibraryTab() {
+    return localStorage.getItem(PREF.libraryTab) || 'library';
+  }
+
+  function setLibraryTab(tab, { push = true } = {}) {
+    const allowed = ['library', 'playlists', 'artists', 'albums', 'songs', 'genres', 'watchfolders', 'all', 'downloaded'];
+    const v = (tab || '').trim().toLowerCase();
+    if (!allowed.includes(v)) return;
+    const route = v === 'all' ? 'library' : v === 'downloaded' ? 'library' : v;
+    localStorage.setItem(PREF.libraryTab, route);
+    if (push) schedulePush();
+  }
+
+  function applyLibraryListSortFromPrefs() {
+    const by = getLibrarySortBy();
+    const order = getLibrarySortOrder();
+    if (by === 'trackCount' || by === 'name') {
+      root._plListSort = { by, order };
+    }
+  }
+
+  function persistLibraryListSort() {
+    if (!root._plListSort) return;
+    setLibrarySortBy(root._plListSort.by, { push: true });
+    setLibrarySortOrder(root._plListSort.order, { push: false });
+    schedulePush();
+  }
+
   function loadEngagement() {
     try {
       const raw = localStorage.getItem(ENGAGEMENT_KEY);
@@ -221,6 +284,11 @@
       if (cont && cont !== 'off') prefs.continueAfterQueue = cont;
       const engagement = exportEngagementJson();
       if (engagement) prefs.homeTileEngagement = engagement;
+      const tab = getLibraryTab();
+      if (tab) prefs.libraryTab = tab;
+      prefs.libraryViewMode = getLibraryViewMode();
+      prefs.librarySortBy = getLibrarySortBy();
+      prefs.librarySortOrder = getLibrarySortOrder();
     }
     return prefs;
   }
@@ -260,6 +328,25 @@
     if (typeof merged.homeTileEngagement === 'string' && merged.homeTileEngagement.trim()) {
       importEngagementJson(merged.homeTileEngagement);
       changed = true;
+    }
+    if (typeof merged.libraryViewMode === 'string' && merged.libraryViewMode.trim()) {
+      setLibraryViewMode(merged.libraryViewMode.trim(), { push: false });
+      changed = true;
+    }
+    if (typeof merged.librarySortBy === 'string' && merged.librarySortBy.trim()) {
+      setLibrarySortBy(merged.librarySortBy.trim(), { push: false });
+      changed = true;
+    }
+    if (typeof merged.librarySortOrder === 'string' && merged.librarySortOrder.trim()) {
+      setLibrarySortOrder(merged.librarySortOrder.trim(), { push: false });
+      changed = true;
+    }
+    if (typeof merged.libraryTab === 'string' && merged.libraryTab.trim()) {
+      setLibraryTab(merged.libraryTab.trim(), { push: false });
+      changed = true;
+    }
+    if ('librarySortBy' in merged || 'librarySortOrder' in merged) {
+      applyLibraryListSortFromPrefs();
     }
     return changed;
   }
@@ -380,6 +467,16 @@
     setContinueAfterQueue,
     noteCardsPresent,
     recordTileSelection,
+    getLibraryViewMode,
+    setLibraryViewMode,
+    getLibrarySortBy,
+    setLibrarySortBy,
+    getLibrarySortOrder,
+    setLibrarySortOrder,
+    getLibraryTab,
+    setLibraryTab,
+    applyLibraryListSortFromPrefs,
+    persistLibraryListSort,
     searchScopeSuffix,
     searchScopeBarHtml,
     applyMerged,

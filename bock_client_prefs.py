@@ -19,6 +19,10 @@ _MEMBER_KEYS = frozenset({
     'pinnedDevices',
     'offlineDownloads',
     'searchPins',
+    'librarySortBy',
+    'librarySortOrder',
+    'libraryViewMode',
+    'libraryTab',
 })
 _CLIENT_KEYS = frozenset()
 _DEVICE_PREF_KEYS = frozenset({'lastDevice', 'pinnedDevices'})

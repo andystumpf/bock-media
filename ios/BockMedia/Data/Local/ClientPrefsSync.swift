@@ -143,6 +143,11 @@ enum ClientPrefsSync {
             if !offline.isEmpty, let encoded = OfflineDownloadSync.encode(offline) {
                 out["offlineDownloads"] = encoded
             }
+            let library = LibraryPrefsStore.load(from: prefs)
+            out["libraryTab"] = LibraryPrefsStore.tabValue(for: library.filter)
+            out["libraryViewMode"] = library.viewMode == .grid ? "grid" : "list"
+            out["librarySortBy"] = library.sort == .recents ? "recents" : "name"
+            out["librarySortOrder"] = library.sort == .recents ? "desc" : "asc"
         }
         return out
     }
@@ -189,6 +194,15 @@ enum ClientPrefsSync {
         }
         if let repository, let records = OfflineDownloadSync.decode(merged["offlineDownloads"]) {
             OfflineDownloadSync.applyRemote(records, repository: repository)
+        }
+        if merged.keys.contains(where: { ["libraryTab", "libraryViewMode", "librarySortBy"].contains($0) }) {
+            LibraryPrefsStore.applyRemote(
+                tab: merged["libraryTab"] as? String,
+                viewMode: merged["libraryViewMode"] as? String,
+                sortBy: merged["librarySortBy"] as? String,
+                sortOrder: merged["librarySortOrder"] as? String,
+                prefs: prefs
+            )
         }
     }
 

@@ -10,6 +10,8 @@ import com.bockmedia.console.domain.model.HomeFeedCache
 import com.bockmedia.console.domain.model.HomeLoadCoordinator
 import com.bockmedia.console.domain.model.HomeSectionKind
 import com.bockmedia.console.domain.model.HomeTileEngagement
+import com.bockmedia.console.domain.model.LibrarySort
+import com.bockmedia.console.domain.model.LibraryViewMode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -181,6 +183,11 @@ object ClientPrefsSync {
             if (offline.isNotEmpty()) {
                 put("offlineDownloads", bockJson.parseToJsonElement(OfflineDownloadSync.encode(offline)))
             }
+            val library = LibraryPrefsStore(context).loadSync()
+            put("libraryTab", LibraryPrefsStore.filterTabValue(library.filter))
+            put("libraryViewMode", if (library.viewMode == LibraryViewMode.Grid) "grid" else "list")
+            put("librarySortBy", if (library.sort == LibrarySort.Recents) "recents" else "name")
+            put("librarySortOrder", if (library.sort == com.bockmedia.console.domain.model.LibrarySort.Recents) "desc" else "asc")
         }
     }
 
@@ -234,6 +241,17 @@ object ClientPrefsSync {
         }
         decodeOfflineDownloads(merged["offlineDownloads"])?.let { records ->
             OfflineDownloadSync.applyRemote(context, records)
+        }
+        if (merged.containsKey("libraryTab") ||
+            merged.containsKey("libraryViewMode") ||
+            merged.containsKey("librarySortBy")
+        ) {
+            LibraryPrefsStore(context).applyRemote(
+                tab = merged["libraryTab"]?.jsonPrimitive?.content,
+                viewMode = merged["libraryViewMode"]?.jsonPrimitive?.content,
+                sortBy = merged["librarySortBy"]?.jsonPrimitive?.content,
+                sortOrder = merged["librarySortOrder"]?.jsonPrimitive?.content,
+            )
         }
     }
 

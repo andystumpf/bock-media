@@ -103,3 +103,28 @@ def test_home_tile_engagement_per_member(tmp_path):
     assert out['merged']['homeTileEngagement'] == raw
     emma = bock_client_prefs.get_prefs(path, member_id='p-emma', client_device_id='c2')
     assert 'homeTileEngagement' not in emma['merged']
+
+
+def test_library_prefs_per_member(tmp_path):
+    path = str(tmp_path / 'client_prefs.json')
+    andy = {
+        'libraryTab': 'artists',
+        'libraryViewMode': 'grid',
+        'librarySortBy': 'name',
+        'librarySortOrder': 'asc',
+    }
+    emma = {
+        'libraryTab': 'playlists',
+        'libraryViewMode': 'list',
+        'librarySortBy': 'trackCount',
+        'librarySortOrder': 'desc',
+    }
+    bock_client_prefs.put_prefs(path, member_id='p-andy', member_prefs=andy)
+    bock_client_prefs.put_prefs(path, member_id='p-emma', member_prefs=emma)
+    out_andy = bock_client_prefs.get_prefs(path, member_id='p-andy', client_device_id='c1')
+    out_emma = bock_client_prefs.get_prefs(path, member_id='p-emma', client_device_id='c2')
+    assert out_andy['merged']['libraryTab'] == 'artists'
+    assert out_andy['merged']['libraryViewMode'] == 'grid'
+    assert out_andy['merged']['librarySortBy'] == 'name'
+    assert out_emma['merged']['librarySortBy'] == 'trackCount'
+    assert out_emma['merged']['librarySortOrder'] == 'desc'

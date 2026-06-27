@@ -10,6 +10,7 @@ struct LibraryView: View {
     @State private var viewMode: LibraryViewMode = .list
     @State private var sort: LibrarySort = .recents
     @State private var search = ""
+    @State private var prefsLoaded = false
 
     private var displayItems: [LibraryItem] {
         if !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -47,9 +48,26 @@ struct LibraryView: View {
             }
             content
         }
-        .task { await bootstrapLibrary() }
-        .onChange(of: filter) { _, _ in
-            if let libraryData { prefetchArt(libraryData.forFilter(filter)) }
+        .task {
+            let prefs = LibraryPrefsStore.load(from: appState.preferences)
+            filter = prefs.filter
+            viewMode = prefs.viewMode
+            sort = prefs.sort
+            prefsLoaded = true
+            await bootstrapLibrary()
+        }
+        .onChange(of: filter) { _, newValue in
+            guard prefsLoaded else { return }
+            LibraryPrefsStore.save(filter: newValue, viewMode: viewMode, sort: sort, prefs: appState.preferences)
+            if let libraryData { prefetchArt(libraryData.forFilter(newValue)) }
+        }
+        .onChange(of: viewMode) { _, _ in
+            guard prefsLoaded else { return }
+            LibraryPrefsStore.save(filter: filter, viewMode: viewMode, sort: sort, prefs: appState.preferences)
+        }
+        .onChange(of: sort) { _, _ in
+            guard prefsLoaded else { return }
+            LibraryPrefsStore.save(filter: filter, viewMode: viewMode, sort: sort, prefs: appState.preferences)
         }
         .onChange(of: search) { _, newValue in
             Task { await runSearch(newValue) }

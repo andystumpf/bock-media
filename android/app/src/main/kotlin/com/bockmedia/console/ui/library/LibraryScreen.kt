@@ -17,7 +17,6 @@ import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -33,6 +32,7 @@ import com.bockmedia.console.domain.model.*
 import com.bockmedia.console.ui.components.TILE_ART_SIZE_PX
 import com.bockmedia.console.ui.components.rememberArtworkUrl
 import com.bockmedia.console.local.DownloadState
+import com.bockmedia.console.local.LibraryPrefsStore
 import com.bockmedia.console.local.OfflineDownloadManager
 import com.bockmedia.console.local.toPlayTarget
 import com.bockmedia.console.ui.components.*
@@ -79,10 +79,24 @@ fun LibraryScreen(
     var searchItems by remember { mutableStateOf<List<LibraryItem>?>(null) }
     var loading by remember { mutableStateOf(LibrarySessionCache.peek() == null) }
     var refreshing by remember { mutableStateOf(false) }
-    var filter by rememberSaveable { mutableStateOf(LibraryFilter.All) }
-    var viewMode by rememberSaveable { mutableStateOf(LibraryViewMode.Grid) }
-    var sort by rememberSaveable { mutableStateOf(LibrarySort.Recents) }
+    var filter by remember { mutableStateOf(LibraryFilter.All) }
+    var viewMode by remember { mutableStateOf(LibraryViewMode.Grid) }
+    var sort by remember { mutableStateOf(LibrarySort.Recents) }
+    var prefsLoaded by remember { mutableStateOf(false) }
     var search by remember { mutableStateOf("") }
+
+    LaunchedEffect(Unit) {
+        val prefs = LibraryPrefsStore(context).loadSync()
+        filter = prefs.filter
+        viewMode = prefs.viewMode
+        sort = prefs.sort
+        prefsLoaded = true
+    }
+
+    LaunchedEffect(filter, viewMode, sort, prefsLoaded) {
+        if (!prefsLoaded) return@LaunchedEffect
+        LibraryPrefsStore(context).save(filter, viewMode, sort)
+    }
     var libraryHealth by remember { mutableStateOf<com.bockmedia.console.data.api.dto.LibraryHealthResponse?>(null) }
     var paginatedBrowse by remember { mutableStateOf(LibraryPaginatedBrowse()) }
 
