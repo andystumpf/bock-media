@@ -2,6 +2,15 @@
   "_comment": "Update this file whenever you upload a new APK/IPA to /app. Shown on GET /app.",
   "releases": [
     {
+      "version": "2.6.33",
+      "date": "2026-06-27",
+      "items": [
+        {"kind": "fix", "text": "Bug hunt stability — queue and Now Playing state use cross-process file locks; NP poll no longer writes on GET"},
+        {"kind": "fix", "text": "Playlist reliability — atomic ServerPlaylists.xml and .m3u writes; Plex sync defers m3u until XML commits and prunes orphan files"},
+        {"kind": "fix", "text": "Stop-after-N and sleep timer honored on skip; add-to-playlist dedupes tracks and updates track count"}
+      ]
+    },
+    {
       "version": "2.6.32",
       "date": "2026-06-25",
       "items": [
