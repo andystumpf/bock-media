@@ -912,3 +912,84 @@ class TestSkipBackIntents:
         data = server.decode_token(st['token']) or {}
         assert data.get('idx') == 1
         assert st.get('filepath') == paths[1]
+
+
+# ─────────────────────────── Office Show NP label ────────────────────────────
+
+class TestOfficeShowNpLabel:
+    """Now Playing must show the correct room (live roster > stale devices.json)."""
+
+    def test_device_label_prefers_live_roster_over_stale_name(self, isolated_paths, monkeypatch):
+        did = 'amzn1.ask.device.OFFICELABEL'
+        server.register_device(did, default_name='Kitchen Show')
+        store = server._load_devices()
+        store[did]['serial'] = 'SERIAL-OFFICE'
+        server._save_devices(store)
+        monkeypatch.setattr(
+            server, '_alexa_name_for_serial',
+            lambda s: 'Office Show' if s == 'SERIAL-OFFICE' else '',
+        )
+        assert server._device_label(did) == 'Office Show'
+        assert server._load_devices()[did]['name'] == 'Office Show'
+
+    def test_office_show_np_row_uses_live_name(
+        self, client, post_alexa, isolated_paths, monkeypatch,
+    ):
+        did = 'amzn1.ask.device.OFFICENP01'
+        path = '/music/office/test.mp3'
+        server.register_device(did, default_name='Kitchen Show')
+        store = server._load_devices()
+        store[did]['serial'] = 'SERIAL-OFFICE'
+        server._save_devices(store)
+        monkeypatch.setattr(
+            server, '_alexa_name_for_serial',
+            lambda s: 'Office Show' if s == 'SERIAL-OFFICE' else '',
+        )
+        token = server.encode_token({'tracks': [path], 'idx': 0})
+        post_alexa('AudioPlayer.PlaybackStarted', token=token, device_id=did)
+        items = client.get('/api/nowplaying_devices').get_json()['items']
+        row = next(i for i in items if i['deviceId'] == did)
+        assert row['deviceName'] == 'Office Show'
+
+    def test_msp_pseudo_labeled_from_play_intent(self, client, isolated_paths, monkeypatch):
+        monkeypatch.setattr(server, '_alexa_name_for_serial', lambda s: '')
+        server._record_play_intent([('SERIAL-OFFICE', 'Office Show')])
+        qid = server._store_queue(['/music/song.mp3'], playlist='Test')
+        server._attach_queue_play_target(qid)
+        did = f'{server.MSP_DEVICE_ID}:{qid}'
+        server.write_np_state_for_device(did, {
+            'track': 'Song',
+            'playing': True,
+            'token': f'{qid}:0',
+            'timestamp': time.time(),
+        })
+        items = client.get('/api/nowplaying_devices').get_json()['items']
+        row = next(i for i in items if i['deviceId'] == did)
+        assert row['deviceName'] == 'Office Show'
+
+    def test_concurrent_msp_streams_distinct_labels(self, client, isolated_paths, monkeypatch):
+        monkeypatch.setattr(server, '_alexa_name_for_serial', lambda s: '')
+        server._record_play_intent([('SERIAL-KITCHEN', 'Kitchen Show')])
+        q_k = server._store_queue(['/music/k.mp3'])
+        server._attach_queue_play_target(q_k)
+        server._record_play_intent([('SERIAL-OFFICE', 'Office Show')])
+        q_o = server._store_queue(['/music/o.mp3'])
+        server._attach_queue_play_target(q_o)
+        did_k = f'{server.MSP_DEVICE_ID}:{q_k}'
+        did_o = f'{server.MSP_DEVICE_ID}:{q_o}'
+        server.write_np_state_for_device(did_k, {
+            'track': 'Kitchen track',
+            'playing': True,
+            'token': f'{q_k}:0',
+            'timestamp': time.time(),
+        })
+        server.write_np_state_for_device(did_o, {
+            'track': 'Office track',
+            'playing': True,
+            'token': f'{q_o}:0',
+            'timestamp': time.time() + 1,
+        })
+        items = client.get('/api/nowplaying_devices').get_json()['items']
+        names = {i['deviceId']: i['deviceName'] for i in items}
+        assert names[did_k] == 'Kitchen Show'
+        assert names[did_o] == 'Office Show'

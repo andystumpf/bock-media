@@ -2506,6 +2506,44 @@ def _correlate_play_intent(new_device_id):
     return True
 
 
+def _consume_play_intent_for_queue():
+    """Pop the oldest pending play intent to label an MSP queue's room.
+
+    MSP playback events carry no deviceId, so we bind the queue to whichever
+    room the UI/voice play just targeted (FIFO, same order as correlation).
+    """
+    now = time.time()
+    with _PLAY_INTENT_LOCK:
+        if now < _PLAY_GROUP_UNTIL:
+            return None
+        pending = sorted(
+            [i for i in _PLAY_INTENTS if now - i['ts'] < _PLAY_INTENT_TTL],
+            key=lambda i: i['ts'],
+        )
+        if not pending:
+            return None
+        intent = pending[0]
+        _PLAY_INTENTS.remove(intent)
+        return dict(intent)
+
+
+def _attach_queue_play_target(qid):
+    """Persist target room on a queue so MSP Now Playing can show Office Show, etc."""
+    intent = _consume_play_intent_for_queue()
+    if not intent or not qid:
+        return
+    with _QUEUES_LOCK:
+        queues = _load_queues()
+        entry = queues.get(qid)
+        if not entry:
+            return
+        if intent.get('serial'):
+            entry['target_serial'] = intent['serial']
+        if intent.get('name'):
+            entry['target_name'] = intent['name']
+        _save_queues(queues)
+
+
 @app.route('/api/playlists/play', methods=['POST'])
 @app.route('/api/alexa_remote/play', methods=['POST'])
 def play_on_device():
@@ -4403,12 +4441,21 @@ def _device_label(device_id):
     if not device_id or device_id == 'default':
         return 'default'
     if _is_msp_pseudo(device_id):
-        return MSP_DEVICE_NAME
+        label = _queue_target_label(_msp_queue_from_device_id(device_id))
+        return label or MSP_DEVICE_NAME
     store = _load_devices()
     primary = _resolve_device_id(device_id, store)
     entry = store.get(primary) or store.get(device_id) or {}
     live = _live_alexa_name(entry, primary, store)
     if live:
+        stored = (entry.get('name') or '').strip()
+        if stored and stored != live:
+            entry['name'] = live
+            store[primary] = entry
+            try:
+                _save_devices(store)
+            except Exception:
+                pass
         return live
     name = (entry.get('name') or '').strip()
     auto_primary = f"echo {primary[-6:]}".lower()
@@ -9094,6 +9141,25 @@ def _is_msp_pseudo(device_id):
     return bool(device_id) and (device_id == MSP_DEVICE_ID
                                 or device_id.startswith(MSP_DEVICE_ID + ':'))
 
+def _msp_queue_from_device_id(device_id):
+    if not _is_msp_pseudo(device_id):
+        return ''
+    prefix = MSP_DEVICE_ID + ':'
+    if device_id.startswith(prefix):
+        return device_id[len(prefix):]
+    return ''
+
+def _queue_target_label(queue_id):
+    """Room label for an MSP queue (from play intent / live roster)."""
+    if not queue_id:
+        return ''
+    entry = (_load_queues() or {}).get(queue_id) or {}
+    serial = (entry.get('target_serial') or '').strip()
+    live = _alexa_name_for_serial(serial) if serial else ''
+    if live:
+        return live
+    return (entry.get('target_name') or '').strip()
+
 # Per-request device id (set by the Alexa handler).
 from flask import g
 
@@ -10282,6 +10348,7 @@ def _msp_handle(namespace, name, payload, header):
         if shuffle:
             random.shuffle(tracks)
         qid = _store_queue(tracks, shuffle, loop, playlist=pname, playlist_id=content_id)
+        _attach_queue_play_target(qid)
         return _msp_event('Alexa.Media.Playback', 'Initiate.Response', header, {
             'playbackMethod': {
                 'type': 'ALEXA_AUDIO_PLAYER_QUEUE',
