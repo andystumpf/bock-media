@@ -2934,10 +2934,12 @@ function renderPlaylistDetailBody() {
         <a href="#playlists" class="btn-sm btn-default" style="margin-right:8px"><i class="fa fa-arrow-left"></i> All playlists</a>
         <span style="font-size:18px;font-weight:600">${escHtml(data.name)}</span>
         <span class="badge orange" style="margin-left:8px">${fmtNum(total)} tracks</span>
+        ${playlistShareBadge(data)}
       </div>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         ${canPlay ? `<button class="btn-sm btn-primary" onclick="plPlayPlaylist()"><i class="fa fa-play"></i> Play</button>` : ''}
         ${data.daily ? `<button class="btn-sm btn-success" onclick="plSaveDaily()" title="Keep this daily mix in your library"><i class="fa fa-bookmark"></i> Save to library</button>` : ''}
+        ${!data.daily ? `<button class="btn-sm btn-default" onclick="plShareDetail()" title="Share with household members"><i class="fa fa-share"></i> Share</button>` : ''}
         ${actionBtn({ kind: 'edit', onclick: 'plRenameDetail()', title: 'Rename', icon: 'pen' })}
         ${data.sourceName === 'bockmedia' ? actionBtn({ kind: 'delete', onclick: 'plDeleteDetail()', title: 'Delete playlist', icon: 'trash' }) : ''}
       </div>
@@ -3070,6 +3072,61 @@ async function plRenameDetail() {
   if (!res.ok) return showToast((await res.json().catch(() => ({}))).error || 'Rename failed', true);
   loadPlaylistDetail(d.id);
 }
+
+async function plShareDetail() {
+  const d = window._plDetail;
+  if (!d || d.daily) return;
+  if (!window._household?.members?.length) {
+    window._household = await API('/api/household').catch(() => ({ members: [] }));
+  }
+  const me = activeMemberId();
+  const members = (window._household?.members || []).filter((m) => m.id && m.id !== me);
+  if (!members.length) {
+    return showToast('Add household members in Family to share playlists', true);
+  }
+  const shared = new Set(d.sharedWith || []);
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  const rows = members.map((m) => `
+    <label style="display:flex;align-items:center;gap:10px;padding:6px 0;cursor:pointer">
+      <input type="checkbox" class="pl-share-cb" value="${escHtml(m.id)}" ${shared.has(m.id) ? 'checked' : ''}>
+      <span>${memberChip(m)}</span>
+    </label>`).join('');
+  overlay.innerHTML = `
+    <div class="modal-box" style="max-width:420px">
+      <h3 style="margin-top:0"><i class="fa fa-share"></i> Share with…</h3>
+      <p class="hint" style="margin:0 0 8px">Choose household members who can see this playlist.</p>
+      <div style="max-height:280px;overflow:auto">${rows}</div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+        <button class="cancel-btn" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+        <button class="save-btn" id="pl-share-go">Share</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#pl-share-go').onclick = async () => {
+    const ids = [...overlay.querySelectorAll('.pl-share-cb:checked')].map((el) => el.value);
+    if (!ids.length) return showToast('Select at least one member', true);
+    const res = await fetch(`/api/playlists/${encodeURIComponent(d.id)}/share`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(ratingsRequestBody({ toMemberIds: ids })),
+    });
+    const data = await res.json().catch(() => ({}));
+    overlay.remove();
+    if (!res.ok) return showToast(data.error || 'Share failed', true);
+    showToast('Playlist shared');
+    Object.assign(window._plDetail, {
+      visibility: data.visibility || 'shared',
+      sharedWith: data.sharedWith || ids,
+      ownerMemberId: data.ownerMemberId ?? d.ownerMemberId,
+      ownerName: data.ownerName ?? d.ownerName,
+    });
+    renderPlaylistDetailBody();
+    _plAllCache = null;
+  };
+}
+window.plShareDetail = plShareDetail;
 
 async function plSaveDaily() {
   const d = window._plDetail;
@@ -3295,7 +3352,7 @@ async function loadPlaylists(showSpinner) {
   const needFetch = !_plAllCache || _plAllCacheSearch !== searchKey;
   const [listData, remoteStatus, smartData, folderData] = await Promise.all([
     needFetch
-      ? API(`/api/playlists?page=1&limit=10000&search=${encodeURIComponent(_plSearch)}`)
+      ? fetchPlaylistsCached(_plSearch, { memberScoped: true })
       : Promise.resolve(null),
     ensureAlexaRemoteStatus(),
     API('/api/smart_playlists').catch(() => ({ items: [] })),
@@ -3305,7 +3362,7 @@ async function loadPlaylists(showSpinner) {
   window._plFolderAssignments = (folderData && folderData.assignments) || {};
   window._smartPlaylists = (smartData && smartData.items) || [];
   if (needFetch) {
-    _plAllCache = (listData && listData.items) || [];
+    _plAllCache = listData || [];
     _plAllCacheSearch = searchKey;
   }
   window._plRemote = remoteStatus || window._plRemote || {};
@@ -3356,7 +3413,10 @@ function renderPlaylistsPage() {
       ? actionBtn({ kind: 'play', onclick: `openPlayMenu(${i})`, title: 'Play', icon: 'play' })
       : '';
     const nameCell = p.id
-      ? `<a href="#playlists/detail/${escHtml(p.id)}" class="pl-name-link">${escHtml(p.name)}</a>`
+      ? (() => {
+        const badge = playlistShareBadge(p);
+        return `<a href="#playlists/detail/${escHtml(p.id)}" class="pl-name-link">${escHtml(p.name)}</a>${badge ? ` ${badge}` : ''}`;
+      })()
       : `<span class="pl-name-text">${escHtml(p.name)}</span>`;
     return `
     <tr id="pl-row-${i}">
@@ -3393,9 +3453,13 @@ function renderPlaylistsPage() {
   const plCards = items.map((p, i) => {
     const art = covers[p.id] || null;
     const play = canPlay && p.id ? `openPlayMenu(${i})` : null;
+    const badge = playlistShareBadgeText(p);
+    const subtitle = badge
+      ? `${fmtNum(p.trackCount || 0)} tracks · ${badge}`
+      : `${fmtNum(p.trackCount || 0)} tracks`;
     return spotifyMediaCard(
       p.name,
-      `${fmtNum(p.trackCount || 0)} tracks`,
+      subtitle,
       p.id ? `#playlists/detail/${encodeURIComponent(p.id)}` : '#playlists',
       'fa-list',
       p.name,
@@ -6720,6 +6784,31 @@ function ratingsRequestBody(extra = {}) {
     if (cid) body.clientId = cid;
   }
   return body;
+}
+
+function playlistShareBadge(p, { me = activeMemberId() } = {}) {
+  if (!p) return '';
+  if (p.daily) return '<span class="badge">Daily</span>';
+  const vis = (p.visibility || 'household').toLowerCase();
+  const ownerId = p.ownerMemberId || '';
+  const ownerName = p.ownerName || '';
+  if (vis === 'shared' && ownerId && ownerId !== me && ownerName) {
+    return `<span class="badge">From ${escHtml(ownerName)}</span>`;
+  }
+  if (vis === 'private' && ownerId === me) {
+    return '<span class="badge">Private</span>';
+  }
+  if (vis === 'shared' && ownerId === me && (p.sharedWith || []).length) {
+    const names = (p.sharedWith || []).map((id) => memberById(id)?.name).filter(Boolean);
+    const label = names.length ? `Shared · ${names.join(', ')}` : 'Shared';
+    return `<span class="badge green">${escHtml(label)}</span>`;
+  }
+  return '';
+}
+
+function playlistShareBadgeText(p, opts) {
+  const html = playlistShareBadge(p, opts);
+  return html.replace(/<[^>]+>/g, '').trim();
 }
 /** Query string for APIs that scope by memberId (ratings, search pins). */
 function profileMemberIdQuery(extra = {}) {

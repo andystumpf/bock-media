@@ -552,6 +552,15 @@ final class BockMediaRepository: ObservableObject {
         _ = try await api.saveDailyPlaylist(id: id, body: body)
     }
 
+    func sharePlaylist(id: String, toMemberIds: [String]) async throws {
+        try await ensureAPI()
+        var body: [String: Any] = ["toMemberIds": toMemberIds]
+        if let member = scopedMember(nil), !member.isEmpty { body["memberId"] = member }
+        let clientId = ClientIdStore.clientId().trimmingCharacters(in: .whitespacesAndNewlines)
+        if !clientId.isEmpty { body["clientId"] = clientId }
+        _ = try await api.sharePlaylist(id: id, body: body)
+    }
+
     func removePlaylistTrack(playlistId: String, path: String) async throws {
         try await ensureAPI()
         _ = try await api.removePlaylistTrack(id: playlistId, body: ["path": path])

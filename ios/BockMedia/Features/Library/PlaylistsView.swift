@@ -15,7 +15,9 @@ struct PlaylistsView: View {
                         HStack {
                             VStack(alignment: .leading) {
                                 Text(pl.name).foregroundStyle(BockColors.onSurface)
-                                Text("\(pl.tracks) tracks").font(.caption).foregroundStyle(BockColors.muted)
+                                Text(playlistShareSubtitle(pl))
+                                    .font(.caption)
+                                    .foregroundStyle(BockColors.muted)
                             }
                             Spacer()
                             PlayDownloadActions(
@@ -39,7 +41,115 @@ struct PlaylistsView: View {
     private func load() async {
         loading = true
         defer { loading = false }
-        items = (try? await appState.repository.playlists(limit: 300))?.items ?? []
+        items = (try? await appState.repository.playlists(limit: 300, memberScoped: true))?.items ?? []
+    }
+}
+
+private func playlistShareSubtitle(_ pl: PlaylistSummary) -> String {
+    let base = "\(pl.tracks) tracks"
+    guard let badge = playlistShareBadge(
+        ownerMemberId: pl.ownerMemberId,
+        ownerName: pl.ownerName,
+        visibility: pl.visibility,
+        sharedWith: pl.sharedWith,
+        daily: pl.daily,
+        activeMemberId: ActiveProfileStore.activeMemberId(),
+        memberName: { _ in nil }
+    ) else { return base }
+    return "\(base) · \(badge)"
+}
+
+private func playlistShareBadge(
+    ownerMemberId: String?,
+    ownerName: String?,
+    visibility: String?,
+    sharedWith: [String],
+    daily: Bool,
+    activeMemberId: String?,
+    memberName: (String) -> String?
+) -> String? {
+    if daily { return "Daily" }
+    let vis = (visibility ?? "household").lowercased()
+    let me = activeMemberId?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let meId = (me?.isEmpty == false) ? me : nil
+    if vis == "shared", let owner = ownerMemberId?.trimmingCharacters(in: .whitespacesAndNewlines), !owner.isEmpty, owner != meId,
+       let name = ownerName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+        return "From \(name)"
+    }
+    if vis == "private", ownerMemberId == meId { return "Private" }
+    if vis == "shared", ownerMemberId == meId, !sharedWith.isEmpty {
+        let names = sharedWith.compactMap { memberName($0) }
+        if !names.isEmpty { return "Shared · \(names.joined(separator: ", "))" }
+        return "Shared"
+    }
+    return nil
+}
+
+struct SharePlaylistSheet: View {
+    let members: [HouseholdMember]
+    let alreadyShared: Set<String>
+    let onShare: ([String]) -> Void
+    let onCancel: () -> Void
+    @State private var selected: Set<String>
+
+    init(
+        members: [HouseholdMember],
+        alreadyShared: Set<String>,
+        onShare: @escaping ([String]) -> Void,
+        onCancel: @escaping () -> Void
+    ) {
+        self.members = members
+        self.alreadyShared = alreadyShared
+        self.onShare = onShare
+        self.onCancel = onCancel
+        _selected = State(initialValue: alreadyShared)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if members.isEmpty {
+                    Text("Add household members in Family to share playlists.")
+                        .foregroundStyle(BockColors.muted)
+                        .padding()
+                } else {
+                    List(members) { member in
+                        Button {
+                            if selected.contains(member.id) {
+                                selected.remove(member.id)
+                            } else {
+                                selected.insert(member.id)
+                            }
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading) {
+                                    Text(member.name)
+                                    Text(member.role.capitalized)
+                                        .font(.caption)
+                                        .foregroundStyle(BockColors.muted)
+                                }
+                                Spacer()
+                                if selected.contains(member.id) {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundStyle(BockColors.pillActive)
+                                }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .navigationTitle("Share with…")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", action: onCancel)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Share") { onShare(Array(selected)) }
+                        .disabled(selected.isEmpty)
+                }
+            }
+        }
     }
 }
 
@@ -62,6 +172,12 @@ struct PlaylistDetailView: View {
     @State private var acquireSeed: DiscoverySeed?
     @State private var editMode: EditMode = .inactive
     @State private var isDaily = false
+    @State private var ownerMemberId: String?
+    @State private var ownerName: String?
+    @State private var visibility: String?
+    @State private var sharedWith: [String] = []
+    @State private var showShare = false
+    @State private var householdMembers: [HouseholdMember] = []
     private let pageSize = 100
 
     private var canReorder: Bool {
@@ -152,6 +268,17 @@ struct PlaylistDetailView: View {
                     } label: {
                         Label("Music to seek out…", systemImage: "binoculars")
                     }
+                    if !isDaily {
+                        Divider()
+                        Button {
+                            Task {
+                                householdMembers = (try? await appState.repository.household().members) ?? []
+                                showShare = true
+                            }
+                        } label: {
+                            Label("Share with…", systemImage: "square.and.arrow.up")
+                        }
+                    }
                     Divider()
                     Button("Delete playlist", role: .destructive) {
                         Task {
@@ -191,6 +318,27 @@ struct PlaylistDetailView: View {
         }
         .sheet(isPresented: $showAcquire) {
             AcquireIdeasSheet(appState: appState, seed: acquireSeed)
+        }
+        .sheet(isPresented: $showShare) {
+            let me = ActiveProfileStore.activeMemberId()
+            SharePlaylistSheet(
+                members: householdMembers.filter { !$0.id.isEmpty && $0.id != me },
+                alreadyShared: Set(sharedWith),
+                onShare: { ids in
+                    Task {
+                        do {
+                            try await appState.repository.sharePlaylist(id: playlistId, toMemberIds: ids)
+                            sharedWith = ids.sorted()
+                            visibility = "shared"
+                            showShare = false
+                            appState.toast = "Playlist shared"
+                        } catch {
+                            appState.toast = error.localizedDescription
+                        }
+                    }
+                },
+                onCancel: { showShare = false }
+            )
         }
     }
 
@@ -234,6 +382,19 @@ struct PlaylistDetailView: View {
             Text("\(total > 0 ? total : tracks.count) songs")
                 .font(.subheadline)
                 .foregroundStyle(BockColors.muted)
+            if let badge = playlistShareBadge(
+                ownerMemberId: ownerMemberId,
+                ownerName: ownerName,
+                visibility: visibility,
+                sharedWith: sharedWith,
+                daily: isDaily,
+                activeMemberId: ActiveProfileStore.activeMemberId(),
+                memberName: { id in householdMembers.first(where: { $0.id == id })?.name }
+            ) {
+                Text(badge)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(BockColors.pillActive)
+            }
             if isDaily {
                 Text("Fresh daily mix — these songs change every day. Save it to keep today's set.")
                     .font(.caption)
@@ -406,6 +567,10 @@ struct PlaylistDetailView: View {
             name = detail.name
             total = detail.total > 0 ? detail.total : detail.tracks.count
             isDaily = detail.daily
+            ownerMemberId = detail.ownerMemberId
+            ownerName = detail.ownerName
+            visibility = detail.visibility
+            sharedWith = detail.sharedWith
             if append {
                 let seen = Set(tracks.compactMap(\.path))
                 tracks.append(contentsOf: detail.tracks.filter { track in

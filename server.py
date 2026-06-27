@@ -5647,7 +5647,9 @@ def share_playlist(playlist_id):
         shared = set(cur.get('sharedWith') or [])
         shared.update(to_members)
         cur['sharedWith'] = sorted(shared)
-        if (cur.get('visibility') or 'household') == 'private':
+        if shared:
+            cur['visibility'] = 'shared'
+        elif (cur.get('visibility') or 'household') == 'private':
             cur['visibility'] = 'shared'
         cur.setdefault('createdAt', time.time())
         meta[playlist_id] = cur
@@ -8167,6 +8169,7 @@ def playlist_detail(playlist_id):
     tracks = _enrich_track_paths(page_paths)
 
     ext_meta = _load_playlist_meta().get(playlist_id) or {}
+    household = _load_household()
 
     return jsonify({
         **meta,
@@ -8179,6 +8182,7 @@ def playlist_detail(playlist_id):
         'q': q or None,
         'daily': bool(ext_meta.get('daily')),
         'dailyRecipe': ext_meta.get('dailyRecipe'),
+        **_public_playlist_meta(ext_meta, household),
     })
 
 

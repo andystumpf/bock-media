@@ -309,6 +309,11 @@ data class PlaylistSummary(
     val lastUsed: String? = null,
     val folderId: String? = null,
     val artPath: String? = null,
+    val ownerMemberId: String? = null,
+    val ownerName: String? = null,
+    val visibility: String? = null,
+    val sharedWith: List<String> = emptyList(),
+    val daily: Boolean = false,
 )
 
 @Serializable
@@ -322,6 +327,10 @@ data class PlaylistDetailResponse(
     val sourceName: String? = null,
     val daily: Boolean = false,
     val dailyRecipe: String? = null,
+    val ownerMemberId: String? = null,
+    val ownerName: String? = null,
+    val visibility: String? = null,
+    val sharedWith: List<String> = emptyList(),
 )
 
 @Serializable

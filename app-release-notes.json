@@ -2,6 +2,15 @@
   "_comment": "Update this file whenever you upload a new APK/IPA to /app. Shown on GET /app.",
   "releases": [
     {
+      "version": "2.6.31",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "feat", "text": "Playlist sharing — share from playlist detail with household member picker; owner/shared badges on library tiles (web, Android, iOS)"},
+        {"kind": "fix", "text": "Office Show and MSP streams show the correct room name in Now Playing instead of generic Alexa labels"},
+        {"kind": "fix", "text": "Sharing a playlist sets visibility to shared so recipients see it in their scoped library"}
+      ]
+    },
+    {
       "version": "2.6.30",
       "date": "2026-06-25",
       "items": [

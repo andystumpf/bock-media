@@ -94,7 +94,7 @@ struct ManagePlaylistsView: View {
     }
 
     private func load() async {
-        playlists = (try? await appState.repository.playlists(search: search, limit: 200))?.items ?? []
+        playlists = (try? await appState.repository.playlists(search: search, limit: 200, memberScoped: true))?.items ?? []
         smart = (try? await appState.repository.smartPlaylists()) ?? []
     }
 }

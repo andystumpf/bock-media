@@ -786,6 +786,18 @@ class BockMediaRepository(
         api().renamePlaylist(buildJsonObject { put("id", id); put("name", name) })
     }
 
+    suspend fun sharePlaylist(id: String, toMemberIds: List<String>) {
+        val (memberId, clientId) = ratingsScope()
+        api().sharePlaylist(id, buildJsonObject {
+            putJsonArray("toMemberIds") {
+                toMemberIds.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) }
+            }
+            memberId?.let { put("memberId", it) }
+            clientId?.let { put("clientId", it) }
+        })
+        invalidatePlaylistsCache()
+    }
+
     /** Keep a daily playlist forever — stops the daily regenerator from overwriting it. */
     suspend fun saveDailyPlaylist(id: String, name: String? = null) {
         api().saveDailyPlaylist(id, buildJsonObject { name?.let { put("name", it) } })

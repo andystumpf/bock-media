@@ -120,7 +120,7 @@ object LibraryLoader {
     ): LibraryData = coroutineScope {
         val playlistsDef = async {
             runCatching {
-                repository.playlists(search = "", limit = BROWSE_PLAYLIST_LIMIT).items
+                repository.playlists(search = "", limit = BROWSE_PLAYLIST_LIMIT, memberScoped = true).items
             }.getOrDefault(emptyList()).also { items ->
                 items.forEach { pl ->
                     pl.artPath?.takeIf { it.isNotBlank() }?.let { HomeArtworkCache.storePlaylistPath(pl.id, it) }
@@ -177,7 +177,7 @@ object LibraryLoader {
         when (filter) {
             LibraryFilter.Playlists, LibraryFilter.All -> {
                 val items = runCatching {
-                    repository.playlists(search = q, limit = BROWSE_PLAYLIST_LIMIT).items
+                    repository.playlists(search = q, limit = BROWSE_PLAYLIST_LIMIT, memberScoped = true).items
                 }.getOrDefault(emptyList())
                 runCatching { repository.prefetchPlaylistCoverPaths(items.map { it.id }) }
                 items.map { pl ->

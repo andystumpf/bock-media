@@ -275,6 +275,11 @@ struct PlaylistSummary: Codable, Identifiable {
     var lastUsed: String?
     var folderId: String?
     var artPath: String?
+    var ownerMemberId: String?
+    var ownerName: String?
+    var visibility: String?
+    var sharedWith: [String] = []
+    var daily: Bool = false
 
     var tracks: Int { trackCount }
 }
@@ -288,6 +293,10 @@ struct PlaylistDetailResponse: Codable {
     var source: String?
     var daily: Bool = false
     var dailyRecipe: String?
+    var ownerMemberId: String?
+    var ownerName: String?
+    var visibility: String?
+    var sharedWith: [String] = []
 }
 
 struct PlaylistTrack: Codable, Identifiable {

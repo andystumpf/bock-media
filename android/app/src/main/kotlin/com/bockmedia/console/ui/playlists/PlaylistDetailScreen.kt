@@ -30,6 +30,7 @@ import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.LocalTrack
 import com.bockmedia.console.domain.model.PlaybackFocus
 import com.bockmedia.console.domain.model.PlayTarget
+import com.bockmedia.console.local.ActiveProfileStore
 import com.bockmedia.console.local.DownloadState
 import com.bockmedia.console.local.OfflineDownloadManager
 import com.bockmedia.console.local.downloadId
@@ -79,6 +80,12 @@ fun PlaylistDetailScreen(
     var playlistSource by remember { mutableStateOf<String?>(null) }
     var playlistSourceName by remember { mutableStateOf<String?>(null) }
     var isDaily by remember { mutableStateOf(false) }
+    var ownerMemberId by remember { mutableStateOf<String?>(null) }
+    var ownerName by remember { mutableStateOf<String?>(null) }
+    var visibility by remember { mutableStateOf<String?>(null) }
+    var sharedWith by remember { mutableStateOf<List<String>>(emptyList()) }
+    var showShare by remember { mutableStateOf(false) }
+    var householdMembers by remember { mutableStateOf(emptyList<com.bockmedia.console.data.api.dto.HouseholdMember>()) }
     var reorderError by remember { mutableStateOf<String?>(null) }
     var trackMenu by remember { mutableStateOf<PlaylistTrack?>(null) }
     var showPlaylistMenu by remember { mutableStateOf(false) }
@@ -123,6 +130,10 @@ fun PlaylistDetailScreen(
             playlistSource = d.source
             playlistSourceName = d.sourceName
             isDaily = d.daily
+            ownerMemberId = d.ownerMemberId
+            ownerName = d.ownerName
+            visibility = d.visibility
+            sharedWith = d.sharedWith
             total = d.total.takeIf { it > 0 } ?: d.tracks.size
             tracks = if (append) {
                 val seen = tracks.mapNotNull { it.path }.toMutableSet()
@@ -205,6 +216,37 @@ fun PlaylistDetailScreen(
                 loadPage(page = (tracks.size / pageSize) + 1, append = true)
             }
         }
+    }
+
+    if (showShare) {
+        SharePlaylistDialog(
+            members = householdMembers,
+            activeMemberId = ActiveProfileStore.activeMemberId(context),
+            alreadyShared = sharedWith.toSet(),
+            onDismiss = { showShare = false },
+            onShare = { ids ->
+                scope.launch {
+                    runCatching { repository.sharePlaylist(playlistId, ids) }
+                        .onSuccess {
+                            sharedWith = ids.sorted()
+                            visibility = "shared"
+                            showShare = false
+                            android.widget.Toast.makeText(
+                                context,
+                                "Playlist shared",
+                                android.widget.Toast.LENGTH_SHORT,
+                            ).show()
+                        }
+                        .onFailure { e ->
+                            android.widget.Toast.makeText(
+                                context,
+                                httpErrorMessage(e, "Could not share playlist"),
+                                android.widget.Toast.LENGTH_LONG,
+                            ).show()
+                        }
+                }
+            },
+        )
     }
 
     if (showRename) {
@@ -555,6 +597,15 @@ fun PlaylistDetailScreen(
                     }),
                 )
                 add(PlexampSheetAction("Rename", Icons.Default.Edit, onClick = { showRename = true }))
+                if (!isDaily) {
+                    add(PlexampSheetAction("Share with…", Icons.Default.Share, onClick = {
+                        scope.launch {
+                            householdMembers = runCatching { repository.household().members }
+                                .getOrDefault(emptyList())
+                            showShare = true
+                        }
+                    }))
+                }
                 add(
                     PlexampSheetAction("Delete playlist", Icons.Default.Delete, onClick = {
                         scope.launch {

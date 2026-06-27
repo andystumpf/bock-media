@@ -37,6 +37,7 @@ import com.bockmedia.console.domain.model.PlaybackFocus
 import com.bockmedia.console.domain.model.PlayTarget
 import com.bockmedia.console.media.LOCAL_PHONE_DEVICE_ID
 import com.bockmedia.console.media.LocalPlaybackController
+import com.bockmedia.console.local.ActiveProfileStore
 import com.bockmedia.console.local.DownloadState
 import com.bockmedia.console.local.OfflineDownloadManager
 import com.bockmedia.console.local.downloadId
@@ -76,7 +77,7 @@ fun PlaylistsScreen(
 
     suspend fun load() {
         runCatching {
-            val loaded = repository.playlists(search).items
+            val loaded = repository.playlists(search, memberScoped = true).items
             // Batch-resolve cover paths once (one request) before rows render, so each
             // SpotifyPlaylistRow reads its cover from cache instead of firing its own
             // /cover call (perf #3 — fixes N+1 cover fetch).
@@ -270,6 +271,18 @@ private fun SpotifyPlaylistRow(
             Text(
                 buildString {
                     append(trackLabel)
+                    playlistShareBadge(
+                        ownerMemberId = playlist.ownerMemberId,
+                        ownerName = playlist.ownerName,
+                        visibility = playlist.visibility,
+                        sharedWith = playlist.sharedWith,
+                        daily = playlist.daily,
+                        activeMemberId = ActiveProfileStore.activeMemberId(LocalContext.current),
+                        memberName = { id ->
+                            // Name lookup deferred — badge uses ownerName from API when available
+                            null
+                        },
+                    )?.let { append(" · $it") }
                     if (!sourceLabel.isNullOrBlank()) append(" · $sourceLabel")
                 },
                 style = MaterialTheme.typography.bodySmall,
