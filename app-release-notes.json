@@ -5,6 +5,7 @@
       "version": "2.6.30",
       "date": "2026-06-25",
       "items": [
+        {"kind": "feat", "text": "Web home tile rotation — tiles you haven't opened in 4+ days swap for fresh library picks (matches Android/iOS)"},
         {"kind": "feat", "text": "Library UI prefs sync per profile — sort order, grid/list view, and last library tab follow you across web, Android, and iOS"},
         {"kind": "feat", "text": "Web playlist sort (name/tracks, A–Z) syncs with your profile; tapping Library restores your last sub-tab"},
         {"kind": "fix", "text": "Per-member ratings hardened against race conditions and profile mix-ups (server + web + iOS favorites API)"}

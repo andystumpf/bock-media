@@ -320,6 +320,122 @@
     return { kind: 'radio', title, seedKind, seed, artPath: artPath || null };
   }
 
+  const TILE_STALE_MS = 4 * 24 * 60 * 60 * 1000;
+  let _testEngagement = null;
+
+  const TileEngagement = {
+    load() {
+      if (_testEngagement !== null) return { ..._testEngagement };
+      if (typeof localStorage !== 'undefined') {
+        try {
+          const raw = localStorage.getItem('bock_home_tile_engagement');
+          return raw ? JSON.parse(raw) : {};
+        } catch {
+          return {};
+        }
+      }
+      return {};
+    },
+    save(map) {
+      if (_testEngagement !== null) {
+        _testEngagement = { ...map };
+        return;
+      }
+      if (typeof localStorage === 'undefined') return;
+      try {
+        if (!Object.keys(map).length) localStorage.removeItem('bock_home_tile_engagement');
+        else localStorage.setItem('bock_home_tile_engagement', JSON.stringify(map));
+      } catch { /* quota */ }
+    },
+    noteCardsPresent(cardIds) {
+      const now = Date.now();
+      const map = this.load();
+      let changed = false;
+      for (const id of cardIds || []) {
+        if (!id || map[id]) continue;
+        map[id] = { firstSeenMs: now };
+        changed = true;
+      }
+      if (changed) this.save(map);
+    },
+    isStale(cardId, nowMs = Date.now()) {
+      const entry = this.load()[cardId];
+      if (!entry) return false;
+      const anchor = entry.lastSelectedMs ?? entry.firstSeenMs;
+      return nowMs - anchor >= TILE_STALE_MS;
+    },
+  };
+
+  function isRotatableSectionKind(kind) {
+    return kind !== 'RatedSongs' && kind !== 'Offline' && kind !== 'Favorites';
+  }
+
+  function rotationSubtitle(kind, pl) {
+    const tracks = plTracks(pl);
+    switch (kind) {
+      case 'JumpBackIn': return `${tracks} tracks · Suggested for you`;
+      case 'TopMixes':
+      case 'ExploreThemes':
+      case 'Mood':
+      case 'DailyMixes': return 'Suggested mix';
+      case 'Radio': return 'From your library';
+      case 'Discover': return `${tracks} tracks · Discover`;
+      case 'RecentPlaylists': return `${tracks} tracks · Suggested for you`;
+      default: return `${tracks} tracks`;
+    }
+  }
+
+  function applyTileRotation(feed, input, nowMs = Date.now()) {
+    const allPlaylists = (input.allPlaylists || []).map((p) => ({ ...p, tracks: plTracks(p) }));
+    const cardIds = (feed.sections || []).flatMap((s) => (s.cards || []).map((c) => c.id));
+    TileEngagement.noteCardsPresent(cardIds);
+
+    const usedPlaylistIds = new Set();
+    const usedCardIds = new Set();
+    const usedPlaylistNames = new Set();
+    for (const card of (feed.sections || []).flatMap((s) => s.cards || [])) {
+      usedCardIds.add(card.id);
+      if (card.playlistId) usedPlaylistIds.add(card.playlistId);
+      usedPlaylistNames.add((card.title || '').toLowerCase());
+    }
+
+    let rotationIndex = 0;
+    const sections = (feed.sections || []).map((section) => {
+      if (!isRotatableSectionKind(section.kind)) return section;
+      const cards = (section.cards || []).map((card) => {
+        if (!TileEngagement.isStale(card.id, nowMs)) return card;
+        const seed = (input.shuffleSeed || 0) + rotationIndex * 17 + hashCode(card.id);
+        const pool = Rules.shuffledBrowsablePlaylists(allPlaylists, seed).filter((pl) =>
+          plTracks(pl) > 0 &&
+          !usedPlaylistIds.has(pl.id) &&
+          !usedPlaylistNames.has(pl.name.toLowerCase()) &&
+          !Rules.isSpecialHomePlaylistName(pl.name),
+        );
+        const playlist = pool[0];
+        if (!playlist) return card;
+        const replacementId = `pl-${playlist.id}`;
+        if (usedCardIds.has(replacementId)) return card;
+        rotationIndex += 1;
+        usedCardIds.add(replacementId);
+        usedPlaylistIds.add(playlist.id);
+        usedPlaylistNames.add(playlist.name.toLowerCase());
+        const replacement = {
+          id: replacementId,
+          title: playlist.name,
+          subtitle: rotationSubtitle(section.kind, playlist),
+          artPath: null,
+          playlistId: playlist.id,
+          playTarget: ptPlaylist(playlist.id, playlist.name),
+          kind: section.kind,
+        };
+        TileEngagement.noteCardsPresent([replacement.id]);
+        return replacement;
+      });
+      return { ...section, cards };
+    });
+    return { sections };
+  }
+
   function HomeFeedRegistry() {
     const usedPlaylistIds = new Set();
     const usedPlaylistNameKeys = new Set();
@@ -1092,7 +1208,27 @@
     return 'fa-music';
   }
 
-  const api = { compose, Rules, homeShortcutCards, eligibleForHomeShortcut, cardPlayOpts, cardHref, cardIcon, dayOfYear, LIMITS };
+  const api = {
+    compose,
+    applyTileRotation,
+    Rules,
+    homeShortcutCards,
+    eligibleForHomeShortcut,
+    cardPlayOpts,
+    cardHref,
+    cardIcon,
+    dayOfYear,
+    LIMITS,
+    __testEngagement: {
+      STALE_MS: TILE_STALE_MS,
+      reset() { _testEngagement = {}; },
+      put(cardId, entry) {
+        const map = TileEngagement.load();
+        map[cardId] = entry;
+        TileEngagement.save(map);
+      },
+    },
+  };
   root.HomeFeed = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : typeof window !== 'undefined' ? window : {});

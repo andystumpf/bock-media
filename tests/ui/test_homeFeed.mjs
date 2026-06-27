@@ -79,6 +79,43 @@ test('homeShortcutCards excludes tracks and albums from Jump back in', () => {
   }));
 });
 
+test('applyTileRotation replaces stale tiles after four days', () => {
+  const HomeFeed = loadHomeFeed();
+  HomeFeed.__testEngagement.reset();
+  const input = {
+    allPlaylists: [
+      { id: 'pl-1', name: 'Playlist 1', trackCount: 12 },
+      { id: 'pl-2', name: 'Playlist 2', trackCount: 12 },
+      { id: 'pl-3', name: 'Playlist 3', trackCount: 12 },
+    ],
+    shuffleSeed: 7,
+  };
+  const feed = {
+    sections: [{
+      id: 'top-mixes',
+      title: 'Your top mixes',
+      kind: 'TopMixes',
+      cards: [{
+        id: 'pl-pl-1',
+        title: 'Playlist 1',
+        subtitle: 'Suggested mix',
+        playlistId: 'pl-1',
+        playTarget: { kind: 'playlist', id: 'pl-1', name: 'Playlist 1' },
+        kind: 'TopMixes',
+      }],
+    }],
+  };
+  const now = Date.now();
+  HomeFeed.__testEngagement.put('pl-pl-1', {
+    firstSeenMs: now - HomeFeed.__testEngagement.STALE_MS - 60_000,
+  });
+  const rotated = HomeFeed.applyTileRotation(feed, input, now);
+  const next = rotated.sections[0].cards[0];
+  assert.notEqual(next.id, 'pl-pl-1');
+  assert.equal(next.kind, 'TopMixes');
+  assert.ok(['pl-pl-2', 'pl-pl-3'].includes(next.id));
+});
+
 test('compose includes explore theme for matching playlist', () => {
   const HomeFeed = loadHomeFeed();
   const feed = HomeFeed.compose({

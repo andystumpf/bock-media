@@ -1353,6 +1353,10 @@ function discoverWeeklyCardsFromApi(discover) {
   }).filter(Boolean);
 }
 
+function buildHomeFeed(input) {
+  return HomeFeed.applyTileRotation(HomeFeed.compose(input), input);
+}
+
 function renderDashboardUI(feed, covers, remote, opts = {}) {
   window._homeFeed = feed;
   if (typeof ClientPrefsSync !== 'undefined') {
@@ -1447,7 +1451,7 @@ async function loadDashboard(opts = {}) {
 
   const history = (historyData && historyData.items) || [];
   let covers = (typeof WebCache !== 'undefined' && WebCache.peekHome()?.covers) || {};
-  const partialFeed = HomeFeed.compose({
+  const partialFeed = buildHomeFeed({
     history,
     analytics: null,
     allPlaylists,
@@ -1481,7 +1485,7 @@ async function loadDashboard(opts = {}) {
     ? dashboard.favorites
     : (Array.isArray(favData) ? favData : []);
 
-  const feed = HomeFeed.compose({
+  const feed = buildHomeFeed({
     history,
     analytics,
     allPlaylists,
