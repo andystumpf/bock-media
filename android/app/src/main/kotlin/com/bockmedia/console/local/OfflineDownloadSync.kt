@@ -40,17 +40,33 @@ object OfflineDownloadSync {
         return loadMap(context)[memberId].orEmpty()
     }
 
-    fun visibleCollectionIds(context: Context): Set<String>? {
-        val memberId = ActiveProfileStore.activeMemberId(context) ?: return null
-        val ids = loadMap(context)[memberId]?.map { it.id }.orEmpty()
-        return ids.toSet()
+    /** Collection ids owned by the active profile (empty when none selected). */
+    fun visibleCollectionIds(context: Context): Set<String> =
+        collectionIdsForMember(context, ActiveProfileStore.activeMemberId(context))
+
+    fun collectionIdsForMember(context: Context, memberId: String?): Set<String> {
+        if (memberId.isNullOrBlank()) return emptySet()
+        return loadMap(context)[memberId]?.map { it.id }?.toSet() ?: emptySet()
     }
 
     fun collectForMember(context: Context): List<OfflineDownloadRecord> {
-        val memberId = ActiveProfileStore.activeMemberId(context)
-        val fromRegistry = if (memberId.isNullOrBlank()) emptyList() else loadMap(context)[memberId].orEmpty()
-        val fromDisk = OfflineDownloadStore(context).listManifests().map { it.toRecord() }
-        return mergeRecords(fromRegistry + fromDisk)
+        val memberId = ActiveProfileStore.activeMemberId(context) ?: return emptyList()
+        return loadMap(context)[memberId].orEmpty()
+    }
+
+    /** Attach on-disk collections not yet assigned to any profile (legacy / pre-registry). */
+    fun claimOrphansForActiveProfile(context: Context) {
+        val memberId = ActiveProfileStore.activeMemberId(context) ?: return
+        val map = loadMap(context).toMutableMap()
+        val assigned = map.values.flatten().map { it.id }.toSet()
+        val orphans = OfflineDownloadStore(context).listManifests()
+            .filter { it.id !in assigned }
+            .map { it.toRecord() }
+        if (orphans.isEmpty()) return
+        val list = map[memberId]?.toMutableList() ?: mutableListOf()
+        list.addAll(orphans)
+        map[memberId] = mergeRecords(list)
+        saveMap(context, map)
     }
 
     fun applyRemote(context: Context, records: List<OfflineDownloadRecord>) {
@@ -72,7 +88,7 @@ object OfflineDownloadSync {
             val target = record.toPlayTarget()
             val manifest = store.readManifest(record.id)
             if (manifest != null && store.isCollectionComplete(manifest)) continue
-            if (OfflineDownloadManager.statusFor(target)?.state == DownloadState.Downloading) continue
+            if (OfflineDownloadManager.statusFor(context, target)?.state == DownloadState.Downloading) continue
             OfflineDownloadManager.download(appContext, target)
         }
     }

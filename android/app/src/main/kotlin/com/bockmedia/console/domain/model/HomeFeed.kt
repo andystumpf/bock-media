@@ -6,6 +6,7 @@ import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.local.ClientPrefsSync
 import com.bockmedia.console.local.OfflineDownloadManager
 import com.bockmedia.console.local.OfflineDownloadStore
+import com.bockmedia.console.local.OfflineDownloadSync
 import com.bockmedia.console.local.toPlayTarget
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -207,9 +208,11 @@ fun HomeFilter.matches(kind: HomeSectionKind): Boolean = when (this) {
 
 fun buildOfflineHomeSection(context: Context): HomeSection? {
     OfflineDownloadManager.refresh(context)
+    OfflineDownloadSync.claimOrphansForActiveProfile(context)
     val store = OfflineDownloadStore(context)
+    val visibleIds = OfflineDownloadSync.visibleCollectionIds(context)
     val cards = store.listManifests()
-        .filter { manifest -> store.isCollectionComplete(manifest) }
+        .filter { manifest -> manifest.id in visibleIds && store.isCollectionComplete(manifest) }
         .sortedByDescending { it.lastSyncedAtMs.takeIf { ms -> ms > 0 } ?: it.downloadedAtMs }
         .map { manifest ->
             HomeCard(

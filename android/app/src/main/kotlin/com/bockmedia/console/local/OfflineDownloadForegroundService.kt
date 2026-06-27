@@ -72,7 +72,10 @@ class OfflineDownloadForegroundService : Service() {
         observing = true
         scope.launch {
             OfflineDownloadManager.statuses.collectLatest { statuses ->
-                val active = statuses.values.filter { it.state == DownloadState.Downloading }
+                val visibleIds = OfflineDownloadSync.visibleCollectionIds(this@OfflineDownloadForegroundService)
+                val active = statuses.values.filter {
+                    it.manifest.id in visibleIds && it.state == DownloadState.Downloading
+                }
                 if (active.isEmpty()) {
                     stopForeground(STOP_FOREGROUND_REMOVE)
                     stopSelf()

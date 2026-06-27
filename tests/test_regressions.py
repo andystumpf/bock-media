@@ -765,7 +765,11 @@ class TestSilentDeviceDiscovery:
         cfg = server.CONFIG_PATH
         os.makedirs(os.path.dirname(cfg), exist_ok=True)
         with open(cfg, 'w') as f:
-            json.dump({'deviceDiscovery': {'enabled': False}}, f)
+            json.dump({
+                'deviceDiscovery': {'enabled': False},
+                'mobileApi': {'allowOpenLanApi': True, 'allowOpenLanMedia': True},
+            }, f)
+        server._config_mtime = 0.0
         resp = client.post('/api/devices/discover', json={})
         assert resp.status_code == 400
         assert resp.get_json()['code'] == 'disabled'
@@ -774,7 +778,11 @@ class TestSilentDeviceDiscovery:
         cfg = server.CONFIG_PATH
         os.makedirs(os.path.dirname(cfg), exist_ok=True)
         with open(cfg, 'w') as f:
-            json.dump({'deviceDiscovery': {'enabled': False}}, f)
+            json.dump({
+                'deviceDiscovery': {'enabled': False},
+                'mobileApi': {'allowOpenLanApi': True, 'allowOpenLanMedia': True},
+            }, f)
+        server._config_mtime = 0.0
         import alexa_remote
         monkeypatch.setattr(alexa_remote, 'list_devices', lambda: [])
         resp = client.post('/api/devices/discover', json={'force': True})

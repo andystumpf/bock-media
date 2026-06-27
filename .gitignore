@@ -20,6 +20,7 @@ favorites.json
 device_groups.json
 selected_state.json
 ignored_tracks.json
+devices.json
 server.log
 server.log.*
 msp_slu_poll.log

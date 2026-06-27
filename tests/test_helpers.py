@@ -252,7 +252,8 @@ class TestFileToStreamUrl:
         """builds <publicUrl>/stream/<encoded path>"""
         monkeypatch.setattr(server, 'get_public_url', lambda: 'https://x.example')
         url = server.file_to_stream_url('/mnt/Music/Foo Bar/Track.mp3')
-        assert url == 'https://x.example/stream/mnt/Music/Foo%20Bar/Track.mp3'
+        assert url.startswith('https://x.example/stream/mnt/Music/Foo%20Bar/Track.mp3')
+        assert 'sig=' in url and 'expires=' in url
 
 
 # ─────────────────────────── streamability check ─────────────────────────────

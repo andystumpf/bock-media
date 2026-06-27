@@ -33,6 +33,7 @@ import com.bockmedia.console.domain.model.PlayTarget
 import com.bockmedia.console.local.ActiveProfileStore
 import com.bockmedia.console.local.DownloadState
 import com.bockmedia.console.local.OfflineDownloadManager
+import com.bockmedia.console.ui.downloads.rememberVisibleDownloadStatuses
 import com.bockmedia.console.local.downloadId
 import com.bockmedia.console.media.LOCAL_PHONE_DEVICE_ID
 import com.bockmedia.console.media.LocalPlaybackController
@@ -95,7 +96,7 @@ fun PlaylistDetailScreen(
     val listState = rememberLazyListState()
     val pageSize = 100
     val playTarget = remember(name, playlistId) { PlayTarget.Playlist(playlistId, name) }
-    val downloadStatus by OfflineDownloadManager.statuses.collectAsState()
+    val downloadStatus = rememberVisibleDownloadStatuses()
     val collectionStatus = downloadStatus[playTarget.downloadId()]
     val downloaded = collectionStatus?.state == DownloadState.Complete
     val downloading = collectionStatus?.state == DownloadState.Downloading

@@ -18,6 +18,8 @@ import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.*
 import com.bockmedia.console.local.ActiveProfileStore
 import com.bockmedia.console.local.OfflineDownloadManager
+import com.bockmedia.console.local.OfflineDownloadSync
+import com.bockmedia.console.ui.downloads.rememberVisibleDownloadStatuses
 import com.bockmedia.console.local.downloadId
 import com.bockmedia.console.ui.components.*
 import com.bockmedia.console.ui.library.LibraryArtPrefetch
@@ -46,7 +48,7 @@ fun HomeScreen(
     var showAllSection by remember { mutableStateOf<HomeSection?>(null) }
     var actionCard by remember { mutableStateOf<HomeCard?>(null) }
     var warmJob by remember { mutableStateOf<Job?>(null) }
-    val downloadStatuses by OfflineDownloadManager.statuses.collectAsState()
+    val downloadStatuses = rememberVisibleDownloadStatuses()
     val alexaStatus by rememberAlexaRemoteStatus(repository)
     val alexaBanner = alexaRemotePlayMessage(alexaStatus).takeIf { !remoteOk }
     var profileBanner by remember { mutableStateOf<String?>(null) }
@@ -235,6 +237,12 @@ fun HomeScreen(
 
     LaunchedEffect(Unit) {
         bootstrapHome()
+    }
+
+    val activeMemberId by ActiveProfileStore.activeMemberIdState.collectAsState()
+    LaunchedEffect(activeMemberId) {
+        OfflineDownloadSync.claimOrphansForActiveProfile(context)
+        loadOffline()
     }
 
     LaunchedEffect(filter) {

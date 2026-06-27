@@ -476,7 +476,7 @@ private fun SongHitRow(
     var showAddToRoom by remember { mutableStateOf(false) }
     var dialogStars by remember(path) { mutableIntStateOf(songRatings[path] ?: 0) }
     val target = PlayTarget.Song(path, hit.title ?: "")
-    val canPlay = remoteOk || OfflineDownloadManager.isDownloaded(target)
+    val canPlay = remoteOk || OfflineDownloadManager.isDownloaded(context, target)
     val playFn: () -> Unit = {
         if (remoteOk) {
             onPlay(target)

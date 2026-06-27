@@ -15,7 +15,7 @@
       .map((seg) => encodeURIComponent(seg).replace(/%20/g, '%20')).join('/');
   }
 
-  function streamUrl(track, normalize) {
+  async function streamUrl(track, normalize) {
     const path = typeof track === 'string' ? track : track?.path;
     if (!path) return null;
     const params = new URLSearchParams();
@@ -25,7 +25,11 @@
     }
     if (normalize === false) params.set('normalize', '0');
     const qs = params.toString();
-    return `/stream/${encodeMediaPath(path)}${qs ? `?${qs}` : ''}`;
+    const rel = `/stream/${encodeMediaPath(path)}${qs ? `?${qs}` : ''}`;
+    if (typeof root.signMediaPath === 'function') {
+      return root.signMediaPath(rel);
+    }
+    return rel;
   }
 
   function dbToLinear(db) {
@@ -204,7 +208,7 @@
     if (!track || token !== loadToken) return false;
     const gainDb = await replayGainDbForTrack(track);
     const clientGain = gainDb != null && gainDb <= 0;
-    let url = streamUrl(track, !clientGain);
+    let url = await streamUrl(track, !clientGain);
     if (!url) return false;
     audio.pause();
     audio.src = url;
@@ -229,7 +233,7 @@
       if (token !== loadToken || isPlayInterrupted(e)) return false;
       // Fallback: original file without server-side transcode.
       if (!clientGain && url.indexOf('normalize=0') < 0) {
-        url = streamUrl(track, false);
+        url = await streamUrl(track, false);
         audio.src = url;
         audio.load();
         audio.volume = state.volume;

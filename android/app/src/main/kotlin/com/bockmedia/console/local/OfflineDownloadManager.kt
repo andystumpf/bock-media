@@ -54,8 +54,39 @@ object OfflineDownloadManager {
     private val mutex = Mutex()
     private val activeJobs = ConcurrentHashMap<String, Job>()
     private val cancelFlags = ConcurrentHashMap<String, AtomicBoolean>()
+    private val profileSuspendedIds = ConcurrentHashMap.newKeySet<String>()
     private val _statuses = MutableStateFlow<Map<String, OfflineCollectionStatus>>(emptyMap())
     val statuses: StateFlow<Map<String, OfflineCollectionStatus>> = _statuses.asStateFlow()
+
+    fun visibleStatuses(context: Context): Map<String, OfflineCollectionStatus> {
+        val ids = OfflineDownloadSync.visibleCollectionIds(context)
+        return _statuses.value.filterKeys { it in ids }
+    }
+
+    fun isVisible(context: Context, collectionId: String): Boolean =
+        collectionId in OfflineDownloadSync.visibleCollectionIds(context)
+
+    fun onActiveProfileChanged(context: Context, previousMemberId: String?) {
+        val appContext = context.applicationContext
+        if (!previousMemberId.isNullOrBlank()) {
+            suspendDownloadsForMember(appContext, previousMemberId)
+        }
+        OfflineDownloadSync.claimOrphansForActiveProfile(appContext)
+        refresh(appContext)
+        OfflineDownloadSync.restoreMissing(appContext, OfflineDownloadSync.recordsForActiveProfile(appContext))
+    }
+
+    /** Stop in-flight jobs for a profile without marking collections failed. */
+    fun suspendDownloadsForMember(context: Context, memberId: String) {
+        OfflineDownloadSync.collectionIdsForMember(context, memberId).forEach { id ->
+            if (!activeJobs.containsKey(id)) return@forEach
+            profileSuspendedIds.add(id)
+            cancelFlags.computeIfAbsent(id) { AtomicBoolean(false) }.set(true)
+            activeJobs[id]?.cancel()
+            activeJobs.remove(id)
+            cancelFlags.remove(id)
+        }
+    }
 
     fun refresh(context: Context) {
         val store = OfflineDownloadStore(context)
@@ -70,10 +101,17 @@ object OfflineDownloadManager {
         }
     }
 
-    fun isDownloaded(target: PlayTarget): Boolean =
-        _statuses.value[target.downloadId()]?.state == DownloadState.Complete
+    fun isDownloaded(context: Context, target: PlayTarget): Boolean {
+        val id = target.downloadId()
+        if (id !in OfflineDownloadSync.visibleCollectionIds(context)) return false
+        return _statuses.value[id]?.state == DownloadState.Complete
+    }
 
-    fun statusFor(target: PlayTarget): OfflineCollectionStatus? = _statuses.value[target.downloadId()]
+    fun statusFor(context: Context, target: PlayTarget): OfflineCollectionStatus? {
+        val id = target.downloadId()
+        if (id !in OfflineDownloadSync.visibleCollectionIds(context)) return null
+        return _statuses.value[id]
+    }
 
     fun downloadPlaylist(context: Context, playlistId: String, playlistName: String) {
         download(context, PlayTarget.Playlist(playlistId, playlistName))
@@ -154,12 +192,15 @@ object OfflineDownloadManager {
     private suspend fun syncAllLocked(context: Context) {
         if (!OfflineDownloadNetwork.canDownloadNow(context)) return
         refresh(context)
-        val store = OfflineDownloadStore(context)
-        _statuses.value.filter { it.value.state == DownloadState.Failed }.forEach { (_, status) ->
+        val visibleIds = OfflineDownloadSync.visibleCollectionIds(context)
+        _statuses.value.filter { (id, status) ->
+            id in visibleIds && status.state == DownloadState.Failed
+        }.forEach { (_, status) ->
             downloadOrSyncLocked(context, status.manifest.toPlayTarget(), resyncOnly = false)
         }
+        val store = OfflineDownloadStore(context)
         store.listManifests()
-            .filter { manifest -> store.isCollectionComplete(manifest) }
+            .filter { manifest -> manifest.id in visibleIds && store.isCollectionComplete(manifest) }
             .forEach { manifest ->
                 downloadOrSyncLocked(context, manifest.toPlayTarget(), resyncOnly = true)
             }
@@ -282,6 +323,9 @@ object OfflineDownloadManager {
             }
             ClientPrefsSync.schedulePush(context)
         }.onFailure { e ->
+            if (profileSuspendedIds.remove(id)) {
+                return@onFailure
+            }
             val partial = store.readManifest(id)
             val progress = partial?.let { store.completionProgress(it) } ?: 0f
             updateStatus(

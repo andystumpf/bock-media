@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import com.bockmedia.console.domain.model.PlayTarget
 import com.bockmedia.console.local.DownloadState
 import com.bockmedia.console.local.OfflineDownloadManager
+import com.bockmedia.console.ui.downloads.rememberVisibleDownloadStatuses
 import com.bockmedia.console.local.downloadId
 import com.bockmedia.console.ui.theme.BockGreen
 
@@ -96,7 +97,7 @@ fun DownloadStatusControl(
     onArtwork: Boolean = false,
 ) {
     val context = LocalContext.current
-    val statuses by OfflineDownloadManager.statuses.collectAsState()
+    val statuses = rememberVisibleDownloadStatuses()
     val status = statuses[playTarget.downloadId()]
     val box = modifier.size(40.dp)
     val inner = if (onArtwork) {

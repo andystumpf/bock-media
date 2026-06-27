@@ -85,10 +85,11 @@ fun FamilyScreen(repository: BockMediaRepository) {
                         includeNone = true,
                         noneLabel = "Unattributed",
                     ) { id ->
+                        val previous = ActiveProfileStore.activeMemberId(context)
                         activeMemberId = id
                         ActiveProfileStore.setActiveMember(context, id.ifBlank { null })
                         scope.launch {
-                            ClientPrefsSync.onActiveMemberChanged(context, id.ifBlank { null })
+                            ClientPrefsSync.onActiveMemberChanged(context, id.ifBlank { null }, previous)
                             loadMessages()
                         }
                     }

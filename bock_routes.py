@@ -293,7 +293,7 @@ def register(app, g):
         result = bock_handoff.handoff_payload(
             from_dev, to_dev, offset_ms, ctx,
             read_np=lambda d: read_np_state_for_device(d),
-            file_to_stream_url=lambda p: file_to_stream_url(p) + '?normalize=1'
+            file_to_stream_url=lambda p: file_to_stream_url(p, normalize=1)
             if _loudness_mode() != 'off' else file_to_stream_url(p),
             alexa_play_fn=_play,
             alexa_serial_for=_alexa_serial,

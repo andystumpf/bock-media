@@ -2,12 +2,31 @@
 
 const AUTH_STORAGE_KEY = 'bockmedia_auth';
 let _requirePassword = false;
+let _mediaAuthRequired = false;
+const _mediaSignCache = new Map();
 
 async function refreshAuthInfo() {
   const info = await fetch('/api/auth/info').then(r => r.json()).catch(() => ({}));
   _requirePassword = !!info.requirePassword;
+  _mediaAuthRequired = !!info.mediaAuthRequired;
   return info;
 }
+
+async function signMediaPath(relativePath) {
+  if (!relativePath || !_mediaAuthRequired) return relativePath;
+  const hit = _mediaSignCache.get(relativePath);
+  if (hit && hit.expires > Date.now() / 1000 + 60) return hit.url;
+  const r = await authFetch(`/api/media/sign?path=${encodeURIComponent(relativePath)}`);
+  if (!r?.ok) return relativePath;
+  const data = await r.json().catch(() => ({}));
+  if (data.url) {
+    _mediaSignCache.set(relativePath, { url: data.url, expires: data.expires || 0 });
+    return data.url;
+  }
+  return relativePath;
+}
+
+window.signMediaPath = signMediaPath;
 
 function authRequired() {
   return _requirePassword;
@@ -155,7 +174,13 @@ function artworkUrl(filepath, sizePx) {
   const rel = String(filepath).replace(/^\/+/, '');
   const encoded = rel.split('/').map(seg => encodeURIComponent(seg)).join('/');
   const q = sizePx ? `?size=${sizePx}` : '';
-  return `/artwork/${encoded}${q}`;
+  const path = `/artwork/${encoded}${q}`;
+  if (_mediaAuthRequired) {
+    const hit = _mediaSignCache.get(path);
+    if (hit) return hit.url;
+    signMediaPath(path).catch(() => {});
+  }
+  return path;
 }
 
 const _artistPortraitCache = new Map();

@@ -79,6 +79,7 @@ fun ProfilePickerGate(
                                 .clickable(enabled = !loading) {
                                     loading = true
                                     scope.launch {
+                                        val previous = ActiveProfileStore.activeMemberId(context)
                                         ActiveProfileStore.setActiveMember(context, member.id)
                                         runCatching {
                                             repository.bindClient(
@@ -87,7 +88,7 @@ fun ProfilePickerGate(
                                                 InstallIdentity.phoneId(context),
                                             )
                                         }
-                                        ClientPrefsSync.pullAndApply(context)
+                                        ClientPrefsSync.onActiveMemberChanged(context, member.id, previous)
                                         loading = false
                                     }
                                 },

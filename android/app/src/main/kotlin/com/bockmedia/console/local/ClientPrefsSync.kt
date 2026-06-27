@@ -121,9 +121,14 @@ object ClientPrefsSync {
         )
     }
 
-    suspend fun onActiveMemberChanged(context: Context, memberId: String?) {
+    suspend fun onActiveMemberChanged(
+        context: Context,
+        memberId: String?,
+        previousMemberId: String?,
+    ) {
         val app = BockMediaApp.get(context)
         val clientId = ClientIdStore.clientId(context)
+        OfflineDownloadManager.onActiveProfileChanged(context, previousMemberId)
         app.repository.clearRatingsCache()
         HomeFeedCache.invalidate()
         HomeLoadCoordinator.resetReloadWindow()

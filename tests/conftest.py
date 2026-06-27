@@ -90,6 +90,15 @@ def isolated_paths(tmp_path, monkeypatch):
     notes_src = os.path.join(REPO_ROOT, 'app-release-notes.json')
     if os.path.isfile(notes_src):
         shutil.copy2(notes_src, state_dir / 'app-release-notes.json')
+    config_path = state_dir / 'config.json'
+    if not config_path.exists():
+        config_path.write_text(json.dumps({
+            'mobileApi': {
+                'allowOpenLanApi': True,
+                'allowOpenLanMedia': True,
+                'token': 'test-mobile-token',
+            },
+        }), encoding='utf-8')
     return tmp_path
 
 

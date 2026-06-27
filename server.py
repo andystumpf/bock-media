@@ -25,7 +25,7 @@ import contextlib
 import alexa_apl
 import ipaddress
 from logging.handlers import RotatingFileHandler
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urlparse, urlencode, parse_qsl
 from urllib.request import urlopen
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
@@ -298,14 +298,19 @@ def apply_logging():
 # Direct port-forward hits (public IP :3001) must NOT treat these as public.
 _ALEXA_TUNNEL_PREFIXES = ('/alexa', '/stream/', '/artwork/', '/music', '/oauth/')
 
+def _is_loopback_remote():
+    ra = (request.remote_addr or '').strip().split('%')[0]
+    try:
+        return ipaddress.ip_address(ra).is_loopback
+    except ValueError:
+        return False
+
 def _is_tunnel_request():
-    # Cloudflare cloudflared adds Cf-Connecting-Ip (and Cf-Ray) on every tunneled
-    # request. Local LAN traffic never has these. We treat presence of either as
-    # "came from the public internet via Cloudflare".
-    return bool(
-        request.headers.get('Cf-Connecting-Ip')
-        or request.headers.get('Cf-Ray')
-    )
+    # Trust Cf-* only when cloudflared connects locally (loopback). Port-forward
+    # clients can forge Cf-Connecting-Ip to bypass external auth (C-03).
+    if not (request.headers.get('Cf-Connecting-Ip') or request.headers.get('Cf-Ray')):
+        return False
+    return _is_loopback_remote()
 
 def _client_ip():
     """Best-effort client IP. Trust Cf-Connecting-Ip only on Cloudflare tunnel hits."""
@@ -396,8 +401,95 @@ def _redact_config(cfg):
             redacted[key] = {'_redacted': True}
     return redacted
 
+def _allow_open_lan_api():
+    return _cfg_flag('mobileApi', 'allowOpenLanApi')
+
+def _allow_open_lan_media():
+    return _cfg_flag('mobileApi', 'allowOpenLanMedia')
+
+def _credentials_configured():
+    if get_pref('WebPassword', '').strip():
+        return True
+    try:
+        ma = load_config().get('mobileApi') or {}
+        return bool((ma.get('token') or '').strip())
+    except Exception:
+        return False
+
+def _media_signing_secret():
+    try:
+        ma = load_config().get('mobileApi') or {}
+        token = (ma.get('token') or '').strip()
+        if token:
+            return token.encode('utf-8')
+    except Exception:
+        pass
+    pw = get_pref('WebPassword', '').strip()
+    return pw.encode('utf-8') if pw else None
+
+_MEDIA_SIG_TTL_SEC = 86400
+
+def _media_sig_canonical(path, expires, query_pairs):
+    parts = [path, str(expires)]
+    for k, v in sorted(query_pairs, key=lambda x: x[0]):
+        if k in ('sig', 'expires'):
+            continue
+        parts.append(f'{k}={v}')
+    return '\n'.join(parts).encode('utf-8')
+
+def _append_media_sig(path, query=None):
+    """Append HMAC query params to a /stream/ or /artwork/ path."""
+    pairs = []
+    if isinstance(query, dict):
+        pairs = [(k, str(v)) for k, v in query.items()]
+    elif query:
+        pairs = [(k, v) for k, v in parse_qsl(query, keep_blank_values=True)]
+    secret = _media_signing_secret()
+    if not secret:
+        return f'{path}?{urlencode(pairs)}' if pairs else path
+    expires = str(int(time.time()) + _MEDIA_SIG_TTL_SEC)
+    sig = hmac.new(
+        secret,
+        _media_sig_canonical(path, expires, pairs),
+        hashlib.sha256,
+    ).hexdigest()
+    pairs.extend([('expires', expires), ('sig', sig)])
+    return f'{path}?{urlencode(pairs)}'
+
+def _verify_media_signature():
+    secret = _media_signing_secret()
+    if not secret:
+        return False
+    sig = (request.args.get('sig') or '').strip()
+    expires = (request.args.get('expires') or '').strip()
+    if not sig or not expires.isdigit():
+        return False
+    if int(expires) < int(time.time()):
+        return False
+    pairs = [(k, v) for k, v in request.args.items() if k not in ('sig', 'expires')]
+    expected = hmac.new(
+        secret,
+        _media_sig_canonical(request.path, expires, pairs),
+        hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(sig, expected)
+
+def _media_access_ok():
+    if _allow_open_lan_media():
+        return True
+    if _basic_auth_ok() or _mobile_api_token_ok():
+        return True
+    return _verify_media_signature()
+
+def _api_write_auth_ok():
+    if _allow_open_lan_api():
+        return True
+    return _basic_auth_ok() or _mobile_api_token_ok()
+
 def _api_auth_required():
-    """Credentials required for direct external hits (port-forward), not on LAN."""
+    """True when the web UI should prompt for console login."""
+    if get_pref('WebPassword', '').strip():
+        return True
     if _is_tunnel_request() or _is_lan_request():
         return False
     return _cfg_flag('mobileApi', 'allowExternalAccess')
@@ -765,11 +857,7 @@ def check_auth():
             return None
         return _auth_required()
 
-    if request.path.startswith('/stream/') or request.path.startswith('/artwork/'):
-        ua = request.headers.get('User-Agent', '')
-        rng = request.headers.get('Range', '')
-        print(f"[STREAM] {request.method} {request.path} ua={ua!r} range={rng!r}", flush=True)
-
+    is_media = request.path.startswith('/stream/') or request.path.startswith('/artwork/')
     is_alexa_tunnel_path = any(request.path.startswith(p) for p in _ALEXA_TUNNEL_PREFIXES)
     external = _is_external_request()
     tunnel = _is_tunnel_request()
@@ -781,6 +869,10 @@ def check_auth():
             return _forbidden('External access disabled')
         if any(request.path.startswith(p) for p in ('/alexa', '/music', '/oauth/')):
             return _forbidden('Alexa endpoints use the Cloudflare tunnel only')
+        if is_media and not _media_access_ok():
+            if _credentials_configured():
+                return _auth_required()
+            return _forbidden('Media access requires authentication')
         if _mobile_api_token_ok() or _basic_auth_ok():
             return None
         return _auth_required()
@@ -790,13 +882,36 @@ def check_auth():
             return None
         return _forbidden()
 
-    if is_alexa_tunnel_path and (tunnel or not external):
+    # Alexa/audio fetches via cloudflared (loopback + Cf-* headers).
+    if tunnel and is_alexa_tunnel_path:
         return None
+
+    # LAN stream/artwork — require credentials, HMAC sig, or opt-in open media (C-02).
+    if is_media and _is_lan_request() and not tunnel:
+        if not _media_access_ok():
+            if _credentials_configured() or _media_signing_secret():
+                return _auth_required()
+            return _forbidden(
+                'Media access disabled on LAN — set WebPassword, mobileApi.token, '
+                'or mobileApi.allowOpenLanMedia'
+            )
+
+    # Mutating API on LAN — require credentials or opt-in open API (C-01).
+    if (request.path.startswith('/api/')
+            and request.method in ('POST', 'PUT', 'PATCH', 'DELETE')
+            and _is_lan_request()
+            and not tunnel):
+        if not _api_write_auth_ok():
+            if _credentials_configured():
+                return _auth_required()
+            return _forbidden(
+                'API writes require authentication — set credentials or mobileApi.allowOpenLanApi'
+            )
 
     if request.path.startswith('/api/') and _mobile_api_token_ok():
         return None
 
-    return None  # LAN open; external credentials enforced above
+    return None
 
 # ── Static files ─────────────────────────────────────────────────────────────
 
@@ -4119,7 +4234,32 @@ def auth_info():
     return jsonify({
         'requirePassword': _api_auth_required(),
         'username': _web_username(),
+        'allowOpenLanMedia': _allow_open_lan_media(),
+        'mediaAuthRequired': (
+            _is_lan_request()
+            and not _allow_open_lan_media()
+            and bool(_media_signing_secret())
+        ),
     })
+
+@app.route('/api/media/sign')
+def media_sign():
+    """Return HMAC-signed /stream/ or /artwork/ URL for web img/audio tags."""
+    if not (_allow_open_lan_media() or _basic_auth_ok() or _mobile_api_token_ok()):
+        if _credentials_configured():
+            return _auth_required()
+        return jsonify({'error': 'forbidden'}), 403
+    raw = (request.args.get('path') or '').strip()
+    if not raw.startswith('/stream/') and not raw.startswith('/artwork/'):
+        return jsonify({'error': 'path must start with /stream/ or /artwork/'}), 400
+    parsed = urlparse(raw)
+    signed = _append_media_sig(parsed.path, parsed.query or None)
+    exp = None
+    for k, v in parse_qsl(signed.split('?', 1)[-1] if '?' in signed else ''):
+        if k == 'expires':
+            exp = int(v)
+            break
+    return jsonify({'url': signed, 'expires': exp})
 
 @app.route('/api/settings', methods=['GET'])
 def settings_get():
@@ -7218,9 +7358,17 @@ def serve_artwork(filepath):
         return accel
     return send_file(abs_path, mimetype=mime, conditional=True, max_age=_ART_MAX_AGE)
 
-def file_to_stream_url(filepath):
+def file_to_stream_url(filepath, **query):
     rel = filepath.lstrip('/')
-    return f"{get_public_url()}/stream/{quote(rel, safe='/')}"
+    path = f"/stream/{quote(rel, safe='/')}"
+    signed = _append_media_sig(path, query or None)
+    return f"{get_public_url()}{signed}"
+
+def file_to_artwork_url(filepath, **query):
+    rel = filepath.lstrip('/')
+    path = f"/artwork/{quote(rel, safe='/')}"
+    signed = _append_media_sig(path, query or None)
+    return f"{get_public_url()}{signed}"
 
 def can_stream_track(path):
     """True if this track can be served by current settings/runtime."""
@@ -10132,10 +10280,7 @@ def track_metadata(path):
     artist  = row.get('artist') or None
     album   = row.get('album') or None
     art_path = find_artwork(path)
-    artwork_url = (
-        f"{get_public_url()}/artwork/{quote(art_path.lstrip('/'), safe='/')}"
-        if art_path else None
-    )
+    artwork_url = file_to_artwork_url(art_path) if art_path else None
     return title, artist, album, artwork_url
 
 def track_metadata_fast(path):

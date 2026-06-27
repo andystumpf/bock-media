@@ -34,6 +34,7 @@ import com.bockmedia.console.ui.components.rememberArtworkUrl
 import com.bockmedia.console.local.DownloadState
 import com.bockmedia.console.local.LibraryPrefsStore
 import com.bockmedia.console.local.OfflineDownloadManager
+import com.bockmedia.console.ui.downloads.rememberVisibleDownloadStatuses
 import com.bockmedia.console.local.toPlayTarget
 import com.bockmedia.console.ui.components.*
 import com.bockmedia.console.ui.theme.HomePillActive
@@ -131,7 +132,7 @@ fun LibraryScreen(
     }
 
     // Downloads are read live from the offline store
-    val downloadStatuses by OfflineDownloadManager.statuses.collectAsState()
+    val downloadStatuses = rememberVisibleDownloadStatuses()
     val liveDownloads = remember(downloadStatuses) {
         downloadStatuses.values
             .filter { it.state == DownloadState.Complete }

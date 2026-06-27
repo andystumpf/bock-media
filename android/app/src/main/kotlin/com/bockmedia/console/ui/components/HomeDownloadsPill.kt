@@ -17,7 +17,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.bockmedia.console.local.DownloadState
 import com.bockmedia.console.local.OfflineCollectionStatus
-import com.bockmedia.console.local.OfflineDownloadManager
+import com.bockmedia.console.ui.downloads.rememberVisibleDownloadStatuses
 
 private val PillShape = RoundedCornerShape(50)
 private val SpotifySheetBg = Color(0xFF282828)
@@ -27,7 +27,7 @@ fun HomeDownloadsPillRow(
     onOpenDownloads: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val statuses by OfflineDownloadManager.statuses.collectAsState()
+    val statuses = rememberVisibleDownloadStatuses()
     val active = remember(statuses) {
         statuses.values.filter { it.state == DownloadState.Downloading || it.state == DownloadState.Failed }
     }

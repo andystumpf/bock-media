@@ -64,7 +64,7 @@ fun DownloadsManagementSection(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val statuses by OfflineDownloadManager.statuses.collectAsState()
+    val statuses = rememberVisibleDownloadStatuses()
     var detailStatus by remember { mutableStateOf<OfflineCollectionStatus?>(null) }
     val store = remember { OfflineDownloadStore(context) }
     val repository = remember { BockMediaApp.get(context).repository }
@@ -74,11 +74,7 @@ fun DownloadsManagementSection(
     }
 
     val sorted = remember(statuses) {
-        val profileIds = OfflineDownloadSync.visibleCollectionIds(context)
-        val values = statuses.values.filter { status ->
-            profileIds == null || status.manifest.id in profileIds
-        }
-        values.sortedWith(
+        statuses.values.sortedWith(
             compareBy<OfflineCollectionStatus> {
                 when (it.state) {
                     DownloadState.Downloading -> 0
@@ -89,7 +85,9 @@ fun DownloadsManagementSection(
             }.thenByDescending { it.manifest.downloadedAtMs },
         )
     }
-    val storageBytes = remember(statuses) { store.bytesOnDisk() }
+    val storageBytes = remember(sorted) {
+        sorted.sumOf { store.collectionBytesOnDisk(it.manifest.id) }
+    }
 
     detailStatus?.let { status ->
         DownloadDetailScreen(

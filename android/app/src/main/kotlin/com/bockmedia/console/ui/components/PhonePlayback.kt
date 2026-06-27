@@ -6,8 +6,8 @@ import com.bockmedia.console.local.OfflineDownloadManager
 import com.bockmedia.console.media.LocalPlaybackController
 
 object PhonePlayback {
-    fun canPlayLocally(target: PlayTarget, remoteOk: Boolean): Boolean =
-        !remoteOk || OfflineDownloadManager.isDownloaded(target)
+    fun canPlayLocally(context: Context, target: PlayTarget, remoteOk: Boolean): Boolean =
+        !remoteOk || OfflineDownloadManager.isDownloaded(context, target)
 
     suspend fun playLocally(
         context: Context,
