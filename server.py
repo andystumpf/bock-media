@@ -809,6 +809,7 @@ _WEB_REQUIRED = (
     'js/boot.js',
     'js/webCache.js',
     'js/homeFeed.js',
+    'js/clientPrefsSync.js',
 )
 
 
@@ -8610,33 +8611,55 @@ _DAILY_LOCK = threading.Lock()
 _daily_scheduler_started = False
 
 
-def _merge_playlist_meta(pid, updates):
+def _merge_playlist_meta(pid, updates, member_id=None):
     if not pid:
         return
     with _PLAYLIST_META_LOCK:
         meta = _load_playlist_meta()
         cur = dict(meta.get(pid) or {})
         cur.update(updates or {})
+        if member_id:
+            cur['ownerMemberId'] = member_id
+            cur['dailyMemberId'] = member_id
+            cur.setdefault('visibility', 'private')
         meta[pid] = cur
         _save_playlist_meta(meta)
 
 
-def _regenerate_daily_playlists(force=False):
+def _daily_member_ids():
+    h = _load_household()
+    mids = [m.get('id') for m in (h.get('members') or []) if m.get('id')]
+    return mids or ['household']
+
+
+def _play_counts_for_member(member_id):
+    import bock_play_counts
+    data = bock_play_counts.load_counts(PLAY_COUNTS_PATH) or {}
+    mid = (member_id or 'household').strip() or 'household'
+    by = (data.get('byMember') or {})
+    return by.get(mid) or data.get('paths') or {}
+
+
+def _regenerate_daily_playlists(force=False, member_id=None):
     """Rebuild today's daily playlists (idempotent within a day unless forced)."""
     import bock_daily
-    import bock_play_counts
     with _DAILY_LOCK:
-        state = bock_daily.load_state(DAILY_STATE_PATH)
-        if not force and not bock_daily.is_stale(state):
-            return state
-        counts = (bock_play_counts.load_counts(PLAY_COUNTS_PATH) or {}).get('paths') or {}
-        return bock_daily.regenerate(
+        mids = [member_id] if member_id else _daily_member_ids()
+        counts_by = {mid: _play_counts_for_member(mid) for mid in mids}
+
+        def set_meta(pid, meta):
+            mid = (meta or {}).get('dailyMemberId') or 'household'
+            _merge_playlist_meta(pid, meta, member_id=mid if mid != 'household' else None)
+
+        return bock_daily.regenerate_all(
             state_path=DAILY_STATE_PATH,
+            member_ids=mids,
             db_query=db_query,
             persist_playlist=_persist_playlist,
             new_id=lambda: str(uuid.uuid4()),
-            set_meta=_merge_playlist_meta,
-            play_counts=counts,
+            set_meta=set_meta,
+            play_counts_by_member=counts_by,
+            force=force,
         )
 
 
@@ -8662,13 +8685,19 @@ def _start_daily_scheduler():
 @app.route('/api/daily-playlists')
 def api_daily_playlists():
     import bock_daily
-    state = bock_daily.load_state(DAILY_STATE_PATH)
+    member = (request.args.get('member') or '').strip()
+    if not member:
+        client_id = (request.args.get('clientId') or '').strip()
+        member = member_for_client(client_id) or 'household'
+    else:
+        member = member or 'household'
+    state = bock_daily.load_state(DAILY_STATE_PATH, member)
     if bock_daily.is_stale(state):
         try:
-            _regenerate_daily_playlists()
+            _regenerate_daily_playlists(member_id=member)
         except Exception as e:
             print(f'daily playlist generate error: {e}', flush=True)
-    return jsonify(bock_daily.list_daily(DAILY_STATE_PATH))
+    return jsonify(bock_daily.list_daily(DAILY_STATE_PATH, member))
 
 
 @app.route('/api/daily-playlists/refresh', methods=['POST'])

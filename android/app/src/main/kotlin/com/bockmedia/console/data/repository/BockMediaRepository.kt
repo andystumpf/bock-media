@@ -351,10 +351,11 @@ class BockMediaRepository(
             put("context", context)
         })
 
-    suspend fun playlists(search: String = "", page: Int = 1, limit: Int = 500): PlaylistsResponse {
+    suspend fun playlists(search: String = "", page: Int = 1, limit: Int = 500, memberScoped: Boolean = false): PlaylistsResponse {
         // Only the default full listing (no search, first page) is shared — that's the
         // payload Home/Library/Search all request. Searches/paging always hit the API.
-        val shareable = search.isBlank() && page == 1
+        val shareable = search.isBlank() && page == 1 && !memberScoped
+        val member = if (memberScoped) scopedMember(null) else null
         if (shareable) {
             playlistsListCache?.let { (ts, cached) ->
                 if (System.currentTimeMillis() - ts < playlistsListTtlMs) return cached
@@ -363,12 +364,12 @@ class BockMediaRepository(
                 playlistsListCache?.let { (ts, cached) ->
                     if (System.currentTimeMillis() - ts < playlistsListTtlMs) return@withLock cached
                 }
-                val fresh = api().playlists(page = page, limit = limit, search = search)
+                val fresh = api().playlists(page = page, limit = limit, search = search, member = member)
                 playlistsListCache = System.currentTimeMillis() to fresh
                 fresh
             }
         }
-        return api().playlists(page = page, limit = limit, search = search)
+        return api().playlists(page = page, limit = limit, search = search, member = member)
     }
 
     fun invalidatePlaylistsCache() {

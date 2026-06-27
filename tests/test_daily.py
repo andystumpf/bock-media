@@ -50,6 +50,8 @@ def test_regenerate_creates_playlist_per_recipe(tmp_path):
         today='2026-06-24',
         target=10,
         file_exists=lambda p: True,
+        member_id='household',
+        force=True,
     )
 
     assert state['date'] == '2026-06-24'
@@ -77,8 +79,8 @@ def test_regenerate_reuses_playlist_id_next_day(tmp_path):
         target=10,
         file_exists=lambda p: True,
     )
-    day1 = bock_daily.regenerate(today='2026-06-24', **common)
-    day2 = bock_daily.regenerate(today='2026-06-25', **common)
+    day1 = bock_daily.regenerate(today='2026-06-24', member_id='household', force=True, **common)
+    day2 = bock_daily.regenerate(today='2026-06-25', member_id='household', force=True, **common)
 
     for key, entry in day1['recipes'].items():
         assert day2['recipes'][key]['playlistId'] == entry['playlistId']
@@ -112,11 +114,44 @@ def test_detach_saved_removes_from_set(tmp_path):
         today='2026-06-24',
         target=10,
         file_exists=lambda p: True,
+        member_id='household',
+        force=True,
     )
     some_key = next(iter(state['recipes']))
     pid = state['recipes'][some_key]['playlistId']
 
     hit = bock_daily.detach_saved(state_path, pid)
     assert hit == some_key
-    after = bock_daily.list_daily(state_path)
+    after = bock_daily.list_daily(state_path, 'household')
     assert all(item['playlistId'] != pid for item in after['items'])
+
+
+def test_per_member_daily_playlists_are_separate(tmp_path):
+    state_path = str(tmp_path / 'daily.json')
+    created = {}
+
+    def persist(pid, name, paths, create=False):
+        created.setdefault(pid, {'name': name, 'paths': list(paths), 'member': None})
+        return {'id': pid, 'name': name, 'trackCount': len(paths)}
+
+    common = dict(
+        state_path=state_path,
+        db_query=_fake_db(SAMPLE),
+        persist_playlist=persist,
+        new_id=lambda: f'pid-{len(created)}',
+        set_meta=lambda pid, m: created.setdefault(pid, {}).update({'meta': m}),
+        play_counts={},
+        today='2026-06-24',
+        target=10,
+        file_exists=lambda p: True,
+        force=True,
+    )
+    andy = bock_daily.regenerate(member_id='p-andy', **common)
+    emma = bock_daily.regenerate(member_id='p-emma', **common)
+    andy_pid = andy['recipes']['discovery']['playlistId']
+    emma_pid = emma['recipes']['discovery']['playlistId']
+    assert andy_pid != emma_pid
+    listed = bock_daily.list_daily(state_path, 'p-andy')
+    assert listed['memberId'] == 'p-andy'
+    assert any(i['playlistId'] == andy_pid for i in listed['items'])
+    assert all(i['playlistId'] != emma_pid for i in listed['items'])

@@ -122,7 +122,7 @@ object HomeFeedLoader {
                 runCatching { repository.analytics() }.getOrNull()
             }
         }
-        val playlistsDef = async { runCatching { repository.playlists(limit = PLAYLIST_LIMIT) }.getOrNull() }
+        val playlistsDef = async { runCatching { repository.playlists(limit = PLAYLIST_LIMIT, memberScoped = true) }.getOrNull() }
         val smartDef = async { runCatching { repository.smartPlaylists() }.getOrNull() }
         val favoritesDef = async { runCatching { repository.ratedSongs() }.getOrNull().orEmpty() }
         val dashboardDef = async { runCatching { repository.dashboardQuick() }.getOrNull() }

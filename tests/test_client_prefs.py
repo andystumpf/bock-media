@@ -74,3 +74,32 @@ def test_search_pins_persist_per_member(tmp_path):
     assert out['merged']['searchPins'] == andy_pins
     emma = bock_client_prefs.get_prefs(path, member_id='p-emma', client_device_id='client-new')
     assert 'searchPins' not in emma['merged']
+
+
+def test_continue_after_queue_per_member(tmp_path):
+    path = str(tmp_path / 'client_prefs.json')
+    bock_client_prefs.put_prefs(
+        path, member_id='p-andy',
+        member_prefs={'continueAfterQueue': 'similar'},
+    )
+    bock_client_prefs.put_prefs(
+        path, member_id='p-emma',
+        member_prefs={'continueAfterQueue': 'artist_radio'},
+    )
+    andy = bock_client_prefs.get_prefs(path, member_id='p-andy', client_device_id='c1')
+    emma = bock_client_prefs.get_prefs(path, member_id='p-emma', client_device_id='c2')
+    assert andy['merged']['continueAfterQueue'] == 'similar'
+    assert emma['merged']['continueAfterQueue'] == 'artist_radio'
+
+
+def test_home_tile_engagement_per_member(tmp_path):
+    path = str(tmp_path / 'client_prefs.json')
+    raw = '{"card-a":{"firstSeenMs":1000,"lastSelectedMs":2000}}'
+    bock_client_prefs.put_prefs(
+        path, member_id='p-andy',
+        member_prefs={'homeTileEngagement': raw},
+    )
+    out = bock_client_prefs.get_prefs(path, member_id='p-andy', client_device_id='c1')
+    assert out['merged']['homeTileEngagement'] == raw
+    emma = bock_client_prefs.get_prefs(path, member_id='p-emma', client_device_id='c2')
+    assert 'homeTileEngagement' not in emma['merged']

@@ -64,9 +64,10 @@ final class BockMediaRepository: ObservableObject {
         return try await api.dashboardQuick()
     }
 
-    func playlists(search: String = "", limit: Int = 100) async throws -> PlaylistsResponse {
+    func playlists(search: String = "", limit: Int = 100, memberScoped: Bool = false) async throws -> PlaylistsResponse {
         try await ensureAPI()
-        return try await api.playlists(limit: limit, search: search)
+        let member = memberScoped ? scopedMember(nil) : nil
+        return try await api.playlists(limit: limit, search: search, member: member)
     }
 
     func playlistDetail(

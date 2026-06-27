@@ -112,6 +112,7 @@ async function submitLogin() {
   const r = await authFetch('/api/health');
   if (r.ok) {
     document.getElementById('login-overlay')?.remove();
+    if (typeof ClientPrefsSync !== 'undefined') ClientPrefsSync.pullAndApply().catch(() => {});
     const hash = window.location.hash.replace('#', '') || 'dashboard';
     navigate(hash);
     refreshCurrentTrack();
@@ -258,15 +259,16 @@ async function fetchPlaylistCovers(ids) {
   return out;
 }
 
-async function fetchPlaylistsCached(search = '') {
+async function fetchPlaylistsCached(search = '', { memberScoped = false } = {}) {
   const q = (search || '').trim().toLowerCase();
-  if (!q && typeof WebCache !== 'undefined') {
+  if (!q && !memberScoped && typeof WebCache !== 'undefined') {
     const cached = WebCache.getPlaylistsIfFresh();
     if (cached) return cached;
   }
-  const data = await API(`/api/playlists?page=1&limit=2000&search=${encodeURIComponent(search)}`).catch(() => ({ items: [] }));
+  const memberQ = memberScoped ? profileMemberQuery() : '';
+  const data = await API(`/api/playlists?page=1&limit=2000&search=${encodeURIComponent(search)}${memberQ ? memberQ.replace('?', '&') : ''}`).catch(() => ({ items: [] }));
   const items = (data && data.items) || [];
-  if (!q && typeof WebCache !== 'undefined' && items.length) WebCache.setPlaylists(items);
+  if (!q && !memberScoped && typeof WebCache !== 'undefined' && items.length) WebCache.setPlaylists(items);
   return items;
 }
 
@@ -1270,6 +1272,7 @@ function homeAlbumCard(album, artist, path, playOnclick) {
 async function homeFeedPlay(sectionIdx, cardIdx) {
   const card = window._homeFeed?.sections?.[sectionIdx]?.cards?.[cardIdx];
   if (!card) return;
+  if (typeof ClientPrefsSync !== 'undefined') ClientPrefsSync.recordTileSelection(card.id);
   const opts = HomeFeed.cardPlayOpts(card);
   if (opts) return startPlayback(opts);
 }
@@ -1278,6 +1281,7 @@ window.homeFeedPlay = homeFeedPlay;
 async function homeQuickPlay(cardId) {
   const feed = window._homeFeed;
   if (!feed || !cardId) return;
+  if (typeof ClientPrefsSync !== 'undefined') ClientPrefsSync.recordTileSelection(cardId);
   for (const sec of feed.sections) {
     const card = sec.cards.find((c) => c.id === cardId);
     if (!card) continue;
@@ -1335,6 +1339,10 @@ function discoverWeeklyCardsFromApi(discover) {
 
 function renderDashboardUI(feed, covers, remote, opts = {}) {
   window._homeFeed = feed;
+  if (typeof ClientPrefsSync !== 'undefined') {
+    const ids = (feed.sections || []).flatMap((s) => (s.cards || []).map((c) => c.id));
+    ClientPrefsSync.noteCardsPresent(ids);
+  }
   const coverFor = (id) => (id && covers[id]) || null;
   const artForCard = (card) => (card.playlistId && coverFor(card.playlistId)) || card.artPath || null;
 
@@ -1413,7 +1421,7 @@ async function loadDashboard(opts = {}) {
     remote,
   ] = await Promise.all([
     API('/api/nowplaying?page=1&limit=150').catch(() => ({ items: [] })),
-    fetchPlaylistsCached(''),
+    fetchPlaylistsCached('', { memberScoped: true }),
     API('/api/smart_playlists').catch(() => ({ items: [] })),
     API('/api/dashboard/quick').catch(() => ({ recent: [], favorites: [] })),
     API(`/api/continue${profileMemberQuery()}`).catch(() => null),
@@ -3562,7 +3570,11 @@ async function playOnDevice(opts) {
       <h3 style="margin-top:0"><i class="fa fa-play"></i> Play "${escHtml(name)}"</h3>
       <p class="hint" style="margin:0 0 8px">Pick a speaker or a <b>group</b> to play on every member at once.</p>
       <label style="display:block;margin:12px 0 4px;font-size:13px;color:#888">Device or group</label>
-      <select id="play-device" class="settings-input" style="width:100%">${deviceOpts}</select>
+      <div style="display:flex;gap:8px;align-items:center">
+        <select id="play-device" class="settings-input" style="flex:1">${deviceOpts}</select>
+        <button type="button" id="play-pin-btn" class="btn-sm btn-default" title="Pin speaker to your profile" style="min-width:42px;font-size:16px">☆</button>
+      </div>
+      <p class="hint" style="margin:8px 0 0;font-size:12px">★ pinned speakers sort first and sync across your devices.</p>
       ${shuffleRow}
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
         <button class="cancel-btn" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
@@ -3570,6 +3582,35 @@ async function playOnDevice(opts) {
       </div>
     </div>`;
   document.body.appendChild(overlay);
+  const pinBtn = overlay.querySelector('#play-pin-btn');
+  const devSel = overlay.querySelector('#play-device');
+  function syncPinBtn() {
+    if (!pinBtn || !devSel || typeof ClientPrefsSync === 'undefined') return;
+    const serial = devSel.value || '';
+    const pinned = serial && !serial.startsWith('group:') && ClientPrefsSync.isPinned(serial);
+    pinBtn.textContent = pinned ? '★' : '☆';
+    pinBtn.title = pinned ? 'Unpin speaker from your profile' : 'Pin speaker to your profile';
+  }
+  function refreshDeviceOptions() {
+    if (!devSel) return;
+    const cur = devSel.value;
+    devSel.innerHTML = deviceSelectOptions(devices, { selectedValue: cur });
+    syncPinBtn();
+  }
+  if (devSel) devSel.onchange = syncPinBtn;
+  if (pinBtn) {
+    pinBtn.onclick = () => {
+      if (typeof ClientPrefsSync === 'undefined') return;
+      const serial = devSel?.value || '';
+      if (!serial || serial.startsWith('group:')) {
+        showToast('Pin individual speakers, not groups', true);
+        return;
+      }
+      ClientPrefsSync.togglePinned(serial);
+      refreshDeviceOptions();
+    };
+  }
+  syncPinBtn();
   overlay.querySelector('#play-go').onclick = async () => {
     const device = overlay.querySelector('#play-device').value;
     const shuffleEl = overlay.querySelector('#play-shuffle');
@@ -3583,7 +3624,10 @@ async function playOnDevice(opts) {
     });
     const data = await res.json().catch(() => ({}));
     overlay.remove();
-    if (res.ok) showToast(`Playing "${name}" on ${data.device || 'device'}`);
+    if (res.ok) {
+      if (typeof ClientPrefsSync !== 'undefined') ClientPrefsSync.setLastDevice(device);
+      showToast(`Playing "${name}" on ${data.device || 'device'}`);
+    }
     else showToast(data.error || 'Failed to start playback', true);
   };
 }
@@ -4175,6 +4219,18 @@ async function deleteGroup(id) {
 // Build <option>s for a device <select>, with a Groups optgroup on top.
 function deviceSelectOptions(devices, { includeGroups = true, selectedValue = '' } = {}) {
   const groups = window._deviceGroups || [];
+  const pinned = (typeof ClientPrefsSync !== 'undefined')
+    ? new Set(ClientPrefsSync.getPinnedDevices())
+    : new Set();
+  if (!selectedValue && typeof ClientPrefsSync !== 'undefined') {
+    selectedValue = ClientPrefsSync.getLastDevice() || '';
+  }
+  const sortedDevices = [...devices].sort((a, b) => {
+    const ap = pinned.has(a.serial) ? 0 : 1;
+    const bp = pinned.has(b.serial) ? 0 : 1;
+    if (ap !== bp) return ap - bp;
+    return (a.name || '').localeCompare(b.name || '');
+  });
   let html = '';
   if (includeGroups && groups.length) {
     html += `<optgroup label="Groups">` + groups.map(g => {
@@ -4182,9 +4238,10 @@ function deviceSelectOptions(devices, { includeGroups = true, selectedValue = ''
       return `<option value="${escHtml(val)}" data-name="${escHtml(g.name)}" ${val === selectedValue ? 'selected' : ''}>${escHtml(g.name)} (${(g.members || []).length})</option>`;
     }).join('') + `</optgroup>`;
   }
-  const devOpts = devices.map(d =>
-    `<option value="${escHtml(d.serial)}" data-name="${escHtml(d.name)}" ${d.serial === selectedValue ? 'selected' : ''}>${escHtml(d.name)}${d.online ? '' : ' (offline)'}</option>`
-  ).join('');
+  const devOpts = sortedDevices.map(d => {
+    const star = pinned.has(d.serial) ? '★ ' : '';
+    return `<option value="${escHtml(d.serial)}" data-name="${escHtml(d.name)}" ${d.serial === selectedValue ? 'selected' : ''}>${star}${escHtml(d.name)}${d.online ? '' : ' (offline)'}</option>`;
+  }).join('');
   html += includeGroups && groups.length ? `<optgroup label="Devices">${devOpts}</optgroup>` : devOpts;
   return html;
 }
@@ -4818,6 +4875,9 @@ register('settings', async () => {
     </div>`;
 
   const requirePw = chk(settings.requirePassword);
+  const continueVal = (typeof ClientPrefsSync !== 'undefined')
+    ? ClientPrefsSync.getContinueAfterQueue()
+    : (settings.continueAfterQueue || 'off');
 
   renderPage('Settings', `
     <div class="card">
@@ -4836,14 +4896,14 @@ register('settings', async () => {
 
         <div class="settings-section">
           <h4>Continue listening</h4>
-          <p class="hint">When an album, playlist, or queue finishes on Alexa (and local apps), start similar songs or artist radio.</p>
+          <p class="hint">When an album, playlist, or queue finishes on Alexa (and local apps), start similar songs or artist radio. Saved per household profile.</p>
           <div class="settings-row">
             <select id="s-continue-queue" class="settings-input">
-              <option value="off" ${(settings.continueAfterQueue || 'off') === 'off' ? 'selected' : ''}>Stop</option>
-              <option value="similar" ${settings.continueAfterQueue === 'similar' ? 'selected' : ''}>Similar songs</option>
-              <option value="artist_radio" ${settings.continueAfterQueue === 'artist_radio' ? 'selected' : ''}>Artist radio</option>
+              <option value="off" ${continueVal === 'off' ? 'selected' : ''}>Stop</option>
+              <option value="similar" ${continueVal === 'similar' ? 'selected' : ''}>Similar songs</option>
+              <option value="artist_radio" ${continueVal === 'artist_radio' ? 'selected' : ''}>Artist radio</option>
             </select>
-            <button class="btn-sm btn-primary" onclick="saveSetting('continueAfterQueue', document.getElementById('s-continue-queue').value)">Set</button>
+            <button class="btn-sm btn-primary" onclick="saveContinueAfterQueue()">Set</button>
           </div>
         </div>
 
@@ -5004,6 +5064,18 @@ async function saveSetting(key, value) {
   if (result && result.ok) showToast('Setting saved');
   else showToast('Save failed', true);
 }
+
+async function saveContinueAfterQueue() {
+  const el = document.getElementById('s-continue-queue');
+  const value = el ? el.value : 'off';
+  if (typeof ClientPrefsSync !== 'undefined') {
+    ClientPrefsSync.setContinueAfterQueue(value);
+    showToast('Saved for your profile');
+    return;
+  }
+  await saveSetting('continueAfterQueue', value);
+}
+window.saveContinueAfterQueue = saveContinueAfterQueue;
 
 async function startLoudnessAnalyze() {
   const el = document.getElementById('loudness-status');
@@ -5334,11 +5406,11 @@ function libSearchHit(opts) {
 }
 
 function searchScopeQuery() {
-  return '';
+  return (typeof ClientPrefsSync !== 'undefined') ? ClientPrefsSync.searchScopeSuffix() : '';
 }
 
 function searchScopeBarHtml() {
-  return '';
+  return (typeof ClientPrefsSync !== 'undefined') ? ClientPrefsSync.searchScopeBarHtml() : '';
 }
 window.searchScopeBarHtml = searchScopeBarHtml;
 
@@ -5355,6 +5427,7 @@ function loadSearchRecentSelections() {
 
 function persistSearchRecentSelections(items) {
   try { localStorage.setItem(SEARCH_RECENTS_KEY, JSON.stringify(items.slice(0, 12))); } catch (_) {}
+  if (typeof ClientPrefsSync !== 'undefined') ClientPrefsSync.schedulePush();
 }
 
 function addSearchRecentSelection(item) {
@@ -5377,6 +5450,7 @@ function removeSearchRecentSelection(item) {
 
 function clearSearchRecentSelections() {
   try { localStorage.removeItem(SEARCH_RECENTS_KEY); } catch (_) {}
+  if (typeof ClientPrefsSync !== 'undefined') ClientPrefsSync.schedulePush();
 }
 
 window.addSearchRecentSelection = addSearchRecentSelection;
@@ -6788,6 +6862,9 @@ async function loadFamilyMessages() {
 function onActingChange(id) {
   setActiveMember(id);
   loadFamilyMessages();
+  if (typeof ClientPrefsSync !== 'undefined') {
+    ClientPrefsSync.onActiveMemberChanged(id).catch(() => {});
+  }
   if (typeof WebCache !== 'undefined' && WebCache.invalidateHome) WebCache.invalidateHome();
   const hash = window.location.hash || '#home';
   if (hash === '#home' || hash === '' || hash === '#') loadDashboard();
@@ -6983,7 +7060,9 @@ async function init() {
   const hash = window.location.hash.replace('#', '') || 'dashboard';
   navigate(hash);
 
-  refreshAuthInfo().then(() => ensureAuth()).catch(() => {});
+  refreshAuthInfo().then(() => ensureAuth()).then(() => {
+    if (typeof ClientPrefsSync !== 'undefined') ClientPrefsSync.pullAndApply().catch(() => {});
+  }).catch(() => {});
 
   refreshCurrentTrack();
   setInterval(refreshCurrentTrack, 6000);

@@ -34,8 +34,10 @@ final class BockMediaAPIClient {
 
     // MARK: - Browse
 
-    func playlists(page: Int = 1, limit: Int = 100, search: String = "") async throws -> PlaylistsResponse {
-        try await get("api/playlists", query: ["page": "\(page)", "limit": "\(limit)", "search": search])
+    func playlists(page: Int = 1, limit: Int = 100, search: String = "", member: String? = nil) async throws -> PlaylistsResponse {
+        var query = ["page": "\(page)", "limit": "\(limit)", "search": search]
+        if let member, !member.isEmpty { query["member"] = member }
+        return try await get("api/playlists", query: query)
     }
 
     func smartPlaylists() async throws -> SmartPlaylistsResponse {

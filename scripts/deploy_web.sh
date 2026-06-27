@@ -19,6 +19,7 @@ required=(
   "$PUBLIC/js/webCache.js"
   "$PUBLIC/js/homeFeed.js"
   "$PUBLIC/js/webPlayback.js"
+  "$PUBLIC/js/clientPrefsSync.js"
 )
 for f in "${required[@]}"; do
   if [[ ! -f "$f" ]]; then

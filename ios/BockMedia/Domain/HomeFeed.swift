@@ -127,7 +127,7 @@ enum HomeFeedLoader {
     static func load(repository: BockMediaRepository) async -> HomeFeed {
         async let historyTask = try? await repository.streamHistory(limit: historyLimit)
         async let analyticsTask = analyticsWithTimeout(repository: repository)
-        async let playlistsTask = try? await repository.playlists(limit: playlistLimit)
+        async let playlistsTask = try? await repository.playlists(limit: playlistLimit, memberScoped: true)
         async let smartTask = try? await repository.smartPlaylists()
         async let favoritesTask = try? await repository.favorites()
         async let dashboardTask = try? await repository.dashboardQuick()

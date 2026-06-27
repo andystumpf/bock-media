@@ -87,6 +87,7 @@ interface BockMediaApi {
         @Query("search") search: String = "",
         @Query("sortBy") sortBy: String? = null,
         @Query("order") order: String? = null,
+        @Query("member") member: String? = null,
     ): PlaylistsResponse
 
     @GET("api/playlists/{id}/cover")

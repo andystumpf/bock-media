@@ -2,6 +2,15 @@
   "_comment": "Update this file whenever you upload a new APK/IPA to /app. Shown on GET /app.",
   "releases": [
     {
+      "version": "2.6.29",
+      "date": "2026-06-27",
+      "items": [
+        {"kind": "feat", "text": "Web profile prefs sync — search scope, recents, last/pinned speakers, continue-after-queue, and home tile engagement sync across web, Android, and iOS"},
+        {"kind": "feat", "text": "Daily mixes are per household profile — each member gets their own daily playlists based on their listening"},
+        {"kind": "improve", "text": "Web device picker — pin/unpin speakers to your profile with ☆/★ toggle"}
+      ]
+    },
+    {
       "version": "2.6.28",
       "date": "2026-06-27",
       "items": [

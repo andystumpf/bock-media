@@ -47,8 +47,9 @@ def today_str(today=None):
     return today or datetime.date.today().isoformat()
 
 
-def _seeded_rng(date, key):
-    return random.Random(f'{date}:{key}')
+def _seeded_rng(date, key, member_id=''):
+    mid = (member_id or '').strip() or 'household'
+    return random.Random(f'{date}:{mid}:{key}')
 
 
 def _genre_clause(genres):
@@ -96,9 +97,9 @@ def _spotlight_genre(db_query, rng):
     return rng.choice(genres) if genres else None
 
 
-def _paths_for_recipe(recipe, *, db_query, play_counts, date, target, file_exists):
+def _paths_for_recipe(recipe, *, db_query, play_counts, date, target, file_exists, member_id=''):
     kind = recipe.get('kind')
-    rng = _seeded_rng(date, recipe['key'])
+    rng = _seeded_rng(date, recipe['key'], member_id)
     subtitle = recipe.get('subtitle')
 
     if kind == 'throwback':
@@ -137,30 +138,66 @@ def _paths_for_recipe(recipe, *, db_query, play_counts, date, target, file_exist
     return _pick(rows, rng, target, file_exists), subtitle
 
 
-# ── State (which playlist id backs each recipe today) ─────────────────────────
+# ── State (which playlist id backs each recipe today, per household member) ───
 
-def load_state(path):
+def _normalize_root(raw):
+    if not isinstance(raw, dict):
+        return {'members': {}}
+    if 'members' in raw:
+        raw.setdefault('members', {})
+        return raw
+    if raw.get('date') or raw.get('recipes'):
+        return {
+            'members': {
+                'household': {
+                    'date': raw.get('date'),
+                    'generatedAt': raw.get('generatedAt'),
+                    'recipes': raw.get('recipes') or {},
+                },
+            },
+        }
+    return {'members': {}}
+
+
+def load_root(path):
     with _LOCK:
         if not os.path.isfile(path):
-            return {'date': None, 'recipes': {}, 'generatedAt': None}
+            return {'members': {}}
         try:
             with open(path) as f:
                 data = json.load(f)
-            if not isinstance(data, dict):
-                raise ValueError
-            data.setdefault('recipes', {})
-            return data
+            return _normalize_root(data)
         except Exception:
-            return {'date': None, 'recipes': {}, 'generatedAt': None}
+            return {'members': {}}
 
 
-def save_state(path, data):
+def save_root(path, root):
     with _LOCK:
         os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
         tmp = path + '.tmp'
         with open(tmp, 'w') as f:
-            json.dump(data, f, indent=2)
+            json.dump(_normalize_root(root), f, indent=2)
         os.replace(tmp, path)
+
+
+def load_state(path, member_id=None):
+    """Return one member's daily state, or the full root when member_id is None."""
+    root = load_root(path)
+    if member_id is None:
+        return root
+    mid = (member_id or 'household').strip() or 'household'
+    state = (root.get('members') or {}).get(mid)
+    if not isinstance(state, dict):
+        return {'date': None, 'recipes': {}, 'generatedAt': None}
+    state.setdefault('recipes', {})
+    return state
+
+
+def save_state(path, data):
+    """Legacy helper — persists household-only state."""
+    root = load_root(path)
+    root.setdefault('members', {})['household'] = data
+    save_root(path, root)
 
 
 def is_stale(state, today=None):
@@ -179,18 +216,17 @@ def regenerate(
     target=DEFAULT_TRACK_TARGET,
     recipes=None,
     file_exists=os.path.isfile,
+    member_id='household',
+    force=False,
 ):
-    """Rebuild every daily playlist for `today`, reusing each recipe's playlist id.
-
-    persist_playlist(pid, name, paths, create) -> dict|None  (server._persist_playlist)
-    new_id() -> str                                          (uuid factory)
-    set_meta(pid, meta_dict)                                 (mark/refresh meta flags)
-    play_counts: {path: count}
-    Returns the refreshed state dict.
-    """
+    """Rebuild every daily playlist for `today` for one household member."""
     recipes = recipes or RECIPES
     date = today_str(today)
-    state = load_state(state_path)
+    mid = (member_id or 'household').strip() or 'household'
+    root = load_root(state_path)
+    state = load_state(state_path, mid)
+    if not force and not is_stale(state, today):
+        return state
     prior = state.get('recipes') or {}
     new_recipes = {}
 
@@ -198,10 +234,9 @@ def regenerate(
         key = recipe['key']
         paths, subtitle = _paths_for_recipe(
             recipe, db_query=db_query, play_counts=play_counts or {},
-            date=date, target=target, file_exists=file_exists,
+            date=date, target=target, file_exists=file_exists, member_id=mid,
         )
         if not paths:
-            # Keep the prior entry if regeneration yields nothing (sparse library).
             if key in prior:
                 new_recipes[key] = prior[key]
             continue
@@ -216,6 +251,7 @@ def regenerate(
             'dailyRecipe': key,
             'dailyDate': date,
             'dailySubtitle': subtitle,
+            'dailyMemberId': mid,
         })
         track_count = result.get('trackCount', len(paths)) if isinstance(result, dict) else len(paths)
         new_recipes[key] = {
@@ -230,13 +266,51 @@ def regenerate(
         'generatedAt': time.strftime('%Y-%m-%dT%H:%M:%S'),
         'recipes': new_recipes,
     }
-    save_state(state_path, state)
+    root.setdefault('members', {})[mid] = state
+    save_root(state_path, root)
     return state
 
 
-def list_daily(state_path, today=None):
+def regenerate_all(
+    *,
+    state_path,
+    member_ids,
+    db_query,
+    persist_playlist,
+    new_id,
+    set_meta,
+    play_counts_by_member,
+    today=None,
+    target=DEFAULT_TRACK_TARGET,
+    recipes=None,
+    file_exists=os.path.isfile,
+    force=False,
+):
+    """Regenerate daily playlists for every listed member id."""
+    mids = [m.strip() for m in (member_ids or []) if m and str(m).strip()] or ['household']
+    last = None
+    for mid in mids:
+        counts = (play_counts_by_member or {}).get(mid) or {}
+        last = regenerate(
+            state_path=state_path,
+            db_query=db_query,
+            persist_playlist=persist_playlist,
+            new_id=new_id,
+            set_meta=set_meta,
+            play_counts=counts,
+            today=today,
+            target=target,
+            recipes=recipes,
+            file_exists=file_exists,
+            member_id=mid,
+            force=force,
+        )
+    return last
+
+
+def list_daily(state_path, member_id='household', today=None):
     """Return today's daily playlists as lightweight cards (id, title, subtitle)."""
-    state = load_state(state_path)
+    state = load_state(state_path, (member_id or 'household').strip() or 'household')
     items = []
     for recipe in RECIPES:
         entry = (state.get('recipes') or {}).get(recipe['key'])
@@ -253,25 +327,30 @@ def list_daily(state_path, today=None):
         'date': state.get('date'),
         'generatedAt': state.get('generatedAt'),
         'stale': is_stale(state, today),
+        'memberId': (member_id or 'household').strip() or 'household',
         'items': items,
     }
 
 
-def detach_saved(state_path, playlist_id):
-    """Drop a playlist from the daily set so the regenerator stops touching it.
-
-    Returns the recipe key it was attached to (or None). A fresh playlist is
-    created for that recipe on the next regeneration.
-    """
-    state = load_state(state_path)
-    recipes = state.get('recipes') or {}
+def detach_saved(state_path, playlist_id, member_id=None):
+    """Drop a playlist from a member's daily set (or search all members)."""
+    root = load_root(state_path)
+    members = root.get('members') or {}
+    scan = [member_id] if member_id else list(members.keys())
     hit = None
-    for key, entry in list(recipes.items()):
-        if (entry or {}).get('playlistId') == playlist_id:
-            hit = key
-            recipes.pop(key, None)
+    for mid in scan:
+        state = members.get(mid) or {}
+        recipes = state.get('recipes') or {}
+        for key, entry in list(recipes.items()):
+            if (entry or {}).get('playlistId') == playlist_id:
+                hit = key
+                recipes.pop(key, None)
+                state['recipes'] = recipes
+                members[mid] = state
+                break
+        if hit:
             break
     if hit:
-        state['recipes'] = recipes
-        save_state(state_path, state)
+        root['members'] = members
+        save_root(state_path, root)
     return hit
