@@ -147,7 +147,12 @@ final class BockMediaRepository: ObservableObject {
 
     func favorites() async throws -> [FavoriteItem] {
         try await ensureAPI()
-        return try await api.favorites().items
+        let member = scopedMember(nil)
+        let clientId = ClientIdStore.clientId().trimmingCharacters(in: .whitespacesAndNewlines)
+        return try await api.favorites(
+            member: member,
+            clientId: clientId.isEmpty ? nil : clientId,
+        ).items
     }
 
     func songs(
@@ -780,12 +785,19 @@ final class BockMediaRepository: ObservableObject {
         if let title { body["title"] = title }
         if let artist { body["artist"] = artist }
         if let album { body["album"] = album }
+        if let member = scopedMember(nil), !member.isEmpty { body["memberId"] = member }
+        let clientId = ClientIdStore.clientId().trimmingCharacters(in: .whitespacesAndNewlines)
+        if !clientId.isEmpty { body["clientId"] = clientId }
         _ = try await api.addFavorite(body: body)
     }
 
     func removeFavorite(path: String) async throws {
         try await ensureAPI()
-        _ = try await api.removeFavorite(body: ["path": path])
+        var body: [String: Any] = ["path": path]
+        if let member = scopedMember(nil), !member.isEmpty { body["memberId"] = member }
+        let clientId = ClientIdStore.clientId().trimmingCharacters(in: .whitespacesAndNewlines)
+        if !clientId.isEmpty { body["clientId"] = clientId }
+        _ = try await api.removeFavorite(body: body)
     }
 
     func ignored() async throws -> [IgnoredTrack] {

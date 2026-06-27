@@ -4943,13 +4943,16 @@ def resolve_play_member(*, device_id=None, client_id=None, explicit_member=None,
 
 
 def _ratings_member_from_request():
-    """Resolve household member for star ratings (explicit → client binding)."""
+    """Resolve household member for star ratings (explicit memberId → client binding)."""
     body = request.get_json(silent=True) or {}
     if not isinstance(body, dict):
         body = {}
     explicit = (request.args.get('memberId') or body.get('memberId') or '').strip() or None
     client_id = (request.args.get('clientId') or body.get('clientId') or '').strip() or None
-    member_id = resolve_play_member(client_id=client_id, explicit_member=explicit)
+    if explicit:
+        member_id = explicit
+    else:
+        member_id = resolve_play_member(client_id=client_id, explicit_member=None) or ''
     if member_id:
         bock_ratings.migrate_legacy_to_member(RATINGS_PATH, member_id, _atomic_json_write)
     return member_id or ''

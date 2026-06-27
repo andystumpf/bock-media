@@ -23,15 +23,61 @@ def _normalize_doc(raw):
     return {'members': {}}
 
 
+def _read_file(path):
+    try:
+        with open(path, encoding='utf-8') as fh:
+            return _normalize_doc(json.load(fh))
+    except OSError:
+        return {'members': {}}
+    except json.JSONDecodeError:
+        return {'members': {}}
+
+
 def _load_doc(path):
     with _RATINGS_LOCK:
-        try:
-            with open(path, encoding='utf-8') as fh:
-                return _normalize_doc(json.load(fh))
-        except OSError:
-            return {'members': {}}
-        except json.JSONDecodeError:
-            return {'members': {}}
+        return _read_file(path)
+
+
+def _count_rated_items(doc):
+    total = 0
+    for row in (doc.get('members') or {}).values():
+        items = (row or {}).get('items') if isinstance(row, dict) else None
+        if not isinstance(items, dict):
+            continue
+        for entry in items.values():
+            if isinstance(entry, dict) and int(entry.get('stars') or 0) >= 1:
+                total += 1
+    return total
+
+
+def _mutate_and_save(path, mutator, atomic_write):
+    """Read-modify-write under one lock so concurrent saves cannot clobber each other."""
+    with _RATINGS_LOCK:
+        doc = _read_file(path)
+        before_total = _count_rated_items(doc)
+        mutator(doc)
+        after_total = _count_rated_items(doc)
+        if before_total >= 5 and after_total == 0:
+            raise ValueError('ratings save rejected: refused to wipe all ratings')
+        payload = {'members': doc.get('members') or {}}
+        if atomic_write:
+            atomic_write(path, payload)
+        else:
+            os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+            with open(path, 'w', encoding='utf-8') as fh:
+                json.dump(payload, fh, indent=2)
+
+
+def _save_doc(path, doc, atomic_write):
+    """Legacy direct save — prefer _mutate_and_save for updates."""
+    payload = {'members': doc.get('members') or {}}
+    with _RATINGS_LOCK:
+        if atomic_write:
+            atomic_write(path, payload)
+        else:
+            os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+            with open(path, 'w', encoding='utf-8') as fh:
+                json.dump(payload, fh, indent=2)
 
 
 def _member_bucket(doc, member_id):
@@ -50,32 +96,25 @@ def _member_items(doc, member_id):
     return _member_bucket(doc, member_id)['items']
 
 
-def _save_doc(path, doc, atomic_write):
-    payload = {'members': doc.get('members') or {}}
-    with _RATINGS_LOCK:
-        if atomic_write:
-            atomic_write(path, payload)
-        else:
-            os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
-            with open(path, 'w', encoding='utf-8') as fh:
-                json.dump(payload, fh, indent=2)
-
-
 def migrate_legacy_to_member(path, member_id, atomic_write=None):
-    """Move household-wide legacy ratings to a member once (first profile use)."""
+    """Merge household-wide legacy ratings into a member profile once."""
     mid = (member_id or '').strip()
     if not mid:
         return False
-    doc = _load_doc(path)
-    legacy = _member_items(doc, _LEGACY_MEMBER)
-    if not legacy:
-        return False
-    if _member_items(doc, mid):
-        return False
-    _member_bucket(doc, mid)['items'] = dict(legacy)
-    doc['members'].pop(_LEGACY_MEMBER, None)
-    _save_doc(path, doc, atomic_write)
-    return True
+    changed = {'v': False}
+
+    def mutate(doc):
+        legacy = dict(_member_items(doc, _LEGACY_MEMBER))
+        if not legacy:
+            return
+        target = dict(_member_items(doc, mid))
+        merged = {**legacy, **target}
+        _member_bucket(doc, mid)['items'] = merged
+        doc['members'].pop(_LEGACY_MEMBER, None)
+        changed['v'] = True
+
+    _mutate_and_save(path, mutate, atomic_write)
+    return changed['v']
 
 
 def rating_key(kind, item_id):
@@ -213,19 +252,23 @@ def set_rating(path, kind, item_id, stars, atomic_write, title=None, artist=None
     if stars < 0 or stars > 5:
         raise ValueError('stars must be 0–5')
     key = rating_key(kind, item_id)
-    doc = _load_doc(path)
-    items = _member_items(doc, member_id)
-    if stars == 0:
-        items.pop(key, None)
-    else:
-        items[key] = {
-            'kind': kind,
-            'id': item_id,
-            'stars': stars,
-            'title': (title or '').strip() or None,
-            'artist': (artist or '').strip() or None,
-            'album': (album or '').strip() or None,
-            'updatedAt': time.time(),
-        }
-    _save_doc(path, doc, atomic_write)
-    return items.get(key)
+    result = {'row': None}
+
+    def mutate(doc):
+        items = _member_items(doc, member_id)
+        if stars == 0:
+            items.pop(key, None)
+        else:
+            items[key] = {
+                'kind': kind,
+                'id': item_id,
+                'stars': stars,
+                'title': (title or '').strip() or None,
+                'artist': (artist or '').strip() or None,
+                'album': (album or '').strip() or None,
+                'updatedAt': time.time(),
+            }
+        result['row'] = items.get(key)
+
+    _mutate_and_save(path, mutate, atomic_write)
+    return result['row']

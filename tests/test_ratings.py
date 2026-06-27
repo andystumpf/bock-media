@@ -58,3 +58,40 @@ def test_migrate_legacy_to_member(tmp_path):
     assert bock_ratings.migrate_legacy_to_member(path, 'p-a', None)
     assert bock_ratings.get_rating(path, 'song', '/music/old.mp3', 'p-a') == 4
     assert bock_ratings.get_rating(path, 'song', '/music/old.mp3', '') == 0
+
+
+def test_migrate_legacy_merges_with_existing_member_ratings(tmp_path):
+    path = str(tmp_path / 'ratings.json')
+    bock_ratings.set_rating(path, 'song', '/music/legacy.mp3', 3, None, member_id='')
+    bock_ratings.set_rating(path, 'song', '/music/andy.mp3', 5, None, member_id='p-a')
+    assert bock_ratings.migrate_legacy_to_member(path, 'p-a', None)
+    assert bock_ratings.get_rating(path, 'song', '/music/legacy.mp3', 'p-a') == 3
+    assert bock_ratings.get_rating(path, 'song', '/music/andy.mp3', 'p-a') == 5
+    assert bock_ratings.get_rating(path, 'song', '/music/legacy.mp3', '') == 0
+
+
+def test_concurrent_set_rating_preserves_both(tmp_path):
+    import threading
+    path = str(tmp_path / 'ratings.json')
+    errors = []
+
+    def rate(song, stars):
+        try:
+            bock_ratings.set_rating(
+                path, 'song', song, stars, None, title=song, member_id='p-a',
+            )
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=rate, args=(f'/music/{i}.mp3', 4))
+        for i in range(12)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors
+    listed = bock_ratings.list_ratings(path, 'p-a')
+    assert len(listed) == 12
+

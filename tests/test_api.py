@@ -472,6 +472,22 @@ class TestLibrarySearchSongMatch:
                       content_type='application/json')
         assert not client.get('/api/favorites').get_json()['items']
 
+    def test_ratings_isolated_by_member(self, client, isolated_paths):
+        song = '/music/shared.mp3'
+        rv = client.put('/api/ratings', data=json.dumps({
+            'kind': 'song', 'id': song, 'stars': 5, 'memberId': 'p-andy',
+        }), content_type='application/json')
+        assert rv.status_code == 200
+        rv = client.put('/api/ratings', data=json.dumps({
+            'kind': 'song', 'id': song, 'stars': 2, 'memberId': 'p-emma',
+        }), content_type='application/json')
+        assert rv.status_code == 200
+        andy = client.get('/api/ratings?memberId=p-andy').get_json()['items']
+        emma = client.get('/api/ratings?memberId=p-emma').get_json()['items']
+        assert any(x['id'] == song and x['stars'] == 5 for x in andy)
+        assert any(x['id'] == song and x['stars'] == 2 for x in emma)
+        assert client.get(f'/api/ratings/lookup?kind=song&id={song}&memberId=p-andy').get_json()['stars'] == 5
+
     def test_dashboard_quick(self, client):
         data = client.get('/api/dashboard/quick').get_json()
         assert 'recent' in data and 'favorites' in data

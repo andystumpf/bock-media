@@ -315,8 +315,11 @@ final class BockMediaAPIClient {
         try await request(path: "api/device_groups/\(id)", method: "DELETE", query: [:], body: nil)
     }
 
-    func favorites() async throws -> FavoritesResponse {
-        try await get("api/favorites")
+    func favorites(member: String? = nil, clientId: String? = nil) async throws -> FavoritesResponse {
+        var query: [String: String] = [:]
+        if let member, !member.isEmpty { query["memberId"] = member }
+        if let clientId, !clientId.isEmpty { query["clientId"] = clientId }
+        return try await get("api/favorites", query: query)
     }
 
     func streamHistory(page: Int = 1, limit: Int = 25) async throws -> StreamHistoryResponse {

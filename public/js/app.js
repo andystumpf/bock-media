@@ -1217,7 +1217,11 @@ async function dashPlayFavorite(i) {
 async function dashRemoveFavorite(i) {
   const r = (window._dashQuickFavs || [])[i];
   if (!r || !r.path) return;
-  await fetch('/api/favorites', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: r.path }) });
+  await fetch('/api/favorites', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(ratingsRequestBody({ path: r.path })),
+  });
   showToast('Removed from favorites');
   loadDashboard();
 }
@@ -1453,7 +1457,7 @@ async function loadDashboard(opts = {}) {
     API('/api/genres?limit=40').catch(() => ({ items: [] })),
     API('/api/library/new?since=7d&limit=50').catch(() => ({ albums: [] })),
     API(`/api/recommendations/discover-weekly${profileMemberQuery()}`).catch(() => ({ sections: [] })),
-    needFavorites ? API('/api/favorites').catch(() => []) : Promise.resolve([]),
+    needFavorites ? API(`/api/favorites${ratingsScopeQuery()}`).catch(() => []) : Promise.resolve([]),
     API(`/api/ratings${ratingsScopeQuery()}`).catch(() => ({ items: [] })),
   ]);
 
@@ -2088,7 +2092,9 @@ async function npFavoriteEl(btn) {
   const res = await fetch('/api/favorites', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path: d.filepath, title: d.track, artist: d.artist, album: d.album }),
+    body: JSON.stringify(ratingsRequestBody({
+      path: d.filepath, title: d.track, artist: d.artist, album: d.album,
+    })),
   });
   if (res.ok) showToast(`Starred "${d.track || 'track'}"`);
   else showToast((await res.json().catch(() => ({}))).error || 'Failed', true);
@@ -5970,7 +5976,7 @@ async function libFavorite(path, title, artist) {
   const res = await fetch('/api/favorites', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path, title, artist }),
+    body: JSON.stringify(ratingsRequestBody({ path, title, artist })),
   });
   if (res.ok) showToast(`Starred "${title}"`);
   else showToast('Failed', true);
@@ -6680,8 +6686,22 @@ function ratingsScopeQuery() {
   const q = new URLSearchParams();
   const memberId = activeMemberId();
   if (memberId) q.set('memberId', memberId);
+  if (typeof ClientPrefsSync !== 'undefined') {
+    const cid = ClientPrefsSync.clientId();
+    if (cid) q.set('clientId', cid);
+  }
   const s = q.toString();
   return s ? `?${s}` : '';
+}
+function ratingsRequestBody(extra = {}) {
+  const body = { ...(extra || {}) };
+  const memberId = activeMemberId();
+  if (memberId) body.memberId = memberId;
+  if (typeof ClientPrefsSync !== 'undefined') {
+    const cid = ClientPrefsSync.clientId();
+    if (cid) body.clientId = cid;
+  }
+  return body;
 }
 /** Query string for APIs that scope by memberId (ratings, search pins). */
 function profileMemberIdQuery(extra = {}) {
