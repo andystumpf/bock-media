@@ -5,6 +5,24 @@
 **Branch state:** Working tree with extensive uncommitted changes vs `main` (+4388/−2466 lines across ~40 files)  
 **Production config:** gunicorn `-w 1`, `OURMEDIA_DATA_DIR=/home/plex/.bockmedia`, Cloudflare tunnel `alexa.morejava.bid`
 
+### 2026-06-27 update (Profile & Household sprint / #17)
+
+Shipped in **v2.6.33** (`tests/test_bug_hunt_s17.py`, 278+ pytest green):
+
+| Original ID | Item | Status |
+|-------------|------|--------|
+| C-06 / NP stop grace | Stopped rows flagged `stopped`, not ghost `playing` | **Fixed** |
+| C-04 / queue locks | `fcntl` flock + thread lock on `queues.json` | **Fixed** |
+| H-O01 | Health watchdog → `DATA_DIR/health_state.json` | **Fixed** |
+| H-B02 / SRV-07–09 | `playlist_xml_lock` + atomic XML/m3u writes; Plex sync defers m3u | **Fixed** |
+| M-B05 | M3U append path-normalized dedup | **Fixed** |
+| NP-M2 | Stop-after-N on skip | **Fixed** |
+| NP GET writes | `/api/nowplaying_devices` read-only expiry | **Fixed** |
+
+**Deferred to a future security sprint (Phase 1):** C-01 open LAN API, C-02 unsigned LAN streams, C-03 forged Cloudflare headers.
+
+**Follow-up (post-#16):** MSP `GetNextItem` splices household room queue at track boundaries (AudioPlayer path already did).
+
 ---
 
 ## Executive Summary

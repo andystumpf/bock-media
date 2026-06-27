@@ -107,3 +107,50 @@ def test_nowplaying_includes_upnext(isolated_paths, client, monkeypatch):
     item = next(i for i in np['items'] if i.get('deviceId') == 'kitchen-echo')
     assert len(item.get('upNext') or []) == 1
     assert item['upNext'][0]['track'] == 'Kitchen Pick'
+
+
+def test_msp_room_key_for_queue_uses_target_serial(isolated_paths, monkeypatch):
+    import json
+    from pathlib import Path
+    qid = 'q-msp-room'
+    server._save_queues({
+        qid: {'tracks': ['/a.mp3'], 'target_serial': 'SER-KITCHEN', 'ts': server.time.time()},
+    })
+    Path(server.DEVICES_PATH).write_text(json.dumps({
+        'kitchen-echo': {'name': 'Kitchen', 'serial': 'SER-KITCHEN'},
+    }), encoding='utf-8')
+    assert server._msp_room_key_for_queue(qid) == 'kitchen-echo'
+
+
+def test_msp_get_next_splices_room_request(isolated_paths, client, monkeypatch, tmp_path):
+    _seed_household(isolated_paths)
+    monkeypatch.setattr(server, '_policy_for', lambda _: {'safe': False})
+    import json
+    from pathlib import Path
+    Path(server.DEVICES_PATH).write_text(json.dumps({
+        'kitchen-echo': {'name': 'Kitchen', 'serial': 'SER-KITCHEN'},
+    }), encoding='utf-8')
+    main = tmp_path / 'now.flac'
+    room = tmp_path / 'room.flac'
+    main.write_bytes(b'1')
+    room.write_bytes(b'2')
+    client.post('/api/rooms/kitchen-echo/requests', json={
+        'path': str(room),
+        'track': 'Room Pick',
+        'memberId': 'p-jack',
+    })
+    qid = 'q-splice'
+    server._save_queues({
+        qid: {
+            'tracks': [str(main), str(main)],
+            'target_serial': 'SER-KITCHEN',
+            'ts': server.time.time(),
+        },
+    })
+    room_key = server._msp_room_key_for_queue(qid)
+    req_path = server._consume_next_request(room_key)
+    assert req_path == str(room)
+    tracks = list(server._load_queues()[qid]['tracks'])
+    tracks.insert(1, req_path)
+    server._update_queue_flags(qid, tracks=tracks)
+    assert server._load_queues()[qid]['tracks'][1] == str(room)

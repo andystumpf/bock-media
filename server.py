@@ -9220,6 +9220,22 @@ def _queue_target_label(queue_id):
         return live
     return (entry.get('target_name') or '').strip()
 
+
+def _msp_room_key_for_queue(queue_id):
+    """Room device key for household up-next on an MSP playback queue."""
+    if not queue_id:
+        return ''
+    entry = (_load_queues() or {}).get(queue_id) or {}
+    serial = (entry.get('target_serial') or '').strip()
+    if serial:
+        return _room_key(serial)
+    target = (entry.get('target_name') or '').strip().lower()
+    if target:
+        for did, dev in _load_devices().items():
+            if (dev.get('name') or '').strip().lower() == target:
+                return _room_key(did)
+    return ''
+
 # Per-request device id (set by the Alexa handler).
 from flask import g
 
@@ -10456,6 +10472,18 @@ def _msp_handle(namespace, name, payload, header):
         idx = _msp_parse_idx(item_id)
         if idx is None:
             return _msp_error(header, 'ITEM_NOT_FOUND', 'Bad item reference')
+        if name == 'GetNextItem':
+            room_key = _msp_room_key_for_queue(queue_id)
+            req_path = _consume_next_request(room_key)
+            if req_path and os.path.isfile(req_path):
+                tracks = list(tracks)
+                insert_at = idx + 1
+                tracks.insert(insert_at, req_path)
+                tracks = tracks[:_QUEUE_TRACK_LIMIT]
+                _update_queue_flags(queue_id, tracks=tracks)
+                return _msp_event('Alexa.Audio.PlayQueue', f'{name}.Response', header,
+                                  {'isQueueFinished': False,
+                                   'item': _msp_build_item(queue_id, insert_at, tracks, content_id)})
         nxt = idx + 1 if name == 'GetNextItem' else idx - 1
         if nxt >= len(tracks):
             nxt = 0 if (loop and tracks) else None

@@ -29,6 +29,8 @@ plex-sync.log
 tunnel.log
 health.log
 health_state.json
+.queues.lock
+.nowplaying_state.lock
 
 # Local secrets (use *.example.json templates)
 config.json
