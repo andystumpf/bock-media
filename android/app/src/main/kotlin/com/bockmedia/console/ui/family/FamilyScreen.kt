@@ -87,7 +87,6 @@ fun FamilyScreen(repository: BockMediaRepository) {
                     ) { id ->
                         val previous = ActiveProfileStore.activeMemberId(context)
                         activeMemberId = id
-                        ActiveProfileStore.setActiveMember(context, id.ifBlank { null })
                         scope.launch {
                             ClientPrefsSync.onActiveMemberChanged(context, id.ifBlank { null }, previous)
                             loadMessages()
@@ -121,7 +120,7 @@ fun FamilyScreen(repository: BockMediaRepository) {
                                     runCatching { repository.deleteMember(m.id) }
                                     if (activeMemberId == m.id) {
                                         activeMemberId = ""
-                                        ActiveProfileStore.setActiveMember(context, null)
+                                        ActiveProfileStore.chooseUnattributed(context)
                                     }
                                     load()
                                 }

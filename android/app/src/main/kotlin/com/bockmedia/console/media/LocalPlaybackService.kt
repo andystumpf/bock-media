@@ -48,6 +48,8 @@ class LocalPlaybackService : MediaSessionService() {
     private var activeTargetAlbum: String? = null
     private var activeTargetPlaylistId: String? = null
     private var lastReportedIndex = -1
+    private var lastMetadataIndex = -1
+    private var lastNotificationAtMs = 0L
     private var crossfadeMs: Long = 0
     private var crossfading = false
     private var incomingPlayer: ExoPlayer? = null
@@ -205,6 +207,7 @@ class LocalPlaybackService : MediaSessionService() {
 
     private fun startPlayback(urlList: List<String>, startIndex: Int, shuffle: Boolean = false) {
         if (urlList.isEmpty()) return
+        lastMetadataIndex = -1
         val exo = player ?: buildPlayer().also { player = it }
         exo.shuffleModeEnabled = shuffle
         val items = urlList.mapIndexed { index, url -> mediaItemFor(index, url) }
@@ -214,20 +217,47 @@ class LocalPlaybackService : MediaSessionService() {
         exo.prepare()
         exo.play()
         reportPlayIfNeeded(startIndex.coerceAtMost(items.lastIndex))
+        ensureDisplayedMetadata(exo)
+        NowPlayingNotificationManager.stop(this)
         startProgressUpdates()
-        startForeground(NOTIFICATION_ID, buildNotification())
+        postPlaybackNotification(force = true)
+    }
+
+    private fun trackMetadata(index: Int): MediaMetadata {
+        val title = titles.getOrNull(index).orEmpty().ifBlank { "Unknown" }
+        val artist = artists.getOrNull(index).orEmpty().ifBlank { "Unknown artist" }
+        val album = albums.getOrNull(index).orEmpty()
+        return MediaMetadata.Builder()
+            .setTitle(title)
+            .setArtist(artist)
+            .setAlbumTitle(album.takeIf { it.isNotBlank() })
+            .setIsPlayable(true)
+            .build()
     }
 
     private fun mediaItemFor(index: Int, url: String): MediaItem =
         MediaItem.Builder()
             .setUri(url)
-            .setMediaMetadata(
-                MediaMetadata.Builder()
-                    .setTitle(titles.getOrNull(index))
-                    .setArtist(artists.getOrNull(index))
-                    .build(),
-            )
+            .setMediaMetadata(trackMetadata(index))
             .build()
+
+    /** Keep library title/artist on AVRCP when the stream has no ID3 tags. */
+    private fun ensureDisplayedMetadata(exo: ExoPlayer, force: Boolean = false) {
+        val idx = exo.currentMediaItemIndex
+        if (idx !in urls.indices) return
+        val playerMd = exo.mediaMetadata
+        val missing = playerMd.title.isNullOrBlank() || playerMd.artist.isNullOrBlank()
+        if (!force && !missing && idx == lastMetadataIndex) return
+        exo.replaceMediaItem(idx, mediaItemFor(idx, urls[idx]))
+        lastMetadataIndex = idx
+    }
+
+    private fun postPlaybackNotification(force: Boolean = false) {
+        val now = System.currentTimeMillis()
+        if (!force && now - lastNotificationAtMs < 1000L) return
+        lastNotificationAtMs = now
+        startForeground(NOTIFICATION_ID, buildNotification())
+    }
 
     private fun leadPlayer(): ExoPlayer? = if (crossfading) incomingPlayer ?: player else player
 
@@ -253,6 +283,8 @@ class LocalPlaybackService : MediaSessionService() {
         crossfadeTargetIndex = nextIndex
         crossfadeDurationMs = overlapMs.coerceAtLeast(CROSSFADE_TICK_MS)
         crossfadeStartedAtMs = System.currentTimeMillis()
+        // Don't let the outgoing player auto-advance to the next item while incoming crossfades in.
+        outgoing.pauseAtEndOfMediaItems = true
         // Give the incoming player the FULL queue with absolute indices so that once
         // it's promoted, currentMediaItemIndex still lines up with paths/titles/etc.
         // and it keeps auto-advancing through the rest of the playlist.
@@ -265,7 +297,7 @@ class LocalPlaybackService : MediaSessionService() {
         reportPlayIfNeeded(nextIndex)
         crossfadeHandler.removeCallbacks(crossfadeVolumeRunnable)
         crossfadeHandler.post(crossfadeVolumeRunnable)
-        startForeground(NOTIFICATION_ID, buildNotification())
+        postPlaybackNotification(force = true)
     }
 
     private fun completeCrossfade() {
@@ -280,12 +312,14 @@ class LocalPlaybackService : MediaSessionService() {
         player = incoming
         incomingPlayer = null
         crossfading = false
+        incoming.pauseAtEndOfMediaItems = false
         incoming.volume = 1f
         outgoing?.release()
         attachMediaSession(incoming)
+        ensureDisplayedMetadata(incoming, force = true)
         reportPlayIfNeeded(incoming.currentMediaItemIndex)
         syncState(incoming)
-        startForeground(NOTIFICATION_ID, buildNotification())
+        postPlaybackNotification(force = true)
     }
 
     private fun cancelCrossfade(releaseIncoming: Boolean) {
@@ -318,7 +352,7 @@ class LocalPlaybackService : MediaSessionService() {
         reportPlayIfNeeded(exo.currentMediaItemIndex)
         syncState(exo)
         startProgressUpdates()
-        startForeground(NOTIFICATION_ID, buildNotification())
+        postPlaybackNotification(force = true)
     }
 
     /** Resume after pause or skip-while-paused; handles IDLE/ENDED so play() actually starts. */
@@ -334,7 +368,7 @@ class LocalPlaybackService : MediaSessionService() {
         if (crossfading) incomingPlayer?.play()
         syncState(leadPlayer() ?: exo)
         startProgressUpdates()
-        startForeground(NOTIFICATION_ID, buildNotification())
+        postPlaybackNotification(force = true)
     }
 
     private fun stopPlayback() {
@@ -460,7 +494,14 @@ class LocalPlaybackService : MediaSessionService() {
             }
             syncState(leadPlayer() ?: exo)
             if (isPlaying) startProgressUpdates() else if (!crossfading) stopProgressUpdates()
-            startForeground(NOTIFICATION_ID, buildNotification())
+            postPlaybackNotification()
+        }
+
+        override fun onMediaMetadataChanged(mediaMetadata: MediaMetadata) {
+            if (exo !== leadPlayer() && !(crossfading && exo === incomingPlayer)) return
+            if (mediaMetadata.title.isNullOrBlank() || mediaMetadata.artist.isNullOrBlank()) {
+                ensureDisplayedMetadata(exo, force = true)
+            }
         }
 
         override fun onPlayerError(error: PlaybackException) {
@@ -483,20 +524,32 @@ class LocalPlaybackService : MediaSessionService() {
             if (crossfading) return
             consecutivePlayErrors = 0
             retryErrorIndex = -1
+            ensureDisplayedMetadata(exo, force = true)
             syncState(exo)
             reportPlayIfNeeded(exo.currentMediaItemIndex)
-            startForeground(NOTIFICATION_ID, buildNotification())
+            postPlaybackNotification(force = true)
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
             if (crossfading) return
             syncState(exo)
-            startForeground(NOTIFICATION_ID, buildNotification())
+            postPlaybackNotification()
             if (playbackState == Player.STATE_ENDED) {
-                // Skip-while-paused can surface ENDED on the outgoing item; don't tear down
-                // the service while the user still expects to resume or keep skipping.
+                if (exo.hasNextMediaItem()) {
+                    if (exo.playWhenReady) {
+                        // ExoPlayer usually auto-advances; nudge in case it stalled.
+                        exo.seekToNextMediaItem()
+                        when (exo.playbackState) {
+                            Player.STATE_IDLE -> exo.prepare()
+                            Player.STATE_ENDED -> exo.seekToDefaultPosition()
+                        }
+                        exo.play()
+                    }
+                    reportPlayIfNeeded(exo.currentMediaItemIndex)
+                    startProgressUpdates()
+                    return
+                }
                 if (!exo.playWhenReady) return
-                if (exo.hasNextMediaItem()) return
                 if (tryContinueQueue()) return
                 stopPlayback()
             }
@@ -524,7 +577,7 @@ class LocalPlaybackService : MediaSessionService() {
             active.play()
             syncState(active)
             startProgressUpdates()
-            startForeground(NOTIFICATION_ID, buildNotification())
+            postPlaybackNotification(force = true)
             return
         }
         val skipped = titles.getOrNull(idx).orEmpty().ifBlank { "Track" }
@@ -556,7 +609,7 @@ class LocalPlaybackService : MediaSessionService() {
         reportPlayIfNeeded(active.currentMediaItemIndex)
         syncState(active)
         startProgressUpdates()
-        startForeground(NOTIFICATION_ID, buildNotification())
+        postPlaybackNotification(force = true)
     }
 
     private fun tryContinueQueue(): Boolean {
@@ -613,7 +666,7 @@ class LocalPlaybackService : MediaSessionService() {
                 isPlaying = true,
             )
         }
-        startForeground(NOTIFICATION_ID, buildNotification())
+        postPlaybackNotification(force = true)
         return true
     }
 
@@ -667,8 +720,9 @@ class LocalPlaybackService : MediaSessionService() {
         )
         val exo = leadPlayer()
         val idx = exo?.currentMediaItemIndex ?: 0
-        val title = titles.getOrNull(idx) ?: "Bock Media"
-        val artist = artists.getOrNull(idx) ?: ""
+        val title = titles.getOrNull(idx).orEmpty().ifBlank { "Unknown" }
+        val artist = artists.getOrNull(idx).orEmpty().ifBlank { "Unknown artist" }
+        val album = albums.getOrNull(idx).orEmpty()
         val isPlaying = exo?.isPlaying == true
         val buffering = exo?.playbackState == Player.STATE_BUFFERING
         val duration = if (exo != null) effectiveDurationMs(exo, idx) else 0L
@@ -690,6 +744,9 @@ class LocalPlaybackService : MediaSessionService() {
             .setSmallIcon(android.R.drawable.ic_media_play)
             .setContentTitle(title)
             .setContentText(artist)
+            .apply {
+                if (album.isNotBlank()) setSubText(album)
+            }
             .setContentIntent(open)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setPriority(NotificationCompat.PRIORITY_LOW)

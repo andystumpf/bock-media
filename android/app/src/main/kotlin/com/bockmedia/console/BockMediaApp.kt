@@ -35,6 +35,7 @@ class BockMediaApp(private val appContext: Context) {
 
     init {
         HomeTileEngagement.init(appContext.applicationContext)
+        ActiveProfileStore.hydrate(appContext)
     }
 
     private var cachedBaseUrl: String? = null

@@ -46,6 +46,11 @@ object NowPlayingNotificationManager {
     fun sync(context: Context) {
         val appContext = context.applicationContext
         ensureChannel(appContext)
+        // Phone playback owns MediaSession + AVRCP metadata; widget poll must not steal it.
+        if (LocalPlaybackController.state.value.active) {
+            stop(appContext)
+            return
+        }
         val item = NowPlayingSessionStore.focusedItem()
         val snap = NowPlayingSessionStore.snapshot
         if (item == null || snap == null) {

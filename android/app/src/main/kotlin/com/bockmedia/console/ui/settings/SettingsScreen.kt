@@ -20,6 +20,7 @@ import com.bockmedia.console.ui.components.LibraryStatsCard
 import com.bockmedia.console.ui.components.LoadingBox
 import com.bockmedia.console.BockMediaApp
 import com.bockmedia.console.ui.downloads.DownloadsManagementSection
+import com.bockmedia.console.local.ActiveProfileStore
 import com.bockmedia.console.local.ClientPrefsSync
 import com.bockmedia.console.ui.watchfolders.WatchFoldersSection
 import kotlinx.coroutines.launch
@@ -51,6 +52,14 @@ fun SettingsScreen(
         crossfadeSeconds = app.preferences.getCrossfadeSecondsSync().toFloat()
         continueAfterQueue = app.preferences.getContinueAfterQueueSync()
         loading = false
+    }
+
+    val activeMemberId by ActiveProfileStore.activeMemberIdState.collectAsState()
+    val profileRevision by ClientPrefsSync.profileChangeRevision.collectAsState()
+    LaunchedEffect(activeMemberId, profileRevision) {
+        wifiOnlyDownloads = app.preferences.isDownloadWifiOnlySync()
+        crossfadeSeconds = app.preferences.getCrossfadeSecondsSync().toFloat()
+        continueAfterQueue = app.preferences.getContinueAfterQueueSync()
     }
 
     Column(Modifier.fillMaxSize().bockVerticalScroll().padding(16.dp)) {

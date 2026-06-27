@@ -198,6 +198,13 @@ final class LocalPlaybackController: ObservableObject {
     private func handleTrackEnded() {
         guard state.active, !state.tracks.isEmpty else { return }
         if crossfading { return }
+        // Stale AVPlayerItemDidPlayToEndTime from the outgoing track during crossfade.
+        if let item = player?.currentItem,
+           item.status == .readyToPlay,
+           item.duration.isNumeric,
+           item.currentTime().seconds < item.duration.seconds - 0.5 {
+            return
+        }
         if state.index >= state.tracks.count - 1 {
             Task {
                 if await tryContinuePlayback() { return }
@@ -316,6 +323,9 @@ final class LocalPlaybackController: ObservableObject {
         crossfading = true
         crossfadeDuration = max(0.05, overlapSeconds)
         crossfadeStartedAt = Date()
+
+        // Outgoing track must not fire handleTrackEnded once we've advanced the queue index.
+        removeEndObserver()
 
         let item = AVPlayerItem(url: nextTrack.playbackURL)
         let incoming = AVPlayer(playerItem: item)
@@ -556,6 +566,7 @@ final class LocalPlaybackController: ObservableObject {
     }
 
     private func observeEnd(for item: AVPlayerItem, player: AVPlayer?) {
+        removeEndObserver()
         endObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: item,

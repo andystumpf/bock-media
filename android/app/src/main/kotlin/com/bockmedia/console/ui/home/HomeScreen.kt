@@ -17,6 +17,7 @@ import com.bockmedia.console.ui.rememberAlexaRemoteStatus
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.*
 import com.bockmedia.console.local.ActiveProfileStore
+import com.bockmedia.console.local.ClientPrefsSync
 import com.bockmedia.console.local.OfflineDownloadManager
 import com.bockmedia.console.local.OfflineDownloadSync
 import com.bockmedia.console.ui.downloads.rememberVisibleDownloadStatuses
@@ -240,9 +241,13 @@ fun HomeScreen(
     }
 
     val activeMemberId by ActiveProfileStore.activeMemberIdState.collectAsState()
-    LaunchedEffect(activeMemberId) {
+    val profileRevision by ClientPrefsSync.profileChangeRevision.collectAsState()
+    LaunchedEffect(activeMemberId, profileRevision) {
         OfflineDownloadSync.claimOrphansForActiveProfile(context)
         loadOffline()
+        if (feed != null) {
+            scope.launch { HomeLoadCoordinator.withLoadLock { load() } }
+        }
     }
 
     LaunchedEffect(filter) {

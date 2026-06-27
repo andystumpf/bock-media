@@ -49,8 +49,11 @@ object OfflineDownloadSync {
         return loadMap(context)[memberId]?.map { it.id }?.toSet() ?: emptySet()
     }
 
-    fun collectForMember(context: Context): List<OfflineDownloadRecord> {
-        val memberId = ActiveProfileStore.activeMemberId(context) ?: return emptyList()
+    fun collectForMember(context: Context): List<OfflineDownloadRecord> =
+        recordsForMember(context, ActiveProfileStore.activeMemberId(context))
+
+    fun recordsForMember(context: Context, memberId: String?): List<OfflineDownloadRecord> {
+        if (memberId.isNullOrBlank()) return emptyList()
         return loadMap(context)[memberId].orEmpty()
     }
 

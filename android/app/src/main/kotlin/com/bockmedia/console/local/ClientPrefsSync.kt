@@ -11,8 +11,13 @@ import com.bockmedia.console.domain.model.HomeLoadCoordinator
 import com.bockmedia.console.domain.model.HomeSectionKind
 import com.bockmedia.console.domain.model.HomeTileEngagement
 import com.bockmedia.console.domain.model.LibrarySort
+import com.bockmedia.console.domain.model.LibrarySessionCache
 import com.bockmedia.console.domain.model.LibraryViewMode
+import com.bockmedia.console.domain.model.SearchBrowseSessionCache
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -37,6 +42,13 @@ object ClientPrefsSync {
     private var pushJob: Job? = null
     @Volatile private var pulling = false
 
+    private val _profileChangeRevision = MutableStateFlow(0)
+    val profileChangeRevision: StateFlow<Int> = _profileChangeRevision.asStateFlow()
+
+    private fun bumpProfileRevision() {
+        _profileChangeRevision.value += 1
+    }
+
     fun schedulePush(context: Context) {
         pushJob?.cancel()
         pushJob = scope.launch {
@@ -45,7 +57,7 @@ object ClientPrefsSync {
         }
     }
 
-    suspend fun pullAndApply(context: Context) {
+    suspend fun pullAndApply(context: Context, profileSwitch: Boolean = false) {
         if (pulling) return
         pulling = true
         try {
@@ -54,10 +66,9 @@ object ClientPrefsSync {
             val prefs = app.preferences
             val clientId = ClientIdStore.clientId(context)
             rebindFromPhone(context, repository, clientId)
-            val restored = restoreActiveMember(context, repository, clientId)
             val memberId = ActiveProfileStore.activeMemberId(context)
             val remote = repository.clientPrefs(clientId, memberId)
-            applyMerged(context, prefs, remote)
+            applyMerged(context, prefs, remote, profileSwitch = profileSwitch)
             if (!memberId.isNullOrBlank()) {
                 runCatching {
                     repository.bindClient(
@@ -68,7 +79,7 @@ object ClientPrefsSync {
                 }
             }
             repository.clearRatingsCache()
-            if (restored || shouldRefreshHomeForProfile(context)) {
+            if (profileSwitch || shouldRefreshHomeForProfile(context)) {
                 HomeFeedCache.invalidate()
                 HomeLoadCoordinator.resetReloadWindow()
             }
@@ -87,19 +98,13 @@ object ClientPrefsSync {
         if (phoneId.isBlank()) return
         val model = android.os.Build.MODEL?.trim().orEmpty()
         val label = if (model.isNotBlank()) "Android · $model" else "This phone"
-        val memberId = runCatching {
+        runCatching {
             repository.connectInstall(phoneId, label, clientId)
-        }.getOrNull()
-        if (!memberId.isNullOrBlank()) {
-            ActiveProfileStore.setActiveMember(context, memberId)
         }
     }
 
-    /** Link this install to a household profile when missing (e.g. after reinstall). */
-    suspend fun ensureProfileLinked(context: Context): Boolean {
-        val app = BockMediaApp.get(context)
-        return restoreActiveMember(context, app.repository, ClientIdStore.clientId(context))
-    }
+    /** No-op — profile is chosen explicitly in [ProfilePickerGate] or Family. */
+    suspend fun ensureProfileLinked(context: Context): Boolean = false
 
     private fun shouldRefreshHomeForProfile(context: Context): Boolean {
         if (ActiveProfileStore.activeMemberId(context).isNullOrBlank()) return false
@@ -107,12 +112,13 @@ object ClientPrefsSync {
         return cached.sections.none { it.kind == HomeSectionKind.RatedSongs }
     }
 
-    suspend fun push(context: Context) {
+    suspend fun push(context: Context, memberIdOverride: String? = null) {
         val app = BockMediaApp.get(context)
         val repository = app.repository
         val prefs = app.preferences
         val clientId = ClientIdStore.clientId(context)
-        val memberId = ActiveProfileStore.activeMemberId(context)
+        val memberId = memberIdOverride?.takeIf { it.isNotBlank() }
+            ?: ActiveProfileStore.activeMemberId(context)
         repository.putClientPrefs(
             clientId = clientId,
             memberId = memberId,
@@ -128,40 +134,25 @@ object ClientPrefsSync {
     ) {
         val app = BockMediaApp.get(context)
         val clientId = ClientIdStore.clientId(context)
+        // Save outgoing profile to the server before switching local state.
+        if (!previousMemberId.isNullOrBlank()) {
+            runCatching { push(context, previousMemberId) }
+        }
+        if (memberId.isNullOrBlank()) {
+            ActiveProfileStore.chooseUnattributed(context)
+        } else {
+            ActiveProfileStore.setActiveMember(context, memberId)
+        }
         OfflineDownloadManager.onActiveProfileChanged(context, previousMemberId)
         app.repository.clearRatingsCache()
+        app.repository.invalidatePlaylistsCache()
         HomeFeedCache.invalidate()
         HomeLoadCoordinator.resetReloadWindow()
+        LibrarySessionCache.invalidate()
+        SearchBrowseSessionCache.invalidate()
         runCatching { app.repository.bindClient(clientId, memberId, InstallIdentity.phoneId(context)) }
-        runCatching { push(context) }
-        runCatching { pullAndApply(context) }
-    }
-
-    /** Re-bind this install to a household profile after reinstall (new client id). Returns true if set. */
-    private suspend fun restoreActiveMember(
-        context: Context,
-        repository: BockMediaRepository,
-        clientId: String,
-    ): Boolean {
-        if (!ActiveProfileStore.activeMemberId(context).isNullOrBlank()) return false
-        val household = runCatching { repository.household() }.getOrNull() ?: return false
-        val deviceId = repository.clientDeviceId()
-        val fromBinding = household.clientBindings.firstOrNull {
-            it.clientDeviceId == deviceId || it.clientDeviceId == clientId
-        }?.memberId?.takeIf { it.isNotBlank() }
-        if (fromBinding != null) {
-            ActiveProfileStore.setActiveMember(context, fromBinding)
-            return true
-        }
-        val members = household.members
-        if (members.isEmpty()) return false
-        if (members.size == 1) {
-            val only = members[0].id.takeIf { it.isNotBlank() } ?: return false
-            ActiveProfileStore.setActiveMember(context, only)
-            return true
-        }
-        // Multi-member: wait for ProfilePickerGate — do not guess another profile.
-        return false
+        runCatching { pullAndApply(context, profileSwitch = true) }
+        bumpProfileRevision()
     }
 
     private suspend fun collectMemberPrefs(
@@ -184,7 +175,7 @@ object ClientPrefsSync {
             if (pinned.isNotEmpty()) {
                 put("pinnedDevices", buildJsonArray { pinned.forEach { add(JsonPrimitive(it)) } })
             }
-            val offline = OfflineDownloadSync.collectForMember(context)
+            val offline = OfflineDownloadSync.recordsForMember(context, memberId)
             if (offline.isNotEmpty()) {
                 put("offlineDownloads", bockJson.parseToJsonElement(OfflineDownloadSync.encode(offline)))
             }
@@ -204,33 +195,40 @@ object ClientPrefsSync {
         context: Context,
         prefs: AppPreferences,
         remote: ClientPrefsResponse,
+        profileSwitch: Boolean = false,
     ) {
-        val merged = remote.merged
-        if (merged.isEmpty()) return
+        val merged = if (profileSwitch) remote.memberPrefs else remote.merged
+        if (merged.isEmpty() && !profileSwitch) return
         merged["searchAllLibraries"]?.jsonPrimitive?.booleanOrNull?.let {
             prefs.setSearchAllLibraries(it)
+        } ?: run {
+            if (profileSwitch) prefs.setSearchAllLibraries(true)
         }
-        merged["searchSourcePath"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }?.let {
-            prefs.setSearchSourcePath(it)
-        } ?: merged.containsKey("searchSourcePath").takeIf { it == true }?.let {
-            prefs.setSearchSourcePath(null)
+        when {
+            merged["searchSourcePath"]?.jsonPrimitive?.content?.isNotBlank() == true -> {
+                prefs.setSearchSourcePath(merged["searchSourcePath"]!!.jsonPrimitive.content)
+            }
+            profileSwitch || merged.containsKey("searchSourcePath") -> {
+                prefs.setSearchSourcePath(null)
+            }
         }
         merged["downloadWifiOnly"]?.jsonPrimitive?.booleanOrNull?.let {
             prefs.setDownloadWifiOnly(it)
+        } ?: run {
+            if (profileSwitch) prefs.setDownloadWifiOnly(false)
         }
         merged["crossfadeSeconds"]?.jsonPrimitive?.intOrNull?.let {
             prefs.setCrossfadeSeconds(it)
+        } ?: run {
+            if (profileSwitch) prefs.setCrossfadeSeconds(0)
         }
-        merged["continueAfterQueue"]?.jsonPrimitive?.content?.let {
+        merged["continueAfterQueue"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }?.let {
             prefs.setContinueAfterQueue(it)
+        } ?: run {
+            if (profileSwitch) prefs.setContinueAfterQueue("off")
         }
         merged["rememberMe"]?.jsonPrimitive?.booleanOrNull?.let {
             prefs.setRememberMe(it)
-        }
-        merged["activeMemberId"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }?.let {
-            if (ActiveProfileStore.activeMemberId(context).isNullOrBlank()) {
-                ActiveProfileStore.setActiveMember(context, it)
-            }
         }
         decodeSearchSelections(merged["searchSelections"])?.let { items ->
             SearchHistoryStore(context).replaceSelections(items)
@@ -244,8 +242,11 @@ object ClientPrefsSync {
         decodeStringList(merged["pinnedDevices"])?.let { pinned ->
             PinnedDevicesStore(context).setPinned(pinned)
         }
-        decodeOfflineDownloads(merged["offlineDownloads"])?.let { records ->
-            OfflineDownloadSync.applyRemote(context, records)
+        val offlineRecords = decodeOfflineDownloads(merged["offlineDownloads"])
+        if (offlineRecords != null) {
+            OfflineDownloadSync.applyRemote(context, offlineRecords)
+        } else if (profileSwitch) {
+            OfflineDownloadSync.applyRemote(context, emptyList())
         }
         if (merged.containsKey("libraryTab") ||
             merged.containsKey("libraryViewMode") ||

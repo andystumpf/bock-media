@@ -71,9 +71,7 @@ object OfflineDownloadManager {
         if (!previousMemberId.isNullOrBlank()) {
             suspendDownloadsForMember(appContext, previousMemberId)
         }
-        OfflineDownloadSync.claimOrphansForActiveProfile(appContext)
         refresh(appContext)
-        OfflineDownloadSync.restoreMissing(appContext, OfflineDownloadSync.recordsForActiveProfile(appContext))
     }
 
     /** Stop in-flight jobs for a profile without marking collections failed. */

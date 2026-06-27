@@ -18,7 +18,7 @@ import com.bockmedia.console.local.ClientPrefsSync
 import com.bockmedia.console.local.InstallIdentity
 import kotlinx.coroutines.launch
 
-/** Blocks the app until a household profile is chosen (required after reinstall). */
+/** Blocks until the user picks a household profile or explicitly continues unattributed. */
 @Composable
 fun ProfilePickerGate(
     repository: BockMediaRepository,
@@ -28,75 +28,93 @@ fun ProfilePickerGate(
     val scope = rememberCoroutineScope()
     var members by remember { mutableStateOf<List<HouseholdMember>?>(null) }
     var loading by remember { mutableStateOf(false) }
-    val activeId = ActiveProfileStore.activeMemberId(context)
+    val choiceMade by ActiveProfileStore.profileChoiceMadeState.collectAsState()
 
-    LaunchedEffect(Unit) {
-        if (!activeId.isNullOrBlank()) return@LaunchedEffect
+    LaunchedEffect(choiceMade) {
+        if (choiceMade || members != null) return@LaunchedEffect
         members = runCatching { repository.household().members }.getOrDefault(emptyList())
     }
 
-    if (!activeId.isNullOrBlank() || members.isNullOrEmpty()) {
+    if (choiceMade) {
         content()
         return
     }
 
-    if (members!!.size == 1) {
-        LaunchedEffect(members) {
-            val only = members!!.first().id
-            ActiveProfileStore.setActiveMember(context, only)
-            runCatching {
-                repository.bindClient(
-                    ClientIdStore.clientId(context),
-                    only,
-                    InstallIdentity.phoneId(context),
-                )
+    when (members) {
+        null -> {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
             }
-            ClientPrefsSync.pullAndApply(context)
         }
-        content()
-        return
-    }
-
-    AlertDialog(
-        onDismissRequest = {},
-        title = { Text("Who's listening?") },
-        text = {
-            Column(Modifier.fillMaxWidth()) {
-                Text(
-                    "Choose your profile so ratings and settings restore from the server.",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Spacer(Modifier.height(12.dp))
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    items(members!!, key = { it.id }) { member ->
-                        ListItem(
-                            headlineContent = { Text(member.name) },
-                            supportingContent = {
-                                Text(if (member.role == "parent") "Parent" else "Kid")
-                            },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable(enabled = !loading) {
-                                    loading = true
-                                    scope.launch {
-                                        val previous = ActiveProfileStore.activeMemberId(context)
-                                        ActiveProfileStore.setActiveMember(context, member.id)
-                                        runCatching {
-                                            repository.bindClient(
-                                                ClientIdStore.clientId(context),
-                                                member.id,
-                                                InstallIdentity.phoneId(context),
-                                            )
-                                        }
-                                        ClientPrefsSync.onActiveMemberChanged(context, member.id, previous)
-                                        loading = false
-                                    }
-                                },
+        emptyList<HouseholdMember>() -> content()
+        else -> {
+            AlertDialog(
+                onDismissRequest = {},
+                title = { Text("Who's listening?") },
+                text = {
+                    Column(Modifier.fillMaxWidth()) {
+                        Text(
+                            "Pick a profile to restore your ratings and settings, " +
+                                "or continue unattributed until you choose later in Family.",
+                            style = MaterialTheme.typography.bodyMedium,
                         )
+                        Spacer(Modifier.height(12.dp))
+                        LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            items(members!!, key = { it.id }) { member ->
+                                ListItem(
+                                    headlineContent = { Text(member.name) },
+                                    supportingContent = {
+                                        Text(if (member.role == "parent") "Parent" else "Kid")
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable(enabled = !loading) {
+                                            loading = true
+                                            scope.launch {
+                                                val previous = ActiveProfileStore.activeMemberId(context)
+                                                runCatching {
+                                                    repository.bindClient(
+                                                        ClientIdStore.clientId(context),
+                                                        member.id,
+                                                        InstallIdentity.phoneId(context),
+                                                    )
+                                                }
+                                                ClientPrefsSync.onActiveMemberChanged(
+                                                    context,
+                                                    member.id,
+                                                    previous,
+                                                )
+                                                loading = false
+                                            }
+                                        },
+                                )
+                            }
+                        }
                     }
-                }
-            }
-        },
-        confirmButton = {},
-    )
+                },
+                confirmButton = {
+                    TextButton(
+                        enabled = !loading,
+                        onClick = {
+                            loading = true
+                            scope.launch {
+                                ActiveProfileStore.chooseUnattributed(context)
+                                runCatching {
+                                    repository.bindClient(
+                                        ClientIdStore.clientId(context),
+                                        null,
+                                        InstallIdentity.phoneId(context),
+                                    )
+                                }
+                                ClientPrefsSync.pullAndApply(context)
+                                loading = false
+                            }
+                        },
+                    ) {
+                        Text("Continue unattributed")
+                    }
+                },
+            )
+        }
+    }
 }

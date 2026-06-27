@@ -2,12 +2,21 @@
   "_comment": "Update this file whenever you upload a new APK/IPA to /app. Shown on GET /app.",
     "releases": [
     {
+      "version": "2.6.35",
+      "date": "2026-06-27",
+      "items": [
+        {"kind": "fix", "text": "Profile switch — save outgoing prefs before loading the new profile (fixes crossfade, when-queue-ends, and downloads bleeding between Andy/Laura)"},
+        {"kind": "fix", "text": "Downloads list, settings, library, and home reload when Acting as changes; incoming profile’s offline queue resumes from server"}
+      ]
+    },
+    {
       "version": "2.6.34",
       "date": "2026-06-27",
       "items": [
         {"kind": "fix", "text": "Security #18 — LAN API writes require Basic auth or mobileApi token (opt-in allowOpenLanApi); stream/artwork require credentials, HMAC sig, or allowOpenLanMedia"},
         {"kind": "fix", "text": "Cloudflare tunnel trust — Cf-* headers honored only from loopback (cloudflared), blocking forged headers on port-forward"},
-        {"kind": "fix", "text": "Alexa stream URLs signed; web console uses /api/media/sign for artwork and browser playback when media auth is enabled"}
+        {"kind": "fix", "text": "Alexa stream URLs signed; web console uses /api/media/sign for artwork and browser playback when media auth is enabled"},
+        {"kind": "fix", "text": "Android downloads follow active profile — switching Andy/Laura hides the other profile’s downloads, pauses sync, and resumes when you switch back"}
       ]
     },
     {
