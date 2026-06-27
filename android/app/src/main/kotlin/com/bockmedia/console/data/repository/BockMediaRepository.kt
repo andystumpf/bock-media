@@ -298,12 +298,18 @@ class BockMediaRepository(
         return filtered
     }
 
-    suspend fun searchPins(): List<SearchPin> =
-        runCatching { api().searchPins().pins }.getOrDefault(emptyList())
+    suspend fun searchPins(): List<SearchPin> = runCatching {
+        api().searchPins(
+            memberId = scopedMember(null),
+            clientId = clientIdProvider().trim().takeIf { it.isNotBlank() },
+        ).pins
+    }.getOrDefault(emptyList())
 
     suspend fun saveSearchPins(pins: List<SearchPin>): Boolean = runCatching {
         api().saveSearchPins(
             buildJsonObject {
+                scopedMember(null)?.let { put("memberId", it) }
+                clientIdProvider().trim().takeIf { it.isNotBlank() }?.let { put("clientId", it) }
                 putJsonArray("pins") {
                     pins.forEach { pin ->
                         add(buildJsonObject {
@@ -322,11 +328,18 @@ class BockMediaRepository(
 
     suspend fun searchSuggest(q: String): SearchResponse = api().searchSuggest(q)
 
-    suspend fun continueListening(member: String? = null): ContinueResponse = api().continueListening(member)
+    suspend fun continueListening(member: String? = null): ContinueResponse =
+        api().continueListening(scopedMember(member))
+
+    /** Active household profile, unless caller passes an explicit member id. */
+    private fun scopedMember(explicit: String? = null): String? =
+        explicit?.trim()?.takeIf { it.isNotBlank() }
+            ?: memberIdProvider()?.trim()?.takeIf { it.isNotBlank() }
 
     suspend fun libraryNew(since: String = "7d"): LibraryNewResponse = api().libraryNew(since = since)
 
-    suspend fun discoverWeekly(member: String? = null): DiscoverWeeklyResponse = api().discoverWeekly(member)
+    suspend fun discoverWeekly(member: String? = null): DiscoverWeeklyResponse =
+        api().discoverWeekly(scopedMember(member))
 
     suspend fun playlistFolders(): PlaylistFoldersResponse = api().playlistFolders()
 
@@ -527,7 +540,7 @@ class BockMediaRepository(
         deviceId: String? = null,
         member: String? = null,
         platform: String? = null,
-    ) = api().analytics(from, to, deviceId, member, platform)
+    ) = api().analytics(from, to, deviceId, scopedMember(member), platform)
 
     // ── Household / Family ──────────────────────────────────────────────────
     suspend fun household() = api().household()
@@ -969,8 +982,9 @@ class BockMediaRepository(
         to: String?,
         cacheDir: java.io.File,
         deviceId: String? = null,
+        member: String? = null,
     ): File {
-        val body = api().analyticsExport(from, to, deviceId)
+        val body = api().analyticsExport(from, to, deviceId, scopedMember(member))
         val file = java.io.File(cacheDir, "bock_media_streams.csv")
         body.byteStream().use { input ->
             file.outputStream().use { output -> input.copyTo(output) }

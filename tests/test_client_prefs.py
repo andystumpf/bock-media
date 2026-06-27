@@ -43,3 +43,34 @@ def test_member_prefs_win_over_client(tmp_path):
     )
     out = bock_client_prefs.get_prefs(path, member_id='p-a', client_device_id='c-old')
     assert out['merged']['lastDevice'] == 'Bedroom'
+
+
+def test_offline_downloads_persist_per_member(tmp_path):
+    path = str(tmp_path / 'client_prefs.json')
+    downloads = [
+        {'id': 'pl-yacht', 'title': 'Yacht Rock', 'kind': 'playlist', 'sourcePlaylistId': 'yacht'},
+        {'id': 'pl-chill', 'title': 'Chill Mix', 'kind': 'playlist', 'sourcePlaylistId': 'chill'},
+    ]
+    bock_client_prefs.put_prefs(
+        path,
+        member_id='p-andy',
+        member_prefs={'offlineDownloads': downloads},
+    )
+    out = bock_client_prefs.get_prefs(path, member_id='p-andy', client_device_id='client-new')
+    assert out['merged']['offlineDownloads'] == downloads
+    emma = bock_client_prefs.get_prefs(path, member_id='p-emma', client_device_id='client-new')
+    assert 'offlineDownloads' not in emma['merged']
+
+
+def test_search_pins_persist_per_member(tmp_path):
+    path = str(tmp_path / 'client_prefs.json')
+    andy_pins = [{'kind': 'genre', 'title': 'Jazz', 'name': 'Jazz'}]
+    bock_client_prefs.put_prefs(
+        path,
+        member_id='p-andy',
+        member_prefs={'searchPins': andy_pins},
+    )
+    out = bock_client_prefs.get_prefs(path, member_id='p-andy', client_device_id='client-new')
+    assert out['merged']['searchPins'] == andy_pins
+    emma = bock_client_prefs.get_prefs(path, member_id='p-emma', client_device_id='client-new')
+    assert 'searchPins' not in emma['merged']

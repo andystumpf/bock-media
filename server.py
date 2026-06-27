@@ -5897,6 +5897,7 @@ def analytics_export():
     from_str = request.args.get('from', '').strip()
     to_str   = request.args.get('to', '').strip()
     device_id_str = request.args.get('deviceId', '').strip()
+    member_str = request.args.get('member', '').strip()
     rows = _read_stream_history()
     from_dt = to_dt = None
     try:
@@ -5909,6 +5910,8 @@ def analytics_export():
     rows = _filter_history_rows(rows, from_dt, to_dt)
     device_store = _load_devices()
     rows = _filter_history_by_device(rows, device_id_str, device_store)
+    household = _load_household()
+    rows = _filter_history_by_member(rows, member_str, household)
     rows = [r for r in rows
             if r.get('deviceId', '') not in ('DEVICE_ALPHA', 'DEVICE_BETA')
             and not r.get('test')]

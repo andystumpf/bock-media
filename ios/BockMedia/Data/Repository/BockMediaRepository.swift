@@ -119,7 +119,29 @@ final class BockMediaRepository: ObservableObject {
 
     func searchPins() async throws -> [SearchPin] {
         try await ensureAPI()
-        return try await api.searchPins().pins
+        return try await api.searchPins(
+            memberId: scopedMember(nil),
+            clientId: ClientIdStore.clientId().trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank
+        ).pins
+    }
+
+    func saveSearchPins(_ pins: [SearchPin]) async throws {
+        try await ensureAPI()
+        var body: [String: Any] = [
+            "pins": pins.map { pin in
+                var row: [String: Any] = ["kind": pin.kind]
+                if let title = pin.title { row["title"] = title }
+                if let name = pin.name { row["name"] = name }
+                if let id = pin.id { row["id"] = id }
+                if let artist = pin.artist { row["artist"] = artist }
+                if let path = pin.path { row["path"] = path }
+                return row
+            },
+        ]
+        if let member = scopedMember(nil) { body["memberId"] = member }
+        let clientId = ClientIdStore.clientId().trimmingCharacters(in: .whitespacesAndNewlines)
+        if !clientId.isEmpty { body["clientId"] = clientId }
+        _ = try await api.saveSearchPins(body: body)
     }
 
     func favorites() async throws -> [FavoriteItem] {
@@ -201,14 +223,14 @@ final class BockMediaRepository: ObservableObject {
         return try await api.streamHistory(page: page, limit: limit)
     }
 
-    func analytics(from: String? = nil, to: String? = nil, deviceId: String? = nil) async throws -> AnalyticsResponse {
+    func analytics(from: String? = nil, to: String? = nil, deviceId: String? = nil, member: String? = nil) async throws -> AnalyticsResponse {
         try await ensureAPI()
-        return try await api.analytics(from: from, to: to, deviceId: deviceId)
+        return try await api.analytics(from: from, to: to, deviceId: deviceId, member: scopedMember(member))
     }
 
-    func exportAnalyticsCSV(from: String? = nil, to: String? = nil, deviceId: String? = nil) async throws -> URL {
+    func exportAnalyticsCSV(from: String? = nil, to: String? = nil, deviceId: String? = nil, member: String? = nil) async throws -> URL {
         try await ensureAPI()
-        let data = try await api.analyticsExport(from: from, to: to, deviceId: deviceId)
+        let data = try await api.analyticsExport(from: from, to: to, deviceId: deviceId, member: scopedMember(member))
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("bock_media_streams.csv")
         try data.write(to: url)
         return url
@@ -237,7 +259,7 @@ final class BockMediaRepository: ObservableObject {
 
     func continueListening(member: String? = nil) async throws -> ContinueResponse {
         try await ensureAPI()
-        return try await api.continueListening(member: member)
+        return try await api.continueListening(member: scopedMember(member))
     }
 
     func libraryNew(since: String = "7d") async throws -> LibraryNewResponse {
@@ -247,7 +269,7 @@ final class BockMediaRepository: ObservableObject {
 
     func discoverWeekly(member: String? = nil) async throws -> DiscoverWeeklyResponse {
         try await ensureAPI()
-        return try await api.discoverWeekly(member: member)
+        return try await api.discoverWeekly(member: scopedMember(member))
     }
 
     func playlistFolders() async throws -> PlaylistFoldersResponse {
@@ -831,6 +853,14 @@ final class BockMediaRepository: ObservableObject {
             break
         }
         return nil
+    }
+
+    /// Active household profile, unless caller passes an explicit member id.
+    private func scopedMember(_ explicit: String?) -> String? {
+        if let explicit = explicit?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank {
+            return explicit
+        }
+        return ActiveProfileStore.activeMemberId()
     }
 }
 

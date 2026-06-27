@@ -21,6 +21,8 @@ object LibrarySessionCache {
 
     fun put(value: LibraryData) {
         if (value.playlists.isEmpty() && value.artists.isEmpty() && value.albums.isEmpty()) return
+        // Playlist-only snapshots make Artists/Albums tabs look empty until a full reload.
+        if (value.artists.isEmpty() && value.albums.isEmpty() && value.playlists.isNotEmpty()) return
         data = value
         cachedAtMs = System.currentTimeMillis()
     }

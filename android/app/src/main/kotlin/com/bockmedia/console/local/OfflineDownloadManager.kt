@@ -81,6 +81,8 @@ object OfflineDownloadManager {
 
     fun download(context: Context, target: PlayTarget) {
         val appContext = context.applicationContext
+        OfflineDownloadSync.register(appContext, target)
+        ClientPrefsSync.schedulePush(appContext)
         val id = target.downloadId()
         if (_statuses.value[id]?.state == DownloadState.Downloading) return
         cancelFlags[id] = AtomicBoolean(false)
@@ -166,6 +168,8 @@ object OfflineDownloadManager {
     fun deleteCollection(context: Context, collectionId: String) {
         OfflineDownloadStore(context).deleteCollection(collectionId)
         _statuses.value = _statuses.value - collectionId
+        OfflineDownloadSync.remove(context, collectionId)
+        ClientPrefsSync.schedulePush(context.applicationContext)
     }
 
     fun retry(context: Context, collectionId: String) {
@@ -276,6 +280,7 @@ object OfflineDownloadManager {
                     trackCount = mergedTracks.size,
                 )
             }
+            ClientPrefsSync.schedulePush(context)
         }.onFailure { e ->
             val partial = store.readManifest(id)
             val progress = partial?.let { store.completionProgress(it) } ?: 0f

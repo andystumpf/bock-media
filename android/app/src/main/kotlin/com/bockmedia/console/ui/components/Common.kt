@@ -347,17 +347,29 @@ fun DevicePickerSheet(
     var loading by remember { mutableStateOf(initialSnapshot == null) }
     var error by remember { mutableStateOf<String?>(null) }
     var playing by remember { mutableStateOf(false) }
-    var remoteReady by remember(remoteOk) { mutableStateOf(initialSnapshot?.remoteReady ?: remoteOk) }
+    var remoteReady by remember(remoteOk) {
+        mutableStateOf(remoteOk || initialSnapshot?.remoteReady == true)
+    }
     var alexaStatus by remember { mutableStateOf(initialSnapshot?.status) }
+    val alexaAvailable = remoteOk || remoteReady
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     LaunchedEffect(Unit) {
         pinned = pinnedStore.pinnedValuesSync()
-        if (DeviceCatalog.isFresh()) return@LaunchedEffect
-        val snap = DeviceCatalog.refresh(repository, probe = false)
-        deviceOptions = snap.options
-        alexaStatus = snap.status
-        remoteReady = snap.remoteReady
+        DeviceCatalog.peek()?.takeIf { DeviceCatalog.isFresh() }?.let { snap ->
+            deviceOptions = snap.options
+            alexaStatus = snap.status
+            remoteReady = snap.remoteReady
+            loading = false
+        }
+        runCatching {
+            val snap = DeviceCatalog.refresh(repository, probe = false)
+            deviceOptions = snap.options
+            alexaStatus = snap.status
+            remoteReady = snap.remoteReady
+        }.onFailure { e ->
+            if (deviceOptions.isEmpty()) error = e.message ?: "Failed to load devices"
+        }
         loading = false
     }
 
@@ -431,7 +443,7 @@ fun DevicePickerSheet(
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(bottom = 12.dp),
                 )
-                !remoteReady -> Text(
+                !loading && pinned != null && !alexaAvailable -> Text(
                     alexaRemotePlayMessage(alexaStatus)
                         ?: "Connect Alexa remote in Settings to play on speakers.",
                     color = MaterialTheme.colorScheme.error,
@@ -539,8 +551,8 @@ fun DevicePickerSheet(
                     Spacer(Modifier.height(16.dp))
 
                     Surface(
-                        onClick = { if (remoteReady) shuffle = !shuffle },
-                        enabled = remoteReady,
+                        onClick = { if (alexaAvailable) shuffle = !shuffle },
+                        enabled = alexaAvailable,
                         shape = RoundedCornerShape(12.dp),
                         color = Color.White.copy(alpha = 0.06f),
                         modifier = Modifier.fillMaxWidth(),
@@ -565,7 +577,7 @@ fun DevicePickerSheet(
                             Switch(
                                 checked = shuffle,
                                 onCheckedChange = { shuffle = it },
-                                enabled = remoteReady,
+                                enabled = alexaAvailable,
                                 colors = SwitchDefaults.colors(
                                     checkedThumbColor = Color.White,
                                     checkedTrackColor = BockGreen,
@@ -597,7 +609,7 @@ fun DevicePickerSheet(
                                 if (succeeded) onDismiss()
                             }
                         },
-                        enabled = !playing && deviceValue.isNotBlank() && remoteReady,
+                        enabled = !playing && deviceValue.isNotBlank() && alexaAvailable,
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(52.dp),

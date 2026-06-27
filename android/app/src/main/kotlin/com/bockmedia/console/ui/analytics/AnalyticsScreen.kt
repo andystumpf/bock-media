@@ -35,15 +35,14 @@ import com.bockmedia.console.ui.components.BockLazyColumn
 import com.bockmedia.console.ui.components.BockPullRefresh
 import com.bockmedia.console.ui.components.LoadingBox
 import com.bockmedia.console.ui.theme.*
-import com.patrykandpatrick.vico.compose.cartesian.CartesianChartHost
-import com.patrykandpatrick.vico.compose.cartesian.axis.rememberBottomAxis
-import com.patrykandpatrick.vico.compose.cartesian.axis.rememberStartAxis
-import com.patrykandpatrick.vico.compose.cartesian.layer.rememberColumnCartesianLayer
-import com.patrykandpatrick.vico.compose.cartesian.layer.rememberLineCartesianLayer
-import com.patrykandpatrick.vico.compose.cartesian.rememberCartesianChart
-import com.patrykandpatrick.vico.core.cartesian.data.CartesianChartModelProducer
-import com.patrykandpatrick.vico.core.cartesian.data.columnSeries
-import com.patrykandpatrick.vico.core.cartesian.data.lineSeries
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import java.text.NumberFormat
@@ -53,7 +52,7 @@ import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 
 internal enum class DatePreset { Last7, Last30, AllTime, Custom }
-private enum class ActivityPeriod { Day, Week, Month, Year }
+internal enum class ActivityPeriod { Day, Week, Month, Year }
 
 private val isoDate = DateTimeFormatter.ISO_LOCAL_DATE
 private val intFmt = NumberFormat.getIntegerInstance()
@@ -102,6 +101,43 @@ internal fun AnalyticsDeviceFilter.displayLabel(thisPhoneId: String): String = w
     AnalyticsDeviceFilter.AllDevices -> "All devices"
     AnalyticsDeviceFilter.ThisPhone -> "This phone"
     is AnalyticsDeviceFilter.Specific -> label.ifBlank { deviceId.takeLast(8) }
+}
+
+internal fun trimActivityPoints(points: List<ActivityPoint>, period: ActivityPeriod): List<ActivityPoint> {
+    if (period != ActivityPeriod.Day || points.isEmpty()) return points
+    val firstPlay = points.indexOfFirst { it.count > 0 }
+    if (firstPlay <= 1) return points
+    return points.drop(firstPlay - 1)
+}
+
+internal fun formatActivityLabel(label: String, period: ActivityPeriod): String = when (period) {
+    ActivityPeriod.Day -> runCatching {
+        val d = LocalDate.parse(label)
+        "${d.monthValue}/${d.dayOfMonth}"
+    }.getOrDefault(label.takeLast(5).replace('-', '/'))
+    ActivityPeriod.Week -> label.substringAfter('-', label).removePrefix("W")
+    ActivityPeriod.Month -> runCatching {
+        val parts = label.split('-')
+        if (parts.size == 2) {
+            val month = parts[1].toInt()
+            listOf("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")[month - 1]
+        } else label
+    }.getOrDefault(label)
+    ActivityPeriod.Year -> label
+}
+
+internal fun chartAxisLabels(labels: List<String>, maxTicks: Int = 6): List<Pair<Int, String>> {
+    if (labels.isEmpty()) return emptyList()
+    if (labels.size <= maxTicks) return labels.mapIndexed { index, label -> index to label }
+    val step = ((labels.size - 1).toFloat() / (maxTicks - 1)).coerceAtLeast(1f)
+    return buildList {
+        var i = 0f
+        while (i < labels.size) {
+            add(i.toInt() to labels[i.toInt()])
+            i += step
+        }
+        if (last().first != labels.lastIndex) add(labels.lastIndex to labels.last())
+    }
 }
 
 private fun localDateToPickerMillis(date: LocalDate): Long =
@@ -708,88 +744,146 @@ private fun ActivityChartCard(
         if (points.isEmpty() || points.all { it.count == 0 }) {
             Text("No plays in this range", color = BockMuted, style = MaterialTheme.typography.bodyMedium)
         } else {
-            LineChart(points.map { it.count }, height = 200.dp)
+            val trimmed = trimActivityPoints(points, period)
+            val values = trimmed.map { it.count }
+            val labels = trimmed.map { formatActivityLabel(it.label, period) }
+            val playTotal = values.sum()
+            val activeBuckets = values.count { it > 0 }
+            Text(
+                "${intFmt.format(playTotal)} plays · $activeBuckets active ${period.name.lowercase()} buckets",
+                style = MaterialTheme.typography.labelSmall,
+                color = BockMuted,
+            )
+            ActivityLineChart(values, labels, height = 200.dp)
         }
     }
 }
 
 @Composable
-private fun LineChart(values: List<Int>, height: androidx.compose.ui.unit.Dp) {
-    val display = values.takeLast(48)
-    val chartKey = display.joinToString(",")
-    val producer = remember(chartKey) { CartesianChartModelProducer() }
-    LaunchedEffect(chartKey) {
-        producer.runTransaction {
-            lineSeries { series(display.map { it.toFloat() }) }
+private fun ActivityLineChart(values: List<Int>, labels: List<String>, height: Dp) {
+    val max = values.maxOrNull()?.coerceAtLeast(1) ?: 1
+    val lineColor = Color(0xFF509BF5)
+    val fillColor = lineColor.copy(alpha = 0.18f)
+    val gridColor = Color.White.copy(alpha = 0.08f)
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(height),
+        ) {
+            Canvas(Modifier.fillMaxSize()) {
+                val padTop = 8f
+                val padBottom = 8f
+                val chartH = size.height - padTop - padBottom
+                val stepX = if (values.size <= 1) 0f else size.width / (values.size - 1)
+                for (grid in 1..3) {
+                    val y = padTop + chartH * grid / 4f
+                    drawLine(gridColor, Offset(0f, y), Offset(size.width, y), strokeWidth = 1f)
+                }
+                if (values.isEmpty()) return@Canvas
+                val path = Path()
+                val fillPath = Path()
+                values.forEachIndexed { index, value ->
+                    val x = if (values.size <= 1) size.width / 2f else index * stepX
+                    val y = padTop + chartH - (value.toFloat() / max) * chartH
+                    if (index == 0) {
+                        path.moveTo(x, y)
+                        fillPath.moveTo(x, size.height)
+                        fillPath.lineTo(x, y)
+                    } else {
+                        path.lineTo(x, y)
+                        fillPath.lineTo(x, y)
+                    }
+                }
+                val lastX = if (values.size <= 1) size.width / 2f else (values.size - 1) * stepX
+                fillPath.lineTo(lastX, size.height)
+                fillPath.close()
+                drawPath(fillPath, fillColor)
+                drawPath(path, lineColor, style = Stroke(width = 3f))
+                values.forEachIndexed { index, value ->
+                    if (value <= 0) return@forEachIndexed
+                    val x = if (values.size <= 1) size.width / 2f else index * stepX
+                    val y = padTop + chartH - (value.toFloat() / max) * chartH
+                    drawCircle(lineColor, radius = 4f, center = Offset(x, y))
+                }
+            }
         }
+        ChartAxisRow(labels)
     }
-    CartesianChartHost(
-        chart = rememberCartesianChart(
-            rememberLineCartesianLayer(),
-            startAxis = rememberStartAxis(),
-            bottomAxis = rememberBottomAxis(),
-        ),
-        modelProducer = producer,
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(height),
-    )
 }
 
 @Composable
-private fun ColumnChart(values: List<Int>, height: androidx.compose.ui.unit.Dp, color: Color = BockGreen) {
+private fun BarChart(
+    values: List<Int>,
+    labels: List<String>,
+    color: Color,
+    height: Dp,
+) {
     if (values.isEmpty()) return
-    val chartKey = values.joinToString(",")
-    val producer = remember(chartKey) { CartesianChartModelProducer() }
-    LaunchedEffect(chartKey) {
-        producer.runTransaction {
-            columnSeries { series(values.map { it.toFloat() }) }
+    val max = values.maxOrNull()?.coerceAtLeast(1) ?: 1
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Canvas(
+            Modifier
+                .fillMaxWidth()
+                .height(height),
+        ) {
+            val barCount = values.size
+            val gap = size.width * 0.015f
+            val barWidth = ((size.width - gap * (barCount - 1)) / barCount).coerceAtLeast(2f)
+            values.forEachIndexed { index, value ->
+                val barHeight = (value.toFloat() / max) * size.height * 0.92f
+                val x = index * (barWidth + gap)
+                drawRoundRect(
+                    color = if (value > 0) color else color.copy(alpha = 0.18f),
+                    topLeft = Offset(x, size.height - barHeight),
+                    size = Size(barWidth, barHeight),
+                    cornerRadius = CornerRadius(4f, 4f),
+                )
+            }
+        }
+        ChartAxisRow(labels)
+    }
+}
+
+@Composable
+private fun ChartAxisRow(labels: List<String>) {
+    val ticks = chartAxisLabels(labels)
+    if (ticks.isEmpty()) return
+    Row(Modifier.fillMaxWidth()) {
+        labels.indices.forEach { index ->
+            val tick = ticks.find { it.first == index }
+            Text(
+                tick?.second.orEmpty(),
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.labelSmall,
+                color = BockMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+            )
         }
     }
-    CartesianChartHost(
-        chart = rememberCartesianChart(
-            rememberColumnCartesianLayer(),
-            startAxis = rememberStartAxis(),
-            bottomAxis = rememberBottomAxis(),
-        ),
-        modelProducer = producer,
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(height),
-    )
 }
 
 @Composable
 private fun HourOfDayChart(hours: List<HourCount>) {
     val values = (0 until 24).map { h -> hours.find { it.hour == h }?.count ?: 0 }
-    ColumnChart(values, height = 140.dp)
+    val labels = (0 until 24).map { hourLabel(it) }
+    BarChart(values, labels, color = Color(0xFF509BF5), height = 160.dp)
 }
 
 @Composable
 private fun DayOfWeekChart(days: List<DayCount>) {
     val order = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
     val values = order.map { d -> days.find { it.day.equals(d, true) }?.count ?: 0 }
-    ColumnChart(values, height = 140.dp, color = BockGold)
+    BarChart(values, order, color = BockGold, height = 160.dp)
 }
 
 @Composable
 private fun DecadeChart(decades: List<DecadeRow>) {
-    ColumnChart(decades.map { it.count }, height = 160.dp, color = Color(0xFF8D67AB))
-    val decadeScroll = rememberScrollState()
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .horizontalScroll(decadeScroll),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        decades.take(8).forEach { d ->
-            Text(
-                d.decade ?: "—",
-                style = MaterialTheme.typography.labelSmall,
-                color = BockMuted,
-            )
-        }
-    }
+    val values = decades.map { it.count }
+    val labels = decades.map { it.decade ?: "—" }
+    BarChart(values, labels, color = Color(0xFF8D67AB), height = 180.dp)
 }
 
 @Composable

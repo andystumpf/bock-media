@@ -74,6 +74,8 @@ final class OfflineDownloadManager: ObservableObject {
 
     func download(repository: BockMediaRepository, preferences: AppPreferences, target: PlayTarget) {
         configure(repository: repository, preferences: preferences)
+        OfflineDownloadSync.register(target: target)
+        ClientPrefsSync.schedulePush(repository: repository)
         let id = target.downloadId()
         if statuses[id]?.state == .downloading { return }
         if let reason = OfflineDownloadNetwork.shared.blockedReason(preferences: preferences) {
@@ -113,6 +115,10 @@ final class OfflineDownloadManager: ObservableObject {
         store.deleteCollection(id)
         statuses.removeValue(forKey: id)
         DownloadNotifications.clear(collectionId: id)
+        OfflineDownloadSync.remove(collectionId: id)
+        if let repository {
+            ClientPrefsSync.schedulePush(repository: repository)
+        }
     }
 
     func retry(repository: BockMediaRepository, preferences: AppPreferences, id: String) {
@@ -249,6 +255,9 @@ final class OfflineDownloadManager: ObservableObject {
         store.pruneOrphanFiles(collectionId: id, tracks: done.tracks)
         statuses[id] = OfflineCollectionStatus(manifest: done, state: .complete, progress: 1)
         DownloadNotifications.clear(collectionId: id)
+        if let repository {
+            ClientPrefsSync.schedulePush(repository: repository)
+        }
     }
 
     private func markFailed(id: String, target: PlayTarget, error: String) {

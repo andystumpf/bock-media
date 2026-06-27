@@ -1400,7 +1400,7 @@ async function loadDashboard(opts = {}) {
   }
 
   const analyticsP = Promise.race([
-    API('/api/analytics').catch(() => null),
+    API(`/api/analytics${profileMemberQuery()}`).catch(() => null),
     new Promise((resolve) => setTimeout(() => resolve(null), 4000)),
   ]);
 
@@ -1416,7 +1416,7 @@ async function loadDashboard(opts = {}) {
     fetchPlaylistsCached(''),
     API('/api/smart_playlists').catch(() => ({ items: [] })),
     API('/api/dashboard/quick').catch(() => ({ recent: [], favorites: [] })),
-    API('/api/continue').catch(() => null),
+    API(`/api/continue${profileMemberQuery()}`).catch(() => null),
     ensureAlexaRemoteStatus().catch(() => ({})),
   ]);
   window._plRemote = remote;
@@ -1444,7 +1444,7 @@ async function loadDashboard(opts = {}) {
     analyticsP,
     API('/api/genres?limit=40').catch(() => ({ items: [] })),
     API('/api/library/new?since=7d&limit=50').catch(() => ({ albums: [] })),
-    API('/api/recommendations/discover-weekly').catch(() => ({ sections: [] })),
+    API(`/api/recommendations/discover-weekly${profileMemberQuery()}`).catch(() => ({ sections: [] })),
     needFavorites ? API('/api/favorites').catch(() => []) : Promise.resolve([]),
     API(`/api/ratings${ratingsScopeQuery()}`).catch(() => ({ items: [] })),
   ]);
@@ -5140,6 +5140,8 @@ async function _loadAnalytics() {
   const params = [];
   if (_anFrom) params.push(`from=${_anFrom}`);
   if (_anTo)   params.push(`to=${_anTo}`);
+  const memberId = activeMemberId();
+  if (memberId) params.push(`member=${encodeURIComponent(memberId)}`);
   if (params.length) url += '?' + params.join('&');
   const data = await API(url);
   const hasDeviceActivity = (data?.deviceBreakdown || []).some(d =>
@@ -5195,6 +5197,8 @@ function anExportUrl() {
   let url = '/api/analytics/export?';
   if (_anFrom) url += `from=${encodeURIComponent(_anFrom)}&`;
   if (_anTo) url += `to=${encodeURIComponent(_anTo)}&`;
+  const memberId = activeMemberId();
+  if (memberId) url += `member=${encodeURIComponent(memberId)}&`;
   return url;
 }
 
@@ -5458,7 +5462,11 @@ async function openSearchRanking(kind, periodDelta) {
       <button type="button" class="btn-sm btn-default" ${canForward ? '' : 'disabled'} onclick="openSearchRanking('${kind}', 1)"><i class="fa fa-chevron-right"></i></button>
     </div>`;
   }
-  const qs = from ? `?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}` : '';
+  const qsParts = [];
+  if (from) qsParts.push(`from=${encodeURIComponent(from)}`, `to=${encodeURIComponent(to)}`);
+  const memberId = activeMemberId();
+  if (memberId) qsParts.push(`member=${encodeURIComponent(memberId)}`);
+  const qs = qsParts.length ? `?${qsParts.join('&')}` : '';
   const analytics = await API(`/api/analytics${qs}`).catch(() => null);
   if (!analytics) {
     el.innerHTML = `${searchScopeBarHtml()}<p class="hint" style="padding:12px">Analytics unavailable.</p>`;
@@ -5542,7 +5550,7 @@ window.removeSearchRecentSelection = removeSearchRecentSelection;
 window.clearSearchRecentSelections = clearSearchRecentSelections;
 
 async function editSearchPins() {
-  const cur = (await API('/api/search/pins').catch(() => ({ pins: [] }))).pins || [];
+  const cur = (await API(`/api/search/pins${profileMemberIdQuery()}`).catch(() => ({ pins: [] }))).pins || [];
   const raw = prompt('Edit shortcuts (JSON array of {kind,title,name,id,artist,path})', JSON.stringify(cur, null, 2));
   if (raw == null) return;
   let pins;
@@ -5550,7 +5558,7 @@ async function editSearchPins() {
   await fetch('/api/search/pins', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pins }),
+    body: JSON.stringify({ pins, memberId: activeMemberId() || undefined }),
   });
   loadSearchBrowse();
 }
@@ -5598,7 +5606,7 @@ async function loadSearchBrowse() {
     cached?.playlists ? Promise.resolve(cached.playlists) : fetchPlaylistsCached('').catch(() => []),
     cached?.newAlbums ? Promise.resolve(cached.newAlbums) : API('/api/library/new?since=30d&limit=12').catch(() => ({ albums: [] })),
     ensureAlexaRemoteStatus().catch(() => ({})),
-    API('/api/search/pins').catch(() => ({ pins: [] })),
+    API(`/api/search/pins${profileMemberIdQuery()}`).catch(() => ({ pins: [] })),
   ]);
   const plIds = plItems.slice(0, 12).map((p) => p.id).filter(Boolean);
   const playlistCovers = plIds.length ? await fetchPlaylistCovers(plIds) : {};
@@ -6601,6 +6609,22 @@ function ratingsScopeQuery() {
   const s = q.toString();
   return s ? `?${s}` : '';
 }
+/** Query string for APIs that scope by memberId (ratings, search pins). */
+function profileMemberIdQuery(extra = {}) {
+  const q = new URLSearchParams(extra);
+  const memberId = activeMemberId();
+  if (memberId) q.set('memberId', memberId);
+  const s = q.toString();
+  return s ? `?${s}` : '';
+}
+/** Query string for APIs that scope by `member` (discover, continue, analytics). */
+function profileMemberQuery(extra = {}) {
+  const q = new URLSearchParams(extra);
+  const memberId = activeMemberId();
+  if (memberId) q.set('member', memberId);
+  const s = q.toString();
+  return s ? `?${s}` : '';
+}
 function setActiveMember(id) {
   if (id) localStorage.setItem('bock_active_member', id);
   else localStorage.removeItem('bock_active_member');
@@ -6761,7 +6785,14 @@ async function loadFamilyMessages() {
   }).join('');
 }
 
-function onActingChange(id) { setActiveMember(id); loadFamilyMessages(); }
+function onActingChange(id) {
+  setActiveMember(id);
+  loadFamilyMessages();
+  if (typeof WebCache !== 'undefined' && WebCache.invalidateHome) WebCache.invalidateHome();
+  const hash = window.location.hash || '#home';
+  if (hash === '#home' || hash === '' || hash === '#') loadDashboard();
+  if (hash === '#search') loadSearchBrowse();
+}
 
 async function addMember() {
   const name = (document.getElementById('new-member-name') || {}).value?.trim();

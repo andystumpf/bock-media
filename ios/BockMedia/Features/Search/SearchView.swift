@@ -66,6 +66,11 @@ struct SearchView: View {
             searchPins = (try? await appState.repository.searchPins()) ?? []
             await loadBrowseFeed()
         }
+        .onAppear {
+            Task {
+                searchPins = (try? await appState.repository.searchPins()) ?? []
+            }
+        }
         .sheet(item: $addToPlaylist) { ctx in
             AddToPlaylistSheet(
                 appState: appState,

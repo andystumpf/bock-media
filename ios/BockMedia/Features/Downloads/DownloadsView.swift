@@ -13,7 +13,12 @@ struct DownloadsView: View {
             Section {
                 LabeledContent("Storage used", value: formatOfflineBytes(store.bytesOnDisk()))
             }
-            let sorted = manager.statuses.values.sorted {
+            let sorted = manager.statuses.values
+                .filter { status in
+                    guard let profileIds = OfflineDownloadSync.visibleCollectionIds() else { return true }
+                    return profileIds.contains(status.manifest.id)
+                }
+                .sorted {
                 if $0.state.sortOrder != $1.state.sortOrder { return $0.state.sortOrder < $1.state.sortOrder }
                 return $0.manifest.downloadedAtMs > $1.manifest.downloadedAtMs
             }

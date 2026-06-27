@@ -35,7 +35,7 @@ enum ClientPrefsSync {
         let restored = await restoreActiveMember(repository: repository, clientId: clientId)
         let memberId = ActiveProfileStore.activeMemberId()
         guard let remote = try? await repository.clientPrefs(clientId: clientId, memberId: memberId) else { return }
-        applyMerged(prefs: prefs, merged: remote.mergedDict)
+        applyMerged(prefs: prefs, merged: remote.mergedDict, repository: repository)
         if let memberId, !memberId.isEmpty {
             try? await repository.bindClient(clientId: clientId, memberId: memberId, phoneId: InstallIdentity.phoneId())
         }
@@ -139,11 +139,15 @@ enum ClientPrefsSync {
             if !pinned.isEmpty {
                 out["pinnedDevices"] = pinned
             }
+            let offline = OfflineDownloadSync.collectForMember()
+            if !offline.isEmpty, let encoded = OfflineDownloadSync.encode(offline) {
+                out["offlineDownloads"] = encoded
+            }
         }
         return out
     }
 
-    static func applyMerged(prefs: AppPreferences, merged: [String: Any]) {
+    static func applyMerged(prefs: AppPreferences, merged: [String: Any], repository: BockMediaRepository? = nil) {
         if merged.isEmpty { return }
         if let v = merged["searchAllLibraries"] as? Bool {
             prefs.searchAllLibraries = v
@@ -182,6 +186,9 @@ enum ClientPrefsSync {
         }
         if let pinned = decodeStringList(merged["pinnedDevices"]) {
             PinnedDevicesStore.setPinned(pinned)
+        }
+        if let repository, let records = OfflineDownloadSync.decode(merged["offlineDownloads"]) {
+            OfflineDownloadSync.applyRemote(records, repository: repository)
         }
     }
 

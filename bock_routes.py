@@ -201,9 +201,26 @@ def register(app, g):
         )
         return jsonify({'ok': True, 'generatedAt': cache.get('generatedAt')})
 
+    def _pins_member():
+        body = request.get_json(silent=True) or {}
+        if not isinstance(body, dict):
+            body = {}
+        explicit = (
+            request.args.get('memberId') or request.args.get('member') or
+            body.get('memberId') or body.get('member') or ''
+        ).strip() or None
+        if explicit:
+            return explicit
+        client_id = (request.args.get('clientId') or body.get('clientId') or '').strip() or None
+        return g['resolve_play_member'](client_id=client_id, explicit_member=None) or ''
+
     @app.route('/api/search/pins')
     def api_search_pins_get():
-        return jsonify({'pins': bock_search.load_pins()})
+        member_id = _pins_member()
+        pins = bock_search.load_pins_for_member(
+            g['CLIENT_PREFS_PATH'], member_id, g.get('_atomic_json_write'),
+        )
+        return jsonify({'pins': pins, 'memberId': member_id or None})
 
     @app.route('/api/search/pins', methods=['PUT'])
     def api_search_pins_put():
@@ -211,26 +228,11 @@ def register(app, g):
         pins = body.get('pins')
         if not isinstance(pins, list):
             return jsonify({'error': 'pins array required'}), 400
-        cleaned = []
-        for p in pins[:24]:
-            if not isinstance(p, dict):
-                continue
-            kind = (p.get('kind') or '').strip().lower()
-            if kind not in ('genre', 'playlist', 'artist', 'album', 'radio', 'mix'):
-                continue
-            entry = {'kind': kind, 'title': (p.get('title') or p.get('name') or '').strip()}
-            if p.get('id'):
-                entry['id'] = str(p['id'])
-            if p.get('name'):
-                entry['name'] = str(p['name'])
-            if p.get('artist'):
-                entry['artist'] = str(p['artist'])
-            if p.get('path'):
-                entry['path'] = str(p['path'])
-            if entry.get('title') or entry.get('name'):
-                cleaned.append(entry)
-        bock_search.save_pins(cleaned)
-        return jsonify({'ok': True, 'pins': cleaned})
+        member_id = _pins_member()
+        cleaned = bock_search.save_pins_for_member(
+            g['CLIENT_PREFS_PATH'], member_id, pins, g.get('_atomic_json_write'),
+        )
+        return jsonify({'ok': True, 'pins': cleaned, 'memberId': member_id or None})
 
     @app.route('/api/search/suggest')
     def api_search_suggest():

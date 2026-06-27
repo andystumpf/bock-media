@@ -177,6 +177,10 @@ object ClientPrefsSync {
             if (pinned.isNotEmpty()) {
                 put("pinnedDevices", buildJsonArray { pinned.forEach { add(JsonPrimitive(it)) } })
             }
+            val offline = OfflineDownloadSync.collectForMember(context)
+            if (offline.isNotEmpty()) {
+                put("offlineDownloads", bockJson.parseToJsonElement(OfflineDownloadSync.encode(offline)))
+            }
         }
     }
 
@@ -228,6 +232,9 @@ object ClientPrefsSync {
         decodeStringList(merged["pinnedDevices"])?.let { pinned ->
             PinnedDevicesStore(context).setPinned(pinned)
         }
+        decodeOfflineDownloads(merged["offlineDownloads"])?.let { records ->
+            OfflineDownloadSync.applyRemote(context, records)
+        }
     }
 
     private fun encodeSearchSelections(items: List<SearchRecentSelection>): JsonElement {
@@ -243,6 +250,11 @@ object ClientPrefsSync {
                 element.toString(),
             )
         }.getOrNull()
+    }
+
+    private fun decodeOfflineDownloads(element: JsonElement?): List<OfflineDownloadRecord>? {
+        if (element == null || element !is JsonArray) return null
+        return OfflineDownloadSync.decode(element.toString())
     }
 
     private fun decodeStringList(element: JsonElement?): List<String>? {

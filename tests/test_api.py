@@ -846,10 +846,13 @@ class TestParityFeatures:
     def test_search_pins(self, client, isolated_paths):
         rv = client.put('/api/search/pins', json={
             'pins': [{'kind': 'genre', 'title': 'Jazz', 'name': 'Jazz'}],
+            'memberId': 'p-andy',
         })
         assert rv.status_code == 200
-        data = client.get('/api/search/pins').get_json()
+        data = client.get('/api/search/pins?memberId=p-andy').get_json()
         assert data['pins'][0]['name'] == 'Jazz'
+        emma = client.get('/api/search/pins?memberId=p-emma').get_json()
+        assert emma['pins'] == []
 
     def test_analyze_loudness_status(self, client):
         data = client.get('/api/library/analyze-loudness/status').get_json()

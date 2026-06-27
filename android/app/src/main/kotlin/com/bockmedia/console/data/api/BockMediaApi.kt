@@ -54,7 +54,10 @@ interface BockMediaApi {
     ): SearchResponse
 
     @GET("api/search/pins")
-    suspend fun searchPins(): SearchPinsResponse
+    suspend fun searchPins(
+        @Query("memberId") memberId: String? = null,
+        @Query("clientId") clientId: String? = null,
+    ): SearchPinsResponse
 
     @PUT("api/search/pins")
     suspend fun saveSearchPins(@Body body: JsonObject): OkResponse
@@ -347,6 +350,7 @@ interface BockMediaApi {
         @Query("from") from: String? = null,
         @Query("to") to: String? = null,
         @Query("deviceId") deviceId: String? = null,
+        @Query("member") member: String? = null,
     ): ResponseBody
 
     @GET("api/ignored")

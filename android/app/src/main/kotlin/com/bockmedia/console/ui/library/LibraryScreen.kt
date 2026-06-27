@@ -41,7 +41,25 @@ import com.bockmedia.console.ui.theme.HomePillInactive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+
 private val PillShape = RoundedCornerShape(50)
+
+internal data class LibraryPaginatedBrowse(
+    val items: List<LibraryItem> = emptyList(),
+    val page: Int = 0,
+    val total: Int = 0,
+    val loadingInitial: Boolean = false,
+    val loadingMore: Boolean = false,
+) {
+    val hasMore: Boolean get() = items.size < total
+}
+
+private fun LibraryFilter.usesPagination(): Boolean =
+    this == LibraryFilter.Artists || this == LibraryFilter.Albums
 
 @Composable
 fun LibraryScreen(
@@ -66,14 +84,39 @@ fun LibraryScreen(
     var sort by rememberSaveable { mutableStateOf(LibrarySort.Recents) }
     var search by remember { mutableStateOf("") }
     var libraryHealth by remember { mutableStateOf<com.bockmedia.console.data.api.dto.LibraryHealthResponse?>(null) }
+    var paginatedBrowse by remember { mutableStateOf(LibraryPaginatedBrowse()) }
+
+    suspend fun prefetchArt(items: List<LibraryItem>) {
+        LibraryArtPrefetch.warm(context, repository, items)
+    }
+
+    suspend fun loadPaginatedPage(filter: LibraryFilter, searchQuery: String, reset: Boolean) {
+        if (!filter.usesPagination()) return
+        val current = if (reset) LibraryPaginatedBrowse(loadingInitial = true) else paginatedBrowse
+        if (!reset && (current.loadingInitial || current.loadingMore || !current.hasMore)) return
+        paginatedBrowse = if (reset) current else current.copy(loadingMore = true)
+        val nextPage = if (reset) 1 else current.page + 1
+        val (batch, total) = when (filter) {
+            LibraryFilter.Artists -> LibraryLoader.loadArtistPage(repository, nextPage, searchQuery)
+            LibraryFilter.Albums -> LibraryLoader.loadAlbumPage(repository, nextPage, searchQuery)
+            else -> emptyList<LibraryItem>() to 0
+        }
+        val merged = if (reset) batch else (current.items + batch).distinctBy { it.id }
+        paginatedBrowse = LibraryPaginatedBrowse(
+            items = merged,
+            page = nextPage,
+            total = total,
+            loadingInitial = false,
+            loadingMore = false,
+        )
+        if (batch.isNotEmpty()) prefetchArt(batch)
+    }
 
     suspend fun loadHealth() {
         libraryHealth = runCatching { repository.libraryHealth() }.getOrNull()
     }
 
-    // Downloads are read live from the offline store, not the cached LibraryData
-    // bucket — otherwise a freshly downloaded playlist won't appear here until the
-    // whole library cache is rebuilt (so it diverged from Home > Downloads).
+    // Downloads are read live from the offline store
     val downloadStatuses by OfflineDownloadManager.statuses.collectAsState()
     val liveDownloads = remember(downloadStatuses) {
         downloadStatuses.values
@@ -93,23 +136,19 @@ fun LibraryScreen(
             }
     }
 
-    val displayItems = remember(libraryData, searchItems, filter, search, liveDownloads) {
+    val displayItems = remember(libraryData, paginatedBrowse, searchItems, filter, search, liveDownloads) {
         when {
             filter == LibraryFilter.Downloaded ->
                 if (search.isBlank()) liveDownloads
                 else liveDownloads.filter { it.title.contains(search, ignoreCase = true) }
+            filter.usesPagination() -> paginatedBrowse.items
             search.isNotBlank() -> searchItems.orEmpty()
             else -> libraryData?.forFilter(filter).orEmpty()
         }
     }
 
-    suspend fun prefetchArt(items: List<LibraryItem>) {
-        LibraryArtPrefetch.warm(context, repository, items)
-    }
-
     fun libraryNeedsNetworkRefresh(data: LibraryData?): Boolean {
         if (data == null) return true
-        if (data.artists.isEmpty() && data.albums.isEmpty() && data.playlists.isNotEmpty()) return true
         return LibrarySessionCache.getIfFresh() == null
     }
 
@@ -122,7 +161,11 @@ fun LibraryScreen(
         }
         loading = false
         refreshing = false
-        libraryData?.let { prefetchArt(it.forFilter(filter)) }
+        if (filter.usesPagination()) {
+            loadPaginatedPage(filter, search.trim(), reset = true)
+        } else {
+            libraryData?.let { prefetchArt(it.forFilter(filter)) }
+        }
     }
 
     suspend fun bootstrapLibrary() {
@@ -145,6 +188,15 @@ fun LibraryScreen(
         }
     }
 
+    LaunchedEffect(filter, search) {
+        if (filter.usesPagination()) {
+            delay(if (search.isBlank()) 0 else 300)
+            loadPaginatedPage(filter, search.trim(), reset = true)
+        } else {
+            paginatedBrowse = LibraryPaginatedBrowse()
+        }
+    }
+
     LaunchedEffect(Unit) {
         OfflineDownloadManager.refresh(context)
         bootstrapLibrary()
@@ -152,14 +204,16 @@ fun LibraryScreen(
     }
 
     LaunchedEffect(filter) {
-        libraryData?.let { data ->
-            scope.launch { prefetchArt(data.forFilter(filter)) }
+        if (!filter.usesPagination()) {
+            libraryData?.let { data ->
+                scope.launch { prefetchArt(data.forFilter(filter)) }
+            }
         }
     }
 
     LaunchedEffect(filter, search) {
-        if (search.isBlank()) {
-            searchItems = null
+        if (search.isBlank() || filter.usesPagination()) {
+            if (!filter.usesPagination()) searchItems = null
             return@LaunchedEffect
         }
         delay(300)
@@ -170,8 +224,9 @@ fun LibraryScreen(
         }
     }
 
-    val sorted = remember(displayItems, sort) {
-        when (sort) {
+    val sorted = remember(displayItems, sort, filter) {
+        if (filter.usesPagination()) displayItems
+        else when (sort) {
             LibrarySort.Name -> displayItems.sortedBy { it.title.lowercase() }
             LibrarySort.Recents -> displayItems.sortedWith(
                 compareByDescending<LibraryItem> { it.sortDate }.thenBy { it.title.lowercase() },
@@ -229,8 +284,11 @@ fun LibraryScreen(
             },
             modifier = Modifier.weight(1f).fillMaxWidth(),
         ) {
+            val paginated = filter.usesPagination()
+            val showInitialLoading = (loading && displayItems.isEmpty()) ||
+                (paginated && paginatedBrowse.loadingInitial && displayItems.isEmpty())
             when {
-                loading && displayItems.isEmpty() -> LoadingBox(Modifier.fillMaxSize())
+                showInitialLoading -> LoadingBox(Modifier.fillMaxSize())
                 sorted.isEmpty() -> Box(
                     Modifier.fillMaxSize().padding(24.dp),
                     contentAlignment = Alignment.Center,
@@ -251,6 +309,12 @@ fun LibraryScreen(
                     items = sorted,
                     repository = repository,
                     remoteOk = remoteOk,
+                    loadingMore = paginated && paginatedBrowse.loadingMore,
+                    onLoadMore = {
+                        if (paginated) {
+                            scope.launch { loadPaginatedPage(filter, search.trim(), reset = false) }
+                        }
+                    },
                     modifier = Modifier.fillMaxSize().testTag(BockTestTags.LIBRARY_LIST),
                     onClick = { item -> handleLibraryClick(item, onPlay, onOpenPlaylist, onOpenArtist, onOpenAlbum) },
                     onPlay = onPlay,
@@ -259,6 +323,12 @@ fun LibraryScreen(
                     items = sorted,
                     repository = repository,
                     remoteOk = remoteOk,
+                    loadingMore = paginated && paginatedBrowse.loadingMore,
+                    onLoadMore = {
+                        if (paginated) {
+                            scope.launch { loadPaginatedPage(filter, search.trim(), reset = false) }
+                        }
+                    },
                     modifier = Modifier.fillMaxSize().testTag(BockTestTags.LIBRARY_LIST),
                     onClick = { item -> handleLibraryClick(item, onPlay, onOpenPlaylist, onOpenArtist, onOpenAlbum) },
                     onPlay = onPlay,
@@ -375,10 +445,22 @@ private fun LibraryList(
     repository: BockMediaRepository,
     remoteOk: Boolean,
     modifier: Modifier = Modifier,
+    loadingMore: Boolean = false,
+    onLoadMore: () -> Unit = {},
     onClick: (LibraryItem) -> Unit,
     onPlay: (PlayTarget) -> Unit,
 ) {
-    BockLazyColumn(modifier.fillMaxSize().padding(horizontal = 8.dp)) {
+    val listState = rememberLazyListState()
+    LaunchedEffect(listState, items.size, loadingMore) {
+        snapshotFlow {
+            val info = listState.layoutInfo
+            val last = info.visibleItemsInfo.lastOrNull()?.index ?: -1
+            last to info.totalItemsCount
+        }.distinctUntilChanged().collect { (last, total) ->
+            if (!loadingMore && total > 0 && last >= total - 4) onLoadMore()
+        }
+    }
+    BockLazyColumn(modifier.fillMaxSize().padding(horizontal = 8.dp), state = listState) {
         items(items, key = { it.id }) { item ->
             LibraryItemRow(
                 item = item,
@@ -394,6 +476,16 @@ private fun LibraryList(
                 },
             )
         }
+        if (loadingMore) {
+            item(key = "loading-more") {
+                Box(
+                    Modifier.fillMaxWidth().padding(16.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator(color = BockGreen)
+                }
+            }
+        }
     }
 }
 
@@ -403,11 +495,24 @@ private fun LibraryGrid(
     repository: BockMediaRepository,
     remoteOk: Boolean,
     modifier: Modifier = Modifier,
+    loadingMore: Boolean = false,
+    onLoadMore: () -> Unit = {},
     onClick: (LibraryItem) -> Unit,
     onPlay: (PlayTarget) -> Unit,
 ) {
+    val gridState = rememberLazyGridState()
+    LaunchedEffect(gridState, items.size, loadingMore) {
+        snapshotFlow {
+            val info = gridState.layoutInfo
+            val last = info.visibleItemsInfo.lastOrNull()?.index ?: -1
+            last to info.totalItemsCount
+        }.distinctUntilChanged().collect { (last, total) ->
+            if (!loadingMore && total > 0 && last >= total - 4) onLoadMore()
+        }
+    }
     LazyVerticalGrid(
         columns = GridCells.Fixed(2),
+        state = gridState,
         modifier = modifier.fillMaxSize().padding(horizontal = 16.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -421,6 +526,16 @@ private fun LibraryGrid(
                 onClick = { onClick(item) },
                 onPlay = { onPlay(item.playTarget) },
             )
+        }
+        if (loadingMore) {
+            item(key = "loading-more") {
+                Box(
+                    Modifier.fillMaxWidth().padding(16.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator(color = BockGreen)
+                }
+            }
         }
     }
 }

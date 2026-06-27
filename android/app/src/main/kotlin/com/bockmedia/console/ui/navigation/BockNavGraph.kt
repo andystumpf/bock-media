@@ -40,6 +40,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import com.bockmedia.console.ui.analytics.AnalyticsScreen
 import com.bockmedia.console.ui.automation.AutomationScreen
+import com.bockmedia.console.ui.components.DeviceCatalog
 import com.bockmedia.console.ui.components.MiniNowPlayingBar
 import com.bockmedia.console.ui.components.PlayTargetLauncher
 import com.bockmedia.console.ui.downloads.DownloadsScreen
@@ -76,7 +77,7 @@ fun BockApp(repository: BockMediaRepository, deepLinkRoute: String? = null) {
     var playTarget by remember { mutableStateOf<PlayTarget?>(null) }
     var pendingOpenNowPlaying by remember { mutableStateOf(false) }
     var playbackFocusGeneration by remember { mutableIntStateOf(PlaybackFocus.generation) }
-    var remoteOk by remember { mutableStateOf(false) }
+    var remoteOk by remember { mutableStateOf(DeviceCatalog.peek()?.remoteReady == true) }
     var alexaDevices by remember { mutableStateOf(emptyList<com.bockmedia.console.data.api.dto.AlexaDevice>()) }
     val scope = rememberCoroutineScope()
     val appContext = LocalContext.current
@@ -91,15 +92,24 @@ fun BockApp(repository: BockMediaRepository, deepLinkRoute: String? = null) {
 
     val lifecycleOwner = LocalLifecycleOwner.current
     LaunchedEffect(repository) {
+        var prevRemoteOk = remoteOk
         while (true) {
-            remoteOk = refreshAlexaControlsAvailable(repository)
+            val ok = refreshAlexaControlsAvailable(repository)
+            if (ok && !prevRemoteOk) DeviceCatalog.invalidate()
+            prevRemoteOk = ok
+            remoteOk = ok
             delay(60_000)
         }
     }
     DisposableEffect(lifecycleOwner, repository, scope) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                scope.launch { remoteOk = refreshAlexaControlsAvailable(repository) }
+                scope.launch {
+                    val wasOk = remoteOk
+                    val ok = refreshAlexaControlsAvailable(repository)
+                    if (ok && !wasOk) DeviceCatalog.invalidate()
+                    remoteOk = ok
+                }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)

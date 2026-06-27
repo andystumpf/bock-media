@@ -8,7 +8,7 @@ data class LibraryData(
     val offline: List<LibraryItem> = emptyList(),
 ) {
     fun forFilter(filter: LibraryFilter): List<LibraryItem> = when (filter) {
-        LibraryFilter.All -> playlists + artists + albums + offline
+        LibraryFilter.All -> playlists + offline
         LibraryFilter.Playlists -> playlists
         LibraryFilter.Artists -> artists
         LibraryFilter.Albums -> albums

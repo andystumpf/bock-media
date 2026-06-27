@@ -2,6 +2,40 @@
   "_comment": "Update this file whenever you upload a new APK/IPA to /app. Shown on GET /app.",
   "releases": [
     {
+      "version": "2.6.28",
+      "date": "2026-06-27",
+      "items": [
+        {"kind": "feat", "text": "Discover Weekly, Continue listening, and Analytics now follow your active household profile (Android, iOS, web)"},
+        {"kind": "feat", "text": "Search Aural Fixations pins are per profile — each member has their own shortcuts; legacy pins migrate on first load"},
+        {"kind": "feat", "text": "Switching profile on web reloads home and search with that member’s recommendations"},
+        {"kind": "improve", "text": "Analytics CSV export respects active profile filter"}
+      ]
+    },
+    {
+      "version": "2.6.27",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "feat", "text": "Library Artists & Albums — infinite scroll loads 60 at a time as you browse; search debounced server-side"},
+        {"kind": "fix", "text": "Library Artists/Albums no longer blank — paginated API replaces bulk fetch that timed out on large libraries"},
+        {"kind": "feat", "text": "Offline downloads sync per profile — saved playlists restore after reinstall and auto-resume downloading"},
+        {"kind": "feat", "text": "Downloads tab filters by active household profile (Android & iOS)"}
+      ]
+    },
+    {
+      "version": "2.6.26",
+      "date": "2026-06-26",
+      "items": [
+        {"kind": "fix", "text": "Analytics charts — visible bar/line graphs with axis labels on dark theme; activity chart trims empty leading days"}
+      ]
+    },
+    {
+      "version": "2.6.25",
+      "date": "2026-06-26",
+      "items": [
+        {"kind": "fix", "text": "Device picker Alexa speakers — always refresh device list on open; stale cache no longer hides Echo devices for up to 60s"}
+      ]
+    },
+    {
       "version": "2.6.24",
       "date": "2026-06-26",
       "items": [

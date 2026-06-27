@@ -98,8 +98,15 @@ final class BockMediaAPIClient {
         return try await get("api/search", query: query)
     }
 
-    func searchPins() async throws -> SearchPinsResponse {
-        try await get("api/search/pins")
+    func searchPins(memberId: String? = nil, clientId: String? = nil) async throws -> SearchPinsResponse {
+        var query: [String: String] = [:]
+        if let memberId, !memberId.isEmpty { query["memberId"] = memberId }
+        if let clientId, !clientId.isEmpty { query["clientId"] = clientId }
+        return try await get("api/search/pins", query: query)
+    }
+
+    func saveSearchPins(body: [String: Any]) async throws -> OkResponse {
+        try await request(path: "api/search/pins", method: "PUT", query: [:], body: body)
     }
 
     func searchSuggest(q: String) async throws -> SearchResponse {
@@ -489,11 +496,12 @@ final class BockMediaAPIClient {
         try await deleteWithBody("api/ignored", body: body)
     }
 
-    func analyticsExport(from: String? = nil, to: String? = nil, deviceId: String? = nil) async throws -> Data {
+    func analyticsExport(from: String? = nil, to: String? = nil, deviceId: String? = nil, member: String? = nil) async throws -> Data {
         var query: [String: String] = [:]
         if let from { query["from"] = from }
         if let to { query["to"] = to }
         if let deviceId, !deviceId.isEmpty { query["deviceId"] = deviceId }
+        if let member, !member.isEmpty { query["member"] = member }
         return try await requestData(path: "api/analytics/export", query: query)
     }
 

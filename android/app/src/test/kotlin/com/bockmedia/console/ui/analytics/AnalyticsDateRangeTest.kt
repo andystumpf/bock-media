@@ -1,5 +1,6 @@
 package com.bockmedia.console.ui.analytics
 
+import com.bockmedia.console.data.api.dto.ActivityPoint
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -58,5 +59,27 @@ class AnalyticsDateRangeTest {
             "amzn1.echo",
             AnalyticsDeviceFilter.Specific("amzn1.echo", "Kitchen").apiDeviceId("client-abc"),
         )
+    }
+
+    @Test
+    fun trimActivityPoints_dropsLeadingZerosButKeepsOne() {
+        val points = listOf(
+            ActivityPoint("2026-06-01", 0),
+            ActivityPoint("2026-06-02", 0),
+            ActivityPoint("2026-06-03", 0),
+            ActivityPoint("2026-06-04", 5),
+            ActivityPoint("2026-06-05", 2),
+        )
+        val trimmed = trimActivityPoints(points, ActivityPeriod.Day)
+        assertEquals(listOf("2026-06-03", "2026-06-04", "2026-06-05"), trimmed.map { it.label })
+        assertEquals(listOf(0, 5, 2), trimmed.map { it.count })
+    }
+
+    @Test
+    fun formatActivityLabel_dayMonthWeekYear() {
+        assertEquals("6/13", formatActivityLabel("2026-06-13", ActivityPeriod.Day))
+        assertEquals("26", formatActivityLabel("2026-W26", ActivityPeriod.Week))
+        assertEquals("Jun", formatActivityLabel("2026-06", ActivityPeriod.Month))
+        assertEquals("2026", formatActivityLabel("2026", ActivityPeriod.Year))
     }
 }

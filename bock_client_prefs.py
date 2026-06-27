@@ -17,6 +17,8 @@ _MEMBER_KEYS = frozenset({
     'homeTileEngagement',
     'lastDevice',
     'pinnedDevices',
+    'offlineDownloads',
+    'searchPins',
 })
 _CLIENT_KEYS = frozenset()
 _DEVICE_PREF_KEYS = frozenset({'lastDevice', 'pinnedDevices'})

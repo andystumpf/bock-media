@@ -41,7 +41,8 @@ data class LibraryItem(
 
 object LibraryLoader {
     private const val BROWSE_PLAYLIST_LIMIT = 500
-    private const val PAGE_SIZE = 200
+    /** Page size for Library Artists/Albums infinite scroll. */
+    const val BROWSE_PAGE_SIZE = 60
 
     private fun albumSubtitle(album: com.bockmedia.console.data.api.dto.AlbumItem): String {
         val parts = mutableListOf<String>()
@@ -54,33 +55,65 @@ object LibraryLoader {
         return parts.joinToString(" · ")
     }
 
-    private suspend fun BockMediaRepository.fetchAllArtists(search: String = ""): List<com.bockmedia.console.data.api.dto.ArtistItem> {
-        val all = mutableListOf<com.bockmedia.console.data.api.dto.ArtistItem>()
-        var page = 1
-        while (true) {
-            val resp = artists(page = page, search = search, limit = PAGE_SIZE)
-            if (resp.items.isEmpty()) break
-            all.addAll(resp.items)
-            if (all.size >= resp.total || resp.items.size < PAGE_SIZE) break
-            page++
-        }
-        return all
+    suspend fun loadArtistPage(
+        repository: BockMediaRepository,
+        page: Int,
+        search: String = "",
+    ): Pair<List<LibraryItem>, Int> {
+        val resp = runCatching {
+            repository.artists(page = page, search = search, limit = BROWSE_PAGE_SIZE)
+        }.getOrNull() ?: return emptyList<LibraryItem>() to 0
+        return artistItems(repository, resp.items) to resp.total
     }
 
-    private suspend fun BockMediaRepository.fetchAllAlbums(search: String = ""): List<com.bockmedia.console.data.api.dto.AlbumItem> {
-        val all = mutableListOf<com.bockmedia.console.data.api.dto.AlbumItem>()
-        var page = 1
-        while (true) {
-            val resp = albums(page = page, search = search, limit = PAGE_SIZE)
-            if (resp.items.isEmpty()) break
-            all.addAll(resp.items)
-            if (all.size >= resp.total || resp.items.size < PAGE_SIZE) break
-            page++
-        }
-        return all
+    suspend fun loadAlbumPage(
+        repository: BockMediaRepository,
+        page: Int,
+        search: String = "",
+    ): Pair<List<LibraryItem>, Int> {
+        val resp = runCatching {
+            repository.albums(page = page, search = search, limit = BROWSE_PAGE_SIZE)
+        }.getOrNull() ?: return emptyList<LibraryItem>() to 0
+        return albumItems(repository, resp.items) to resp.total
     }
 
-    /** Load all library buckets in parallel — filter client-side for instant tab switches. */
+    private suspend fun artistItems(
+        repository: BockMediaRepository,
+        artists: List<com.bockmedia.console.data.api.dto.ArtistItem>,
+    ): List<LibraryItem> = artists.map { artist ->
+        artist.artPath?.let { repository.cacheArtistArtPath(artist.name, it) }
+        LibraryItem(
+            id = "ar-${artist.name}",
+            title = artist.name,
+            subtitle = "${artist.albums} albums · ${artist.tracks} songs",
+            kind = LibraryItemKind.Artist,
+            playTarget = PlayTarget.Artist(artist.name),
+            artistName = artist.name,
+            artPath = artist.artPath,
+        )
+    }
+
+    private suspend fun albumItems(
+        repository: BockMediaRepository,
+        albums: List<com.bockmedia.console.data.api.dto.AlbumItem>,
+    ): List<LibraryItem> = albums.map { album ->
+        album.artPath?.let { repository.cacheArtPath(album.name, album.artist, it) }
+        LibraryItem(
+            id = "al-${album.name}\u0000${album.artist.orEmpty()}",
+            title = album.name,
+            subtitle = albumSubtitle(album),
+            kind = LibraryItemKind.Album,
+            playTarget = PlayTarget.Album(album.name, album.artist),
+            albumName = album.name,
+            artistName = album.artist,
+            artPath = album.artPath,
+            unplayed = album.unplayed,
+            year = album.year,
+            avgStars = album.avgStars,
+        )
+    }
+
+    /** Playlists + offline; artists/albums paginate on demand in LibraryScreen. */
     suspend fun loadBuckets(
         repository: BockMediaRepository,
         context: Context,
@@ -105,42 +138,6 @@ object LibraryLoader {
                 )
             }
         }
-        val artistsDef = async {
-            runCatching {
-                repository.fetchAllArtists()
-            }.getOrDefault(emptyList()).map { artist ->
-                artist.artPath?.let { repository.cacheArtistArtPath(artist.name, it) }
-                LibraryItem(
-                    id = "ar-${artist.name}",
-                    title = artist.name,
-                    subtitle = "${artist.albums} albums · ${artist.tracks} songs",
-                    kind = LibraryItemKind.Artist,
-                    playTarget = PlayTarget.Artist(artist.name),
-                    artistName = artist.name,
-                    artPath = artist.artPath,
-                )
-            }
-        }
-        val albumsDef = async {
-            runCatching {
-                repository.fetchAllAlbums()
-            }.getOrDefault(emptyList()).map { album ->
-                album.artPath?.let { repository.cacheArtPath(album.name, album.artist, it) }
-                LibraryItem(
-                    id = "al-${album.name}\u0000${album.artist.orEmpty()}",
-                    title = album.name,
-                    subtitle = albumSubtitle(album),
-                    kind = LibraryItemKind.Album,
-                    playTarget = PlayTarget.Album(album.name, album.artist),
-                    albumName = album.name,
-                    artistName = album.artist,
-                    artPath = album.artPath,
-                    unplayed = album.unplayed,
-                    year = album.year,
-                    avgStars = album.avgStars,
-                )
-            }
-        }
         val offlineDef = async {
             OfflineDownloadManager.refresh(context)
             val store = OfflineDownloadStore(context)
@@ -162,8 +159,8 @@ object LibraryLoader {
 
         LibraryData(
             playlists = playlistsDef.await(),
-            artists = artistsDef.await(),
-            albums = albumsDef.await(),
+            artists = emptyList(),
+            albums = emptyList(),
             offline = offlineDef.await(),
         )
     }
@@ -195,40 +192,8 @@ object LibraryLoader {
                     )
                 }
             }
-            LibraryFilter.Artists -> {
-                runCatching {
-                    repository.fetchAllArtists(search = q)
-                }.getOrDefault(emptyList()).map { artist ->
-                    LibraryItem(
-                        id = "ar-${artist.name}",
-                        title = artist.name,
-                        subtitle = "${artist.albums} albums · ${artist.tracks} songs",
-                        kind = LibraryItemKind.Artist,
-                        playTarget = PlayTarget.Artist(artist.name),
-                        artistName = artist.name,
-                        artPath = artist.artPath,
-                    )
-                }
-            }
-            LibraryFilter.Albums -> {
-                runCatching {
-                    repository.fetchAllAlbums(search = q)
-                }.getOrDefault(emptyList()).map { album ->
-                    LibraryItem(
-                        id = "al-${album.name}\u0000${album.artist.orEmpty()}",
-                        title = album.name,
-                        subtitle = albumSubtitle(album),
-                        kind = LibraryItemKind.Album,
-                        playTarget = PlayTarget.Album(album.name, album.artist),
-                        albumName = album.name,
-                        artistName = album.artist,
-                        artPath = album.artPath,
-                        unplayed = album.unplayed,
-                        year = album.year,
-                        avgStars = album.avgStars,
-                    )
-                }
-            }
+            LibraryFilter.Artists -> loadArtistPage(repository, page = 1, search = q).first
+            LibraryFilter.Albums -> loadAlbumPage(repository, page = 1, search = q).first
             LibraryFilter.Downloaded -> {
                 OfflineDownloadManager.refresh(context)
                 OfflineDownloadStore(context).listManifests()

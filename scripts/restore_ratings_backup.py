@@ -75,6 +75,15 @@ def discover_candidates(extra: list[str]) -> list[Path]:
                 p = child / name
                 if p.is_file():
                     patterns.append(p)
+    trash_ratings = Path.home() / '.local/share/Trash/files/ratings.json'
+    if trash_ratings.is_file():
+        patterns.append(trash_ratings)
+    legacy_alexa = Path.home() / '.MyMediaForAlexa/ratings.json'
+    if legacy_alexa.is_file():
+        patterns.append(legacy_alexa)
+    backup_root = DATA_DIR / 'member_data_backups'
+    if backup_root.is_dir():
+        patterns.extend(sorted(backup_root.glob('ratings.json.*.bak'), reverse=True))
     seen = set()
     out = []
     for p in patterns + [Path(x) for x in extra]:

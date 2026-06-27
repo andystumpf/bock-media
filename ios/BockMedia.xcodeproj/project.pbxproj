@@ -99,6 +99,7 @@
 		BE2FDF15F6EA38E4C6AE9FAB /* BockIcons.swift in Sources */ = {isa = PBXBuildFile; fileRef = 950FD3DD7882DEBB571034B9 /* BockIcons.swift */; };
 		BED7A18BD2946C1059F4E617 /* BockIcons.swift in Sources */ = {isa = PBXBuildFile; fileRef = 950FD3DD7882DEBB571034B9 /* BockIcons.swift */; };
 		BF47D6BDD33B53B784348F2B /* OfflineDownloadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D98381030488F554155B41C /* OfflineDownloadManager.swift */; };
+		B1A2C3D4E5F60718293A4B5E /* OfflineDownloadSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4B5F /* OfflineDownloadSync.swift */; };
 		C27F81088F1300D8F92CF36C /* GenreDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1346EDF03051012039EFE5A8 /* GenreDetailView.swift */; };
 		C3E51BA9B27B43DD346B74AE /* RecentRequestsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 507524D9DC1D15458C956978 /* RecentRequestsView.swift */; };
 		C86EEE4BD90C58ABFEBD4646 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 157E21D1DF21A36CD192F9C2 /* RootView.swift */; };
@@ -189,6 +190,7 @@
 		1CC695189DB77B2380B67826 /* PhonePlayback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhonePlayback.swift; sourceTree = "<group>"; };
 		1D23E7344A8A65A0A7622357 /* BrowseViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowseViews.swift; sourceTree = "<group>"; };
 		1D98381030488F554155B41C /* OfflineDownloadManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfflineDownloadManager.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60718293A4B5F /* OfflineDownloadSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfflineDownloadSync.swift; sourceTree = "<group>"; };
 		1F7B58B0A76536AEE6734C2A /* LibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryView.swift; sourceTree = "<group>"; };
 		2009C94AADC564CEDFDCBBA1 /* OfflineBackgroundSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfflineBackgroundSession.swift; sourceTree = "<group>"; };
 		2053E1DD199FF4054EB5901B /* HomeFeedCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeFeedCache.swift; sourceTree = "<group>"; };
@@ -528,6 +530,7 @@
 				2009C94AADC564CEDFDCBBA1 /* OfflineBackgroundSession.swift */,
 				1291CDFA2FECFFB31CE543E5 /* OfflineDownloadIds.swift */,
 				1D98381030488F554155B41C /* OfflineDownloadManager.swift */,
+				A1B2C3D4E5F60718293A4B5F /* OfflineDownloadSync.swift */,
 				3F46C8C5260BAC8B1994EEFD /* OfflineDownloadNetwork.swift */,
 				CD6FC0E93762FEE687CB04FC /* OfflineDownloadStore.swift */,
 				E7B9A44B0939C5EB01A0E800 /* OfflineModels.swift */,
@@ -1027,6 +1030,7 @@
 				59D1F8AA1967F4DFC49A3BCC /* NowPlayingView.swift in Sources */,
 				CD50C243F4FEF5EFD1192A10 /* OfflineBackgroundSession.swift in Sources */,
 				6E722A8D5D488F69037365E6 /* OfflineDownloadIds.swift in Sources */,
+				B1A2C3D4E5F60718293A4B5E /* OfflineDownloadSync.swift in Sources */,
 				BF47D6BDD33B53B784348F2B /* OfflineDownloadManager.swift in Sources */,
 				F1B3BCD79B81D395CDE765B3 /* OfflineDownloadNetwork.swift in Sources */,
 				2D60B4D759F60645D769F739 /* OfflineDownloadStore.swift in Sources */,

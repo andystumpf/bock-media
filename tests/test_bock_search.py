@@ -124,3 +124,18 @@ class TestPins:
         pins = bock_search.load_pins()
         assert len(pins) == 1
         assert pins[0]['kind'] == 'genre'
+
+    def test_per_member_pins(self, tmp_path):
+        bock_search.configure(str(tmp_path))
+        bock_search.save_pins([{'kind': 'genre', 'title': 'Legacy', 'name': 'Legacy'}])
+        prefs = str(tmp_path / 'client_prefs.json')
+        bock_search.save_pins_for_member(prefs, 'p-andy', [
+            {'kind': 'artist', 'title': 'R.E.M.', 'name': 'R.E.M.'},
+        ])
+        bock_search.save_pins_for_member(prefs, 'p-emma', [
+            {'kind': 'genre', 'title': 'Pop', 'name': 'Pop'},
+        ])
+        assert bock_search.load_pins_for_member(prefs, 'p-andy')[0]['name'] == 'R.E.M.'
+        assert bock_search.load_pins_for_member(prefs, 'p-emma')[0]['name'] == 'Pop'
+        migrated = bock_search.load_pins_for_member(prefs, 'p-jack')
+        assert migrated[0]['name'] == 'Legacy'

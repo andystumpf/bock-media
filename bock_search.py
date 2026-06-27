@@ -589,6 +589,34 @@ def run_search(
 
 # ── Search pins (Aural Fixations) ────────────────────────────────────────────
 
+_PIN_KINDS = frozenset({'genre', 'playlist', 'artist', 'album', 'radio', 'mix'})
+
+
+def clean_pins(pins):
+    """Normalize pin payloads from API / client prefs."""
+    if not isinstance(pins, list):
+        return []
+    cleaned = []
+    for p in pins[:24]:
+        if not isinstance(p, dict):
+            continue
+        kind = (p.get('kind') or '').strip().lower()
+        if kind not in _PIN_KINDS:
+            continue
+        entry = {'kind': kind, 'title': (p.get('title') or p.get('name') or '').strip()}
+        if p.get('id'):
+            entry['id'] = str(p['id'])
+        if p.get('name'):
+            entry['name'] = str(p['name'])
+        if p.get('artist'):
+            entry['artist'] = str(p['artist'])
+        if p.get('path'):
+            entry['path'] = str(p['path'])
+        if entry.get('title') or entry.get('name'):
+            cleaned.append(entry)
+    return cleaned
+
+
 def load_pins():
     if not PINS_PATH or not os.path.isfile(PINS_PATH):
         return []
@@ -596,7 +624,7 @@ def load_pins():
         with open(PINS_PATH) as f:
             data = json.load(f)
         pins = data.get('pins') if isinstance(data, dict) else data
-        return pins if isinstance(pins, list) else []
+        return clean_pins(pins if isinstance(pins, list) else [])
     except Exception:
         return []
 
@@ -604,7 +632,46 @@ def load_pins():
 def save_pins(pins):
     if not PINS_PATH:
         return False
+    cleaned = clean_pins(pins)
     os.makedirs(os.path.dirname(PINS_PATH) or '.', exist_ok=True)
     with open(PINS_PATH, 'w') as f:
-        json.dump({'pins': pins}, f, indent=2)
+        json.dump({'pins': cleaned}, f, indent=2)
     return True
+
+
+def load_pins_for_member(prefs_path, member_id, atomic_write=None):
+    """Per-household-profile pins in client_prefs; migrate legacy global file once."""
+    mid = (member_id or '').strip()
+    if not mid:
+        return load_pins()
+    import bock_client_prefs
+    row = bock_client_prefs.get_prefs(prefs_path, member_id=mid)
+    stored = (row.get('merged') or {}).get('searchPins')
+    if isinstance(stored, list) and stored:
+        return clean_pins(stored)
+    legacy = load_pins()
+    if legacy:
+        bock_client_prefs.put_prefs(
+            prefs_path,
+            member_id=mid,
+            member_prefs={'searchPins': legacy},
+            atomic_write=atomic_write,
+        )
+        return legacy
+    return []
+
+
+def save_pins_for_member(prefs_path, member_id, pins, atomic_write=None):
+    mid = (member_id or '').strip()
+    cleaned = clean_pins(pins)
+    if not mid:
+        save_pins(cleaned)
+        return cleaned
+    import bock_client_prefs
+    bock_client_prefs.put_prefs(
+        prefs_path,
+        member_id=mid,
+        member_prefs={'searchPins': cleaned},
+        atomic_write=atomic_write,
+    )
+    return cleaned

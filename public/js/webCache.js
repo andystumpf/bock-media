@@ -205,6 +205,12 @@
     return [...ids];
   }
 
+  function invalidateHome() {
+    homeMem = null;
+    lastHomeLoadMs = 0;
+    try { localStorage.removeItem(HOME_DISK_KEY); } catch { /* quota */ }
+  }
+
   const api = {
     FEED_LAYOUT_VERSION,
     hasCurrentHomeLayout,
@@ -215,6 +221,7 @@
     saveHomeToDisk,
     loadHomeFromDisk,
     hydrateHomeFromDisk,
+    invalidateHome,
     peekLibrary,
     putLibrary,
     markLibraryLoaded,

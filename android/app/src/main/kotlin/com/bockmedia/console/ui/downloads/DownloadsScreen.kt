@@ -26,6 +26,7 @@ import com.bockmedia.console.local.DownloadState
 import com.bockmedia.console.local.OfflineCollectionStatus
 import com.bockmedia.console.local.OfflineDownloadManager
 import com.bockmedia.console.local.OfflineDownloadStore
+import com.bockmedia.console.local.OfflineDownloadSync
 import com.bockmedia.console.local.formatDownloadDate
 import com.bockmedia.console.local.formatOfflineBytes
 import com.bockmedia.console.local.toPlayTarget
@@ -73,7 +74,11 @@ fun DownloadsManagementSection(
     }
 
     val sorted = remember(statuses) {
-        statuses.values.sortedWith(
+        val profileIds = OfflineDownloadSync.visibleCollectionIds(context)
+        val values = statuses.values.filter { status ->
+            profileIds == null || status.manifest.id in profileIds
+        }
+        values.sortedWith(
             compareBy<OfflineCollectionStatus> {
                 when (it.state) {
                     DownloadState.Downloading -> 0
