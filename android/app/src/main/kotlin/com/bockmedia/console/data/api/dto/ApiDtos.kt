@@ -184,6 +184,7 @@ data class NowPlayingDeviceItem(
     val sourceLabel: String? = null,
     val sleep: SleepInfo? = null,
     val upcoming: List<UpcomingTrack> = emptyList(),
+    val upNext: List<RoomRequestItem> = emptyList(),
 )
 
 @Serializable
@@ -194,6 +195,25 @@ data class UpcomingTrack(
     val title: String? = null,
     val artist: String? = null,
     val path: String? = null,
+)
+
+@Serializable
+data class RoomRequestItem(
+    val id: String = "",
+    val path: String? = null,
+    val track: String? = null,
+    val artist: String? = null,
+    val byMemberId: String? = null,
+    val byMemberName: String? = null,
+    val status: String? = null,
+    val ts: Double? = null,
+)
+
+@Serializable
+data class RoomQueueResponse(
+    val deviceId: String = "",
+    val deviceName: String? = null,
+    val queue: List<RoomRequestItem> = emptyList(),
 )
 
 @Serializable

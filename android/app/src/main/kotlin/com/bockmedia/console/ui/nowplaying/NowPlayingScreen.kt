@@ -42,6 +42,7 @@ import com.bockmedia.console.domain.model.computeNowPlayingProgress
 import com.bockmedia.console.domain.model.formatPlaybackTime
 import com.bockmedia.console.media.LocalPlaybackController
 import com.bockmedia.console.media.isLocalPhoneDevice
+import com.bockmedia.console.local.ActiveProfileStore
 import com.bockmedia.console.media.toNowPlayingDevice
 import com.bockmedia.console.ui.alexaControlsAvailable
 import com.bockmedia.console.ui.components.BockArtwork
@@ -50,6 +51,8 @@ import com.bockmedia.console.ui.components.ErrorText
 import com.bockmedia.console.ui.components.LoadingBox
 import com.bockmedia.console.ui.components.PaginationBar
 import com.bockmedia.console.ui.components.RatingKind
+import com.bockmedia.console.ui.components.AddToRoomSheet
+import com.bockmedia.console.ui.components.RoomRequestsSheet
 import com.bockmedia.console.ui.components.UpNextSheet
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -338,6 +341,7 @@ fun NowPlayingScreen(
                             onHistory = { showHistory = true },
                             onControl = { d, action -> scope.launch { runControl(d, action) } },
                             onSleep = { sleepDevice = it },
+                            onRefresh = { scope.launch { runCatching { refreshLive() } } },
                         )
                     }
                     if (pagerDotsVisible) {
@@ -524,6 +528,7 @@ private fun SpotifyNowPlayingPage(
     onHistory: () -> Unit,
     onControl: (NowPlayingDeviceItem, String) -> Unit,
     onSleep: (NowPlayingDeviceItem) -> Unit,
+    onRefresh: () -> Unit,
 ) {
     val isLocal = isLocalPhoneDevice(dev.deviceId)
     val liveLocal by LocalPlaybackController.state.collectAsState()
@@ -544,7 +549,12 @@ private fun SpotifyNowPlayingPage(
     }
     val elapsedSec = prog.elapsedMs / 1000
     val durationSec = prog.durationMs / 1000
+    val context = LocalContext.current
     var showUpNext by remember { mutableStateOf(false) }
+    var showRoomRequests by remember { mutableStateOf(false) }
+    var showAddToRoom by remember { mutableStateOf(false) }
+    var actingMemberId by remember { mutableStateOf(ActiveProfileStore.activeMemberId(context)) }
+    var isParent by remember { mutableStateOf(false) }
     var showLyrics by remember { mutableStateOf(false) }
     var lyricsOffsetMs by remember { mutableIntStateOf(0) }
     var lyricsPositionMs by remember { mutableLongStateOf(0L) }
@@ -553,7 +563,6 @@ private fun SpotifyNowPlayingPage(
     var lyricsLoading by remember { mutableStateOf(false) }
     var lyricsError by remember { mutableStateOf<String?>(null) }
     var artUrl by remember(displayDev.filepath) { mutableStateOf<String?>(null) }
-    val context = androidx.compose.ui.platform.LocalContext.current
     val localArtFile = if (isLocal) liveLocal.current?.localFile else null
     var lastSkipToast by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(isLocal, liveLocal.error) {
@@ -565,6 +574,13 @@ private fun SpotifyNowPlayingPage(
     }
     LaunchedEffect(displayDev.filepath, localArtFile) {
         artUrl = repository.resolvePlaybackArtUrl(context, displayDev.filepath, localArtFile)
+    }
+    LaunchedEffect(Unit) {
+        val me = ActiveProfileStore.activeMemberId(context)
+        actingMemberId = me
+        isParent = runCatching { repository.household().members }
+            .getOrDefault(emptyList())
+            .any { it.id == me && it.role == "parent" }
     }
     var year by remember(displayDev.filepath) { mutableStateOf(displayDev.year) }
     LaunchedEffect(displayDev.filepath, displayDev.year) {
@@ -789,6 +805,38 @@ private fun SpotifyNowPlayingPage(
                         )
                     }
 
+                    if (displayDev.upNext.isNotEmpty()) {
+                        Column(
+                            Modifier
+                                .padding(horizontal = 24.dp)
+                                .padding(bottom = 8.dp)
+                                .clickable { showRoomRequests = true },
+                        ) {
+                            Text(
+                                "Household requests",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = Color.White.copy(alpha = 0.55f),
+                                modifier = Modifier.padding(bottom = 6.dp),
+                            )
+                            displayDev.upNext.take(4).forEach { req ->
+                                val who = req.byMemberName?.takeIf { it.isNotBlank() } ?: "Someone"
+                                val status = if (req.status == "queued") " · pending" else ""
+                                Text(
+                                    "${req.track ?: "Track"} · $who$status",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color.White.copy(alpha = 0.75f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    }
+                    if (remoteOk && !displayDev.filepath.isNullOrBlank() && !isLocal) {
+                        TextButton(onClick = { showAddToRoom = true }) {
+                            Text("Add to another room", color = Color.White.copy(alpha = 0.75f))
+                        }
+                    }
+
                     if (displayDev.upcoming.isNotEmpty()) {
                         SpotifyUpNext(
                             tracks = displayDev.upcoming,
@@ -824,6 +872,37 @@ private fun SpotifyNowPlayingPage(
                     }
                 },
                 onDismiss = { showUpNext = false },
+            )
+        }
+        if (showRoomRequests) {
+            RoomRequestsSheet(
+                deviceId = displayDev.deviceId,
+                deviceName = displayDev.deviceName,
+                requests = displayDev.upNext,
+                repository = repository,
+                actingMemberId = actingMemberId,
+                isParent = isParent,
+                onUpdated = {
+                    onRefresh()
+                    repository.roomQueue(displayDev.deviceId).queue
+                        .filter { it.status == "queued" || it.status == "approved" }
+                },
+                onDismiss = { showRoomRequests = false },
+            )
+        }
+        if (showAddToRoom && !displayDev.filepath.isNullOrBlank()) {
+            AddToRoomSheet(
+                repository = repository,
+                path = displayDev.filepath!!,
+                track = displayDev.track ?: "Track",
+                artist = displayDev.artist,
+                remoteOk = remoteOk,
+                onDismiss = { showAddToRoom = false },
+                onSuccess = { msg ->
+                    scope.launch { snackbarHostState.showSnackbar(msg) }
+                    showAddToRoom = false
+                },
+                onError = { msg -> scope.launch { snackbarHostState.showSnackbar(msg) } },
             )
         }
     }

@@ -186,6 +186,8 @@ struct NowPlayingView: View {
     @State private var scrollPage: Int?
     @State private var showSleep = false
     @State private var showUpNext = false
+    @State private var showRoomRequests = false
+    @State private var showAddToRoom = false
     @State private var showHistory = false
     @State private var sheetDeviceId: String?
 
@@ -304,6 +306,37 @@ struct NowPlayingView: View {
                 )
             }
         }
+        .sheet(isPresented: $showRoomRequests) {
+            if let dev = sheetDevice {
+                RoomRequestsSheet(
+                    appState: appState,
+                    deviceId: dev.deviceId,
+                    deviceName: dev.deviceName,
+                    requests: dev.upNext,
+                    onUpdated: {
+                        await viewModel.refresh(repository: appState.repository)
+                        return viewModel.devices.first(where: { $0.deviceId == dev.deviceId })?.upNext ?? []
+                    },
+                    onDismiss: { showRoomRequests = false }
+                )
+            }
+        }
+        .sheet(isPresented: $showAddToRoom) {
+            if let dev = sheetDevice, let path = dev.filepath {
+                AddToRoomSheet(
+                    repository: appState.repository,
+                    path: path,
+                    track: dev.track ?? "Track",
+                    artist: dev.artist,
+                    remoteOk: appState.remoteOk,
+                    onDismiss: { showAddToRoom = false },
+                    onDone: { msg in
+                        appState.toast = msg
+                        showAddToRoom = false
+                    }
+                )
+            }
+        }
         .sheet(isPresented: $showHistory) {
             StreamHistorySheet(appState: appState, onDismiss: { showHistory = false })
         }
@@ -350,12 +383,21 @@ struct NowPlayingView: View {
                             initialArtURL: viewModel.artURLs[dev.deviceId],
                             viewModel: viewModel,
                             repository: appState.repository,
+                            remoteOk: viewModel.remoteOk,
                             showPagerInset: viewModel.devices.count > 1,
                             onUpNext: {
                                 sheetDeviceId = dev.deviceId
                                 showUpNext = true
                             },
-                            upNextCount: upNextTracks(for: dev).count
+                            upNextCount: upNextTracks(for: dev).count,
+                            onRoomQueue: {
+                                sheetDeviceId = dev.deviceId
+                                showRoomRequests = true
+                            },
+                            onAddToRoom: {
+                                sheetDeviceId = dev.deviceId
+                                showAddToRoom = true
+                            }
                         )
                         .containerRelativeFrame(.vertical)
                         .id(idx)
@@ -397,9 +439,12 @@ private struct NowPlayingDevicePage: View {
     let initialArtURL: URL?
     @ObservedObject var viewModel: NowPlayingViewModel
     let repository: BockMediaRepository
+    var remoteOk: Bool = false
     var showPagerInset: Bool
     let onUpNext: () -> Void
     let upNextCount: Int
+    var onRoomQueue: (() -> Void)? = nil
+    var onAddToRoom: (() -> Void)? = nil
 
     @State private var artURL: URL?
     @State private var artPath: String = ""
@@ -454,8 +499,34 @@ private struct NowPlayingDevicePage: View {
                         }
                         .padding(.horizontal, 24)
 
+                        if !dev.upNext.isEmpty {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Household requests")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.white.opacity(0.55))
+                                ForEach(dev.upNext.prefix(4)) { req in
+                                    let who = req.byMemberName ?? "Someone"
+                                    let pending = req.status == "queued" ? " · pending" : ""
+                                    Text("\(req.track ?? "Track") · \(who)\(pending)")
+                                        .font(.caption)
+                                        .foregroundStyle(.white.opacity(0.65))
+                                        .lineLimit(1)
+                                }
+                                Button("Manage queue", action: { onRoomQueue?() })
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(BockColors.green)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 24)
+                        }
+
                         if upNextCount > 0 {
                             Button("Up next · \(upNextCount) tracks", action: onUpNext)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.white.opacity(0.65))
+                        }
+                        if dev.filepath != nil, remoteOk, dev.deviceId != LocalPlaybackIds.localPhoneDeviceId {
+                            Button("Add to another room") { onAddToRoom?() }
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.white.opacity(0.65))
                         }

@@ -343,7 +343,23 @@ interface BockMediaApi {
     suspend fun sharePlaylist(@Path("id") id: String, @Body body: JsonObject): OkResponse
 
     @POST("api/rooms/{deviceId}/requests")
-    suspend fun roomRequest(@Path("deviceId") deviceId: String, @Body body: JsonObject): OkResponse
+    suspend fun roomRequest(@Path("deviceId") deviceId: String, @Body body: JsonObject): RoomRequestItem
+
+    @GET("api/rooms/{deviceId}/queue")
+    suspend fun roomQueue(@Path("deviceId") deviceId: String): RoomQueueResponse
+
+    @POST("api/rooms/{deviceId}/requests/{rid}/approve")
+    suspend fun approveRoomRequest(
+        @Path("deviceId") deviceId: String,
+        @Path("rid") rid: String,
+        @Body body: JsonObject,
+    ): RoomRequestItem
+
+    @DELETE("api/rooms/{deviceId}/requests/{rid}")
+    suspend fun deleteRoomRequest(@Path("deviceId") deviceId: String, @Path("rid") rid: String): OkResponse
+
+    @POST("api/rooms/{deviceId}/requests/reorder")
+    suspend fun reorderRoomRequests(@Path("deviceId") deviceId: String, @Body body: JsonObject): RoomQueueResponse
 
     @GET("api/analytics/export")
     @Streaming

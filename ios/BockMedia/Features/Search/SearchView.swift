@@ -14,6 +14,7 @@ struct SearchView: View {
     @State private var showNewReleases = false
     @State private var browseArtworkEpoch = 0
     @State private var addToPlaylist: AddToPlaylistContext?
+    @State private var addToRoom: AddToRoomContext?
     @State private var searchTask: Task<Void, Never>?
     @State private var favoritePaths: Set<String> = []
     @State private var searchPins: [SearchPin] = []
@@ -80,6 +81,20 @@ struct SearchView: View {
                 onAdded: { msg in
                     appState.toast = msg
                     addToPlaylist = nil
+                }
+            )
+        }
+        .sheet(item: $addToRoom) { ctx in
+            AddToRoomSheet(
+                repository: appState.repository,
+                path: ctx.path,
+                track: ctx.title,
+                artist: ctx.artist,
+                remoteOk: appState.remoteOk,
+                onDismiss: { addToRoom = nil },
+                onDone: { msg in
+                    appState.toast = msg
+                    addToRoom = nil
                 }
             )
         }
@@ -626,6 +641,14 @@ struct SearchView: View {
             .buttonStyle(.plain)
             Spacer()
             if let path = hit.path {
+                if appState.remoteOk {
+                    Button {
+                        addToRoom = AddToRoomContext(path: path, title: hit.title ?? hit.name ?? path, artist: hit.artist)
+                    } label: {
+                        BockIcon(icon: .add, size: 22).foregroundStyle(BockColors.muted)
+                    }
+                    .buttonStyle(.plain)
+                }
                 Button {
                     addToPlaylist = AddToPlaylistContext(path: path, title: hit.title ?? hit.name ?? path)
                 } label: {
@@ -1016,4 +1039,11 @@ private struct BrowseArtwork: View {
             }
         }
     }
+}
+
+private struct AddToRoomContext: Identifiable {
+    let path: String
+    let title: String
+    let artist: String?
+    var id: String { path }
 }

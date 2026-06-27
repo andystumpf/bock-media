@@ -178,6 +178,7 @@ struct PlaylistDetailView: View {
     @State private var sharedWith: [String] = []
     @State private var showShare = false
     @State private var householdMembers: [HouseholdMember] = []
+    @State private var addToRoom: AddToRoomContext?
     private let pageSize = 100
 
     private var canReorder: Bool {
@@ -340,6 +341,20 @@ struct PlaylistDetailView: View {
                 onCancel: { showShare = false }
             )
         }
+        .sheet(item: $addToRoom) { ctx in
+            AddToRoomSheet(
+                repository: appState.repository,
+                path: ctx.path,
+                track: ctx.title,
+                artist: ctx.artist,
+                remoteOk: appState.remoteOk,
+                onDismiss: { addToRoom = nil },
+                onDone: { msg in
+                    appState.toast = msg
+                    addToRoom = nil
+                }
+            )
+        }
     }
 
     private var playlistSeed: DiscoverySeed {
@@ -484,6 +499,15 @@ struct PlaylistDetailView: View {
                     acquireSeed: $acquireSeed
                 )
                 Divider()
+                if appState.remoteOk {
+                    Button {
+                        addToRoom = AddToRoomContext(
+                            path: path,
+                            title: track.title ?? path,
+                            artist: track.artist
+                        )
+                    } label: { Label("Add to room", systemImage: "plus") }
+                }
                 Button(role: .destructive) {
                     Task {
                         try? await appState.repository.removePlaylistTrack(playlistId: playlistId, path: path)
@@ -591,4 +615,11 @@ private extension String {
         let t = trimmingCharacters(in: .whitespacesAndNewlines)
         return t.isEmpty ? nil : t
     }
+}
+
+private struct AddToRoomContext: Identifiable {
+    let path: String
+    let title: String
+    let artist: String?
+    var id: String { path }
 }

@@ -133,6 +133,7 @@ struct SongsView: View {
     @State private var mixMuseSeed: DiscoverySeed?
     @State private var showAcquire = false
     @State private var acquireSeed: DiscoverySeed?
+    @State private var addToRoom: AddToRoomContext?
 
     var body: some View {
         browseList(loading: loading && items.isEmpty, empty: "No songs") {
@@ -167,6 +168,16 @@ struct SongsView: View {
                             showAcquire: $showAcquire,
                             acquireSeed: $acquireSeed
                         )
+                        if appState.remoteOk {
+                            Divider()
+                            Button {
+                                addToRoom = AddToRoomContext(
+                                    path: path,
+                                    title: song.title ?? path,
+                                    artist: song.artist
+                                )
+                            } label: { Label("Add to room", systemImage: "plus") }
+                        }
                     }
                 }
                 .listRowBackground(BockColors.surfaceVariant.opacity(0.4))
@@ -185,6 +196,20 @@ struct SongsView: View {
         }
         .sheet(isPresented: $showAcquire) {
             AcquireIdeasSheet(appState: appState, seed: acquireSeed)
+        }
+        .sheet(item: $addToRoom) { ctx in
+            AddToRoomSheet(
+                repository: appState.repository,
+                path: ctx.path,
+                track: ctx.title,
+                artist: ctx.artist,
+                remoteOk: appState.remoteOk,
+                onDismiss: { addToRoom = nil },
+                onDone: { msg in
+                    appState.toast = msg
+                    addToRoom = nil
+                }
+            )
         }
     }
 
@@ -254,4 +279,11 @@ private func browseList<Content: View>(
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
     }
+}
+
+private struct AddToRoomContext: Identifiable {
+    let path: String
+    let title: String
+    let artist: String?
+    var id: String { path }
 }

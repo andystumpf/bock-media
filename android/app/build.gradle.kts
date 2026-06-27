@@ -14,7 +14,7 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = 45
-        versionName = "2.6.31"
+        versionName = "2.6.32"
         // Bock Media server endpoints (override via local.properties if needed)
         val localProps = rootProject.file("local.properties")
         fun prop(name: String) = if (localProps.exists()) {

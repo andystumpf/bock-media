@@ -171,6 +171,14 @@ fun FamilyScreen(repository: BockMediaRepository) {
                 }
             }
 
+            item {
+                FamilyRoomRequestsSection(
+                    repository = repository,
+                    rooms = rooms,
+                    householdMembers = household.members,
+                )
+            }
+
             stats?.takeIf { it.byMember.isNotEmpty() }?.let { s ->
                 item {
                     SectionCard("Family activity · ${s.totalPlays} plays") {
@@ -268,7 +276,7 @@ fun FamilyScreen(repository: BockMediaRepository) {
 }
 
 @Composable
-private fun SectionCard(title: String, content: @Composable ColumnScope.() -> Unit) {
+internal fun SectionCard(title: String, content: @Composable ColumnScope.() -> Unit) {
     Surface(shape = CardShape, color = Color_Card) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(title, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)

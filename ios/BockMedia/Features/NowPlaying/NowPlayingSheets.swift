@@ -198,3 +198,160 @@ struct StreamHistorySheet: View {
         }
     }
 }
+
+struct AddToRoomSheet: View {
+    let repository: BockMediaRepository
+    let path: String
+    let track: String
+    let artist: String?
+    let remoteOk: Bool
+    let onDismiss: () -> Void
+    let onDone: (String) -> Void
+
+    @State private var options: [DeviceOption] = []
+    @State private var loading = true
+    @State private var submitting = false
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if !remoteOk {
+                    Text("Connect Alexa to queue songs on speakers.")
+                        .foregroundStyle(BockColors.muted)
+                        .padding()
+                } else if loading {
+                    ProgressView().padding()
+                } else if options.isEmpty {
+                    Text("No speakers found.").foregroundStyle(BockColors.muted).padding()
+                } else {
+                    List(options) { opt in
+                        Button {
+                            submit(deviceId: opt.value, label: opt.label)
+                        } label: {
+                            Text(opt.label)
+                        }
+                        .disabled(submitting)
+                    }
+                }
+            }
+            .navigationTitle("Add to room")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", action: onDismiss)
+                }
+            }
+            .task { await loadDevices() }
+        }
+    }
+
+    private func loadDevices() async {
+        if let snapshot = DeviceCatalog.peek(), DeviceCatalog.isFresh() {
+            options = snapshot.options.filter { !$0.value.hasPrefix("group:") }
+            loading = false
+            return
+        }
+        let snapshot = await DeviceCatalog.refresh(repository: repository, probe: false)
+        options = snapshot.options.filter { !$0.value.hasPrefix("group:") }
+        loading = false
+    }
+
+    private func submit(deviceId: String, label: String) {
+        submitting = true
+        Task {
+            do {
+                let item = try await repository.roomRequest(
+                    deviceId: deviceId,
+                    path: path,
+                    track: track,
+                    artist: artist
+                )
+                let msg = item.status == "queued"
+                    ? "Request sent — waiting for approval"
+                    : "Added to \(label.trimmingCharacters(in: .whitespaces))"
+                onDone(msg)
+            } catch {
+                onDone(error.localizedDescription)
+                submitting = false
+            }
+        }
+    }
+}
+
+struct RoomRequestsSheet: View {
+    @ObservedObject var appState: AppState
+    let deviceId: String
+    let deviceName: String?
+    let requests: [RoomRequestItem]
+    let onUpdated: () async -> [RoomRequestItem]
+    let onDismiss: () -> Void
+
+    @State private var items: [RoomRequestItem] = []
+    @State private var busy = false
+    @State private var isParent = false
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if items.isEmpty {
+                    Text("No household requests for this room.")
+                        .foregroundStyle(BockColors.muted)
+                }
+                ForEach(items) { req in
+                    HStack {
+                        VStack(alignment: .leading) {
+                            Text(req.track ?? "Track")
+                            let who = req.byMemberName ?? "Someone"
+                            let pending = req.status == "queued" ? " · awaiting approval" : ""
+                            Text("\(who)\(pending)").font(.caption).foregroundStyle(BockColors.muted)
+                        }
+                        Spacer()
+                        if isParent, req.status == "queued" {
+                            Button {
+                                Task { await approve(req) }
+                            } label: {
+                                Image(systemName: "checkmark.circle")
+                            }
+                            .disabled(busy)
+                        }
+                        Button(role: .destructive) {
+                            Task { await remove(req) }
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .disabled(busy)
+                    }
+                }
+            }
+            .navigationTitle(deviceName ?? "Room queue")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Close", action: onDismiss) }
+            }
+            .onAppear { items = requests }
+            .task {
+                if let h = try? await appState.repository.household() {
+                    let me = ActiveProfileStore.activeMemberId()
+                    isParent = h.members.contains { $0.id == me && $0.isParent }
+                }
+            }
+        }
+    }
+
+    private func approve(_ req: RoomRequestItem) async {
+        let me = ActiveProfileStore.activeMemberId() ?? ""
+        guard let pin = ParentPinCache.get(memberId: me), !pin.isEmpty else {
+            appState.toast = "Set a parent PIN first"
+            return
+        }
+        busy = true
+        defer { busy = false }
+        _ = try? await appState.repository.approveRoomRequest(deviceId: deviceId, requestId: req.id, pin: pin)
+        items = await onUpdated()
+    }
+
+    private func remove(_ req: RoomRequestItem) async {
+        busy = true
+        defer { busy = false }
+        try? await appState.repository.deleteRoomRequest(deviceId: deviceId, requestId: req.id)
+        items = await onUpdated()
+    }
+}

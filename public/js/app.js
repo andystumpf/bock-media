@@ -996,7 +996,29 @@ function renderQueuePanel() {
     </div>
   </div>`;
   const upcoming = d.upcoming || [];
+  const roomUpNext = d.upNext || [];
   const src = d.sourceLabel || d.playlist || d.context || '';
+  const roomHtml = roomUpNext.length
+    ? `<div class="queue-section-label">Household requests</div>${roomUpNext.map((r, i) => {
+      const url = r.path ? artworkUrl(r.path) : null;
+      const who = r.byMemberName || 'Someone';
+      const pending = r.status === 'queued' ? ' · pending' : '';
+      const devId = d.deviceId || '';
+      const actions = `
+        ${r.status === 'queued' ? `<button class="btn-sm btn-primary" onclick="approveRoomRequest('${escHtml(devId)}','${escHtml(r.id)}')">Approve</button>` : ''}
+        <button class="btn-sm btn-default" onclick="deleteRoomRequest('${escHtml(devId)}','${escHtml(r.id)}')" title="Remove"><i class="fa fa-trash"></i></button>
+        ${i > 0 ? `<button class="btn-sm btn-default" onclick="reorderRoomRequest('${escHtml(devId)}','${escHtml(r.id)}',-1)">↑</button>` : ''}
+        ${i < roomUpNext.length - 1 ? `<button class="btn-sm btn-default" onclick="reorderRoomRequest('${escHtml(devId)}','${escHtml(r.id)}',1)">↓</button>` : ''}`;
+      return `<div class="queue-track">
+        <div class="queue-track-art">${url ? `<img src="${escHtml(url)}" alt="" loading="lazy">` : ''}</div>
+        <div class="queue-track-meta">
+          <div class="queue-track-title">${escHtml(r.track || 'Track')}</div>
+          <div class="queue-track-artist">${escHtml(who)}${pending}</div>
+        </div>
+        <div class="row-actions">${actions}</div>
+      </div>`;
+    }).join('')}`
+    : '';
   const nextLabel = src ? `Next from: ${src}` : 'Next up';
   const nextHtml = upcoming.length
     ? `<div class="queue-section-label">${escHtml(nextLabel)}</div>${upcoming.map((t) => {
@@ -1010,7 +1032,7 @@ function renderQueuePanel() {
       </div>`;
     }).join('')}`
     : '<p class="hint" style="padding:8px;font-size:12px;color:var(--text-muted)">Queue ends after this track</p>';
-  body.innerHTML = nowHtml + nextHtml;
+  body.innerHTML = nowHtml + roomHtml + nextHtml;
 }
 
 function spotifyBrowsePage(title, filtersHtml, innerHtml) {
@@ -1782,13 +1804,49 @@ function npProgressHtml(d) {
 }
 
 function npUpcomingHtml(d) {
+  const room = d.upNext || [];
   const up = d.upcoming || [];
-  if (!up.length) return '';
-  const rows = up.map((t, i) =>
-    `<li>${i + 2}. ${escHtml(t.title || '—')}${t.artist ? ' — ' + escHtml(t.artist) : ''}</li>`
-  ).join('');
-  return `<div class="np-upcoming"><div class="np-upcoming-label">Up next</div><ol>${rows}</ol></div>`;
+  let html = '';
+  if (room.length) {
+    const rows = room.map((r, i) => {
+      const who = r.byMemberName || 'Someone';
+      const pending = r.status === 'queued' ? ' · pending' : '';
+      const actions = `
+        ${r.status === 'queued' ? `<button class="btn-sm btn-primary" onclick="approveRoomRequest('${escHtml(d.deviceId)}','${escHtml(r.id)}')">Approve</button>` : ''}
+        <button class="btn-sm btn-default" onclick="deleteRoomRequest('${escHtml(d.deviceId)}','${escHtml(r.id)}')" title="Remove"><i class="fa fa-trash"></i></button>
+        ${i > 0 ? `<button class="btn-sm btn-default" onclick="reorderRoomRequest('${escHtml(d.deviceId)}','${escHtml(r.id)}',-1)" title="Move up">↑</button>` : ''}
+        ${i < room.length - 1 ? `<button class="btn-sm btn-default" onclick="reorderRoomRequest('${escHtml(d.deviceId)}','${escHtml(r.id)}',1)" title="Move down">↓</button>` : ''}`;
+      return `<li>${escHtml(r.track || '—')} · ${escHtml(who)}${pending} <span class="row-actions">${actions}</span></li>`;
+    }).join('');
+    html += `<div class="np-upcoming"><div class="np-upcoming-label">Household requests</div><ol>${rows}</ol></div>`;
+  }
+  if (up.length) {
+    const rows = up.map((t, i) =>
+      `<li>${i + 2}. ${escHtml(t.title || '—')}${t.artist ? ' — ' + escHtml(t.artist) : ''}</li>`
+    ).join('');
+    html += `<div class="np-upcoming"><div class="np-upcoming-label">Up next</div><ol>${rows}</ol></div>`;
+  }
+  return html;
 }
+
+async function reorderRoomRequest(deviceId, requestId, delta) {
+  const d = (window._npItems || []).find(x => x.deviceId === deviceId);
+  const room = (d && d.upNext) || [];
+  const ids = room.map(r => r.id);
+  const i = ids.indexOf(requestId);
+  if (i < 0) return;
+  const j = i + delta;
+  if (j < 0 || j >= ids.length) return;
+  [ids[i], ids[j]] = [ids[j], ids[i]];
+  const res = await fetch(`/api/rooms/${encodeURIComponent(deviceId)}/requests/reorder`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ order: ids }),
+  });
+  if (!res.ok) return showToast('Could not reorder', true);
+  await refreshCurrentTrack();
+}
+window.reorderRoomRequest = reorderRoomRequest;
 
 // Tick the time displays in place (smooth) between the 5s data polls.
 function npTickTimes() {
@@ -2067,6 +2125,7 @@ function buildDeviceRow(d, controlsAvailable = false) {
       ${actionBtn({ kind: 'muted', onclick: 'npOpenSleepEl(this)', title: 'Sleep timer', icon: 'moon', dataAttrs: devAttr })}
       ${d.filepath ? actionBtn({ kind: 'muted', onclick: 'npFavoriteEl(this)', title: 'Add to favorites', icon: 'star', dataAttrs: devAttr }) : ''}
       ${d.filepath ? actionBtn({ kind: 'muted', onclick: 'npNeverAgainEl(this)', title: 'Never play this song again', icon: 'ban', dataAttrs: devAttr }) : ''}
+      ${d.filepath ? actionBtn({ kind: 'muted', onclick: 'npAddToRoomEl(this)', title: 'Add to room queue', icon: 'plus', dataAttrs: devAttr }) : ''}
       ${actionBtn({ kind: 'delete', onclick: "npControlEl(this,'stop')", title: 'Stop', icon: 'stop', dataAttrs: devAttr })}
     </div>` : '';
   const sleepBadge = d.sleep ? `<span class="np-sleep-badge" title="Sleep timer armed"><i class="fa fa-moon"></i> ${
@@ -2115,6 +2174,14 @@ async function npFavoriteEl(btn) {
   if (res.ok) showToast(`Starred "${d.track || 'track'}"`);
   else showToast((await res.json().catch(() => ({}))).error || 'Failed', true);
 }
+
+function npAddToRoomEl(btn) {
+  const deviceId = btn && btn.dataset && btn.dataset.deviceId;
+  const d = (window._npItems || []).find(x => x.deviceId === deviceId);
+  if (!d || !d.filepath) return;
+  openAddToRoomModal({ path: d.filepath, track: d.track, artist: d.artist || '' });
+}
+window.npAddToRoomEl = npAddToRoomEl;
 
 let _npVolumeTimers = {};
 function npVolumeEl(slider) {
@@ -2923,6 +2990,7 @@ function renderPlaylistDetailBody() {
       <td class="text-muted">${fmtDuration(t.duration_seconds)}</td>
       <td>${reorderBtns}${rowActions(
         canPlay ? actionBtn({ kind: 'play', onclick: `plPlayTrackAt(${pathArg})`, title: 'Play', icon: 'play' }) : '',
+        t.path ? actionBtn({ kind: 'muted', onclick: `openAddToRoomModal({path:${pathArg},track:${JSON.stringify(t.title || '')},artist:${JSON.stringify(t.artist || '')}})`, title: 'Add to room', icon: 'plus' }) : '',
         data.editable !== false ? actionBtn({ kind: 'delete', onclick: `plRemoveTrackAt(${pathArg})`, title: 'Remove from playlist', icon: 'trash' }) : ''
       )}</td>
     </tr>`;
@@ -3720,6 +3788,116 @@ async function playOnDevice(opts) {
   };
 }
 
+async function openAddToRoomModal({ path, track, artist }) {
+  if (!path) return showToast('Track path required', true);
+  let devices;
+  try {
+    devices = await ensureAlexaDevices();
+  } catch (e) {
+    if (isAlexaAuthError(e)) {
+      handleAlexaAuthFailure();
+      return showToast('Alexa session expired — sign in to continue', true);
+    }
+    return showToast(e.message || 'Failed to load devices', true);
+  }
+  if (!devices.length) return showToast('No Alexa devices found', true);
+  const deviceOpts = deviceSelectOptions(devices, { includeGroups: false });
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = `
+    <div class="modal-box">
+      <h3 style="margin-top:0"><i class="fa fa-plus"></i> Add to room</h3>
+      <p class="hint" style="margin:0 0 8px">${escHtml(track || 'Track')} queues after what's playing in that room.</p>
+      <label style="display:block;margin:12px 0 4px;font-size:13px;color:#888">Room / speaker</label>
+      <select id="room-device" class="settings-input" style="width:100%">${deviceOpts}</select>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+        <button class="cancel-btn" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+        <button class="save-btn" id="room-go">Add</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#room-go').onclick = async () => {
+    const deviceId = overlay.querySelector('#room-device').value;
+    const btn = overlay.querySelector('#room-go');
+    btn.disabled = true; btn.textContent = 'Sending…';
+    const res = await fetch(`/api/rooms/${encodeURIComponent(deviceId)}/requests`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(ratingsRequestBody({ path, track: track || '', artist: artist || '' })),
+    });
+    const data = await res.json().catch(() => ({}));
+    overlay.remove();
+    if (!res.ok) return showToast(data.error || 'Could not add to room', true);
+    const label = data.status === 'queued' ? 'Request sent — waiting for approval' : 'Added to room queue';
+    showToast(label);
+    if (document.getElementById('spotify-queue') && !document.getElementById('spotify-queue').classList.contains('hidden')) {
+      renderQueuePanel();
+    }
+  };
+}
+window.openAddToRoomModal = openAddToRoomModal;
+
+async function approveRoomRequest(deviceId, requestId) {
+  const pin = parentPin() || prompt('Parent PIN');
+  if (!pin) return;
+  const res = await fetch(`/api/rooms/${encodeURIComponent(deviceId)}/requests/${encodeURIComponent(requestId)}/approve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(ratingsRequestBody({ pin })),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) return showToast(data.error || 'Approve failed', true);
+  showToast('Request approved');
+  loadFamilyRoomRequests();
+}
+
+async function deleteRoomRequest(deviceId, requestId) {
+  const res = await fetch(`/api/rooms/${encodeURIComponent(deviceId)}/requests/${encodeURIComponent(requestId)}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) return showToast('Could not remove request', true);
+  showToast('Removed from queue');
+  loadFamilyRoomRequests();
+}
+window.approveRoomRequest = approveRoomRequest;
+window.deleteRoomRequest = deleteRoomRequest;
+
+async function loadFamilyRoomRequests() {
+  const el = document.getElementById('family-room-requests');
+  if (!el) return;
+  const rooms = window._familyDevices || [];
+  if (!rooms.length) {
+    el.innerHTML = '<p class="hint" style="margin:0">Connect Alexa to manage room queues.</p>';
+    return;
+  }
+  const queues = await Promise.all(rooms.map(async (d) => {
+    const data = await API(`/api/rooms/${encodeURIComponent(d.deviceId)}/queue`).catch(() => null);
+    return { device: d, queue: (data && data.queue) || [] };
+  }));
+  const pending = queues.flatMap(({ device, queue }) =>
+    queue.filter((r) => r.status === 'queued' || r.status === 'approved').map((r) => ({ device, r })),
+  );
+  if (!pending.length) {
+    el.innerHTML = '<p class="hint" style="margin:0">No pending room requests.</p>';
+    return;
+  }
+  el.innerHTML = `<ul class="device-list" style="margin:0">${pending.map(({ device, r }) => {
+    const who = r.byMemberName ? memberChip(memberById(r.byMemberId) || { id: r.byMemberId, name: r.byMemberName, role: 'kid', color: '#7c8aa5' }) : 'Someone';
+    const status = r.status === 'queued' ? '<span class="badge orange">Awaiting approval</span>' : '<span class="badge green">Approved</span>';
+    const approve = r.status === 'queued'
+      ? `<button class="btn-sm btn-primary" onclick="approveRoomRequest('${escHtml(device.deviceId)}','${escHtml(r.id)}')">Approve</button>`
+      : '';
+    return `<li style="flex-wrap:wrap;gap:8px">
+      <span style="flex:1;min-width:180px"><strong>${escHtml(r.track || 'Track')}</strong>
+        <span class="hint" style="margin:0 0 0 6px">${escHtml(device.name)} · ${who} ${status}</span></span>
+      ${approve}
+      <button class="btn-sm btn-default" onclick="deleteRoomRequest('${escHtml(device.deviceId)}','${escHtml(r.id)}')" title="Remove"><i class="fa fa-trash"></i></button>
+    </li>`;
+  }).join('')}</ul>`;
+}
+window.loadFamilyRoomRequests = loadFamilyRoomRequests;
+
 function playArtistAt(i) {
   const a = (window._artists || [])[i];
   if (a) startPlayback({ kind: 'artist', name: a.artist });
@@ -3878,11 +4056,14 @@ async function loadSongs() {
     const playBtn = canPlay
       ? `<button type="button" class="spotify-play-fab" style="position:static;opacity:1;width:32px;height:32px" onclick="playSongAt(${i})" aria-label="Play"><i class="fa fa-play"></i></button>`
       : '';
+    const roomBtn = s.path
+      ? `<button type="button" class="spotify-play-fab" style="position:static;opacity:1;width:32px;height:32px;margin-left:4px" onclick="openAddToRoomModal({path:${JSON.stringify(s.path)},track:${JSON.stringify(title)},artist:${JSON.stringify(s.artist || '')}})" aria-label="Add to room"><i class="fa fa-plus"></i></button>`
+      : '';
     return `<div class="spotify-track-row">
       <span class="text-muted">${s.track_number || i + 1}</span>
       <span class="track-title">${escHtml(title)}</span>
       <span>${escHtml(s.album || '—')}</span>
-      <span>${playBtn}</span>
+      <span>${playBtn}${roomBtn}</span>
     </div>`;
   }).join('');
 
@@ -5887,6 +6068,17 @@ function setupSearchDelegation() {
       libFavorite(path, title, artist);
       return;
     }
+    const roomBtn = e.target.closest('.lib-search-room');
+    if (roomBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      openAddToRoomModal({
+        path: roomBtn.getAttribute('data-room-path'),
+        track: roomBtn.getAttribute('data-room-track'),
+        artist: roomBtn.getAttribute('data-room-artist') || '',
+      });
+      return;
+    }
     const showAllBtn = e.target.closest('.search-show-all');
     if (showAllBtn) {
       e.preventDefault();
@@ -5941,6 +6133,9 @@ function renderSearchResultsUI(el, data, q) {
 
   const songRows = (items) => (items || []).map((s) => {
     const star = `<button type="button" class="action-btn action-muted lib-search-star" data-fav-path="${escHtml(s.path || '')}" data-fav-title="${escHtml(s.title || '')}" data-fav-artist="${escHtml(s.artist || '')}" title="Star" aria-label="Star"><i class="fa fa-star"></i></button>`;
+    const room = s.path
+      ? `<button type="button" class="action-btn action-muted lib-search-room" data-room-path="${escHtml(s.path)}" data-room-track="${escHtml(s.title || '')}" data-room-artist="${escHtml(s.artist || '')}" title="Add to room" aria-label="Add to room"><i class="fa fa-plus"></i></button>`
+      : '';
     return libSearchHit({
       kind: 'song',
       titleHtml: escHtml(s.title),
@@ -5948,7 +6143,7 @@ function renderSearchResultsUI(el, data, q) {
       artPath: s.path,
       seed: s.title,
       playOpts: { kind: 'song', name: s.title, artist: s.artist || '', path: s.path || '' },
-      extraActions: star,
+      extraActions: room + star,
       showPlay: !!(s.path),
     });
   }).join('');
@@ -6926,8 +7121,13 @@ function renderFamily() {
       </div>
     </div>`;
 
-  renderPage('Family', actingSel + membersHtml + roomsHtml + renderFamilyStats() + renderFamilyMessages());
+  renderPage('Family', actingSel + membersHtml + roomsHtml + `
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-header"><h3><i class="fa fa-list-ul"></i> Room requests</h3></div>
+      <div class="card-body" id="family-room-requests"><div class="spinner-wrap"><div class="spinner"></div></div></div>
+    </div>` + renderFamilyStats() + renderFamilyMessages());
   loadFamilyMessages();
+  loadFamilyRoomRequests();
 }
 
 function renderFamilyStats() {

@@ -419,8 +419,24 @@ final class BockMediaAPIClient {
         try await post("api/playlists/\(id)/share", body: body)
     }
 
-    func roomRequest(deviceId: String, body: [String: Any]) async throws -> OkResponse {
+    func roomRequest(deviceId: String, body: [String: Any]) async throws -> RoomRequestItem {
         try await post("api/rooms/\(deviceId)/requests", body: body)
+    }
+
+    func roomQueue(deviceId: String) async throws -> RoomQueueResponse {
+        try await get("api/rooms/\(deviceId)/queue")
+    }
+
+    func approveRoomRequest(deviceId: String, requestId: String, body: [String: Any]) async throws -> RoomRequestItem {
+        try await post("api/rooms/\(deviceId)/requests/\(requestId)/approve", body: body)
+    }
+
+    func deleteRoomRequest(deviceId: String, requestId: String) async throws -> OkResponse {
+        try await request(path: "api/rooms/\(deviceId)/requests/\(requestId)", method: "DELETE", query: [:], body: nil)
+    }
+
+    func reorderRoomRequests(deviceId: String, body: [String: Any]) async throws -> RoomQueueResponse {
+        try await post("api/rooms/\(deviceId)/requests/reorder", body: body)
     }
 
     // MARK: - Playback

@@ -2,6 +2,15 @@
   "_comment": "Update this file whenever you upload a new APK/IPA to /app. Shown on GET /app.",
   "releases": [
     {
+      "version": "2.6.32",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "feat", "text": "Room queue UX — add tracks to a speaker's shared up-next from search, albums, playlists, and Now Playing; approve kid-safe requests from Family"},
+        {"kind": "feat", "text": "Now Playing shows household requests with requester names; parents can approve, remove, and reorder the room queue"},
+        {"kind": "feat", "text": "Android and iOS: Add to room on search/album/playlist/NP; Family tab pending requests"}
+      ]
+    },
+    {
       "version": "2.6.31",
       "date": "2026-06-25",
       "items": [

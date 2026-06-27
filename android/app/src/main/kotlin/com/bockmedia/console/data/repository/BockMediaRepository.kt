@@ -620,6 +620,44 @@ class BockMediaRepository(
             if (!toMemberId.isNullOrBlank()) put("toMemberId", toMemberId)
         })
 
+    suspend fun roomRequest(
+        deviceId: String,
+        path: String,
+        track: String? = null,
+        artist: String? = null,
+    ): RoomRequestItem {
+        val (memberId, clientId) = ratingsScope()
+        return api().roomRequest(deviceId, buildJsonObject {
+            put("path", path)
+            track?.let { put("track", it) }
+            artist?.let { put("artist", it) }
+            memberId?.let { put("memberId", it) }
+            clientId?.let { put("clientId", it) }
+        })
+    }
+
+    suspend fun roomQueue(deviceId: String) = api().roomQueue(deviceId)
+
+    suspend fun approveRoomRequest(deviceId: String, requestId: String, pin: String): RoomRequestItem {
+        val (memberId, _) = ratingsScope()
+        return api().approveRoomRequest(deviceId, requestId, buildJsonObject {
+            put("pin", pin)
+            memberId?.let { put("memberId", it) }
+        })
+    }
+
+    suspend fun deleteRoomRequest(deviceId: String, requestId: String) {
+        api().deleteRoomRequest(deviceId, requestId)
+    }
+
+    suspend fun reorderRoomRequests(deviceId: String, order: List<String>): RoomQueueResponse {
+        return api().reorderRoomRequests(deviceId, buildJsonObject {
+            putJsonArray("order") {
+                order.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) }
+            }
+        })
+    }
+
     fun clientDeviceId(): String {
         val cid = clientIdProvider().trim().lowercase()
         return if (cid.isBlank()) "" else "client-$cid"

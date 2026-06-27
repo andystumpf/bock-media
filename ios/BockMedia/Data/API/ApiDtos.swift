@@ -172,8 +172,26 @@ struct NowPlayingDeviceItem: Codable, Identifiable {
     var sourceLabel: String?
     var sleep: SleepInfo?
     var upcoming: [UpcomingTrack] = []
+    var upNext: [RoomRequestItem] = []
 
     var id: String { deviceId }
+}
+
+struct RoomRequestItem: Codable, Identifiable {
+    var id: String = ""
+    var path: String?
+    var track: String?
+    var artist: String?
+    var byMemberId: String?
+    var byMemberName: String?
+    var status: String?
+    var ts: Double?
+}
+
+struct RoomQueueResponse: Codable {
+    var deviceId: String = ""
+    var deviceName: String?
+    var queue: [RoomRequestItem] = []
 }
 
 struct SleepInfo: Codable {

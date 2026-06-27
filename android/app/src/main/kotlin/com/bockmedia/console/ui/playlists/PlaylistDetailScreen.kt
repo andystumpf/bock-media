@@ -86,6 +86,7 @@ fun PlaylistDetailScreen(
     var sharedWith by remember { mutableStateOf<List<String>>(emptyList()) }
     var showShare by remember { mutableStateOf(false) }
     var householdMembers by remember { mutableStateOf(emptyList<com.bockmedia.console.data.api.dto.HouseholdMember>()) }
+    var addToRoom by remember { mutableStateOf<Triple<String, String, String?>?>(null) }
     var reorderError by remember { mutableStateOf<String?>(null) }
     var trackMenu by remember { mutableStateOf<PlaylistTrack?>(null) }
     var showPlaylistMenu by remember { mutableStateOf(false) }
@@ -245,6 +246,24 @@ fun PlaylistDetailScreen(
                             ).show()
                         }
                 }
+            },
+        )
+    }
+
+    addToRoom?.let { (path, title, artist) ->
+        AddToRoomSheet(
+            repository = repository,
+            path = path,
+            track = title,
+            artist = artist,
+            remoteOk = remoteOk,
+            onDismiss = { addToRoom = null },
+            onSuccess = { msg ->
+                android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
+                addToRoom = null
+            },
+            onError = { e ->
+                android.widget.Toast.makeText(context, e, android.widget.Toast.LENGTH_LONG).show()
             },
         )
     }
@@ -517,6 +536,12 @@ fun PlaylistDetailScreen(
                                 repository.removePlaylistTrack(playlistId, path)
                                 loadPage(page = 1, append = false)
                             }
+                        }))
+                    }
+                    if (remoteOk) {
+                        add(PlexampSheetAction("Add to room", Icons.Default.Add, onClick = {
+                            addToRoom = Triple(path, track.title ?: "Track", track.artist)
+                            trackMenu = null
                         }))
                     }
                 },

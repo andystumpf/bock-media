@@ -17,6 +17,7 @@ struct FamilyView: View {
 
     @State private var policyRoom: DeviceItem?
     @State private var pinMember: HouseholdMember?
+    @State private var pendingRoomRequests: [(DeviceItem, RoomRequestItem)] = []
 
     private var ownerByDevice: [String: String] {
         Dictionary(uniqueKeysWithValues: household.deviceOwners.compactMap { o in
@@ -33,6 +34,7 @@ struct FamilyView: View {
             actingSection
             membersSection
             roomsSection
+            roomRequestsSection
             statsSection
             messagesSection
         }
@@ -152,6 +154,36 @@ struct FamilyView: View {
         }
     }
 
+    private var roomRequestsSection: some View {
+        Section("Room requests") {
+            if pendingRoomRequests.isEmpty {
+                Text("No pending room requests.")
+                    .font(.caption).foregroundStyle(BockColors.muted)
+            }
+            ForEach(pendingRoomRequests, id: \.1.id) { room, req in
+                HStack {
+                    VStack(alignment: .leading) {
+                        Text(req.track ?? "Track")
+                        Text("\(room.name ?? room.deviceId) · \(req.byMemberName ?? "Someone")")
+                            .font(.caption).foregroundStyle(BockColors.muted)
+                    }
+                    Spacer()
+                    if req.status == "queued", activeMember?.isParent == true {
+                        Button("Approve") {
+                            Task { await approveRoomRequest(room: room, requestId: req.id) }
+                        }
+                        .font(.caption)
+                    }
+                    Button(role: .destructive) {
+                        Task { await deleteRoomRequest(room: room, requestId: req.id) }
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                }
+            }
+        }
+    }
+
     @ViewBuilder
     private var statsSection: some View {
         if let s = stats, !s.byMember.isEmpty {
@@ -224,6 +256,33 @@ struct FamilyView: View {
         rooms = all.filter { !$0.deviceId.hasPrefix("client-") }
         stats = try? await appState.repository.householdAnalytics()
         await loadMessages()
+        await loadRoomRequests()
+    }
+
+    private func loadRoomRequests() async {
+        var pending: [(DeviceItem, RoomRequestItem)] = []
+        for room in rooms {
+            guard let q = try? await appState.repository.roomQueue(deviceId: room.deviceId) else { continue }
+            for req in q.queue where req.status == "queued" || req.status == "approved" {
+                pending.append((room, req))
+            }
+        }
+        pendingRoomRequests = pending
+    }
+
+    private func approveRoomRequest(room: DeviceItem, requestId: String) async {
+        let me = ActiveProfileStore.activeMemberId() ?? ""
+        guard let pin = ParentPinCache.get(memberId: me), !pin.isEmpty else {
+            appState.toast = "Set a parent PIN first"
+            return
+        }
+        _ = try? await appState.repository.approveRoomRequest(deviceId: room.deviceId, requestId: requestId, pin: pin)
+        await loadRoomRequests()
+    }
+
+    private func deleteRoomRequest(room: DeviceItem, requestId: String) async {
+        try? await appState.repository.deleteRoomRequest(deviceId: room.deviceId, requestId: requestId)
+        await loadRoomRequests()
     }
 
     private func loadMessages() async {

@@ -561,6 +561,39 @@ final class BockMediaRepository: ObservableObject {
         _ = try await api.sharePlaylist(id: id, body: body)
     }
 
+    func roomRequest(deviceId: String, path: String, track: String?, artist: String?) async throws -> RoomRequestItem {
+        try await ensureAPI()
+        var body: [String: Any] = ["path": path]
+        if let track, !track.isEmpty { body["track"] = track }
+        if let artist, !artist.isEmpty { body["artist"] = artist }
+        if let member = scopedMember(nil), !member.isEmpty { body["memberId"] = member }
+        let clientId = ClientIdStore.clientId().trimmingCharacters(in: .whitespacesAndNewlines)
+        if !clientId.isEmpty { body["clientId"] = clientId }
+        return try await api.roomRequest(deviceId: deviceId, body: body)
+    }
+
+    func roomQueue(deviceId: String) async throws -> RoomQueueResponse {
+        try await ensureAPI()
+        return try await api.roomQueue(deviceId: deviceId)
+    }
+
+    func approveRoomRequest(deviceId: String, requestId: String, pin: String) async throws -> RoomRequestItem {
+        try await ensureAPI()
+        var body: [String: Any] = ["pin": pin]
+        if let member = scopedMember(nil), !member.isEmpty { body["memberId"] = member }
+        return try await api.approveRoomRequest(deviceId: deviceId, requestId: requestId, body: body)
+    }
+
+    func deleteRoomRequest(deviceId: String, requestId: String) async throws {
+        try await ensureAPI()
+        _ = try await api.deleteRoomRequest(deviceId: deviceId, requestId: requestId)
+    }
+
+    func reorderRoomRequests(deviceId: String, order: [String]) async throws -> RoomQueueResponse {
+        try await ensureAPI()
+        return try await api.reorderRoomRequests(deviceId: deviceId, body: ["order": order])
+    }
+
     func removePlaylistTrack(playlistId: String, path: String) async throws {
         try await ensureAPI()
         _ = try await api.removePlaylistTrack(id: playlistId, body: ["path": path])

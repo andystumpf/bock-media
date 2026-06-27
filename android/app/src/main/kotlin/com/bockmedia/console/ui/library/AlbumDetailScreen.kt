@@ -26,11 +26,13 @@ import com.bockmedia.console.data.api.dto.AlbumItem
 import com.bockmedia.console.data.api.dto.SongItem
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.PlayTarget
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.GraphicEq
 import com.bockmedia.console.ui.components.AddToPlaylistSheet
+import com.bockmedia.console.ui.components.AddToRoomSheet
 import com.bockmedia.console.ui.components.ArtBackdrop
 import com.bockmedia.console.ui.components.BockArtwork
 import com.bockmedia.console.ui.components.BockLazyColumn
@@ -80,6 +82,7 @@ fun AlbumDetailScreen(
     var showMore by remember { mutableStateOf(false) }
     var addToPlaylist by remember { mutableStateOf<Pair<String, String>?>(null) }
     var trackMenu by remember { mutableStateOf<SongItem?>(null) }
+    var addToRoom by remember { mutableStateOf<Triple<String, String, String?>?>(null) }
     var hotTrackTitles by remember { mutableStateOf<Set<String>>(emptySet()) }
 
     val playTarget = remember(albumName, artistFilter) {
@@ -159,6 +162,18 @@ fun AlbumDetailScreen(
             trackTitle = title,
             onDismiss = { addToPlaylist = null },
             onAdded = { msg -> scope.launch { snackbarHostState?.showSnackbar(msg) } },
+        )
+    }
+    addToRoom?.let { (path, title, artist) ->
+        AddToRoomSheet(
+            repository = repository,
+            path = path,
+            track = title,
+            artist = artist,
+            remoteOk = remoteOk,
+            onDismiss = { addToRoom = null },
+            onSuccess = { msg -> scope.launch { snackbarHostState?.showSnackbar(msg); addToRoom = null } },
+            onError = { msg -> scope.launch { snackbarHostState?.showSnackbar(msg) } },
         )
     }
     if (showDiscovery) {
@@ -263,14 +278,20 @@ fun AlbumDetailScreen(
                     album = track.album,
                 ),
                 repository = repository,
-                actions = listOf(
-                    PlexampSheetAction("Play", Icons.Default.PlayArrow, onClick = {
+                actions = buildList {
+                    add(PlexampSheetAction("Play", Icons.Default.PlayArrow, onClick = {
                         onPlay(PlayTarget.Song(path, track.title ?: ""))
-                    }),
-                    PlexampSheetAction("Add to playlist", Icons.Default.PlaylistAdd, onClick = {
+                    }))
+                    add(PlexampSheetAction("Add to playlist", Icons.Default.PlaylistAdd, onClick = {
                         addToPlaylist = path to (track.title ?: "Track")
-                    }),
-                ),
+                    }))
+                    if (remoteOk) {
+                        add(PlexampSheetAction("Add to room", Icons.Default.Add, onClick = {
+                            addToRoom = Triple(path, track.title ?: "Track", track.artist)
+                            trackMenu = null
+                        }))
+                    }
+                },
                 onDismiss = { trackMenu = null },
             )
         }

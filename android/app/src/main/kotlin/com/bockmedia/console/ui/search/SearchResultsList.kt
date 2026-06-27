@@ -473,6 +473,7 @@ private fun SongHitRow(
     val scope = rememberCoroutineScope()
     val path = hit.path.orEmpty()
     var showRateDialog by remember { mutableStateOf(false) }
+    var showAddToRoom by remember { mutableStateOf(false) }
     var dialogStars by remember(path) { mutableIntStateOf(songRatings[path] ?: 0) }
     val target = PlayTarget.Song(path, hit.title ?: "")
     val canPlay = remoteOk || OfflineDownloadManager.isDownloaded(target)
@@ -518,6 +519,9 @@ private fun SongHitRow(
             if (canPlay) add(SearchMenuAction("Play", playFn))
             if (path.isNotBlank()) {
                 add(SearchMenuAction("Add to playlist") { onAddToPlaylist(path, hit.title ?: hit.name ?: "Track") })
+                if (remoteOk) {
+                    add(SearchMenuAction("Add to room") { showAddToRoom = true })
+                }
                 val rated = (songRatings[path] ?: 0) > 0
                 add(SearchMenuAction(if (rated) "Change rating" else "Rate track") {
                     dialogStars = songRatings[path] ?: 0
@@ -526,6 +530,18 @@ private fun SongHitRow(
             }
         },
     )
+    if (showAddToRoom && path.isNotBlank()) {
+        com.bockmedia.console.ui.components.AddToRoomSheet(
+            repository = repository,
+            path = path,
+            track = hit.title ?: hit.name ?: "Track",
+            artist = hit.artist,
+            remoteOk = remoteOk,
+            onDismiss = { showAddToRoom = false },
+            onSuccess = { msg -> scope.launch { snackbarHostState?.showSnackbar(msg) } },
+            onError = { msg -> scope.launch { snackbarHostState?.showSnackbar(msg) } },
+        )
+    }
 }
 
 private data class SearchMenuAction(val label: String, val action: () -> Unit)
