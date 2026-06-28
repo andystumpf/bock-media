@@ -22,7 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.draw.scale
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.SubcomposeAsyncImage
 import coil.compose.SubcomposeAsyncImageContent
+import com.bockmedia.console.BockMediaApp
 import com.bockmedia.console.data.api.dto.*
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.PlaybackFocus
@@ -43,11 +44,13 @@ import com.bockmedia.console.domain.model.formatPlaybackTime
 import com.bockmedia.console.media.LocalPlaybackController
 import com.bockmedia.console.media.isLocalPhoneDevice
 import com.bockmedia.console.local.ActiveProfileStore
+import com.bockmedia.console.local.ClientPrefsSync
 import com.bockmedia.console.media.toNowPlayingDevice
 import com.bockmedia.console.ui.alexaControlsAvailable
 import com.bockmedia.console.ui.components.BockArtwork
 import com.bockmedia.console.ui.components.CompactStarRatingBar
 import com.bockmedia.console.ui.components.ErrorText
+import okhttp3.OkHttpClient
 import com.bockmedia.console.ui.components.LoadingBox
 import com.bockmedia.console.ui.components.PaginationBar
 import com.bockmedia.console.ui.components.RatingKind
@@ -556,6 +559,14 @@ private fun SpotifyNowPlayingPage(
     var actingMemberId by remember { mutableStateOf(ActiveProfileStore.activeMemberId(context)) }
     var isParent by remember { mutableStateOf(false) }
     var showLyrics by remember { mutableStateOf(false) }
+    val app = BockMediaApp.get(context)
+    val showVideo by app.preferences.nowPlayingVideo.collectAsState(initial = false)
+    var videoId by remember { mutableStateOf<String?>(null) }
+    var videoLoading by remember { mutableStateOf(false) }
+    var videoPlayUrl by remember { mutableStateOf<String?>(null) }
+    var videoStreamLoading by remember { mutableStateOf(false) }
+    var videoStreamError by remember { mutableStateOf<String?>(null) }
+    var playbackHttpClient by remember { mutableStateOf<OkHttpClient?>(null) }
     var lyricsOffsetMs by remember { mutableIntStateOf(0) }
     var lyricsPositionMs by remember { mutableLongStateOf(0L) }
     @Suppress("UNUSED_VARIABLE") val _t = tick
@@ -596,6 +607,54 @@ private fun SpotifyNowPlayingPage(
         lyrics = null
         lyricsError = null
         lyricsOffsetMs = 0
+    }
+
+    val serverBaseUrl = remember(repository.baseUrlEpoch) { repository.peekBaseUrl() }
+
+    LaunchedEffect(Unit) {
+        playbackHttpClient = BockMediaApp.get(context).buildPlaybackHttpClient()
+    }
+
+    LaunchedEffect(displayDev.track, displayDev.artist, durationSec) {
+        videoId = null
+        videoPlayUrl = null
+        videoStreamError = null
+        val title = displayDev.track?.trim().orEmpty()
+        if (title.isEmpty()) {
+            videoLoading = false
+            return@LaunchedEffect
+        }
+        videoLoading = true
+        videoId = runCatching {
+            repository.musicVideo(
+                title = title,
+                artist = displayDev.artist,
+                durationSec = durationSec.takeIf { it > 0 }?.toInt(),
+            )?.videoId
+        }.getOrNull()?.takeIf { it.isNotBlank() }
+        videoLoading = false
+    }
+
+    LaunchedEffect(showVideo, videoId, serverBaseUrl) {
+        videoPlayUrl = null
+        videoStreamError = null
+        if (!showVideo || videoId.isNullOrBlank()) {
+            videoStreamLoading = false
+            return@LaunchedEffect
+        }
+        val base = serverBaseUrl?.takeIf { it.isNotBlank() } ?: run {
+            videoStreamError = "Server not connected"
+            videoStreamLoading = false
+            return@LaunchedEffect
+        }
+        videoStreamLoading = true
+        val play = repository.musicVideoPlay(videoId!!)
+        if (play?.ready == true) {
+            videoPlayUrl = repository.resolveMusicVideoPlayUrl(base, play)
+        } else {
+            videoStreamError = play?.reason ?: "Video stream unavailable"
+        }
+        videoStreamLoading = false
     }
 
     LaunchedEffect(displayDev.filepath, displayDev.track, displayDev.artist, displayDev.album, durationSec) {
@@ -651,8 +710,24 @@ private fun SpotifyNowPlayingPage(
     val compact = config.screenHeightDp < 640
     val artCorner = if (compact) 6.dp else 8.dp
 
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
-        ArtBackdrop(artUrl = artUrl)
+    Box(Modifier.fillMaxSize().background(Color.Black).clipToBounds()) {
+        when {
+            showVideo && !videoId.isNullOrBlank() ->
+                MusicVideoPlayer(
+                    playUrl = videoPlayUrl,
+                    videoId = videoId!!,
+                    loading = videoStreamLoading,
+                    error = videoStreamError,
+                    httpClient = playbackHttpClient,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            else -> ArtBackdrop(artUrl = artUrl)
+        }
+
+        NowPlayingBottomFade(
+            modifier = Modifier.align(Alignment.BottomCenter),
+            deep = showVideo,
+        )
 
         Column(
             Modifier
@@ -673,47 +748,52 @@ private fun SpotifyNowPlayingPage(
                     .weight(1f)
                     .fillMaxWidth(),
             ) {
-                val maxArt = minOf(
-                    maxWidth - 28.dp,
-                    maxHeight * if (compact) 0.78f else 0.84f,
-                    maxWidth * 0.92f,
-                )
-                val artSize = maxArt.coerceAtLeast(180.dp)
+                if (!showVideo) {
+                    val maxArt = minOf(
+                        maxWidth - 28.dp,
+                        maxHeight * if (compact) 0.52f else 0.58f,
+                        maxWidth * 0.92f,
+                    )
+                    val artSize = maxArt.coerceAtLeast(180.dp)
 
-                Box(
-                    Modifier
-                        .size(artSize)
-                        .align(Alignment.TopCenter)
-                        .padding(top = if (compact) 4.dp else 12.dp),
-                ) {
-                    if (showLyrics) {
-                        LyricsPanel(
-                            lyrics = lyrics,
-                            loading = lyricsLoading,
-                            error = lyricsError,
-                            positionMs = if (showLyrics) lyricsPositionMs else prog.elapsedMs,
-                            offsetMs = lyricsOffsetMs,
-                            onOffsetChange = { lyricsOffsetMs = it },
-                            modifier = Modifier.fillMaxSize(),
-                        )
-                    } else {
-                        BockArtwork(
-                            model = artUrl,
-                            title = displayDev.track ?: "Now playing",
-                            modifier = Modifier.fillMaxSize(),
-                            shape = RoundedCornerShape(artCorner),
-                            fallbackFontSize = 48.sp,
-                        )
+                    Box(
+                        Modifier
+                            .size(artSize)
+                            .align(Alignment.TopCenter)
+                            .padding(top = if (compact) 4.dp else 12.dp),
+                    ) {
+                        if (showLyrics) {
+                            LyricsPanel(
+                                lyrics = lyrics,
+                                loading = lyricsLoading,
+                                error = lyricsError,
+                                positionMs = if (showLyrics) lyricsPositionMs else prog.elapsedMs,
+                                offsetMs = lyricsOffsetMs,
+                                onOffsetChange = { lyricsOffsetMs = it },
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        } else {
+                            BockArtwork(
+                                model = artUrl,
+                                title = displayDev.track ?: "Now playing",
+                                modifier = Modifier.fillMaxSize(),
+                                shape = RoundedCornerShape(artCorner),
+                                fallbackFontSize = 48.sp,
+                            )
+                        }
                     }
-                    if (displayDev.filepath != null) {
-                        LyricsTogglePill(
-                            showingLyrics = showLyrics,
-                            onClick = { showLyrics = !showLyrics },
-                            modifier = Modifier
-                                .align(Alignment.BottomCenter)
-                                .padding(bottom = 10.dp),
-                        )
-                    }
+                } else if (showLyrics) {
+                    LyricsPanel(
+                        lyrics = lyrics,
+                        loading = lyricsLoading,
+                        error = lyricsError,
+                        positionMs = lyricsPositionMs,
+                        offsetMs = lyricsOffsetMs,
+                        onOffsetChange = { lyricsOffsetMs = it },
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 20.dp, vertical = 8.dp),
+                    )
                 }
 
                 Column(
@@ -722,16 +802,6 @@ private fun SpotifyNowPlayingPage(
                         .fillMaxWidth()
                         .then(
                             if (pagerDotsVisible) Modifier.padding(bottom = 28.dp) else Modifier,
-                        )
-                        .background(
-                            Brush.verticalGradient(
-                                colorStops = arrayOf(
-                                    0f to Color.Transparent,
-                                    0.18f to Color.Black.copy(alpha = 0.45f),
-                                    0.45f to Color.Black.copy(alpha = 0.82f),
-                                    1f to Color.Black.copy(alpha = 0.95f),
-                                ),
-                            ),
                         )
                         .padding(top = 48.dp),
                 ) {
@@ -841,14 +911,45 @@ private fun SpotifyNowPlayingPage(
                         SpotifyUpNext(
                             tracks = displayDev.upcoming,
                             modifier = Modifier
-                                .padding(horizontal = 24.dp)
-                                .padding(bottom = 12.dp)
                                 .clickable { showUpNext = true },
                         )
                     } else {
                         Spacer(Modifier.height(if (canControl) 4.dp else 16.dp))
                     }
                 }
+            }
+        }
+
+        Row(
+            Modifier
+                .align(Alignment.BottomEnd)
+                .navigationBarsPadding()
+                .padding(end = 16.dp, bottom = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (displayDev.filepath != null) {
+                NowPlayingOverlayIconButton(
+                    icon = if (showLyrics) Icons.Default.Album else Icons.Default.Lyrics,
+                    contentDescription = if (showLyrics) "Hide lyrics" else "Show lyrics",
+                    selected = showLyrics,
+                    onClick = { showLyrics = !showLyrics },
+                )
+            }
+            if (videoId != null || videoLoading) {
+                VideoModeTogglePill(
+                    showingVideo = showVideo,
+                    loading = videoLoading,
+                    enabled = videoId != null,
+                    onClick = {
+                        if (videoId != null) {
+                            scope.launch {
+                                app.preferences.setNowPlayingVideo(!showVideo)
+                                ClientPrefsSync.schedulePush(context)
+                            }
+                        }
+                    },
+                )
             }
         }
 
@@ -910,13 +1011,12 @@ private fun SpotifyNowPlayingPage(
 
 @Composable
 private fun ArtBackdrop(artUrl: String?) {
-    Box(Modifier.fillMaxSize()) {
+    Box(Modifier.fillMaxSize().clipToBounds()) {
         SubcomposeAsyncImage(
             model = artUrl,
             contentDescription = null,
             modifier = Modifier
                 .fillMaxSize()
-                .scale(1.25f)
                 .then(if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) Modifier.blur(56.dp) else Modifier),
             contentScale = ContentScale.Crop,
             loading = { Box(Modifier.fillMaxSize().background(Color(0xFF1A1A1A))) },
@@ -1105,11 +1205,47 @@ private fun SpotifyStatusChips(
 }
 
 @Composable
+private fun NowPlayingBottomFade(modifier: Modifier = Modifier, deep: Boolean = false) {
+    Box(
+        modifier
+            .fillMaxWidth()
+            .fillMaxHeight(if (deep) 0.62f else 0.56f)
+            .background(
+                Brush.verticalGradient(
+                    colorStops = arrayOf(
+                        0f to Color.Transparent,
+                        0.22f to Color.Black.copy(alpha = if (deep) 0.35f else 0.22f),
+                        0.48f to Color.Black.copy(alpha = if (deep) 0.62f else 0.48f),
+                        0.72f to Color.Black.copy(alpha = 0.85f),
+                        0.9f to Color.Black.copy(alpha = 0.96f),
+                        1f to Color.Black,
+                    ),
+                ),
+            ),
+    )
+}
+
+@Composable
 private fun SpotifyUpNext(
     tracks: List<UpcomingTrack>,
     modifier: Modifier = Modifier,
 ) {
-    Column(modifier) {
+    Column(
+        modifier
+            .fillMaxWidth()
+            .background(
+                Brush.verticalGradient(
+                    colorStops = arrayOf(
+                        0f to Color.Transparent,
+                        0.3f to Color.Black.copy(alpha = 0.5f),
+                        0.65f to Color.Black.copy(alpha = 0.82f),
+                        1f to Color.Black,
+                    ),
+                ),
+            )
+            .padding(top = 20.dp, bottom = 12.dp)
+            .padding(horizontal = 24.dp),
+    ) {
         Text(
             "Up next",
             style = MaterialTheme.typography.labelLarge,
@@ -1123,6 +1259,7 @@ private fun SpotifyUpNext(
                 color = Color.White.copy(alpha = 0.55f),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = if (i == 0) 4.dp else 2.dp),
             )
         }
     }

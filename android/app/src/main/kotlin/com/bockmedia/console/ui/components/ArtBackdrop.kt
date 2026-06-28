@@ -7,7 +7,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
-import androidx.compose.ui.draw.scale
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -18,13 +18,12 @@ import coil.compose.SubcomposeAsyncImageContent
 /** Plexamp-style blurred album-art background with dark gradient overlay. */
 @Composable
 fun ArtBackdrop(artUrl: String?, modifier: Modifier = Modifier) {
-    Box(modifier.fillMaxSize()) {
+    Box(modifier.fillMaxSize().clipToBounds()) {
         SubcomposeAsyncImage(
             model = artUrl,
             contentDescription = null,
             modifier = Modifier
                 .fillMaxSize()
-                .scale(1.25f)
                 .then(if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) Modifier.blur(56.dp) else Modifier),
             contentScale = ContentScale.Crop,
             loading = { Box(Modifier.fillMaxSize().background(Color(0xFF1A1A1A))) },

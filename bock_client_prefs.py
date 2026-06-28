@@ -23,6 +23,7 @@ _MEMBER_KEYS = frozenset({
     'librarySortOrder',
     'libraryViewMode',
     'libraryTab',
+    'nowPlayingVideo',
 })
 _CLIENT_KEYS = frozenset()
 _DEVICE_PREF_KEYS = frozenset({'lastDevice', 'pinnedDevices'})

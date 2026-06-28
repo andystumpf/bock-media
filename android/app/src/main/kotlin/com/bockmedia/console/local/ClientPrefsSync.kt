@@ -165,6 +165,7 @@ object ClientPrefsSync {
         put("downloadWifiOnly", prefs.isDownloadWifiOnlySync())
         put("crossfadeSeconds", prefs.getCrossfadeSecondsSync())
         put("continueAfterQueue", prefs.getContinueAfterQueueSync())
+        put("nowPlayingVideo", prefs.isNowPlayingVideoSync())
         put("rememberMe", prefs.isRememberMeSync())
         memberId?.let { put("activeMemberId", it) }
         put("searchSelections", encodeSearchSelections(SearchHistoryStore(context).selectionsSync()))
@@ -226,6 +227,11 @@ object ClientPrefsSync {
             prefs.setContinueAfterQueue(it)
         } ?: run {
             if (profileSwitch) prefs.setContinueAfterQueue("off")
+        }
+        merged["nowPlayingVideo"]?.jsonPrimitive?.booleanOrNull?.let {
+            prefs.setNowPlayingVideo(it)
+        } ?: run {
+            if (profileSwitch) prefs.setNowPlayingVideo(false)
         }
         merged["rememberMe"]?.jsonPrimitive?.booleanOrNull?.let {
             prefs.setRememberMe(it)

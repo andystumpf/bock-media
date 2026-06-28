@@ -527,6 +527,37 @@ class BockMediaRepository(
         return resp
     }
 
+    private val musicVideoCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    /** YouTube music-video id for artist/title (cached). Null when none found. */
+    suspend fun musicVideo(title: String, artist: String? = null, durationSec: Int? = null): MusicVideoResponse? {
+        val t = title.trim()
+        if (t.isEmpty()) return null
+        val key = "${artist.orEmpty().trim().lowercase()}|${t.lowercase()}|${durationSec ?: 0}"
+        musicVideoCache[key]?.let { return MusicVideoResponse(videoId = it) }
+        val resp = runCatching {
+            api().musicVideo(
+                title = t,
+                artist = artist?.trim()?.takeIf { it.isNotBlank() },
+                durationSec = durationSec?.takeIf { it > 0 },
+            )
+        }.getOrNull() ?: return null
+        resp.videoId?.takeIf { it.isNotBlank() }?.let { musicVideoCache[key] = it }
+        return resp
+    }
+
+    suspend fun musicVideoPlay(videoId: String): MusicVideoPlayResponse? {
+        val id = videoId.trim()
+        if (id.isEmpty()) return null
+        return runCatching { api().musicVideoPlay(id) }.getOrNull()
+    }
+
+    fun resolveMusicVideoPlayUrl(base: String, resp: MusicVideoPlayResponse): String? {
+        val url = resp.playUrl?.trim()?.takeIf { it.isNotBlank() } ?: return null
+        if (url.startsWith("http://") || url.startsWith("https://")) return url
+        return base.trimEnd('/') + url
+    }
+
     suspend fun watchFolders() = api().watchFolders()
     suspend fun devices() = api().devices()
     suspend fun mergeCandidates() = api().mergeCandidates()

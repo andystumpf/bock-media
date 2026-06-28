@@ -2,6 +2,65 @@
   "_comment": "Update this file whenever you upload a new APK/IPA to /app. Shown on GET /app.",
     "releases": [
     {
+      "version": "2.6.43",
+      "date": "2026-06-27",
+      "items": [
+        {"kind": "fix", "text": "Now Playing Up next — fade the black plate behind the list, not the track text"}
+      ]
+    },
+    {
+      "version": "2.6.42",
+      "date": "2026-06-27",
+      "items": [
+        {"kind": "fix", "text": "Now Playing — bottom fade scrim over art/video and softened Up next list into black (cover + video modes)"}
+      ]
+    },
+    {
+      "version": "2.6.41",
+      "date": "2026-06-27",
+      "items": [
+        {"kind": "fix", "text": "Now Playing art + music video — clip blurred backdrop and use SurfaceView fixed-height crop (fixes top-of-frame wrapping to bottom)"}
+      ]
+    },
+    {
+      "version": "2.6.40",
+      "date": "2026-06-27",
+      "items": [
+        {"kind": "fix", "text": "Music video black screen — server uses Deno + yt-dlp for YouTube HLS URLs; ExoPlayer HLS module added"},
+        {"kind": "fix", "text": "Show thumbnail + error instead of empty black when stream fails; /play returns 503 when no stream"}
+      ]
+    },
+    {
+      "version": "2.6.39",
+      "date": "2026-06-27",
+      "items": [
+        {"kind": "fix", "text": "Now Playing crash on open — use BockMediaApp.get() instead of invalid Application cast"}
+      ]
+    },
+    {
+      "version": "2.6.38",
+      "date": "2026-06-27",
+      "items": [
+        {"kind": "fix", "text": "Music video — ExoPlayer stream from server instead of YouTube WebView (avoids bot / sign-in embed errors)"},
+        {"kind": "fix", "text": "Server streams via yt-dlp with youtube-cookies.txt — run scripts/youtube_cookies.sh once from your Mac"}
+      ]
+    },
+    {
+      "version": "2.6.37",
+      "date": "2026-06-27",
+      "items": [
+        {"kind": "fix", "text": "Music video embed — send YouTube-required Referer header (fixes “video player configuration error” in Now Playing)"}
+      ]
+    },
+    {
+      "version": "2.6.36",
+      "date": "2026-06-27",
+      "items": [
+        {"kind": "feat", "text": "Now Playing music video — Switch to video shows a muted YouTube clip behind controls while Bock audio keeps playing"},
+        {"kind": "fix", "text": "Music video lookup uses yt-dlp search on the server (Piped fallback); fixes 1979, 28, and other tracks with official videos"}
+      ]
+    },
+    {
       "version": "2.6.35",
       "date": "2026-06-27",
       "items": [

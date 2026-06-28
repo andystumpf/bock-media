@@ -478,6 +478,20 @@ data class LyricLine(
 )
 
 @Serializable
+data class MusicVideoResponse(
+    val videoId: String? = null,
+    val title: String? = null,
+)
+
+@Serializable
+data class MusicVideoPlayResponse(
+    val ready: Boolean = false,
+    val playUrl: String? = null,
+    val proxied: Boolean = false,
+    val reason: String? = null,
+)
+
+@Serializable
 data class SongItem(
     val title: String? = null,
     val artist: String? = null,

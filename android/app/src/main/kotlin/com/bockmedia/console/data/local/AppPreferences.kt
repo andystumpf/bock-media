@@ -50,11 +50,13 @@ class AppPreferences(private val context: Context) {
     private val keyDownloadWifiOnly = booleanPreferencesKey("download_wifi_only")
     private val keyCrossfadeSeconds = intPreferencesKey("crossfade_seconds")
     private val keyContinueAfterQueue = stringPreferencesKey("continue_after_queue")
+    private val keyNowPlayingVideo = booleanPreferencesKey("now_playing_video")
     private val keyLastEndpoint = stringPreferencesKey("last_good_endpoint")
 
     val rememberMe: Flow<Boolean> = context.dataStore.data.map { it[keyRememberMe] != false }
     val downloadWifiOnly: Flow<Boolean> = context.dataStore.data.map { it[keyDownloadWifiOnly] == true }
     val crossfadeSeconds: Flow<Int> = context.dataStore.data.map { (it[keyCrossfadeSeconds] ?: 0).coerceIn(0, 20) }
+    val nowPlayingVideo: Flow<Boolean> = context.dataStore.data.map { it[keyNowPlayingVideo] == true }
 
     val localServerUrl: Flow<String?> = context.dataStore.data.map { it[keyLocalUrl] }
     val externalServerUrl: Flow<String?> = context.dataStore.data.map { it[keyExternalUrl] }
@@ -123,6 +125,15 @@ class AppPreferences(private val context: Context) {
 
     suspend fun getContinueAfterQueueSync(): String =
         context.dataStore.data.first()[keyContinueAfterQueue]?.takeIf { it.isNotBlank() } ?: "off"
+
+    suspend fun isNowPlayingVideoSync(): Boolean =
+        context.dataStore.data.first()[keyNowPlayingVideo] == true
+
+    suspend fun setNowPlayingVideo(enabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            if (enabled) prefs[keyNowPlayingVideo] = true else prefs.remove(keyNowPlayingVideo)
+        }
+    }
 
     suspend fun setContinueAfterQueue(mode: String) {
         context.dataStore.edit { prefs ->

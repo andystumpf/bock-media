@@ -13,8 +13,8 @@ android {
         applicationId = "com.bockmedia.console"
         minSdk = 26
         targetSdk = 35
-        versionCode = 46
-        versionName = "2.6.35"
+        versionCode = 54
+        versionName = "2.6.43"
         // Bock Media server endpoints (override via local.properties if needed)
         val localProps = rootProject.file("local.properties")
         fun prop(name: String) = if (localProps.exists()) {
@@ -148,8 +148,10 @@ dependencies {
     implementation("androidx.media:media:1.7.0")
     val media3 = "1.5.1"
     implementation("androidx.media3:media3-exoplayer:$media3")
+    implementation("androidx.media3:media3-exoplayer-hls:$media3")
     implementation("androidx.media3:media3-session:$media3")
     implementation("androidx.media3:media3-datasource-okhttp:$media3")
+    implementation("androidx.media3:media3-ui:$media3")
     // Charts (Analytics uses Canvas — no Vico)
 
     debugImplementation("androidx.compose.ui:ui-tooling")

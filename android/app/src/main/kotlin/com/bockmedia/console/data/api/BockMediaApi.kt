@@ -208,6 +208,16 @@ interface BockMediaApi {
         @Query("album") album: String? = null,
     ): LyricsResponse
 
+    @GET("api/music-video")
+    suspend fun musicVideo(
+        @Query("title") title: String,
+        @Query("artist") artist: String? = null,
+        @Query("durationSec") durationSec: Int? = null,
+    ): MusicVideoResponse
+
+    @GET("api/music-video/{videoId}/play")
+    suspend fun musicVideoPlay(@Path("videoId") videoId: String): MusicVideoPlayResponse
+
     @GET("api/songs")
     suspend fun songs(
         @Query("page") page: Int = 1,

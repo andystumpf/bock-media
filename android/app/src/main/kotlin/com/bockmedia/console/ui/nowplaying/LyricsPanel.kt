@@ -59,6 +59,8 @@ fun LyricsTogglePill(
     showingLyrics: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    onLabel: String = "Cover",
+    offLabel: String = "Lyrics",
 ) {
     Surface(
         onClick = onClick,
@@ -78,7 +80,7 @@ fun LyricsTogglePill(
                 modifier = Modifier.size(18.dp),
             )
             Text(
-                if (showingLyrics) "Cover" else "Lyrics",
+                if (showingLyrics) onLabel else offLabel,
                 color = Color.White,
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.SemiBold,

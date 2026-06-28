@@ -128,3 +128,19 @@ def test_library_prefs_per_member(tmp_path):
     assert out_andy['merged']['librarySortBy'] == 'name'
     assert out_emma['merged']['librarySortBy'] == 'trackCount'
     assert out_emma['merged']['librarySortOrder'] == 'desc'
+
+
+def test_now_playing_video_per_member(tmp_path):
+    path = str(tmp_path / 'client_prefs.json')
+    bock_client_prefs.put_prefs(
+        path, member_id='p-andy',
+        member_prefs={'nowPlayingVideo': True},
+    )
+    bock_client_prefs.put_prefs(
+        path, member_id='p-emma',
+        member_prefs={'nowPlayingVideo': False},
+    )
+    andy = bock_client_prefs.get_prefs(path, member_id='p-andy', client_device_id='c1')
+    emma = bock_client_prefs.get_prefs(path, member_id='p-emma', client_device_id='c2')
+    assert andy['merged']['nowPlayingVideo'] is True
+    assert emma['merged']['nowPlayingVideo'] is False

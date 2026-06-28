@@ -31,7 +31,7 @@ from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding as rsa_padding
-from flask import Flask, jsonify, request, send_from_directory, send_file, Response
+from flask import Flask, jsonify, request, send_from_directory, send_file, Response, stream_with_context
 
 import bock_loudness
 import bock_continue
@@ -4153,6 +4153,640 @@ def lyrics():
     artist = (request.args.get('artist') or '').strip() or None
     album = (request.args.get('album') or '').strip() or None
     return jsonify(_lyrics_payload(path, duration_sec, title=title, artist=artist, album=album))
+
+
+MUSIC_VIDEO_CACHE_PATH = os.path.join(DATA_DIR, 'music_video_cache.json')
+_MUSIC_VIDEO_CACHE_LOCK = threading.Lock()
+
+
+def _music_video_cache_load():
+    try:
+        with open(MUSIC_VIDEO_CACHE_PATH, encoding='utf-8') as fh:
+            return json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _music_video_cache_save(data):
+    try:
+        tmp = MUSIC_VIDEO_CACHE_PATH + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as fh:
+            json.dump(data, fh)
+        os.replace(tmp, MUSIC_VIDEO_CACHE_PATH)
+    except OSError as e:
+        print(f'music video cache write: {e}', flush=True)
+
+
+def _music_video_cache_key(title, artist):
+    # v4 — stricter title/duration scoring (bump to invalidate cache).
+    return f"v4|{(artist or '').strip().lower()}|{title.strip().lower()}"
+
+
+def _music_video_search_queries(artist, title):
+    title = (title or '').strip()
+    artist = (artist or '').strip()
+    queries = []
+    if artist:
+        queries.extend([
+            f'{artist} {title} official music video',
+            f'{artist} {title} music video vevo',
+            f'{artist} - {title} official video',
+        ])
+    if title:
+        queries.append(f'{title} official music video')
+    seen = set()
+    out = []
+    for q in queries:
+        q = q.strip()
+        if q and q.lower() not in seen:
+            seen.add(q.lower())
+            out.append(q)
+    return out
+
+
+_MUSIC_VIDEO_BAD_TITLE = (
+    'lyric video', 'lyrics video', 'lyrics', 'official audio', 'audio only',
+    'visualizer', 'visualiser', 'static', 'still image', 'picture video',
+    'provided to youtube', 'auto-generated', 'topic -', 'full album',
+    '1 hour', '10 hours', '8 hours', 'loop', 'slowed', 'reverb', 'nightcore',
+    'cover', 'karaoke', 'instrumental', 'sped up', '8d audio',
+    'live at', 'live from', 'full concert', 'concert footage', 'tv performance',
+    'the tonight show', 'late night', 'unplugged', 'acoustic version', 'acoustic session',
+    'behind the scenes', 'making of', 'reaction', 'review', 'reading', 'storytime',
+    'interview', 'documentary', 'trailer', 'teaser', 'announcement',
+)
+_MUSIC_VIDEO_GOOD_TITLE = (
+    'official music video', 'official video', '(official video)', '[official video]',
+    'music video', '(video)', ' - video', ' vevo',
+)
+
+
+def _music_video_normalize(text):
+    import re
+    t = (text or '').lower()
+    t = re.sub(r'[^\w\s]', ' ', t)
+    t = re.sub(r'\s+', ' ', t).strip()
+    for noise in (
+        'official music video', 'official video', 'music video', 'video', 'hd', 'vevo',
+        'remaster', 'remastered', '4k', '1080p',
+    ):
+        t = t.replace(noise, ' ')
+    return re.sub(r'\s+', ' ', t).strip()
+
+
+def _music_video_compact(text):
+    return _music_video_normalize(text).replace(' ', '')
+
+
+def _music_video_artist_tokens(artist):
+    tokens = set(_music_video_normalize(artist).split())
+    tokens -= {'the', 'and', 'a', 'an'}
+    return {t for t in tokens if t}
+
+
+def _music_video_artist_matches(artist, picked_title, channel=None):
+    if not (artist or '').strip():
+        return True
+    blob = f"{_music_video_normalize(picked_title)} {_music_video_normalize(channel or '')}"
+    tokens = _music_video_artist_tokens(artist)
+    if not tokens:
+        return True
+    return all(tok in blob for tok in tokens)
+
+
+def _music_video_extract_song_title(picked_title, artist=None):
+    import re
+    raw = (picked_title or '').strip()
+    t = re.sub(r'\([^)]*\)', '', raw)
+    t = re.sub(r'\[[^\]]*\]', '', t).strip()
+    for sep in (' - ', ' – ', ' — ', ' | ', '|'):
+        if sep in t:
+            left, right = t.split(sep, 1)
+            left_n = _music_video_normalize(left)
+            right_n = _music_video_normalize(right)
+            if artist:
+                artist_n = _music_video_normalize(artist)
+                if artist_n and artist_n in left_n:
+                    return right_n
+                if artist_n and artist_n in right_n:
+                    return left_n
+            return right_n or left_n
+    if artist:
+        artist_n = _music_video_normalize(artist)
+        whole = _music_video_normalize(t)
+        if artist_n and whole.startswith(artist_n):
+            rest = whole[len(artist_n):].strip()
+            if rest:
+                return rest
+    return _music_video_normalize(t)
+
+
+def _music_video_title_matches(title, picked_title):
+    title_n = _music_video_normalize(title)
+    if not title_n:
+        return True
+    picked_song = _music_video_extract_song_title(picked_title)
+    if not picked_song:
+        return False
+    if title_n in picked_song or picked_song in title_n:
+        if title_n == picked_song:
+            return True
+        if len(title_n.split()) >= 2:
+            return True
+        if len(picked_song.split()) == 1:
+            return title_n == picked_song
+        return False
+    if _music_video_compact(title) and _music_video_compact(title) in _music_video_compact(picked_song):
+        return True
+    words = [w for w in title_n.split() if len(w) >= 3]
+    if not words and title_n:
+        words = title_n.split()
+    return bool(words) and all(w in picked_song for w in words)
+
+
+def _music_video_score(artist, title, picked_title, duration_sec=None, channel=None, track_duration_sec=None):
+    t = (picked_title or '').lower()
+    title_l = (title or '').strip().lower()
+    title_ok = _music_video_title_matches(title, picked_title)
+    score = 0
+    if not title_ok:
+        score -= 70
+        if (artist or '').strip() and _music_video_artist_matches(artist, picked_title, channel):
+            score -= 35
+    elif title_l and title_l in t:
+        score += 32
+    else:
+        score += 18
+    for phrase in _MUSIC_VIDEO_GOOD_TITLE:
+        if phrase in t:
+            score += 40
+            break
+    if 'music video' in t or 'official video' in t:
+        score += 25
+    if _music_video_artist_matches(artist, picked_title, channel):
+        score += 14
+    elif (artist or '').strip():
+        score -= 18
+    if 'vevo' in t or (channel and 'vevo' in channel.lower()):
+        score += 20
+    for bad in _MUSIC_VIDEO_BAD_TITLE:
+        if bad in t:
+            score -= 45
+    if duration_sec is not None:
+        try:
+            dur = int(duration_sec)
+        except (TypeError, ValueError):
+            dur = None
+        if dur is not None:
+            if dur < 45:
+                score -= 35
+            elif dur < 90:
+                score -= 10
+            elif 90 <= dur <= 720:
+                score += 8
+            elif dur > 900 and 'live' not in t:
+                score -= 12
+            if track_duration_sec is not None:
+                try:
+                    track_d = int(track_duration_sec)
+                except (TypeError, ValueError):
+                    track_d = None
+                if track_d and track_d > 0:
+                    delta = abs(track_d - dur)
+                    if delta <= 8:
+                        score += 28
+                    elif delta <= 18:
+                        score += 14
+                    elif delta <= 35:
+                        score += 6
+                    elif delta > 75:
+                        score -= 22
+    return score
+
+
+def _music_video_pick_best(artist, title, candidates, track_duration_sec=None):
+    """Pick highest-scoring candidate: list of (video_id, picked_title, duration_sec, channel)."""
+    scored = []
+    for row in candidates:
+        if len(row) >= 4:
+            vid, picked, dur, channel = row[0], row[1], row[2], row[3]
+        else:
+            vid, picked, dur, channel = row[0], row[1], row[2] if len(row) > 2 else None, None
+        if not vid:
+            continue
+        s = _music_video_score(artist, title, picked, dur, channel, track_duration_sec)
+        scored.append((s, vid, picked, _music_video_title_matches(title, picked)))
+    if not scored:
+        return None, None
+    title_ok = [row for row in scored if row[3]]
+    pool = title_ok if title_ok else scored
+    best = max(pool, key=lambda row: row[0])
+    if not best[3] and best[0] < 35:
+        return None, None
+    if best[0] < -20:
+        return None, None
+    return best[1], best[2]
+
+
+def _music_video_query(artist, title):
+    if artist:
+        return f'{artist} {title} official music video'.strip()
+    return f'{title} official music video'.strip()
+
+
+def _music_video_youtube_id(raw):
+    import urllib.parse
+    if not raw:
+        return None
+    raw = raw.strip()
+    if len(raw) == 11 and raw.replace('-', '').replace('_', '').isalnum():
+        return raw
+    if 'v=' in raw:
+        return urllib.parse.parse_qs(urllib.parse.urlparse(raw).query).get('v', [None])[0]
+    if raw.startswith('/watch?v='):
+        return raw.split('v=', 1)[-1].split('&', 1)[0]
+    return None
+
+
+def _music_video_from_override(artist, title):
+    overrides = load_config().get('musicVideoOverrides') or {}
+    if not isinstance(overrides, dict):
+        return None, None
+    key = _music_video_cache_key(title, artist or '')
+    hit = overrides.get(key)
+    if isinstance(hit, str):
+        vid = _music_video_youtube_id(hit)
+        return (vid, title) if vid else (None, None)
+    if isinstance(hit, dict):
+        vid = _music_video_youtube_id(hit.get('videoId') or hit.get('id'))
+        return (vid, hit.get('title')) if vid else (None, None)
+    return None, None
+
+
+def _music_video_from_youtube_api(artist, title, track_duration_sec=None):
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+    api_key = (load_config().get('youtubeApiKey') or '').strip()
+    if not api_key:
+        return None, None
+    query = _music_video_query(artist, title)
+    params = urllib.parse.urlencode({
+        'part': 'snippet',
+        'q': query,
+        'type': 'video',
+        'maxResults': '8',
+        'key': api_key,
+    })
+    url = f'https://www.googleapis.com/youtube/v3/search?{params}'
+    req = urllib.request.Request(url, headers={'User-Agent': 'BockMedia/1.0'})
+    try:
+        with urllib.request.urlopen(req, timeout=14) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
+        print(f'music video youtube api search failed: {e}', flush=True)
+        return None, None
+    candidates = []
+    for item in data.get('items') or []:
+        vid = (item.get('id') or {}).get('videoId')
+        snippet = item.get('snippet') or {}
+        picked = snippet.get('title')
+        if vid:
+            candidates.append((vid, picked, None, snippet.get('channelTitle')))
+    return _music_video_pick_best(artist, title, candidates, track_duration_sec)
+
+
+def _music_video_ytdlp_search_rows(artist, title):
+    import shutil
+    if not shutil.which('yt-dlp'):
+        return []
+    rows = []
+    seen = set()
+    for query in _music_video_search_queries(artist, title):
+        cmd = [
+            'yt-dlp', '--flat-playlist',
+            '--print', '%(id)s\t%(title)s\t%(duration)s\t%(channel)s',
+            '--no-warnings', '--no-update', f'ytsearch12:{query}',
+        ]
+        cookies = _music_video_cookies_path()
+        if cookies:
+            cmd[1:1] = ['--cookies', cookies]
+        out = _music_video_ytdlp_run(cmd, timeout=40)
+        if out is None:
+            continue
+        for line in (out.stdout or '').splitlines():
+            parts = line.split('\t', 3)
+            if len(parts) < 2:
+                continue
+            vid = _music_video_youtube_id(parts[0])
+            if not vid or vid in seen:
+                continue
+            seen.add(vid)
+            picked = parts[1].strip() or None
+            dur = None
+            if len(parts) > 2 and parts[2].strip().isdigit():
+                dur = int(parts[2].strip())
+            channel = parts[3].strip() if len(parts) > 3 else None
+            rows.append((vid, picked, dur, channel))
+    return rows
+
+
+def _music_video_from_ytdlp(artist, title, track_duration_sec=None):
+    candidates = _music_video_ytdlp_search_rows(artist, title)
+    vid, picked = _music_video_pick_best(artist, title, candidates, track_duration_sec)
+    if vid:
+        return vid, picked
+    return None, None
+
+
+def _music_video_from_piped_base(base, artist, title, track_duration_sec=None):
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+    query = _music_video_query(artist, title)
+    url = f"{base.rstrip('/')}/search?{urllib.parse.urlencode({'q': query, 'filter': 'videos'})}"
+    req = urllib.request.Request(url, headers={'User-Agent': 'BockMedia/1.0'})
+    try:
+        with urllib.request.urlopen(req, timeout=14) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+        return None, None
+    candidates = []
+    for item in data.get('items') or []:
+        if item.get('type') not in ('stream', 'video'):
+            continue
+        vid = _music_video_youtube_id(item.get('url') or '')
+        if vid:
+            candidates.append((vid, item.get('title'), None))
+    return _music_video_pick_best(artist, title, candidates, track_duration_sec)
+
+
+def _music_video_piped_bases():
+    cfg = load_config()
+    bases = []
+    single = (cfg.get('pipedApiBase') or '').strip()
+    if single:
+        bases.append(single.rstrip('/'))
+    extra = cfg.get('pipedApiBases') or []
+    if isinstance(extra, list):
+        for b in extra:
+            if isinstance(b, str) and b.strip():
+                bases.append(b.strip().rstrip('/'))
+    if not bases:
+        bases = [
+            'https://pipedapi.kavin.rocks',
+            'https://api.piped.yt',
+            'https://pipedapi-libre.kavin.rocks',
+        ]
+    seen = set()
+    out = []
+    for b in bases:
+        if b not in seen:
+            seen.add(b)
+            out.append(b)
+    return out
+
+
+def _music_video_from_piped(artist, title, track_duration_sec=None):
+    for base in _music_video_piped_bases():
+        vid, picked = _music_video_from_piped_base(base, artist, title, track_duration_sec)
+        if vid:
+            return vid, picked
+    return None, None
+
+
+def _music_video_lookup(artist, title, track_duration_sec=None):
+    for fn in (
+        lambda: _music_video_from_override(artist, title),
+        lambda: _music_video_from_youtube_api(artist, title, track_duration_sec),
+        lambda: _music_video_from_ytdlp(artist, title, track_duration_sec),
+        lambda: _music_video_from_piped(artist, title, track_duration_sec),
+    ):
+        vid, picked = fn()
+        if vid:
+            return vid, picked
+    return None, None
+
+
+def _music_video_payload(title, artist=None, track_duration_sec=None):
+    title = (title or '').strip()
+    if not title:
+        return {'videoId': None, 'title': None}
+    artist = (artist or '').strip() or None
+    key = _music_video_cache_key(title, artist or '')
+    with _MUSIC_VIDEO_CACHE_LOCK:
+        cached = _music_video_cache_load()
+        hit = cached.get(key)
+        if hit:
+            return hit
+    vid, picked_title = _music_video_lookup(artist or '', title, track_duration_sec)
+    payload = {'videoId': vid, 'title': picked_title}
+    if vid:
+        with _MUSIC_VIDEO_CACHE_LOCK:
+            cached = _music_video_cache_load()
+            cached[key] = payload
+            _music_video_cache_save(cached)
+    return payload
+
+
+@app.route('/api/music-video')
+def music_video():
+    """Resolve a YouTube music-video id for artist/title (cached; muted embed on clients)."""
+    title = (request.args.get('title') or '').strip()
+    if not title:
+        return jsonify({'error': 'title required'}), 400
+    artist = (request.args.get('artist') or '').strip() or None
+    duration_raw = (request.args.get('durationSec') or request.args.get('duration') or '').strip()
+    track_duration_sec = None
+    if duration_raw.isdigit():
+        track_duration_sec = int(duration_raw)
+    return jsonify(_music_video_payload(title, artist, track_duration_sec))
+
+
+_MUSIC_VIDEO_ID_RE = re.compile(r'^[\w-]{11}$')
+_MUSIC_VIDEO_STREAM_CACHE = {}
+_MUSIC_VIDEO_STREAM_CACHE_LOCK = threading.Lock()
+_MUSIC_VIDEO_STREAM_TTL_SEC = 2 * 3600
+
+
+def _music_video_cookies_path():
+    cfg = (load_config().get('ytDlpCookiesPath') or '').strip()
+    if cfg and os.path.isfile(cfg):
+        return cfg
+    default = os.path.join(DATA_DIR, 'youtube-cookies.txt')
+    if os.path.isfile(default):
+        return default
+    return None
+
+
+def _music_video_ytdlp_env():
+    env = os.environ.copy()
+    deno_dir = os.path.expanduser('~/.deno/bin')
+    if os.path.isdir(deno_dir):
+        env['PATH'] = deno_dir + os.pathsep + env.get('PATH', '')
+    return env
+
+
+def _music_video_ytdlp_cmd(video_id, *extra):
+    deno_bin = os.path.expanduser('~/.deno/bin/deno')
+    cmd = ['yt-dlp', '--no-update', '--no-warnings']
+    if os.path.isfile(deno_bin):
+        cmd.extend(['--js-runtimes', f'deno:{deno_bin}'])
+    cookies = _music_video_cookies_path()
+    if cookies:
+        cmd.extend(['--cookies', cookies])
+    cmd.extend(extra)
+    cmd.append(f'https://www.youtube.com/watch?v={video_id}')
+    return cmd
+
+
+def _music_video_ytdlp_run(cmd, *, timeout=45):
+    try:
+        return subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+            env=_music_video_ytdlp_env(),
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        print(f'music video yt-dlp: {e}', flush=True)
+        return None
+
+
+def _music_video_stream_cache_get(video_id):
+    with _MUSIC_VIDEO_STREAM_CACHE_LOCK:
+        hit = _MUSIC_VIDEO_STREAM_CACHE.get(video_id)
+        if hit and hit.get('expires', 0) > time.time():
+            return hit.get('url')
+    return None
+
+
+def _music_video_stream_cache_set(video_id, url):
+    with _MUSIC_VIDEO_STREAM_CACHE_LOCK:
+        _MUSIC_VIDEO_STREAM_CACHE[video_id] = {
+            'url': url,
+            'expires': time.time() + _MUSIC_VIDEO_STREAM_TTL_SEC,
+        }
+
+
+def _music_video_direct_stream_url(video_id):
+    cached = _music_video_stream_cache_get(video_id)
+    if cached:
+        return cached
+    # Prefer single-file progressive MP4 — ExoPlayer needs Range/Content-Length (not yt-dlp pipe).
+    format_specs = [
+        'best[ext=mp4][height<=720][protocol=https][vcodec!=none][acodec!=none]/'
+        'best[ext=mp4][protocol=https][vcodec!=none][acodec!=none]/22/18/b',
+    ]
+    for fmt in format_specs:
+        cmd = _music_video_ytdlp_cmd(video_id, '-f', fmt, '-g')
+        out = _music_video_ytdlp_run(cmd)
+        if out is None:
+            continue
+        urls = []
+        for line in (out.stdout or '').splitlines():
+            line = line.strip()
+            if line.startswith('http'):
+                urls.append(line)
+        if len(urls) == 1 and '.m3u8' not in urls[0] and 'manifest' not in urls[0]:
+            _music_video_stream_cache_set(video_id, urls[0])
+            return urls[0]
+        if out.stderr:
+            print(f'music video stream url ({fmt}): {out.stderr.strip()[:280]}', flush=True)
+    return None
+
+
+def _music_video_play_reason():
+    if not shutil.which('yt-dlp'):
+        return 'yt-dlp is not installed on the server'
+    if not _music_video_cookies_path():
+        return (
+            'YouTube blocked anonymous access — export browser cookies to '
+            f'{os.path.join(DATA_DIR, "youtube-cookies.txt")} (see scripts/youtube_cookies.sh)'
+        )
+    if not os.path.isfile(os.path.expanduser('~/.deno/bin/deno')):
+        return 'Install Deno on the server for YouTube stream extraction (~/.deno/bin/deno)'
+    return 'Could not resolve a playable stream for this video'
+
+
+def _music_video_can_stream(video_id):
+    """True when yt-dlp can extract a stream for this id (check only; do not give URL to clients)."""
+    return _music_video_direct_stream_url(video_id) is not None
+
+
+@app.route('/api/music-video/<video_id>/play')
+def music_video_play(video_id):
+    """Return a LAN-proxied stream URL for ExoPlayer (googlevideo URLs are IP-bound to the server)."""
+    video_id = (video_id or '').strip()
+    if not _MUSIC_VIDEO_ID_RE.fullmatch(video_id):
+        return jsonify({'error': 'bad video id'}), 400
+    if not _music_video_cookies_path() or not shutil.which('yt-dlp'):
+        return jsonify({'ready': False, 'reason': _music_video_play_reason()}), 503
+    if not _music_video_can_stream(video_id):
+        return jsonify({'ready': False, 'reason': _music_video_play_reason()}), 503
+    play_url = f'/api/music-video/{video_id}/proxy'
+    return jsonify({'ready': True, 'playUrl': play_url, 'proxied': True})
+
+
+@app.route('/api/music-video/<video_id>/proxy', methods=['GET', 'HEAD'])
+def music_video_proxy(video_id):
+    """Range-aware reverse proxy — googlevideo URLs are IP-bound to this server."""
+    import urllib.error
+    import urllib.request
+
+    video_id = (video_id or '').strip()
+    if not _MUSIC_VIDEO_ID_RE.fullmatch(video_id):
+        return jsonify({'error': 'bad video id'}), 400
+    if not _music_video_cookies_path():
+        return jsonify({'error': _music_video_play_reason()}), 503
+    upstream_url = _music_video_direct_stream_url(video_id)
+    if not upstream_url:
+        return jsonify({'error': _music_video_play_reason()}), 503
+
+    req_headers = {'User-Agent': 'Mozilla/5.0 (compatible; BockMedia/1.0)', 'Accept': '*/*'}
+    range_header = request.headers.get('Range')
+    if range_header:
+        req_headers['Range'] = range_header
+    upstream_req = urllib.request.Request(upstream_url, headers=req_headers, method=request.method)
+    try:
+        upstream = urllib.request.urlopen(upstream_req, timeout=120)
+    except urllib.error.HTTPError as e:
+        body = e.read()
+        return Response(body, status=e.code, headers=dict(e.headers.items()))
+    except urllib.error.URLError as e:
+        print(f'music video proxy upstream failed: {e}', flush=True)
+        return jsonify({'error': 'upstream stream failed'}), 502
+
+    hop_by_hop = {
+        'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization',
+        'te', 'trailers', 'transfer-encoding', 'upgrade',
+    }
+    out_headers = {
+        k: v for k, v in upstream.headers.items()
+        if k.lower() not in hop_by_hop
+    }
+
+    if request.method == 'HEAD':
+        upstream.close()
+        return Response('', status=upstream.status, headers=out_headers)
+
+    def generate():
+        try:
+            while True:
+                chunk = upstream.read(65536)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            upstream.close()
+
+    return Response(
+        stream_with_context(generate()),
+        status=upstream.status,
+        headers=out_headers,
+    )
 
 
 @app.route('/api/songs')
