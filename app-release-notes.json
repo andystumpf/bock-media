@@ -2,6 +2,13 @@
   "_comment": "Update this file whenever you upload a new APK/IPA to /app. Shown on GET /app.",
     "releases": [
     {
+      "version": "2.6.44",
+      "date": "2026-06-27",
+      "items": [
+        {"kind": "fix", "text": "Analytics — household-wide stats match web (no profile filter); device table + heatmap parity"}
+      ]
+    },
+    {
       "version": "2.6.43",
       "date": "2026-06-27",
       "items": [

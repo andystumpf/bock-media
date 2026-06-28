@@ -34,7 +34,6 @@ private val accountMenuSections = listOf(
         BockRoute.Devices,
         BockRoute.Family,
         BockRoute.Driving,
-        BockRoute.Routines,
     )),
     AccountMenuSection("App", listOf(BockRoute.About)),
 )

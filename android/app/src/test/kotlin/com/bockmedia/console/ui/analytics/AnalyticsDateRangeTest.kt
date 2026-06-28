@@ -1,6 +1,7 @@
 package com.bockmedia.console.ui.analytics
 
 import com.bockmedia.console.data.api.dto.ActivityPoint
+import com.bockmedia.console.data.api.dto.CatalogCoverage
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -49,6 +50,22 @@ class AnalyticsDateRangeTest {
             analyticsRangeKey(DatePreset.Last7, null, null, "client-abc"),
         )
         assertEquals("all|all-devices", analyticsRangeKey(DatePreset.AllTime, null, null, null))
+    }
+
+    @Test
+    fun formatCatalogPct_matchesWeb() {
+        assertEquals("<0.1", formatCatalogPct(CatalogCoverage(heard = 10, total = 100_000, pct = 0.05)))
+        assertEquals("0.51", formatCatalogPct(CatalogCoverage(heard = 2176, total = 422975, pct = 0.51)))
+    }
+
+    @Test
+    fun formatLastSeen_relativeLabels() {
+        val now = System.currentTimeMillis() / 1000.0
+        assertEquals("just now", formatLastSeen(now - 30))
+        assertEquals("5m ago", formatLastSeen(now - 300))
+        assertEquals("2h ago", formatLastSeen(now - 7200))
+        assertEquals("3d ago", formatLastSeen(now - 86400 * 3))
+        assertEquals("—", formatLastSeen(null))
     }
 
     @Test

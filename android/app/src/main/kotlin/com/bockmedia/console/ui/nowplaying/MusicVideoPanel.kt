@@ -15,6 +15,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -28,6 +29,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
@@ -49,72 +51,98 @@ fun MusicVideoPlayer(
     val context = LocalContext.current
     val thumbUrl = remember(videoId) { "https://i.ytimg.com/vi/$videoId/hqdefault.jpg" }
     var playerError by remember(playUrl) { mutableStateOf<String?>(null) }
+    var isRendered by remember(playUrl) { mutableStateOf(false) }
     val displayError = error ?: playerError
+    val canPlay = !playUrl.isNullOrBlank() && httpClient != null && displayError == null
 
-    when {
-        loading || (playUrl != null && httpClient == null) -> {
-            Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                BockProgressIndicator(size = 36.dp)
+    Box(modifier.fillMaxSize().clipToBounds()) {
+        AsyncImage(
+            model = thumbUrl,
+            contentDescription = null,
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Crop,
+        )
+
+        when {
+            loading -> {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    BockProgressIndicator(size = 32.dp)
+                }
             }
-        }
-        !playUrl.isNullOrBlank() && httpClient != null && displayError == null -> {
-            key(playUrl) {
-                val exo = remember(playUrl, httpClient) {
-                    val dataSource = DefaultDataSource.Factory(
-                        context,
-                        OkHttpDataSource.Factory(httpClient),
-                    )
-                    ExoPlayer.Builder(context)
-                        .setMediaSourceFactory(DefaultMediaSourceFactory(dataSource))
-                        .build()
-                        .apply {
-                            volume = 0f
-                            repeatMode = Player.REPEAT_MODE_ONE
-                            playWhenReady = true
-                            setMediaItem(MediaItem.fromUri(playUrl))
-                            prepare()
-                        }
-                }
-                DisposableEffect(exo) {
-                    val listener = object : Player.Listener {
-                        override fun onPlayerError(changedError: PlaybackException) {
-                            playerError = changedError.localizedMessage ?: "Playback failed"
-                        }
-                    }
-                    exo.addListener(listener)
-                    onDispose {
-                        exo.removeListener(listener)
-                        exo.release()
-                    }
-                }
-                AndroidView(
-                    modifier = modifier.clipToBounds(),
-                    factory = { ctx ->
-                        PlayerView(ctx).apply {
-                            layoutParams = ViewGroup.LayoutParams(
-                                ViewGroup.LayoutParams.MATCH_PARENT,
-                                ViewGroup.LayoutParams.MATCH_PARENT,
+            canPlay -> {
+                key(playUrl) {
+                    val exo = remember(playUrl, httpClient) {
+                        val dataSource = DefaultDataSource.Factory(
+                            context,
+                            OkHttpDataSource.Factory(httpClient!!),
+                        )
+                        val loadControl = DefaultLoadControl.Builder()
+                            .setBufferDurationsMs(
+                                2_500,
+                                8_000,
+                                250,
+                                500,
                             )
-                            useController = false
-                            // FIXED_HEIGHT: fill portrait height, crop sides — avoids TextureView
-                            // zoom matrix bugs that wrap the top of the frame to the bottom.
-                            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIXED_HEIGHT
-                            player = exo
-                            setBackgroundColor(android.graphics.Color.BLACK)
+                            .build()
+                        ExoPlayer.Builder(context)
+                            .setLoadControl(loadControl)
+                            .setMediaSourceFactory(DefaultMediaSourceFactory(dataSource))
+                            .build()
+                            .apply {
+                                volume = 0f
+                                repeatMode = Player.REPEAT_MODE_ONE
+                                playWhenReady = true
+                                setMediaItem(MediaItem.fromUri(playUrl!!))
+                                prepare()
+                            }
+                    }
+                    DisposableEffect(exo) {
+                        val listener = object : Player.Listener {
+                            override fun onPlaybackStateChanged(state: Int) {
+                                if (state == Player.STATE_READY) {
+                                    isRendered = true
+                                }
+                            }
+
+                            override fun onPlayerError(changedError: PlaybackException) {
+                                playerError = changedError.localizedMessage ?: "Playback failed"
+                            }
                         }
-                    },
-                    update = { it.player = exo },
-                )
+                        exo.addListener(listener)
+                        if (exo.playbackState == Player.STATE_READY) {
+                            isRendered = true
+                        }
+                        onDispose {
+                            exo.removeListener(listener)
+                            exo.release()
+                        }
+                    }
+                    AndroidView(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .alpha(if (isRendered) 1f else 0f),
+                        factory = { ctx ->
+                            PlayerView(ctx).apply {
+                                layoutParams = ViewGroup.LayoutParams(
+                                    ViewGroup.LayoutParams.MATCH_PARENT,
+                                    ViewGroup.LayoutParams.MATCH_PARENT,
+                                )
+                                useController = false
+                                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIXED_HEIGHT
+                                player = exo
+                                setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                            }
+                        },
+                        update = { it.player = exo },
+                    )
+                }
+                if (!isRendered) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        BockProgressIndicator(size = 32.dp)
+                    }
+                }
             }
-        }
-        else -> {
-            Box(modifier.fillMaxSize()) {
-                AsyncImage(
-                    model = thumbUrl,
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop,
-                )
+            displayError != null -> {
                 Column(
                     Modifier
                         .align(Alignment.Center)
@@ -122,14 +150,12 @@ fun MusicVideoPlayer(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    if (displayError != null) {
-                        Text(
-                            displayError,
-                            color = Color.White,
-                            style = MaterialTheme.typography.bodyMedium,
-                            textAlign = TextAlign.Center,
-                        )
-                    }
+                    Text(
+                        displayError,
+                        color = Color.White,
+                        style = MaterialTheme.typography.bodyMedium,
+                        textAlign = TextAlign.Center,
+                    )
                     FilledTonalButton(
                         onClick = {
                             val uri = Uri.parse("https://www.youtube.com/watch?v=$videoId")

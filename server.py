@@ -4578,6 +4578,8 @@ def _music_video_payload(title, artist=None, track_duration_sec=None):
         cached = _music_video_cache_load()
         hit = cached.get(key)
         if hit:
+            if hit.get('videoId'):
+                _music_video_warm_stream(hit['videoId'])
             return hit
     vid, picked_title = _music_video_lookup(artist or '', title, track_duration_sec)
     payload = {'videoId': vid, 'title': picked_title}
@@ -4586,7 +4588,27 @@ def _music_video_payload(title, artist=None, track_duration_sec=None):
             cached = _music_video_cache_load()
             cached[key] = payload
             _music_video_cache_save(cached)
+        _music_video_warm_stream(vid)
     return payload
+
+
+def _music_video_warm_stream(video_id):
+    """Resolve googlevideo URL in the background so the proxy is hot when the client connects."""
+    video_id = (video_id or '').strip()
+    if not video_id or not _MUSIC_VIDEO_ID_RE.fullmatch(video_id):
+        return
+    if _music_video_stream_cache_get(video_id):
+        return
+    if not _music_video_cookies_path() or not shutil.which('yt-dlp'):
+        return
+
+    def _run():
+        try:
+            _music_video_direct_stream_url(video_id)
+        except Exception as e:
+            print(f'music video warm {video_id}: {e}', flush=True)
+
+    threading.Thread(target=_run, name=f'mv-warm-{video_id[:8]}', daemon=True).start()
 
 
 @app.route('/api/music-video')
@@ -4675,8 +4697,9 @@ def _music_video_direct_stream_url(video_id):
     cached = _music_video_stream_cache_get(video_id)
     if cached:
         return cached
-    # Prefer single-file progressive MP4 — ExoPlayer needs Range/Content-Length (not yt-dlp pipe).
+    # Prefer smaller progressive MP4 first — faster first frame through the proxy.
     format_specs = [
+        'best[ext=mp4][height<=480][protocol=https][vcodec!=none][acodec!=none]/'
         'best[ext=mp4][height<=720][protocol=https][vcodec!=none][acodec!=none]/'
         'best[ext=mp4][protocol=https][vcodec!=none][acodec!=none]/22/18/b',
     ]

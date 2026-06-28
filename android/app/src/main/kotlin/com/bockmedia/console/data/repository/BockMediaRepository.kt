@@ -558,6 +558,14 @@ class BockMediaRepository(
         return base.trimEnd('/') + url
     }
 
+    /** LAN proxy path — no /play round trip; server resolves the googlevideo URL on first byte. */
+    fun musicVideoProxyPlayUrl(base: String, videoId: String): String? {
+        val id = videoId.trim()
+        val root = base.trim().trimEnd('/')
+        if (id.isEmpty() || root.isEmpty()) return null
+        return "$root/api/music-video/$id/proxy"
+    }
+
     suspend fun watchFolders() = api().watchFolders()
     suspend fun devices() = api().devices()
     suspend fun mergeCandidates() = api().mergeCandidates()
@@ -572,7 +580,14 @@ class BockMediaRepository(
         deviceId: String? = null,
         member: String? = null,
         platform: String? = null,
-    ) = api().analytics(from, to, deviceId, scopedMember(member), platform)
+        householdWide: Boolean = false,
+    ) = api().analytics(
+        from,
+        to,
+        deviceId,
+        if (householdWide) null else scopedMember(member),
+        platform,
+    )
 
     // ── Household / Family ──────────────────────────────────────────────────
     suspend fun household() = api().household()
@@ -1065,8 +1080,14 @@ class BockMediaRepository(
         cacheDir: java.io.File,
         deviceId: String? = null,
         member: String? = null,
+        householdWide: Boolean = false,
     ): File {
-        val body = api().analyticsExport(from, to, deviceId, scopedMember(member))
+        val body = api().analyticsExport(
+            from,
+            to,
+            deviceId,
+            if (householdWide) null else scopedMember(member),
+        )
         val file = java.io.File(cacheDir, "bock_media_streams.csv")
         body.byteStream().use { input ->
             file.outputStream().use { output -> input.copyTo(output) }

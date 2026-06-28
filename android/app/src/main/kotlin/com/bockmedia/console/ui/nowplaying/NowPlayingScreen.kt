@@ -564,7 +564,6 @@ private fun SpotifyNowPlayingPage(
     var videoId by remember { mutableStateOf<String?>(null) }
     var videoLoading by remember { mutableStateOf(false) }
     var videoPlayUrl by remember { mutableStateOf<String?>(null) }
-    var videoStreamLoading by remember { mutableStateOf(false) }
     var videoStreamError by remember { mutableStateOf<String?>(null) }
     var playbackHttpClient by remember { mutableStateOf<OkHttpClient?>(null) }
     var lyricsOffsetMs by remember { mutableIntStateOf(0) }
@@ -609,13 +608,17 @@ private fun SpotifyNowPlayingPage(
         lyricsOffsetMs = 0
     }
 
+    LaunchedEffect(showVideo) {
+        if (showVideo) showLyrics = false
+    }
+
     val serverBaseUrl = remember(repository.baseUrlEpoch) { repository.peekBaseUrl() }
 
     LaunchedEffect(Unit) {
         playbackHttpClient = BockMediaApp.get(context).buildPlaybackHttpClient()
     }
 
-    LaunchedEffect(displayDev.track, displayDev.artist, durationSec) {
+    LaunchedEffect(displayDev.track, displayDev.artist, durationSec, serverBaseUrl) {
         videoId = null
         videoPlayUrl = null
         videoStreamError = null
@@ -625,36 +628,19 @@ private fun SpotifyNowPlayingPage(
             return@LaunchedEffect
         }
         videoLoading = true
-        videoId = runCatching {
+        val id = runCatching {
             repository.musicVideo(
                 title = title,
                 artist = displayDev.artist,
                 durationSec = durationSec.takeIf { it > 0 }?.toInt(),
             )?.videoId
         }.getOrNull()?.takeIf { it.isNotBlank() }
+        videoId = id
         videoLoading = false
-    }
-
-    LaunchedEffect(showVideo, videoId, serverBaseUrl) {
-        videoPlayUrl = null
-        videoStreamError = null
-        if (!showVideo || videoId.isNullOrBlank()) {
-            videoStreamLoading = false
-            return@LaunchedEffect
+        val base = serverBaseUrl?.takeIf { it.isNotBlank() }
+        if (!id.isNullOrBlank() && base != null) {
+            videoPlayUrl = repository.musicVideoProxyPlayUrl(base, id)
         }
-        val base = serverBaseUrl?.takeIf { it.isNotBlank() } ?: run {
-            videoStreamError = "Server not connected"
-            videoStreamLoading = false
-            return@LaunchedEffect
-        }
-        videoStreamLoading = true
-        val play = repository.musicVideoPlay(videoId!!)
-        if (play?.ready == true) {
-            videoPlayUrl = repository.resolveMusicVideoPlayUrl(base, play)
-        } else {
-            videoStreamError = play?.reason ?: "Video stream unavailable"
-        }
-        videoStreamLoading = false
     }
 
     LaunchedEffect(displayDev.filepath, displayDev.track, displayDev.artist, displayDev.album, durationSec) {
@@ -716,7 +702,7 @@ private fun SpotifyNowPlayingPage(
                 MusicVideoPlayer(
                     playUrl = videoPlayUrl,
                     videoId = videoId!!,
-                    loading = videoStreamLoading,
+                    loading = videoLoading,
                     error = videoStreamError,
                     httpClient = playbackHttpClient,
                     modifier = Modifier.fillMaxSize(),
@@ -782,18 +768,6 @@ private fun SpotifyNowPlayingPage(
                             )
                         }
                     }
-                } else if (showLyrics) {
-                    LyricsPanel(
-                        lyrics = lyrics,
-                        loading = lyricsLoading,
-                        error = lyricsError,
-                        positionMs = lyricsPositionMs,
-                        offsetMs = lyricsOffsetMs,
-                        onOffsetChange = { lyricsOffsetMs = it },
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(horizontal = 20.dp, vertical = 8.dp),
-                    )
                 }
 
                 Column(
@@ -931,9 +905,19 @@ private fun SpotifyNowPlayingPage(
             if (displayDev.filepath != null) {
                 NowPlayingOverlayIconButton(
                     icon = if (showLyrics) Icons.Default.Album else Icons.Default.Lyrics,
-                    contentDescription = if (showLyrics) "Hide lyrics" else "Show lyrics",
+                    contentDescription = if (showLyrics) "Show cover art" else "Show lyrics",
                     selected = showLyrics,
-                    onClick = { showLyrics = !showLyrics },
+                    onClick = {
+                        if (showLyrics) {
+                            showLyrics = false
+                        } else {
+                            showLyrics = true
+                            scope.launch {
+                                app.preferences.setNowPlayingVideo(false)
+                                ClientPrefsSync.schedulePush(context)
+                            }
+                        }
+                    },
                 )
             }
             if (videoId != null || videoLoading) {
@@ -943,8 +927,10 @@ private fun SpotifyNowPlayingPage(
                     enabled = videoId != null,
                     onClick = {
                         if (videoId != null) {
+                            val next = !showVideo
+                            if (next) showLyrics = false
                             scope.launch {
-                                app.preferences.setNowPlayingVideo(!showVideo)
+                                app.preferences.setNowPlayingVideo(next)
                                 ClientPrefsSync.schedulePush(context)
                             }
                         }

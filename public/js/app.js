@@ -443,7 +443,7 @@ let currentRoute = '';
 function register(name, fn) { routes[name] = fn; }
 
 const BOTTOM_TAB_ROUTES = {
-  home: ['dashboard', 'rooms', 'analytics', 'routines'],
+  home: ['dashboard', 'rooms', 'analytics'],
   nowplaying: ['nowplaying'],
   search: ['search'],
   library: ['library', 'playlists', 'artists', 'albums', 'songs', 'watchfolders', 'genres'],

@@ -622,6 +622,24 @@ data class AnalyticsResponse(
     @SerialName("repeatRate") val repeatRate: RepeatRate? = null,
     @SerialName("mostActiveDay") val mostActiveDay: MostActiveDay? = null,
     @SerialName("deviceBreakdown") val deviceBreakdown: List<DeviceBreakdownRow> = emptyList(),
+    @SerialName("playsPerDay") val playsPerDay: Map<String, Int> = emptyMap(),
+    @SerialName("entity_activity") val entityActivity: EntityActivity? = null,
+    @SerialName("dateRange") val dateRange: AnalyticsDateRange? = null,
+)
+
+@Serializable
+data class AnalyticsDateRange(
+    val from: String? = null,
+    val to: String? = null,
+    @SerialName("deviceId") val deviceId: String? = null,
+)
+
+@Serializable
+data class EntityActivity(
+    val artists: Map<String, Map<String, Int>> = emptyMap(),
+    val albums: Map<String, Map<String, Int>> = emptyMap(),
+    val tracks: Map<String, Map<String, Int>> = emptyMap(),
+    val devices: Map<String, Map<String, Int>> = emptyMap(),
 )
 
 @Serializable
@@ -664,6 +682,7 @@ data class DeviceBreakdownRow(
     val plays: Int = 0,
     val downloads: Int = 0,
     val connects: Int = 0,
+    @SerialName("lastSeen") val lastSeen: Double? = null,
 )
 
 @Serializable

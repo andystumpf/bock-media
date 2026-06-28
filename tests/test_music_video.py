@@ -13,13 +13,16 @@ def test_music_video_requires_title(client):
 def test_music_video_cached(client, tmp_path, monkeypatch):
     cache = tmp_path / 'music_video_cache.json'
     cache.write_text(
-        json.dumps({'v4|staind|outside': {'videoId': 'abc123', 'title': 'Staind - Outside'}}),
+        json.dumps({'v4|staind|outside': {'videoId': 'abc12345678', 'title': 'Staind - Outside'}}),
         encoding='utf-8',
     )
     monkeypatch.setattr(server, 'MUSIC_VIDEO_CACHE_PATH', str(cache))
+    warmed = []
+    monkeypatch.setattr(server, '_music_video_warm_stream', lambda vid: warmed.append(vid))
     rv = client.get('/api/music-video', query_string={'title': 'Outside', 'artist': 'Staind'})
     assert rv.status_code == 200
-    assert rv.get_json()['videoId'] == 'abc123'
+    assert rv.get_json()['videoId'] == 'abc12345678'
+    assert warmed == ['abc12345678']
 
 
 def test_music_video_piped_search(client, tmp_path, monkeypatch):
