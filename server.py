@@ -10101,7 +10101,15 @@ def _prune_np(payload):
     keep = {}
     for did, st in devices.items():
         ts = st.get('timestamp', 0) or 0
-        if not st.get('playing') and now - ts > _NP_DEVICE_TTL_SECONDS:
+        playing = bool(st.get('playing'))
+        paused = bool(st.get('paused')) and not playing
+        if not playing and not paused:
+            # Idle rows (stopped / resume window) — drop once the UI would hide them.
+            if ts and now - ts > _NP_STOPPED_VISIBLE_SECONDS:
+                continue
+            if not ts and not st.get('token'):
+                continue
+        if not playing and now - ts > _NP_DEVICE_TTL_SECONDS:
             continue
         keep[did] = st
     payload['devices'] = keep
@@ -10147,7 +10155,7 @@ def write_np_state(data):
             devices.pop(did, None)
         else:
             devices[did] = data
-        _canonicalize_np(_prune_np(payload))
+        payload = _canonicalize_np(_prune_np(payload))
         _write_all_np(payload)
     _np_on_state_written(did, data)
 
@@ -10355,6 +10363,15 @@ def _expire_stale_playing(payload):
             changed = True
     return changed
 
+def _refresh_np_expiry(payload):
+    """Expire stale rows and prune idle devices. Returns (payload, changed)."""
+    before = json.dumps(payload.get('devices', {}), sort_keys=True, default=str)
+    _expire_stale_playing(payload)
+    _expire_stale_client_playback(payload)
+    payload = _canonicalize_np(_prune_np(payload))
+    after = json.dumps(payload.get('devices', {}), sort_keys=True, default=str)
+    return payload, before != after
+
 def _sleep_info_for_token(token):
     """Describe an armed sleep timer / stop-after-N for a now-playing token,
     or None. Used to badge the row in the web Now Playing UI."""
@@ -10399,12 +10416,11 @@ def nowplaying_sleep():
 def nowplaying_devices():
     now = time.time()
     with _NP_LOCK:
-        payload = _canonicalize_np(_prune_np(_read_all_np() or {'devices': {}}))
-    # Expire stale rows for display only — never persist from a GET (avoids races).
-    display = json.loads(json.dumps(payload))
-    _expire_stale_playing(display)
-    _expire_stale_client_playback(display)
-    devices = display.get('devices', {})
+        payload = _read_all_np() or {'devices': {}}
+        payload, changed = _refresh_np_expiry(payload)
+        if changed:
+            _write_all_np(payload)
+    devices = payload.get('devices', {})
     known = set(_load_devices().keys())
     device_store = _load_devices()
     # Mobile apps pass viewerClientId to hide other phones/tablets; web omits it.
