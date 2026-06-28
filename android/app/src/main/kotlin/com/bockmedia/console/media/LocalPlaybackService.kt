@@ -31,7 +31,13 @@ import com.bockmedia.console.MainActivity
 import com.bockmedia.console.R
 import com.bockmedia.console.data.analytics.DeviceAnalyticsReporter
 import com.bockmedia.console.domain.model.PlayTarget
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
 
 class LocalPlaybackService : MediaSessionService() {
     private var player: ExoPlayer? = null
@@ -62,6 +68,8 @@ class LocalPlaybackService : MediaSessionService() {
     private var consecutivePlayErrors = 0
     private var retryErrorIndex = -1
     private var consecutiveSkips = 0
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    @Volatile private var playbackHttpClient: OkHttpClient? = null
     private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
         when (change) {
             AudioManager.AUDIOFOCUS_LOSS -> {
@@ -112,6 +120,9 @@ class LocalPlaybackService : MediaSessionService() {
         super.onCreate()
         instance = this
         ensureChannel()
+        serviceScope.launch(Dispatchers.IO) {
+            playbackHttpClient = BockMediaApp.get(this@LocalPlaybackService).buildPlaybackHttpClient()
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -143,7 +154,7 @@ class LocalPlaybackService : MediaSessionService() {
                 if (player == null) {
                     val st = LocalPlaybackController.state.value
                     if (st.active && st.tracks.isNotEmpty()) {
-                        runBlocking {
+                        serviceScope.launch {
                             LocalPlaybackController.playTracks(
                                 this@LocalPlaybackService,
                                 st.tracks,
@@ -418,7 +429,11 @@ class LocalPlaybackService : MediaSessionService() {
     }
 
     private fun buildExoPlayer(): ExoPlayer {
-        val httpClient = runBlocking { BockMediaApp.get(this@LocalPlaybackService).buildPlaybackHttpClient() }
+        val httpClient = playbackHttpClient ?: runBlocking(Dispatchers.IO) {
+            BockMediaApp.get(this@LocalPlaybackService).buildPlaybackHttpClient().also {
+                playbackHttpClient = it
+            }
+        }
         val dataSourceFactory = DefaultDataSource.Factory(this, OkHttpDataSource.Factory(httpClient))
         return ExoPlayer.Builder(this)
             .setMediaSourceFactory(
@@ -613,8 +628,16 @@ class LocalPlaybackService : MediaSessionService() {
     }
 
     private fun tryContinueQueue(): Boolean {
+        serviceScope.launch {
+            val ok = withContext(Dispatchers.IO) { tryContinueQueueOnIo() }
+            if (!ok) stopPlayback()
+        }
+        return true
+    }
+
+    private suspend fun tryContinueQueueOnIo(): Boolean {
         val app = BockMediaApp.get(this)
-        val mode = runBlocking { app.preferences.getContinueAfterQueueSync() }
+        val mode = app.preferences.getContinueAfterQueueSync()
         if (mode == "off" || activeTargetKind == "radio") return false
         val idx = exoCurrentIndex()
         val lastPath = paths.getOrNull(idx).orEmpty()
@@ -626,17 +649,15 @@ class LocalPlaybackService : MediaSessionService() {
             "song" -> activeTargetPath?.let { PlayTarget.Song(it, titles.getOrNull(idx).orEmpty()) }
             else -> null
         }
-        val more = runBlocking {
-            app.repository.continuationTracks(
-                mode = mode,
-                target = target,
-                lastPath = lastPath,
-                lastArtist = artists.getOrNull(idx),
-                exclude = paths.toSet(),
-            )
-        }
+        val more = app.repository.continuationTracks(
+            mode = mode,
+            target = target,
+            lastPath = lastPath,
+            lastArtist = artists.getOrNull(idx),
+            exclude = paths.toSet(),
+        )
         if (more.isEmpty()) return false
-        val base = runBlocking { app.resolveBaseUrl() }
+        val base = app.resolveBaseUrl()
         val appended = more.mapNotNull { track ->
             val url = track.localFile?.let { android.net.Uri.fromFile(it).toString() }
                 ?: com.bockmedia.console.data.local.AppPreferences.streamUrl(
@@ -645,28 +666,31 @@ class LocalPlaybackService : MediaSessionService() {
             url?.let { track to it }
         }
         if (appended.isEmpty()) return false
-        paths = paths + appended.map { it.first.path }
-        titles = titles + appended.map { it.first.title }
-        artists = artists + appended.map { it.first.displayArtist }
-        albums = albums + appended.map { it.first.album.orEmpty() }
-        durationsMs = durationsMs + appended.map { it.first.durationMs }
-        urls = urls + appended.map { it.second }
-        val exo = leadPlayer() ?: player ?: return false
-        val items = urls.mapIndexed { i, url -> mediaItemFor(i, url) }
-        val nextIndex = idx + 1
-        exo.setMediaItems(items, nextIndex, 0)
-        exo.prepare()
-        exo.play()
-        reportPlayIfNeeded(nextIndex)
-        syncState(exo)
-        LocalPlaybackController.update { state ->
-            state.copy(
-                tracks = state.tracks + appended.map { it.first },
-                index = nextIndex,
-                isPlaying = true,
-            )
+        withContext(Dispatchers.Main) {
+            paths = paths + appended.map { it.first.path }
+            titles = titles + appended.map { it.first.title }
+            artists = artists + appended.map { it.first.displayArtist }
+            albums = albums + appended.map { it.first.album.orEmpty() }
+            durationsMs = durationsMs + appended.map { it.first.durationMs }
+            urls = urls + appended.map { it.second }
+            val exo = leadPlayer() ?: player ?: return@withContext
+            val items = urls.mapIndexed { i, url -> mediaItemFor(i, url) }
+            val nextIndex = idx + 1
+            exo.setMediaItems(items, nextIndex, 0)
+            exo.prepare()
+            exo.play()
+            reportPlayIfNeeded(nextIndex)
+            syncState(exo)
+            LocalPlaybackController.update { state ->
+                state.copy(
+                    tracks = state.tracks + appended.map { it.first },
+                    index = nextIndex,
+                    isPlaying = true,
+                )
+            }
+            startProgressUpdates()
+            postPlaybackNotification(force = true)
         }
-        postPlaybackNotification(force = true)
         return true
     }
 

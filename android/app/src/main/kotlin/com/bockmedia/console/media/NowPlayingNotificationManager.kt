@@ -7,7 +7,6 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -20,9 +19,6 @@ import com.bockmedia.console.domain.model.computeNowPlayingProgress
 import com.bockmedia.console.domain.model.formatPlaybackTime
 import com.bockmedia.console.widget.NowPlayingSessionStore
 import com.bockmedia.console.widget.NowPlayingWidget
-import java.net.URL
-import kotlin.math.max
-import kotlin.math.min
 
 object NowPlayingNotificationManager {
 
@@ -110,7 +106,14 @@ object NowPlayingNotificationManager {
             .setOnlyAlertOnce(true)
             .setOngoing(!item.paused)
             .setShowWhen(false)
-            .setLargeIcon(loadArtwork(context, item.filepath))
+            .setLargeIcon(largeIconFor(context, item.filepath))
+
+        val baseUrl = NowPlayingSessionStore.snapshot?.baseUrl?.takeIf { it.isNotBlank() }
+        val artUrl = baseUrl?.let { AppPreferences.artworkUrl(it, item.filepath) }
+        if (!artUrl.isNullOrBlank() && NotificationArtworkLoader.cached(artUrl) == null) {
+            val appContext = context.applicationContext
+            NotificationArtworkLoader.load(artUrl) { sync(appContext) }
+        }
 
         val enabled = NowPlayingSessionStore.canControl(item)
         val deviceName = item.deviceName?.takeIf { it.isNotBlank() } ?: item.deviceId
@@ -169,26 +172,9 @@ object NowPlayingNotificationManager {
         return builder.build()
     }
 
-    private fun loadArtwork(context: Context, filepath: String?): Bitmap? {
-        val base = NowPlayingSessionStore.snapshot?.baseUrl ?: return null
-        val url = AppPreferences.artworkUrl(base, filepath) ?: return null
-        return try {
-            val conn = URL(url).openConnection()
-            conn.connectTimeout = 4000
-            conn.readTimeout = 4000
-            conn.getInputStream().use { stream ->
-                val bmp = BitmapFactory.decodeStream(stream) ?: return null
-                val size = 256
-                val scale = min(size.toFloat() / bmp.width, size.toFloat() / bmp.height)
-                Bitmap.createScaledBitmap(
-                    bmp,
-                    max(1, (bmp.width * scale).toInt()),
-                    max(1, (bmp.height * scale).toInt()),
-                    true,
-                )
-            }
-        } catch (_: Exception) {
-            null
-        }
+    private fun largeIconFor(context: Context, filepath: String?): Bitmap? {
+        val baseUrl = NowPlayingSessionStore.snapshot?.baseUrl?.takeIf { it.isNotBlank() } ?: return null
+        val url = AppPreferences.artworkUrl(baseUrl, filepath) ?: return null
+        return NotificationArtworkLoader.cached(url)
     }
 }

@@ -123,6 +123,26 @@ class TestStuckNowPlaying:
         post_alexa('IntentRequest', 'SkipIntent', device_id=did)
         assert server.read_np_state_for_device(did) is None
 
+    def test_skip_at_last_track_does_not_wrap(self, client, post_alexa, sample_track, isolated_paths):
+        """Non-looping queues must stop at the end, not restart at track 0."""
+        did = 'amzn1.ask.device.SKIPEND'
+        _register(client, post_alexa, did, 'Office')
+        tracks = [sample_track['path'], sample_track['path']]
+        token = server.encode_token({'tracks': tracks, 'idx': 1})
+        post_alexa('AudioPlayer.PlaybackStarted', token=token, device_id=did)
+        post_alexa('IntentRequest', 'SkipIntent', device_id=did)
+        assert server.read_np_state_for_device(did) is None
+
+    def test_stop_after_last_track_skip_does_not_wrap(self, client, post_alexa, sample_track, isolated_paths):
+        """Stop-after-N on the last track must not modulo-wrap to track 0."""
+        did = 'amzn1.ask.device.STOPWRAP'
+        _register(client, post_alexa, did, 'Bedroom')
+        tracks = [sample_track['path'], sample_track['path'], sample_track['path']]
+        token = server.encode_token({'tracks': tracks, 'idx': 2, 'stopAfterIdx': 2})
+        post_alexa('AudioPlayer.PlaybackStarted', token=token, device_id=did)
+        post_alexa('IntentRequest', 'SkipIntent', device_id=did)
+        assert server.read_np_state_for_device(did) is None
+
 
 # ─────────────────────────── device correlation ──────────────────────────────
 

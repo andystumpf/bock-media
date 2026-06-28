@@ -10765,7 +10765,14 @@ def _np_skip_next(playback_controller=False):
     idx = data.get('idx', 0)
     if not tracks:
         return alexa_empty() if playback_controller else alexa_speak("There are no more tracks.")
-    next_idx = (idx + 1) % len(tracks)
+    next_idx = idx + 1
+    if next_idx >= len(tracks):
+        if data.get('loop'):
+            next_idx = 0
+        else:
+            write_np_state(None)
+            msg = "There are no more tracks."
+            return alexa_empty() if playback_controller else alexa_speak(msg)
     blocked = _np_queue_limit_reached(data, next_idx, playback_controller=playback_controller)
     if blocked:
         return blocked
@@ -11609,6 +11616,9 @@ def alexa_skill():
         tracks = data.get('tracks', [])
         idx    = data.get('idx', 0)
         next_idx = idx + 1
+        blocked = _np_queue_limit_reached(data, next_idx, playback_controller=True)
+        if blocked:
+            return blocked
         if next_idx >= len(tracks):
             if data.get('loop'):
                 next_idx = 0
@@ -11697,593 +11707,606 @@ def alexa_skill():
     # ── Intents ─────────────────────────────────────────────────────────────
 
     if rtype == 'IntentRequest':
-        intent = req.get('intent', {})
-        iname  = intent.get('name', '')
-        slots  = intent.get('slots', {})
-        def sv(name): return normalize_spoken_value((slots.get(name, {}).get('value') or '').strip())
-        print(f'[ALEXA DEBUG] intent={iname} slots={json.dumps({k: slots[k].get("value") for k in slots})}', flush=True)
-
-        # ── Play playlist ──────────────────────────────────────────────────
-        if iname == 'PlayPlaylistIntent':
-            query = sv('PlaylistName')
-            if not query:
-                return alexa_speak("Which playlist would you like to play?", end_session=False)
-            token_entry = _play_playlist_token_from_query(query)
-            if token_entry:
-                return _start_playlist_token_entry(token_entry)
-            token_entry = _play_file_token_from_query(query)
-            if token_entry and os.path.isfile(token_entry['path']):
-                label = token_entry['title']
-                if token_entry.get('artist'):
-                    label = f"{label} by {token_entry['artist']}"
-                return start_playing([token_entry['path']], speech=f"Playing {label}.",
-                                    context=f'Song · {label}')
-            if re.search(r'\bby\b', query, re.I) or re.match(r'^(?:the\s+)?(?:song|track)\s+', query, re.I):
-                recovered = _try_play_misrouted_song(query)
-                if recovered:
-                    tracks, label = recovered
-                    return start_playing(tracks, speech=f"Playing {label}.", context=f'Song · {label}')
-            entry = best_playlist_entry(query)
-            name = entry[1] if entry else None
-            source = entry[2] if entry else None
-            pid = entry[0] if entry else None
-            print(f'[ALEXA DEBUG] PlayPlaylistIntent query={repr(query)} -> name={repr(name)} source={repr(source)}', flush=True)
-            if not name:
-                if 'token' in query.lower():
-                    return alexa_speak("Sorry, that play request expired. Please try again from the app.")
-                recovered = _try_play_misrouted_song(query)
-                if recovered:
-                    tracks, label = recovered
-                    return start_playing(tracks, speech=f"Playing {label}.", context=f'Song · {label}')
-                return alexa_speak(f"Sorry, I couldn't find a playlist called {query}.")
-            return start_playing(None, speech=f"Playing {name}.",
-                                playlist=name, playlist_id=pid, source=source)
-
-        # ── Shuffle playlist ───────────────────────────────────────────────
-        elif iname == 'ShufflePlaylistIntent':
-            query = sv('PlaylistName')
-            if not query:
-                return alexa_speak("Which playlist would you like to shuffle?", end_session=False)
-            token_entry = _play_playlist_token_from_query(query)
-            if token_entry:
-                return _start_playlist_token_entry(token_entry, shuffle=True)
-            entry = best_playlist_entry(query)
-            name = entry[1] if entry else None
-            source = entry[2] if entry else None
-            pid = entry[0] if entry else None
-            print(f'[ALEXA DEBUG] ShufflePlaylistIntent query={repr(query)} -> name={repr(name)} source={repr(source)}', flush=True)
-            if not name:
-                return alexa_speak(f"Sorry, I couldn't find a playlist called {query}.")
-            return start_playing(None, shuffle=True, speech=f"Shuffling {name}.",
-                                playlist=name, playlist_id=pid, source=source)
-
-        # ── Play artist ────────────────────────────────────────────────────
-        elif iname == 'PlayArtistIntent':
-            query = sv('ArtistName')
-            if not query:
-                return alexa_speak("Which artist would you like to play?", end_session=False)
-            token_resp = _try_ui_token_play(query)
-            if token_resp:
-                return token_resp
-            if 'playlist' in query.lower():
-                pl_q = re.sub(r'\s+playlist$', '', query, flags=re.IGNORECASE).strip()
-                pl_q = re.sub(r'^(?:play\s+)?(?:my\s+)?(?:the\s+)?playlist\s+', '', pl_q, flags=re.IGNORECASE).strip() or query
-                entry = best_playlist_entry(pl_q)
-                if entry and entry[2] and os.path.isfile(entry[2]):
-                    tracks = parse_m3u(entry[2])
-                    if tracks:
-                        return start_playing(tracks, speech=f"Playing {entry[1]}.",
-                                            playlist=entry[1], playlist_id=entry[0])
-            artist = fuzzy_find_artist(query)
-            if not artist:
-                return alexa_speak(f"Sorry, I couldn't find any music by {query}.")
-            rows = db_query(
-                "SELECT path FROM songs_cache WHERE artist = ? AND path IS NOT NULL "
-                "AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac') ORDER BY RANDOM() LIMIT 300",
-                [artist]
-            )
-            tracks = [r['path'] for r in rows]
-            if not tracks:
-                return alexa_speak(f"I found {artist} but no playable files.")
-            return start_playing(tracks, shuffle=True, speech=f"Playing music by {artist}.",
-                                context=f'Artist · {artist}')
-
-        # ── Shuffle artist ─────────────────────────────────────────────────
-        elif iname == 'ShuffleArtistIntent':
-            query = sv('ArtistName')
-            if not query:
-                return alexa_speak("Which artist would you like to shuffle?", end_session=False)
-            token_entry = _play_playlist_token_from_query(query)
-            if token_entry:
-                return _start_playlist_token_entry(token_entry)
-            if 'playlist' in query.lower():
-                pl_q = re.sub(r'\s+playlist$', '', query, flags=re.IGNORECASE).strip()
-                pl_q = re.sub(r'^(?:shuffle\s+)?(?:play\s+)?(?:my\s+)?(?:the\s+)?playlist\s+', '', pl_q, flags=re.IGNORECASE).strip() or query
-                entry = best_playlist_entry(pl_q)
-                if entry and entry[2] and os.path.isfile(entry[2]):
-                    tracks = parse_m3u(entry[2])
-                    if tracks:
-                        return start_playing(tracks, shuffle=True, speech=f"Shuffling {entry[1]}.",
-                                            playlist=entry[1], playlist_id=entry[0])
-            artist = fuzzy_find_artist(query)
-            if not artist:
-                return alexa_speak(f"Sorry, I couldn't find any music by {query}.")
-            rows = db_query(
-                "SELECT path FROM songs_cache WHERE artist = ? AND path IS NOT NULL "
-                "AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac') ORDER BY RANDOM() LIMIT 300",
-                [artist]
-            )
-            tracks = [r['path'] for r in rows]
-            if not tracks:
-                return alexa_speak(f"I found {artist} but no playable files.")
-            return start_playing(tracks, shuffle=True, speech=f"Shuffling music by {artist}.",
-                                context=f'Artist · {artist}')
-
-        # ── Play album ─────────────────────────────────────────────────────
-        elif iname == 'PlayAlbumIntent':
-            query = sv('AlbumName')
-            if not query:
-                return alexa_speak("Which album would you like to play?", end_session=False)
-            token_resp = _try_ui_token_play(query)
-            if token_resp:
-                return token_resp
-            if 'playlist' in query.lower():
-                pl_q = re.sub(r'\s+playlist$', '', query, flags=re.IGNORECASE).strip()
-                pl_q = re.sub(
-                    r'^(?:play\s+)?(?:my\s+)?(?:the\s+)?playlist\s+',
-                    '', pl_q, flags=re.IGNORECASE,
-                ).strip() or query
-                entry = best_playlist_entry(pl_q)
-                if entry and entry[2] and os.path.isfile(entry[2]):
-                    tracks = parse_m3u(entry[2])
-                    if tracks:
-                        return start_playing(tracks, speech=f"Playing {entry[1]}.",
-                                            playlist=entry[1], playlist_id=entry[0])
-            album = fuzzy_find_album(query)
-            if album:
-                tracks = _album_tracks_for_play(album, shuffle=False)
-                if tracks:
-                    return start_playing(tracks, speech=f"Playing the album {album}.",
-                                        context=f'Album · {album}')
-            playlist_resp = _play_named_playlist_if_strong_match(query, shuffle=False)
-            if playlist_resp:
-                return playlist_resp
-            if not album:
-                return alexa_speak(f"Sorry, I couldn't find the album {query}.")
-            return alexa_speak(f"I found {album} but no playable files.")
-
-        # ── Shuffle album ──────────────────────────────────────────────────
-        elif iname == 'ShuffleAlbumIntent':
-            query = sv('AlbumName')
-            if not query:
-                return alexa_speak("Which album would you like to shuffle?", end_session=False)
-            token_resp = _try_ui_token_play(query, shuffle=True)
-            if token_resp:
-                return token_resp
-            album = fuzzy_find_album(query)
-            if album:
-                tracks = _album_tracks_for_play(album, shuffle=True)
-                if tracks:
-                    return start_playing(tracks, shuffle=True, speech=f"Shuffling the album {album}.",
-                                        context=f'Album · {album}')
-            playlist_resp = _play_named_playlist_if_strong_match(query, shuffle=True)
-            if playlist_resp:
-                return playlist_resp
-            if not album:
-                return alexa_speak(f"Sorry, I couldn't find the album {query}.")
-            return alexa_speak(f"I found {album} but no playable files.")
-
-        # ── Play file by UI token (exact path, no fuzzy match) ─────────────
-        elif iname == 'PlayFileTokenIntent':
-            try:
-                token_raw = sv('FileToken')
-                pl_entry = _consume_play_playlist_token(token_raw)
-                if pl_entry:
-                    if pl_entry.get('kind') == 'album':
-                        return _start_album_token_entry(pl_entry)
-                    return _start_playlist_token_entry(pl_entry)
-                entry = _consume_play_file_token(token_raw)
-                if entry and entry.get('path') and os.path.isfile(entry['path']):
-                    label = entry['title']
-                    if entry.get('artist'):
-                        label = f"{label} by {entry['artist']}"
-                    return start_playing([entry['path']], speech=f"Playing {label}.",
-                                        context=f'Song · {label}')
-                return alexa_speak(
-                    "Sorry, that play link expired or was not found. "
-                    "Try playing again from the Bock Media app.",
-                )
-            except Exception as ex:
-                import traceback
-                print(f'[ALEXA] PlayFileTokenIntent failed: {ex}\n{traceback.format_exc()}', flush=True)
-                return alexa_speak(
-                    "Sorry, I couldn't start playback. Check the Bock Media server logs.",
-                )
-
-        # ── Play specific track ────────────────────────────────────────────
-        elif iname == 'PlayTrackIntent':
-            query = sv('TrackName')
-            if not query:
-                return alexa_speak("Which track would you like to play?", end_session=False)
-
-            # Recovery path: some devices/tests can misroute "play ... playlist"
-            # utterances into PlayTrackIntent with invocation text in TrackName.
-            q = query.strip()
-            q_lower = q.lower()
-            if 'playlist' in q_lower:
-                pl_q = re.sub(r'^(?:play\s+)?(?:my\s+)?(?:the\s+)?playlist\s+', '', q, flags=re.IGNORECASE).strip()
-                pl_q = re.sub(r'\s+playlist$', '', pl_q, flags=re.IGNORECASE).strip()
-                if not pl_q:
-                    pl_q = q
-                entry = best_playlist_entry(pl_q)
-                if entry and entry[2] and os.path.isfile(entry[2]):
-                    tracks = parse_m3u(entry[2])
-                    if tracks:
-                        return start_playing(tracks, speech=f"Playing {entry[1]}.",
-                                            playlist=entry[1], playlist_id=entry[0])
-
-            tracks = fuzzy_find_track(query)
-            if not tracks:
-                return alexa_speak(f"Sorry, I couldn't find a track called {query}.")
-            return start_playing(tracks, speech=f"Playing {query}.", context=f'Song · {query}')
-
-        # ── Play track by artist ───────────────────────────────────────────
-        elif iname == 'PlayTrackByArtistIntent':
-            track_q  = sv('TrackName')
-            artist_q = sv('ArtistName')
-            if not track_q:
-                return alexa_speak("Which song would you like to play?", end_session=False)
-            tracks = fuzzy_find_track(track_q, artist_q or None)
-            if not tracks:
-                msg = f"{track_q} by {artist_q}" if artist_q else track_q
-                return alexa_speak(f"Sorry, I couldn't find {msg}.")
-            label = f"{track_q} by {artist_q}" if artist_q else track_q
-            return start_playing(tracks, speech=f"Playing {label}.", context=f'Song · {label}')
-
-        # ── Play genre ─────────────────────────────────────────────────────
-        elif iname == 'PlayGenreIntent':
-            query = sv('Genre')
-            if not query:
-                return alexa_speak("Which genre would you like to play?", end_session=False)
-            genre = fuzzy_find_genre(query)
-            if genre:
-                rows = db_query(
-                    "SELECT path FROM songs_cache WHERE genre = ? AND path IS NOT NULL "
-                    "AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac') ORDER BY RANDOM() LIMIT 300",
-                    [genre]
-                )
-                tracks = [r['path'] for r in rows]
-                if tracks:
-                    return start_playing(tracks, shuffle=True, speech=f"Playing {genre} music.",
-                                        context=f'Genre · {genre}')
-            entry = best_playlist_entry(query)
-            if entry and entry[2] and os.path.isfile(entry[2]):
-                tracks = parse_m3u(entry[2])
-                if tracks:
-                    return start_playing(tracks, shuffle=True, speech=f"Playing {entry[1]}.",
-                                        playlist=entry[1], playlist_id=entry[0])
-            return alexa_speak(f"Sorry, I couldn't find music in the genre {query}.")
-
-        # ── Shuffle genre ──────────────────────────────────────────────────
-        elif iname == 'ShuffleGenreIntent':
-            query = sv('Genre')
-            if not query:
-                return alexa_speak("Which genre would you like to shuffle?", end_session=False)
-            genre = fuzzy_find_genre(query)
-            if genre:
-                rows = db_query(
-                    "SELECT path FROM songs_cache WHERE genre = ? AND path IS NOT NULL "
-                    "AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac') ORDER BY RANDOM() LIMIT 300",
-                    [genre]
-                )
-                tracks = [r['path'] for r in rows]
-                if tracks:
-                    return start_playing(tracks, shuffle=True, speech=f"Shuffling {genre} music.",
-                                        context=f'Genre · {genre}')
-            entry = best_playlist_entry(query)
-            if entry and entry[2] and os.path.isfile(entry[2]):
-                tracks = parse_m3u(entry[2])
-                if tracks:
-                    return start_playing(tracks, shuffle=True, speech=f"Shuffling {entry[1]}.",
-                                        playlist=entry[1], playlist_id=entry[0])
-            return alexa_speak(f"Sorry, I couldn't find music in the genre {query}.")
-
-        # ── General "play X" — tries playlist → artist → album → track ────
-        elif iname == 'PlayGeneralIntent':
-            query = sv('Query')
-            if not query:
-                return alexa_speak("What would you like to play?", end_session=False)
-            tracks, speech, do_shuffle, meta = general_search_tracks(query)
-            if not tracks:
-                return alexa_speak(f"Sorry, I couldn't find anything matching {query}.")
-            return start_playing(tracks, shuffle=do_shuffle, speech=speech, **meta)
-
-        # ── Read audio book ────────────────────────────────────────────────
-        elif iname == 'ReadBookIntent':
-            query = sv('BookName')
-            if not query:
-                return alexa_speak("Which audio book would you like to hear?", end_session=False)
-            name, source = fuzzy_find_playlist(query)
-            if not name or not source or not os.path.isfile(source):
-                # Fall back to searching by album name
-                album = fuzzy_find_album(query)
-                if album:
-                    rows = db_query(
-                        "SELECT path FROM songs_cache WHERE album = ? AND path IS NOT NULL "
-                        "AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac') ORDER BY CAST(track_number AS INTEGER), title LIMIT 100",
-                        [album]
-                    )
-                    tracks = [r['path'] for r in rows]
-                    if tracks:
-                        return start_playing(tracks, speech=f"Reading {album}.",
-                                            context=f'Audiobook · {album}')
-                return alexa_speak(f"Sorry, I couldn't find an audio book called {query}.")
-            tracks = parse_m3u(source)
-            if not tracks:
-                return alexa_speak(f"The book {name} has no playable tracks.")
-            entry = best_playlist_entry(query)
-            pid = entry[0] if entry else None
-            return start_playing(tracks, speech=f"Reading {name}.",
-                                playlist=name, playlist_id=pid, context=f'Audiobook · {name}')
-
-        # ── Play current selection (set via web UI) ────────────────────────
-        elif iname == 'PlayCurrentIntent':
-            sel = read_selected()
-            if not sel:
-                return alexa_speak(
-                    "Nothing is currently selected in the console. "
-                    "Open the Bock Media web app and browse to a song, album, or artist first."
-                )
-            sel_type = sel.get('type', '')
-            query    = sel.get('name', '')
-            if sel_type == 'track':
-                path = sel.get('path', '')
-                if path and os.path.isfile(path):
-                    return start_playing([path], speech=f"Playing {query}.", context=f'Song · {query}')
-            elif sel_type == 'album':
-                rows = db_query(
-                    "SELECT path FROM songs_cache WHERE album = ? AND path IS NOT NULL "
-                    "AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac') ORDER BY CAST(track_number AS INTEGER), title LIMIT 50",
-                    [query]
-                )
-                tracks = [r['path'] for r in rows]
-                if tracks:
-                    return start_playing(tracks, speech=f"Playing the album {query}.",
-                                        context=f'Album · {query}')
-            elif sel_type == 'artist':
-                rows = db_query(
-                    "SELECT path FROM songs_cache WHERE artist = ? AND path IS NOT NULL "
-                    "AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac') ORDER BY RANDOM() LIMIT 300",
-                    [query]
-                )
-                tracks = [r['path'] for r in rows]
-                if tracks:
-                    return start_playing(tracks, shuffle=True, speech=f"Playing music by {query}.",
-                                        context=f'Artist · {query}')
-            elif sel_type == 'playlist':
-                source = sel.get('source', '')
-                if source and os.path.isfile(source):
-                    tracks = parse_m3u(source)
-                    if tracks:
-                        return start_playing(tracks, speech=f"Playing {query}.",
-                                            playlist=query, playlist_id=sel.get('id'))
-            return alexa_speak(f"I couldn't play what's showing. Try selecting something in the console.")
-
-        # ── What's playing ─────────────────────────────────────────────────
-        elif iname == 'WhatsPlayingIntent':
-            state = read_np_state()
-            if not state or not state.get('track'):
-                return alexa_speak("Nothing is currently playing.")
-            track  = state.get('track', 'Unknown')
-            artist = state.get('artist', '')
-            album  = state.get('album', '')
-            src = state.get('sourceLabel') or state.get('playlist') or state.get('context')
-            msg = f"You're listening to {track}"
-            if artist:
-                msg += f" by {artist}"
-            if album:
-                msg += f" from the album {album}"
-            if src:
-                msg += f" from {src}"
-            return alexa_speak(msg + ".", end_session=False)
-
-        # ── Add current track to playlist ──────────────────────────────────
-        elif iname == 'AddToPlaylistIntent':
-            playlist_q = sv('PlaylistName')
-            state = read_np_state() or {}
-            current_path = state.get('filepath')
-            if not current_path or not os.path.isfile(current_path):
-                return alexa_speak("Nothing is currently playing to add.")
-            if not playlist_q:
-                return alexa_speak("Which playlist would you like to add this to?", end_session=False)
-            name, source = fuzzy_find_playlist(playlist_q)
-            if not name or not source:
-                return alexa_speak(f"I couldn't find a playlist called {playlist_q}.")
-            track_name = state.get('track', 'the current track')
-            # Two-way sync: if this is a Plex-sourced playlist, write the add
-            # back to Plex (authoritative). Always also append to the local .m3u
-            # for instant reflection in the UI; the next Plex sync run dedupes
-            # by rebuilding the .m3u from Plex.
-            plex_ok = False
-            try:
-                import plex_client
-                pl_rk = plex_client.playlist_ratingkey_from_source(source)
-                if pl_rk:
-                    plex_ok = plex_client.add_track_to_playlist(pl_rk, current_path)
-            except Exception as e:
-                print(f'AddToPlaylist Plex write-back error: {e}', flush=True)
-            added = False
-            try:
-                added = _append_m3u_track(source, current_path)
-                if added:
-                    tree = _load_playlists_tree()
-                    root = tree.getroot()
-                    src_norm = os.path.normpath(source)
-                    for entry in root.findall('Entry'):
-                        key = entry.find('Key')
-                        if key is None:
-                            continue
-                        if os.path.normpath(xml_text(key, 'SourceID') or '') != src_norm:
-                            continue
-                        tc = key.find('TrackCount')
-                        count = int((tc.text if tc is not None else '0') or 0) + 1
-                        if tc is None:
-                            tc = ET.SubElement(key, 'TrackCount')
-                        tc.text = str(count)
-                        _save_playlists_tree(tree)
-                        break
-            except Exception as e:
-                print(f'AddToPlaylist error: {e}', flush=True)
-                if not plex_ok and not added:
-                    return alexa_speak(f"Sorry, I couldn't add to {name}.")
-            if not added and not plex_ok:
-                return alexa_speak(f"That track is already in {name}.")
-            return alexa_speak(f"Added {track_name} to {name}.")
-
-        # ── Skip / Back (one-shot transport, collision-safe) ────────────────
-        elif iname == 'SkipIntent':
-            return _np_skip_next()
-
-        elif iname == 'BackIntent':
-            return _np_skip_previous()
-
-        # ── Sleep timer / stop after N songs ────────────────────────────────
-        elif iname == 'SleepTimerIntent':
-            raw = (slots.get('minutes', {}).get('value') or '').strip()
-            try:
-                minutes = int(raw)
-            except ValueError:
-                minutes = 0
-            if minutes <= 0:
-                return _np_arm_sleep(minutes=None)  # cancel
-            return _np_arm_sleep(minutes=minutes)
-
-        elif iname == 'StopAfterIntent':
-            raw = (slots.get('count', {}).get('value') or '').strip()
-            try:
-                count = int(raw)
-            except ValueError:
-                count = 1
-            return _np_arm_sleep(songs=max(1, count))
-
-        # ── Ignore/skip current song ───────────────────────────────────────
-        elif iname == 'IgnoreSongIntent':
-            state = read_np_state() or {}
-            current_path = state.get('filepath')
-            token = state.get('token', '')
-            data  = decode_token(token) or {}
-            tracks = data.get('tracks', [])
-            idx    = data.get('idx', 0)
-            if current_path:
-                add_ignored(current_path)
-            next_idx = idx + 1
-            blocked = _np_queue_limit_reached(data, next_idx)
-            if blocked:
-                return blocked
-            if next_idx < len(tracks):
-                next_path  = tracks[next_idx]
-                next_token = encode_token({**data, 'idx': next_idx})
-                return _np_play_path(next_path, next_token, speech="OK, skipping that song.")
-            return alexa_speak("Song ignored. There are no more tracks.")
-
-        # ── Server management ──────────────────────────────────────────────
-        elif iname == 'ListServersIntent':
-            return alexa_speak("You have one server: Bock Media.", end_session=False)
-
-        elif iname == 'SwitchServersIntent':
+        try:
+            return _alexa_intent_request(req)
+        except Exception as ex:
+            import traceback
+            print(f'[ALEXA INTENT ERROR] {ex}\n{traceback.format_exc()}', flush=True)
             return alexa_speak(
-                "You only have one server configured: Bock Media. "
-                "Add additional servers in the Bock Media console to switch between them.",
-                end_session=False
+                'Sorry, something went wrong. Please try again.',
+                end_session=True,
             )
-
-        elif iname == 'CurrentServerIntent':
-            return alexa_speak("Your current server is Bock Media.", end_session=False)
-
-        elif iname == 'ListInvitationsIntent':
-            return alexa_speak(
-                "Family share invitations are managed in the Bock Media console under Settings.",
-                end_session=False
-            )
-
-        # ── Stop / Cancel ──────────────────────────────────────────────────
-        elif iname in ('AMAZON.StopIntent', 'AMAZON.CancelIntent'):
-            # Stop = device goes home. Clear the row so it doesn't linger in
-            # Now Playing (pause keeps the row; stop removes it).
-            remove_np_state()
-            return alexa_stop()
-
-        # ── Pause ──────────────────────────────────────────────────────────
-        elif iname == 'AMAZON.PauseIntent':
-            return _np_pause_playback()
-
-        # ── Resume ─────────────────────────────────────────────────────────
-        elif iname == 'AMAZON.ResumeIntent':
-            return _np_resume_playback()
-
-        # ── Next ───────────────────────────────────────────────────────────
-        elif iname == 'AMAZON.NextIntent':
-            return _np_skip_next()
-
-        # ── Previous ───────────────────────────────────────────────────────
-        elif iname == 'AMAZON.PreviousIntent':
-            return _np_skip_previous()
-
-        # ── Loop ───────────────────────────────────────────────────────────
-        elif iname == 'AMAZON.LoopOnIntent':
-            state = read_np_state() or {}
-            if state.get('token'):
-                data = decode_token(state['token']) or {}
-                _update_queue_flags(data.get('qid'), loop=True)
-            return alexa_speak("Loop mode on.")
-
-        elif iname == 'AMAZON.LoopOffIntent':
-            state = read_np_state() or {}
-            if state.get('token'):
-                data = decode_token(state['token']) or {}
-                _update_queue_flags(data.get('qid'), loop=False)
-            return alexa_speak("Loop mode off.")
-
-        # ── Shuffle (built-in Alexa intents as aliases) ────────────────────
-        elif iname == 'AMAZON.ShuffleOnIntent':
-            state = read_np_state() or {}
-            token = state.get('token', '')
-            if token:
-                data = decode_token(token) or {}
-                # Reshuffle remaining tracks from current position and persist
-                idx = data.get('idx', 0)
-                remaining = data.get('tracks', [])[idx:]
-                random.shuffle(remaining)
-                new_tracks = data.get('tracks', [])[:idx] + remaining
-                _update_queue_flags(data.get('qid'), shuffle=True, tracks=new_tracks)
-                return alexa_speak("Shuffle on.")
-            return alexa_speak("Nothing is playing to shuffle.")
-
-        elif iname == 'AMAZON.ShuffleOffIntent':
-            state = read_np_state() or {}
-            if state.get('token'):
-                data = decode_token(state['token']) or {}
-                _update_queue_flags(data.get('qid'), shuffle=False)
-            return alexa_speak("Shuffle off.")
-
-        # ── Help ───────────────────────────────────────────────────────────
-        elif iname == 'AMAZON.HelpIntent':
-            return alexa_speak(
-                "You can say: play my Yacht Rock playlist, play the album Rumours, "
-                "play music by Dave Matthews, play the song Hotel California, "
-                "play jazz music, or mix the album Kind of Blue. "
-                "Tip: say mix instead of shuffle to avoid Spotify or Amazon Music "
-                "intercepting your request. Or open Bock Media first, then say the playlist name. "
-                "You can also say: what's playing, next, previous, pause, resume, or stop.",
-                end_session=False
-            )
-
-        return alexa_speak("I didn't understand that. Try saying play followed by a playlist, artist, or album name.")
 
     return alexa_speak(
         "Sorry, I couldn't process that Alexa request. Please try again.",
         end_session=True
     )
+
+
+def _alexa_intent_request(req):
+    intent = req.get('intent', {})
+    iname  = intent.get('name', '')
+    slots  = intent.get('slots', {})
+    def sv(name): return normalize_spoken_value((slots.get(name, {}).get('value') or '').strip())
+    print(f'[ALEXA DEBUG] intent={iname} slots={json.dumps({k: slots[k].get("value") for k in slots})}', flush=True)
+
+    # ── Play playlist ──────────────────────────────────────────────────
+    if iname == 'PlayPlaylistIntent':
+        query = sv('PlaylistName')
+        if not query:
+            return alexa_speak("Which playlist would you like to play?", end_session=False)
+        token_entry = _play_playlist_token_from_query(query)
+        if token_entry:
+            return _start_playlist_token_entry(token_entry)
+        token_entry = _play_file_token_from_query(query)
+        if token_entry and os.path.isfile(token_entry['path']):
+            label = token_entry['title']
+            if token_entry.get('artist'):
+                label = f"{label} by {token_entry['artist']}"
+            return start_playing([token_entry['path']], speech=f"Playing {label}.",
+                                context=f'Song · {label}')
+        if re.search(r'\bby\b', query, re.I) or re.match(r'^(?:the\s+)?(?:song|track)\s+', query, re.I):
+            recovered = _try_play_misrouted_song(query)
+            if recovered:
+                tracks, label = recovered
+                return start_playing(tracks, speech=f"Playing {label}.", context=f'Song · {label}')
+        entry = best_playlist_entry(query)
+        name = entry[1] if entry else None
+        source = entry[2] if entry else None
+        pid = entry[0] if entry else None
+        print(f'[ALEXA DEBUG] PlayPlaylistIntent query={repr(query)} -> name={repr(name)} source={repr(source)}', flush=True)
+        if not name:
+            if 'token' in query.lower():
+                return alexa_speak("Sorry, that play request expired. Please try again from the app.")
+            recovered = _try_play_misrouted_song(query)
+            if recovered:
+                tracks, label = recovered
+                return start_playing(tracks, speech=f"Playing {label}.", context=f'Song · {label}')
+            return alexa_speak(f"Sorry, I couldn't find a playlist called {query}.")
+        return start_playing(None, speech=f"Playing {name}.",
+                            playlist=name, playlist_id=pid, source=source)
+
+    # ── Shuffle playlist ───────────────────────────────────────────────
+    elif iname == 'ShufflePlaylistIntent':
+        query = sv('PlaylistName')
+        if not query:
+            return alexa_speak("Which playlist would you like to shuffle?", end_session=False)
+        token_entry = _play_playlist_token_from_query(query)
+        if token_entry:
+            return _start_playlist_token_entry(token_entry, shuffle=True)
+        entry = best_playlist_entry(query)
+        name = entry[1] if entry else None
+        source = entry[2] if entry else None
+        pid = entry[0] if entry else None
+        print(f'[ALEXA DEBUG] ShufflePlaylistIntent query={repr(query)} -> name={repr(name)} source={repr(source)}', flush=True)
+        if not name:
+            return alexa_speak(f"Sorry, I couldn't find a playlist called {query}.")
+        return start_playing(None, shuffle=True, speech=f"Shuffling {name}.",
+                            playlist=name, playlist_id=pid, source=source)
+
+    # ── Play artist ────────────────────────────────────────────────────
+    elif iname == 'PlayArtistIntent':
+        query = sv('ArtistName')
+        if not query:
+            return alexa_speak("Which artist would you like to play?", end_session=False)
+        token_resp = _try_ui_token_play(query)
+        if token_resp:
+            return token_resp
+        if 'playlist' in query.lower():
+            pl_q = re.sub(r'\s+playlist$', '', query, flags=re.IGNORECASE).strip()
+            pl_q = re.sub(r'^(?:play\s+)?(?:my\s+)?(?:the\s+)?playlist\s+', '', pl_q, flags=re.IGNORECASE).strip() or query
+            entry = best_playlist_entry(pl_q)
+            if entry and entry[2] and os.path.isfile(entry[2]):
+                tracks = parse_m3u(entry[2])
+                if tracks:
+                    return start_playing(tracks, speech=f"Playing {entry[1]}.",
+                                        playlist=entry[1], playlist_id=entry[0])
+        artist = fuzzy_find_artist(query)
+        if not artist:
+            return alexa_speak(f"Sorry, I couldn't find any music by {query}.")
+        rows = db_query(
+            "SELECT path FROM songs_cache WHERE artist = ? AND path IS NOT NULL "
+            "AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac') ORDER BY RANDOM() LIMIT 300",
+            [artist]
+        )
+        tracks = [r['path'] for r in rows]
+        if not tracks:
+            return alexa_speak(f"I found {artist} but no playable files.")
+        return start_playing(tracks, shuffle=True, speech=f"Playing music by {artist}.",
+                            context=f'Artist · {artist}')
+
+    # ── Shuffle artist ─────────────────────────────────────────────────
+    elif iname == 'ShuffleArtistIntent':
+        query = sv('ArtistName')
+        if not query:
+            return alexa_speak("Which artist would you like to shuffle?", end_session=False)
+        token_entry = _play_playlist_token_from_query(query)
+        if token_entry:
+            return _start_playlist_token_entry(token_entry, shuffle=True)
+        if 'playlist' in query.lower():
+            pl_q = re.sub(r'\s+playlist$', '', query, flags=re.IGNORECASE).strip()
+            pl_q = re.sub(r'^(?:shuffle\s+)?(?:play\s+)?(?:my\s+)?(?:the\s+)?playlist\s+', '', pl_q, flags=re.IGNORECASE).strip() or query
+            entry = best_playlist_entry(pl_q)
+            if entry and entry[2] and os.path.isfile(entry[2]):
+                tracks = parse_m3u(entry[2])
+                if tracks:
+                    return start_playing(tracks, shuffle=True, speech=f"Shuffling {entry[1]}.",
+                                        playlist=entry[1], playlist_id=entry[0])
+        artist = fuzzy_find_artist(query)
+        if not artist:
+            return alexa_speak(f"Sorry, I couldn't find any music by {query}.")
+        rows = db_query(
+            "SELECT path FROM songs_cache WHERE artist = ? AND path IS NOT NULL "
+            "AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac') ORDER BY RANDOM() LIMIT 300",
+            [artist]
+        )
+        tracks = [r['path'] for r in rows]
+        if not tracks:
+            return alexa_speak(f"I found {artist} but no playable files.")
+        return start_playing(tracks, shuffle=True, speech=f"Shuffling music by {artist}.",
+                            context=f'Artist · {artist}')
+
+    # ── Play album ─────────────────────────────────────────────────────
+    elif iname == 'PlayAlbumIntent':
+        query = sv('AlbumName')
+        if not query:
+            return alexa_speak("Which album would you like to play?", end_session=False)
+        token_resp = _try_ui_token_play(query)
+        if token_resp:
+            return token_resp
+        if 'playlist' in query.lower():
+            pl_q = re.sub(r'\s+playlist$', '', query, flags=re.IGNORECASE).strip()
+            pl_q = re.sub(
+                r'^(?:play\s+)?(?:my\s+)?(?:the\s+)?playlist\s+',
+                '', pl_q, flags=re.IGNORECASE,
+            ).strip() or query
+            entry = best_playlist_entry(pl_q)
+            if entry and entry[2] and os.path.isfile(entry[2]):
+                tracks = parse_m3u(entry[2])
+                if tracks:
+                    return start_playing(tracks, speech=f"Playing {entry[1]}.",
+                                        playlist=entry[1], playlist_id=entry[0])
+        album = fuzzy_find_album(query)
+        if album:
+            tracks = _album_tracks_for_play(album, shuffle=False)
+            if tracks:
+                return start_playing(tracks, speech=f"Playing the album {album}.",
+                                    context=f'Album · {album}')
+        playlist_resp = _play_named_playlist_if_strong_match(query, shuffle=False)
+        if playlist_resp:
+            return playlist_resp
+        if not album:
+            return alexa_speak(f"Sorry, I couldn't find the album {query}.")
+        return alexa_speak(f"I found {album} but no playable files.")
+
+    # ── Shuffle album ──────────────────────────────────────────────────
+    elif iname == 'ShuffleAlbumIntent':
+        query = sv('AlbumName')
+        if not query:
+            return alexa_speak("Which album would you like to shuffle?", end_session=False)
+        token_resp = _try_ui_token_play(query, shuffle=True)
+        if token_resp:
+            return token_resp
+        album = fuzzy_find_album(query)
+        if album:
+            tracks = _album_tracks_for_play(album, shuffle=True)
+            if tracks:
+                return start_playing(tracks, shuffle=True, speech=f"Shuffling the album {album}.",
+                                    context=f'Album · {album}')
+        playlist_resp = _play_named_playlist_if_strong_match(query, shuffle=True)
+        if playlist_resp:
+            return playlist_resp
+        if not album:
+            return alexa_speak(f"Sorry, I couldn't find the album {query}.")
+        return alexa_speak(f"I found {album} but no playable files.")
+
+    # ── Play file by UI token (exact path, no fuzzy match) ─────────────
+    elif iname == 'PlayFileTokenIntent':
+        try:
+            token_raw = sv('FileToken')
+            pl_entry = _consume_play_playlist_token(token_raw)
+            if pl_entry:
+                if pl_entry.get('kind') == 'album':
+                    return _start_album_token_entry(pl_entry)
+                return _start_playlist_token_entry(pl_entry)
+            entry = _consume_play_file_token(token_raw)
+            if entry and entry.get('path') and os.path.isfile(entry['path']):
+                label = entry['title']
+                if entry.get('artist'):
+                    label = f"{label} by {entry['artist']}"
+                return start_playing([entry['path']], speech=f"Playing {label}.",
+                                    context=f'Song · {label}')
+            return alexa_speak(
+                "Sorry, that play link expired or was not found. "
+                "Try playing again from the Bock Media app.",
+            )
+        except Exception as ex:
+            import traceback
+            print(f'[ALEXA] PlayFileTokenIntent failed: {ex}\n{traceback.format_exc()}', flush=True)
+            return alexa_speak(
+                "Sorry, I couldn't start playback. Check the Bock Media server logs.",
+            )
+
+    # ── Play specific track ────────────────────────────────────────────
+    elif iname == 'PlayTrackIntent':
+        query = sv('TrackName')
+        if not query:
+            return alexa_speak("Which track would you like to play?", end_session=False)
+
+        # Recovery path: some devices/tests can misroute "play ... playlist"
+        # utterances into PlayTrackIntent with invocation text in TrackName.
+        q = query.strip()
+        q_lower = q.lower()
+        if 'playlist' in q_lower:
+            pl_q = re.sub(r'^(?:play\s+)?(?:my\s+)?(?:the\s+)?playlist\s+', '', q, flags=re.IGNORECASE).strip()
+            pl_q = re.sub(r'\s+playlist$', '', pl_q, flags=re.IGNORECASE).strip()
+            if not pl_q:
+                pl_q = q
+            entry = best_playlist_entry(pl_q)
+            if entry and entry[2] and os.path.isfile(entry[2]):
+                tracks = parse_m3u(entry[2])
+                if tracks:
+                    return start_playing(tracks, speech=f"Playing {entry[1]}.",
+                                        playlist=entry[1], playlist_id=entry[0])
+
+        tracks = fuzzy_find_track(query)
+        if not tracks:
+            return alexa_speak(f"Sorry, I couldn't find a track called {query}.")
+        return start_playing(tracks, speech=f"Playing {query}.", context=f'Song · {query}')
+
+    # ── Play track by artist ───────────────────────────────────────────
+    elif iname == 'PlayTrackByArtistIntent':
+        track_q  = sv('TrackName')
+        artist_q = sv('ArtistName')
+        if not track_q:
+            return alexa_speak("Which song would you like to play?", end_session=False)
+        tracks = fuzzy_find_track(track_q, artist_q or None)
+        if not tracks:
+            msg = f"{track_q} by {artist_q}" if artist_q else track_q
+            return alexa_speak(f"Sorry, I couldn't find {msg}.")
+        label = f"{track_q} by {artist_q}" if artist_q else track_q
+        return start_playing(tracks, speech=f"Playing {label}.", context=f'Song · {label}')
+
+    # ── Play genre ─────────────────────────────────────────────────────
+    elif iname == 'PlayGenreIntent':
+        query = sv('Genre')
+        if not query:
+            return alexa_speak("Which genre would you like to play?", end_session=False)
+        genre = fuzzy_find_genre(query)
+        if genre:
+            rows = db_query(
+                "SELECT path FROM songs_cache WHERE genre = ? AND path IS NOT NULL "
+                "AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac') ORDER BY RANDOM() LIMIT 300",
+                [genre]
+            )
+            tracks = [r['path'] for r in rows]
+            if tracks:
+                return start_playing(tracks, shuffle=True, speech=f"Playing {genre} music.",
+                                    context=f'Genre · {genre}')
+        entry = best_playlist_entry(query)
+        if entry and entry[2] and os.path.isfile(entry[2]):
+            tracks = parse_m3u(entry[2])
+            if tracks:
+                return start_playing(tracks, shuffle=True, speech=f"Playing {entry[1]}.",
+                                    playlist=entry[1], playlist_id=entry[0])
+        return alexa_speak(f"Sorry, I couldn't find music in the genre {query}.")
+
+    # ── Shuffle genre ──────────────────────────────────────────────────
+    elif iname == 'ShuffleGenreIntent':
+        query = sv('Genre')
+        if not query:
+            return alexa_speak("Which genre would you like to shuffle?", end_session=False)
+        genre = fuzzy_find_genre(query)
+        if genre:
+            rows = db_query(
+                "SELECT path FROM songs_cache WHERE genre = ? AND path IS NOT NULL "
+                "AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac') ORDER BY RANDOM() LIMIT 300",
+                [genre]
+            )
+            tracks = [r['path'] for r in rows]
+            if tracks:
+                return start_playing(tracks, shuffle=True, speech=f"Shuffling {genre} music.",
+                                    context=f'Genre · {genre}')
+        entry = best_playlist_entry(query)
+        if entry and entry[2] and os.path.isfile(entry[2]):
+            tracks = parse_m3u(entry[2])
+            if tracks:
+                return start_playing(tracks, shuffle=True, speech=f"Shuffling {entry[1]}.",
+                                    playlist=entry[1], playlist_id=entry[0])
+        return alexa_speak(f"Sorry, I couldn't find music in the genre {query}.")
+
+    # ── General "play X" — tries playlist → artist → album → track ────
+    elif iname == 'PlayGeneralIntent':
+        query = sv('Query')
+        if not query:
+            return alexa_speak("What would you like to play?", end_session=False)
+        tracks, speech, do_shuffle, meta = general_search_tracks(query)
+        if not tracks:
+            return alexa_speak(f"Sorry, I couldn't find anything matching {query}.")
+        return start_playing(tracks, shuffle=do_shuffle, speech=speech, **meta)
+
+    # ── Read audio book ────────────────────────────────────────────────
+    elif iname == 'ReadBookIntent':
+        query = sv('BookName')
+        if not query:
+            return alexa_speak("Which audio book would you like to hear?", end_session=False)
+        name, source = fuzzy_find_playlist(query)
+        if not name or not source or not os.path.isfile(source):
+            # Fall back to searching by album name
+            album = fuzzy_find_album(query)
+            if album:
+                rows = db_query(
+                    "SELECT path FROM songs_cache WHERE album = ? AND path IS NOT NULL "
+                    "AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac') ORDER BY CAST(track_number AS INTEGER), title LIMIT 100",
+                    [album]
+                )
+                tracks = [r['path'] for r in rows]
+                if tracks:
+                    return start_playing(tracks, speech=f"Reading {album}.",
+                                        context=f'Audiobook · {album}')
+            return alexa_speak(f"Sorry, I couldn't find an audio book called {query}.")
+        tracks = parse_m3u(source)
+        if not tracks:
+            return alexa_speak(f"The book {name} has no playable tracks.")
+        entry = best_playlist_entry(query)
+        pid = entry[0] if entry else None
+        return start_playing(tracks, speech=f"Reading {name}.",
+                            playlist=name, playlist_id=pid, context=f'Audiobook · {name}')
+
+    # ── Play current selection (set via web UI) ────────────────────────
+    elif iname == 'PlayCurrentIntent':
+        sel = read_selected()
+        if not sel:
+            return alexa_speak(
+                "Nothing is currently selected in the console. "
+                "Open the Bock Media web app and browse to a song, album, or artist first."
+            )
+        sel_type = sel.get('type', '')
+        query    = sel.get('name', '')
+        if sel_type == 'track':
+            path = sel.get('path', '')
+            if path and os.path.isfile(path):
+                return start_playing([path], speech=f"Playing {query}.", context=f'Song · {query}')
+        elif sel_type == 'album':
+            rows = db_query(
+                "SELECT path FROM songs_cache WHERE album = ? AND path IS NOT NULL "
+                "AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac') ORDER BY CAST(track_number AS INTEGER), title LIMIT 50",
+                [query]
+            )
+            tracks = [r['path'] for r in rows]
+            if tracks:
+                return start_playing(tracks, speech=f"Playing the album {query}.",
+                                    context=f'Album · {query}')
+        elif sel_type == 'artist':
+            rows = db_query(
+                "SELECT path FROM songs_cache WHERE artist = ? AND path IS NOT NULL "
+                "AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac') ORDER BY RANDOM() LIMIT 300",
+                [query]
+            )
+            tracks = [r['path'] for r in rows]
+            if tracks:
+                return start_playing(tracks, shuffle=True, speech=f"Playing music by {query}.",
+                                    context=f'Artist · {query}')
+        elif sel_type == 'playlist':
+            source = sel.get('source', '')
+            if source and os.path.isfile(source):
+                tracks = parse_m3u(source)
+                if tracks:
+                    return start_playing(tracks, speech=f"Playing {query}.",
+                                        playlist=query, playlist_id=sel.get('id'))
+        return alexa_speak(f"I couldn't play what's showing. Try selecting something in the console.")
+
+    # ── What's playing ─────────────────────────────────────────────────
+    elif iname == 'WhatsPlayingIntent':
+        state = read_np_state()
+        if not state or not state.get('track'):
+            return alexa_speak("Nothing is currently playing.")
+        track  = state.get('track', 'Unknown')
+        artist = state.get('artist', '')
+        album  = state.get('album', '')
+        src = state.get('sourceLabel') or state.get('playlist') or state.get('context')
+        msg = f"You're listening to {track}"
+        if artist:
+            msg += f" by {artist}"
+        if album:
+            msg += f" from the album {album}"
+        if src:
+            msg += f" from {src}"
+        return alexa_speak(msg + ".", end_session=False)
+
+    # ── Add current track to playlist ──────────────────────────────────
+    elif iname == 'AddToPlaylistIntent':
+        playlist_q = sv('PlaylistName')
+        state = read_np_state() or {}
+        current_path = state.get('filepath')
+        if not current_path or not os.path.isfile(current_path):
+            return alexa_speak("Nothing is currently playing to add.")
+        if not playlist_q:
+            return alexa_speak("Which playlist would you like to add this to?", end_session=False)
+        name, source = fuzzy_find_playlist(playlist_q)
+        if not name or not source:
+            return alexa_speak(f"I couldn't find a playlist called {playlist_q}.")
+        track_name = state.get('track', 'the current track')
+        # Two-way sync: if this is a Plex-sourced playlist, write the add
+        # back to Plex (authoritative). Always also append to the local .m3u
+        # for instant reflection in the UI; the next Plex sync run dedupes
+        # by rebuilding the .m3u from Plex.
+        plex_ok = False
+        try:
+            import plex_client
+            pl_rk = plex_client.playlist_ratingkey_from_source(source)
+            if pl_rk:
+                plex_ok = plex_client.add_track_to_playlist(pl_rk, current_path)
+        except Exception as e:
+            print(f'AddToPlaylist Plex write-back error: {e}', flush=True)
+        added = False
+        try:
+            added = _append_m3u_track(source, current_path)
+            if added:
+                tree = _load_playlists_tree()
+                root = tree.getroot()
+                src_norm = os.path.normpath(source)
+                for entry in root.findall('Entry'):
+                    key = entry.find('Key')
+                    if key is None:
+                        continue
+                    if os.path.normpath(xml_text(key, 'SourceID') or '') != src_norm:
+                        continue
+                    tc = key.find('TrackCount')
+                    count = int((tc.text if tc is not None else '0') or 0) + 1
+                    if tc is None:
+                        tc = ET.SubElement(key, 'TrackCount')
+                    tc.text = str(count)
+                    _save_playlists_tree(tree)
+                    break
+        except Exception as e:
+            print(f'AddToPlaylist error: {e}', flush=True)
+            if not plex_ok and not added:
+                return alexa_speak(f"Sorry, I couldn't add to {name}.")
+        if not added and not plex_ok:
+            return alexa_speak(f"That track is already in {name}.")
+        return alexa_speak(f"Added {track_name} to {name}.")
+
+    # ── Skip / Back (one-shot transport, collision-safe) ────────────────
+    elif iname == 'SkipIntent':
+        return _np_skip_next()
+
+    elif iname == 'BackIntent':
+        return _np_skip_previous()
+
+    # ── Sleep timer / stop after N songs ────────────────────────────────
+    elif iname == 'SleepTimerIntent':
+        raw = (slots.get('minutes', {}).get('value') or '').strip()
+        try:
+            minutes = int(raw)
+        except ValueError:
+            minutes = 0
+        if minutes <= 0:
+            return _np_arm_sleep(minutes=None)  # cancel
+        return _np_arm_sleep(minutes=minutes)
+
+    elif iname == 'StopAfterIntent':
+        raw = (slots.get('count', {}).get('value') or '').strip()
+        try:
+            count = int(raw)
+        except ValueError:
+            count = 1
+        return _np_arm_sleep(songs=max(1, count))
+
+    # ── Ignore/skip current song ───────────────────────────────────────
+    elif iname == 'IgnoreSongIntent':
+        state = read_np_state() or {}
+        current_path = state.get('filepath')
+        token = state.get('token', '')
+        data  = decode_token(token) or {}
+        tracks = data.get('tracks', [])
+        idx    = data.get('idx', 0)
+        if current_path:
+            add_ignored(current_path)
+        next_idx = idx + 1
+        blocked = _np_queue_limit_reached(data, next_idx)
+        if blocked:
+            return blocked
+        if next_idx < len(tracks):
+            next_path  = tracks[next_idx]
+            next_token = encode_token({**data, 'idx': next_idx})
+            return _np_play_path(next_path, next_token, speech="OK, skipping that song.")
+        return alexa_speak("Song ignored. There are no more tracks.")
+
+    # ── Server management ──────────────────────────────────────────────
+    elif iname == 'ListServersIntent':
+        return alexa_speak("You have one server: Bock Media.", end_session=False)
+
+    elif iname == 'SwitchServersIntent':
+        return alexa_speak(
+            "You only have one server configured: Bock Media. "
+            "Add additional servers in the Bock Media console to switch between them.",
+            end_session=False
+        )
+
+    elif iname == 'CurrentServerIntent':
+        return alexa_speak("Your current server is Bock Media.", end_session=False)
+
+    elif iname == 'ListInvitationsIntent':
+        return alexa_speak(
+            "Family share invitations are managed in the Bock Media console under Settings.",
+            end_session=False
+        )
+
+    # ── Stop / Cancel ──────────────────────────────────────────────────
+    elif iname in ('AMAZON.StopIntent', 'AMAZON.CancelIntent'):
+        # Stop = device goes home. Clear the row so it doesn't linger in
+        # Now Playing (pause keeps the row; stop removes it).
+        remove_np_state()
+        return alexa_stop()
+
+    # ── Pause ──────────────────────────────────────────────────────────
+    elif iname == 'AMAZON.PauseIntent':
+        return _np_pause_playback()
+
+    # ── Resume ─────────────────────────────────────────────────────────
+    elif iname == 'AMAZON.ResumeIntent':
+        return _np_resume_playback()
+
+    # ── Next ───────────────────────────────────────────────────────────
+    elif iname == 'AMAZON.NextIntent':
+        return _np_skip_next()
+
+    # ── Previous ───────────────────────────────────────────────────────
+    elif iname == 'AMAZON.PreviousIntent':
+        return _np_skip_previous()
+
+    # ── Loop ───────────────────────────────────────────────────────────
+    elif iname == 'AMAZON.LoopOnIntent':
+        state = read_np_state() or {}
+        if state.get('token'):
+            data = decode_token(state['token']) or {}
+            _update_queue_flags(data.get('qid'), loop=True)
+        return alexa_speak("Loop mode on.")
+
+    elif iname == 'AMAZON.LoopOffIntent':
+        state = read_np_state() or {}
+        if state.get('token'):
+            data = decode_token(state['token']) or {}
+            _update_queue_flags(data.get('qid'), loop=False)
+        return alexa_speak("Loop mode off.")
+
+    # ── Shuffle (built-in Alexa intents as aliases) ────────────────────
+    elif iname == 'AMAZON.ShuffleOnIntent':
+        state = read_np_state() or {}
+        token = state.get('token', '')
+        if token:
+            data = decode_token(token) or {}
+            # Reshuffle remaining tracks from current position and persist
+            idx = data.get('idx', 0)
+            remaining = data.get('tracks', [])[idx:]
+            random.shuffle(remaining)
+            new_tracks = data.get('tracks', [])[:idx] + remaining
+            _update_queue_flags(data.get('qid'), shuffle=True, tracks=new_tracks)
+            return alexa_speak("Shuffle on.")
+        return alexa_speak("Nothing is playing to shuffle.")
+
+    elif iname == 'AMAZON.ShuffleOffIntent':
+        state = read_np_state() or {}
+        if state.get('token'):
+            data = decode_token(state['token']) or {}
+            _update_queue_flags(data.get('qid'), shuffle=False)
+        return alexa_speak("Shuffle off.")
+
+    # ── Help ───────────────────────────────────────────────────────────
+    elif iname == 'AMAZON.HelpIntent':
+        return alexa_speak(
+            "You can say: play my Yacht Rock playlist, play the album Rumours, "
+            "play music by Dave Matthews, play the song Hotel California, "
+            "play jazz music, or mix the album Kind of Blue. "
+            "Tip: say mix instead of shuffle to avoid Spotify or Amazon Music "
+            "intercepting your request. Or open Bock Media first, then say the playlist name. "
+            "You can also say: what's playing, next, previous, pause, resume, or stop.",
+            end_session=False
+        )
+
+    return alexa_speak("I didn't understand that. Try saying play followed by a playlist, artist, or album name.")
+
 
 # ── Run ──────────────────────────────────────────────────────────────────────
 

@@ -2121,14 +2121,18 @@ function renderPlayerBar() {
 }
 
 async function refreshCurrentTrack() {
-  const [data, remote] = await Promise.all([
-    API('/api/nowplaying_devices'),
-    ensureAlexaRemoteStatus().catch(() => ({})),
-  ]);
-  window._npItems = (data && data.items) || [];
-  window._npControlsAvailable = !!(data && data.controlsAvailable) && !!(remote && remote.configured);
-  if (window._npControlsAvailable && window._npItems.length) {
-    await ensureAlexaDevices().catch(() => []);
+  try {
+    const [data, remote] = await Promise.all([
+      API('/api/nowplaying_devices'),
+      ensureAlexaRemoteStatus().catch(() => ({})),
+    ]);
+    window._npItems = (data && data.items) || [];
+    window._npControlsAvailable = !!(data && data.controlsAvailable) && !!(remote && remote.configured);
+    if (window._npControlsAvailable && window._npItems.length) {
+      await ensureAlexaDevices().catch(() => []);
+    }
+  } catch (_e) {
+    // Keep the last good snapshot when a poll fails briefly.
   }
   renderPlayerBar();
   const card = document.getElementById('np-current-card');
@@ -3792,12 +3796,15 @@ async function playOnDevice(opts) {
     };
   }
   syncPinBtn();
-  overlay.querySelector('#play-go').onclick = async () => {
+    overlay.querySelector('#play-go').onclick = async () => {
     const device = overlay.querySelector('#play-device').value;
     const shuffleEl = overlay.querySelector('#play-shuffle');
     const shuffle = shuffleEl ? shuffleEl.checked : false;
     const btn = overlay.querySelector('#play-go');
     btn.disabled = true; btn.textContent = 'Sending…';
+    if (typeof WebPlayback !== 'undefined' && WebPlayback.active) {
+      WebPlayback.stop();
+    }
     const res = await fetch('/api/alexa_remote/play', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

@@ -250,6 +250,29 @@ class TestAudioPlayerEvents:
         if d:
             assert d['playBehavior'] == 'REPLACE_ALL'
 
+    def test_failed_honors_stop_after(self, post_alexa, sample_track):
+        token = server.encode_token({
+            'tracks': [sample_track['path'], sample_track['path']],
+            'idx': 0,
+            'stopAfterIdx': 0,
+        })
+        resp = post_alexa('AudioPlayer.PlaybackFailed', token=token,
+                          error={'type': 'MEDIA_ERROR', 'message': 'x'})
+        assert _audio_play(resp) is None
+
+    def test_intent_exception_returns_valid_response(self, client, monkeypatch):
+        def boom(_req):
+            raise ValueError('bad slot')
+        monkeypatch.setattr(server, '_alexa_intent_request', boom)
+        body = {
+            'version': '1.0',
+            'context': {'System': {'device': {'deviceId': 'amzn1.ask.device.EXCEPT01'}}},
+            'request': {'type': 'IntentRequest', 'intent': {'name': 'PlayPlaylistIntent', 'slots': {}}},
+        }
+        rv = client.post('/alexa', data=json.dumps(body), content_type='application/json')
+        assert rv.status_code == 200
+        assert rv.get_json()['response']['outputSpeech']['type'] == 'PlainText'
+
     def test_default_device_id_not_registered(self, client, post_alexa):
         """requests without a real deviceId never auto-register a 'default' device"""
         # No deviceId → handler defaults to 'default', which must not be persisted.

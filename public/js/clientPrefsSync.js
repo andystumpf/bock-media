@@ -281,7 +281,7 @@
       const pinned = getPinnedDevices();
       if (pinned.length) prefs.pinnedDevices = pinned;
       const cont = getContinueAfterQueue();
-      if (cont && cont !== 'off') prefs.continueAfterQueue = cont;
+      if (cont) prefs.continueAfterQueue = cont;
       const engagement = exportEngagementJson();
       if (engagement) prefs.homeTileEngagement = engagement;
       const tab = getLibraryTab();
