@@ -1598,6 +1598,12 @@ function buildHealthCard(h, remote) {
   const stale = h.watchdogFresh === false
     ? `<span class="health-stale" title="Watchdog snapshot is stale or missing">watchdog ${fmtAgo(h.watchdogAgeSeconds)}</span>`
     : '';
+  const lanOpen = h.credentialsConfigured === false && h.allowOpenLanApi && h.allowOpenLanMedia;
+  const lanWarn = lanOpen
+    ? `<div class="health-stale" style="margin-top:10px;padding:8px 10px;border-radius:6px;background:#3d1f1f;color:#ffb4b4">
+        LAN is open — set a web password or mobile API token in Settings.
+      </div>`
+    : '';
   const needLogin = remote && remote.configured && remote.authenticated === false;
   const host = window.location.hostname || 'localhost';
   const loginBtn = needLogin
@@ -1613,7 +1619,7 @@ function buildHealthCard(h, remote) {
         <h3><i class="fa fa-heart-pulse"></i> Service Health</h3>
         <span class="health-meta">uptime ${fmtAgo(h.uptimeSeconds)} · last Alexa hit ${fmtAgo(h.lastAlexaHitAgo)} ${stale}</span>
       </div>
-      <div class="card-body health-chips">${chips}${loginBtn}</div>
+      <div class="card-body health-chips">${chips}${lanWarn}${loginBtn}</div>
     </div>`;
 }
 

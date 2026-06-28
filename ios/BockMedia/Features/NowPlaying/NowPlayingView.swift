@@ -446,12 +446,19 @@ private struct NowPlayingDevicePage: View {
     var onRoomQueue: (() -> Void)? = nil
     var onAddToRoom: (() -> Void)? = nil
 
+    @ObservedObject private var localPlayback = LocalPlaybackController.shared
     @State private var artURL: URL?
     @State private var artPath: String = ""
+    @State private var showLyrics = false
+    @State private var lyricsOffsetMs = 0
+    @State private var lyrics: LyricsResponse?
+    @State private var lyricsLoading = false
+    @State private var lyricsError: String?
 
     var body: some View {
         let progress = viewModel.progress(for: dev)
         let canControl = viewModel.canControl(dev)
+        let hasTrack = dev.filepath?.isEmpty == false
 
         ZStack {
             NowPlayingArtBackdrop(url: artURL)
@@ -459,8 +466,48 @@ private struct NowPlayingDevicePage: View {
             VStack(spacing: 0) {
                 Spacer(minLength: 8)
 
-                BockArtwork(url: artURL, size: 280, cornerRadius: 8)
-                    .shadow(color: .black.opacity(0.4), radius: 24, y: 12)
+                ZStack(alignment: .topTrailing) {
+                    Group {
+                        if showLyrics, hasTrack {
+                            TimelineView(.animation(minimumInterval: 0.2, paused: !showLyrics)) { _ in
+                                LyricsPanel(
+                                    lyrics: lyrics,
+                                    loading: lyricsLoading,
+                                    error: lyricsError,
+                                    positionMs: progress.elapsedMs,
+                                    offsetMs: lyricsOffsetMs,
+                                    onOffsetChange: { lyricsOffsetMs = $0 }
+                                )
+                            }
+                            .frame(width: 320, height: 320)
+                        } else {
+                            BockArtwork(url: artURL, size: 280, cornerRadius: 8)
+                                .shadow(color: .black.opacity(0.4), radius: 24, y: 12)
+                        }
+                    }
+                    if hasTrack {
+                        Button {
+                            if showLyrics {
+                                showLyrics = false
+                            } else {
+                                showLyrics = true
+                                if lyrics == nil || ((lyrics?.lines.isEmpty ?? true) && (lyrics?.plain.isEmpty ?? true)) {
+                                    lyricsError = "No lyrics found for this track"
+                                }
+                            }
+                        } label: {
+                            Label(showLyrics ? "Cover" : "Lyrics", systemImage: showLyrics ? "square.stack" : "text.quote")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                .background(Color.black.opacity(0.55))
+                                .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .padding(8)
+                    }
+                }
 
                 Spacer(minLength: 16)
 
@@ -622,6 +669,25 @@ private struct NowPlayingDevicePage: View {
                     .background(Color.black.opacity(0.95))
                 }
             }
+        }
+        .task(id: dev.filepath ?? "") {
+            showLyrics = false
+            lyricsOffsetMs = 0
+            lyricsError = nil
+            guard let path = dev.filepath, !path.isEmpty else {
+                lyrics = nil
+                return
+            }
+            lyricsLoading = true
+            let durSec = Int(progress.durationMs / 1000)
+            lyrics = await repository.lyrics(
+                path: path,
+                durationSec: durSec > 0 ? durSec : nil,
+                title: dev.track,
+                artist: dev.artist,
+                album: dev.album
+            )
+            lyricsLoading = false
         }
         // Resolve artwork from the *live* track so it never lags a song behind the
         // title/metadata (which update instantly from LocalPlaybackController).

@@ -179,6 +179,21 @@ final class BockMediaAPIClient {
         return try await get("api/songs", query: query)
     }
 
+    func lyrics(
+        path: String,
+        durationSec: Int? = nil,
+        title: String? = nil,
+        artist: String? = nil,
+        album: String? = nil
+    ) async throws -> LyricsResponse {
+        var query = ["path": path]
+        if let durationSec { query["duration"] = "\(durationSec)" }
+        if let title, !title.isEmpty { query["title"] = title }
+        if let artist, !artist.isEmpty { query["artist"] = artist }
+        if let album, !album.isEmpty { query["album"] = album }
+        return try await get("api/lyrics", query: query)
+    }
+
     func genres(limit: Int = 20) async throws -> GenresResponse {
         try await get("api/genres", query: ["limit": "\(limit)"])
     }

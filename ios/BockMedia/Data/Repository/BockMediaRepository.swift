@@ -7,6 +7,7 @@ final class BockMediaRepository: ObservableObject {
     private var resolvedBaseURL: String?
     private var artistPortraitPathCache: [String: String] = [:]
     private var artistPortraitMissCache: Set<String> = []
+    private var lyricsCache: [String: LyricsResponse] = [:]
 
     init(preferences: AppPreferences) {
         self.preferences = preferences
@@ -477,6 +478,36 @@ final class BockMediaRepository: ObservableObject {
         guard let path, !path.isEmpty else { return nil }
         guard let base = try? await resolveBaseURL() else { return nil }
         return ServerURL.streamURL(base: base, filepath: path)
+    }
+
+    func lyrics(
+        path: String,
+        durationSec: Int? = nil,
+        title: String? = nil,
+        artist: String? = nil,
+        album: String? = nil
+    ) async -> LyricsResponse? {
+        guard !path.isEmpty else { return nil }
+        let key = [path, durationSec.map(String.init), title, artist, album]
+            .compactMap { $0 }
+            .joined(separator: "|")
+        if let cached = lyricsCache[key] { return cached }
+        do {
+            try await ensureAPI()
+            let resp = try await api.lyrics(
+                path: path,
+                durationSec: durationSec,
+                title: title,
+                artist: artist,
+                album: album
+            )
+            if !resp.lines.isEmpty {
+                lyricsCache[key] = resp
+            }
+            return resp
+        } catch {
+            return nil
+        }
     }
 
     func playOnDevice(

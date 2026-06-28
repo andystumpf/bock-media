@@ -1585,6 +1585,9 @@ def health():
         'skillTesting':    skill_testing,
         'plexConfigured':  plex.get('configured'),
         'plexReachable':   plex.get('reachable'),
+        'credentialsConfigured': _credentials_configured(),
+        'allowOpenLanApi': _allow_open_lan_api(),
+        'allowOpenLanMedia': _allow_open_lan_media(),
     })
 
 # ── Plex sync status (dashboard panel) ───────────────────────────────────────
@@ -12354,6 +12357,23 @@ _start_automation_scheduler()
 _start_device_discovery_scheduler()
 _start_daily_scheduler()
 _start_playlist_cover_warm()
+
+def _warn_insecure_lan_config():
+    """Log once at startup when LAN is fully open with no credentials."""
+    try:
+        if _credentials_configured():
+            return
+        if _allow_open_lan_api() and _allow_open_lan_media():
+            print(
+                'SECURITY: LAN API and media are open with no WebPassword or mobileApi.token — '
+                'any device on your Wi-Fi can read the library and trigger playback. '
+                'Set credentials in Settings or disable allowOpenLanApi/allowOpenLanMedia in config.json.',
+                flush=True,
+            )
+    except Exception:
+        pass
+
+_warn_insecure_lan_config()
 
 if __name__ == '__main__':
     apply_logging()

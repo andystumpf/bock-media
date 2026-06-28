@@ -79,6 +79,9 @@ struct HealthResponse: Codable {
     var alexaAuth: Bool?
     var plexConfigured: Bool?
     var plexReachable: Bool?
+    var credentialsConfigured: Bool?
+    var allowOpenLanApi: Bool?
+    var allowOpenLanMedia: Bool?
 }
 
 struct DashboardQuickResponse: Codable {
@@ -843,4 +846,17 @@ struct AcquireSeedInfo: Codable {
     var resolvedName: String?
     var mbid: String?
     var artists: [String]?
+}
+
+struct LyricLine: Codable, Identifiable, Hashable {
+    var timeMs: Int64 = 0
+    var text: String = ""
+    var id: String { "\(timeMs)-\(text)" }
+}
+
+struct LyricsResponse: Codable {
+    var synced: Bool = false
+    var lines: [LyricLine] = []
+    var plain: String = ""
+    var source: String?
 }

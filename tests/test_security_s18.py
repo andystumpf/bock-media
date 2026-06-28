@@ -139,3 +139,11 @@ class TestMediaSignature:
         bad = signed.replace('sig=', 'sig=deadbeef')
         with server.app.test_request_context(bad, headers={'Host': '192.168.1.1:3001'}):
             assert server._verify_media_signature() is False
+
+
+class TestHealthSecurityFlags:
+    def test_health_exposes_lan_security_flags(self, client):
+        data = client.get('/api/health').get_json()
+        assert 'credentialsConfigured' in data
+        assert 'allowOpenLanApi' in data
+        assert 'allowOpenLanMedia' in data
