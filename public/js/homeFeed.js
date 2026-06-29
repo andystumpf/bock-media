@@ -119,6 +119,18 @@
         this.isGenreMixPlaylistName(name) || this.isExplicitRadioPlaylistName(name) ||
         this.isAutomationPlaylistName(name);
     },
+    /** "Classical Era Mix" → "Classical Era" */
+    mixGenreLabel(title) {
+      const t = (title || '').trim();
+      if (t.endsWith(' Mix') && t.length > 4) return t.slice(0, -4);
+      return null;
+    },
+    /** "Jazz Radio" → "Jazz" */
+    genreRadioLabel(displayTitle) {
+      const t = (displayTitle || '').trim();
+      if (t.endsWith(' Radio') && t.length > 6) return t.slice(0, -6);
+      return null;
+    },
     historyMatchesGenre(row, genre) {
       const hay = [row.sourceLabel, row.playlist, row.album, row.artist].filter(Boolean);
       const g = genre.toLowerCase();
