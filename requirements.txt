@@ -1,11 +1,4 @@
-# Core backend
-Flask>=3.0
-cryptography>=42.0
-mutagen>=1.47          # audio tag / embedded-artwork reading
-
-# Optional: "Play on device" + Now Playing transport controls via the
-# unofficial Alexa API (alexapy). Only needed if you set config.json
-# `alexaRemote`. The aiohttp pin is REQUIRED — alexapy 1.26.9 imports a symbol
-# removed in aiohttp >= 3.11.
-#   alexapy==1.26.9
-#   aiohttp>=3.10,<3.11
+flask
+cryptography
+mutagen
+gunicorn

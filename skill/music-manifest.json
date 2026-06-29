@@ -22,7 +22,7 @@
     "apis": {
       "music": {
         "endpoint": {
-          "uri": "https://your-domain.example.com/music",
+          "uri": "https://your-tunnel.example.com/music",
           "sslCertificateType": "Wildcard"
         },
         "locales": {
@@ -68,13 +68,13 @@
         { "eventName": "AUDIO_ITEM_PLAYBACK_FAILED" }
       ],
       "endpoint": {
-        "uri": "https://your-domain.example.com/music",
+        "uri": "https://your-tunnel.example.com/music",
         "sslCertificateType": "Wildcard"
       },
       "regions": {
         "NA": {
           "endpoint": {
-            "uri": "https://your-domain.example.com/music",
+            "uri": "https://your-tunnel.example.com/music",
             "sslCertificateType": "Wildcard"
           }
         }

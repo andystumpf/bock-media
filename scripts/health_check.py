@@ -23,9 +23,10 @@ import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-STATE_PATH = os.path.join(REPO, 'health_state.json')
+DATA_DIR = os.environ.get('OURMEDIA_DATA_DIR', os.path.expanduser('~/.bockmedia'))
+STATE_PATH = os.path.join(DATA_DIR, 'health_state.json')
 LOG_PATH = os.path.join(REPO, 'health.log')
-CONFIG_PATH = os.path.join(REPO, 'config.json')
+CONFIG_PATH = os.path.join(DATA_DIR, 'config.json')
 
 BACKEND_URL = 'http://127.0.0.1:3001/api/summary'
 
@@ -34,9 +35,9 @@ def _public_url():
     try:
         with open(CONFIG_PATH) as f:
             url = (json.load(f) or {}).get('publicUrl') or ''
-        return url.rstrip('/') or 'https://your-domain.example.com'
+        return url.rstrip('/') or 'https://your-tunnel.example.com'
     except Exception:
-        return 'https://your-domain.example.com'
+        return 'https://your-tunnel.example.com'
 
 
 def _is_active(unit):

@@ -154,6 +154,21 @@
           ]
         },
         {
+          "name": "PlayFileTokenIntent",
+          "slots": [
+            { "name": "FileToken", "type": "AMAZON.SearchQuery" }
+          ],
+          "samples": [
+            "start file token {FileToken}",
+            "start token {FileToken}",
+            "play file token {FileToken}",
+            "start playlist token {FileToken}",
+            "mix playlist token {FileToken}",
+            "start album token {FileToken}",
+            "mix album token {FileToken}"
+          ]
+        },
+        {
           "name": "PlayTrackByArtistIntent",
           "slots": [
             { "name": "TrackName", "type": "AMAZON.MusicRecording" },
@@ -164,7 +179,11 @@
             "play the track {TrackName} by {ArtistName}",
             "play the song {TrackName} by {ArtistName}",
             "play {TrackName} the song by {ArtistName}",
-            "play {TrackName} the track by {ArtistName}"
+            "play {TrackName} the track by {ArtistName}",
+            "start {TrackName} by {ArtistName}",
+            "start the song {TrackName} by {ArtistName}",
+            "start track {TrackName} by {ArtistName}",
+            "start the track {TrackName} by {ArtistName}"
           ]
         },
         {

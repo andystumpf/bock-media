@@ -1,0 +1,85 @@
+{
+  "type": "AMAZON.MusicPlaylist",
+  "version": 2.0,
+  "locales": [
+    {
+      "country": "US",
+      "language": "en"
+    }
+  ],
+  "entities": [
+    {
+      "id": "pl-road-trip",
+      "names": [
+        {
+          "language": "en",
+          "value": "Road Trip Demo"
+        }
+      ],
+      "popularity": {
+        "default": 75
+      },
+      "lastUpdatedTime": "2026-06-29T01:12:27.000Z",
+      "locales": [
+        {
+          "country": "US",
+          "language": "en"
+        }
+      ]
+    },
+    {
+      "id": "pl-daily-mix",
+      "names": [
+        {
+          "language": "en",
+          "value": "Daily Mix Demo"
+        }
+      ],
+      "popularity": {
+        "default": 75
+      },
+      "lastUpdatedTime": "2026-06-29T01:12:27.000Z",
+      "locales": [
+        {
+          "country": "US",
+          "language": "en"
+        }
+      ],
+      "alternateNames": [
+        {
+          "language": "en",
+          "values": [
+            "Daily Demo"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "pl-focus",
+      "names": [
+        {
+          "language": "en",
+          "value": "Focus Playlist"
+        }
+      ],
+      "popularity": {
+        "default": 75
+      },
+      "lastUpdatedTime": "2026-06-29T01:12:27.000Z",
+      "locales": [
+        {
+          "country": "US",
+          "language": "en"
+        }
+      ],
+      "alternateNames": [
+        {
+          "language": "en",
+          "values": [
+            "Focus"
+          ]
+        }
+      ]
+    }
+  ]
+}

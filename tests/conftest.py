@@ -23,8 +23,8 @@ import server  # noqa: E402
 
 # ─────────────────────────── helpers ─────────────────────────────────────────
 
-REAL_DATA_DIR = os.environ.get('OURMEDIA_DATA_DIR', '/home/youruser/.bockmedia')
-REAL_DB_PATH = os.environ.get('OURMEDIA_DB_PATH', '/srv/music/music_organizer.db')
+REAL_DATA_DIR = os.environ.get('OURMEDIA_DATA_DIR', os.path.join(REPO_ROOT, 'fixtures', 'demo-data'))
+REAL_DB_PATH = os.environ.get('OURMEDIA_DB_PATH', os.path.join(REPO_ROOT, 'fixtures', 'demo-data', 'songs_cache.db'))
 
 # XML files in the data dir we want to copy into tmp so tests can read them.
 MMA_XML_FILES = [
@@ -64,14 +64,41 @@ def isolated_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(server, 'DATA_DIR', str(mma_dir))
     monkeypatch.setattr(server, 'DEVICES_PATH', str(state_dir / 'devices.json'))
     monkeypatch.setattr(server, 'STREAM_HISTORY_PATH', str(state_dir / 'streaming_history.jsonl'))
+    monkeypatch.setattr(server, 'DOWNLOAD_HISTORY_PATH', str(state_dir / 'download_history.jsonl'))
     monkeypatch.setattr(server, 'CONFIG_PATH', str(state_dir / 'config.json'))
+    monkeypatch.setattr(server, 'FAVORITES_PATH', str(mma_dir / 'favorites.json'))
+    monkeypatch.setattr(server, 'RATINGS_PATH', str(mma_dir / 'ratings.json'))
     monkeypatch.setattr(server, 'QUEUES_PATH', str(state_dir / 'queues.json'))
     monkeypatch.setattr(server, 'NP_STATE_PATH', str(state_dir / 'nowplaying_state.json'))
     monkeypatch.setattr(server, 'SELECTED_PATH', str(state_dir / 'selected_state.json'))
     monkeypatch.setattr(server, 'IGNORE_PATH', str(state_dir / 'ignored_tracks.json'))
     monkeypatch.setattr(server, 'DEVICE_GROUPS_PATH', str(state_dir / 'device_groups.json'))
     monkeypatch.setattr(server, 'HEALTH_STATE_PATH', str(state_dir / 'health_state.json'))
+    monkeypatch.setattr(server, 'SMART_PLAYLISTS_PATH', str(state_dir / 'smart_playlists.json'))
     monkeypatch.setattr(server, 'LOG_PATH', str(state_dir / 'server.log'))
+    monkeypatch.setattr(server, 'HOUSEHOLD_PATH', str(state_dir / 'household.json'))
+    monkeypatch.setattr(server, 'ROOM_POLICY_PATH', str(state_dir / 'room_policies.json'))
+    monkeypatch.setattr(server, 'REQUESTS_PATH', str(state_dir / 'requests.json'))
+    monkeypatch.setattr(server, 'PLAYLIST_META_PATH', str(state_dir / 'playlist_meta.json'))
+    monkeypatch.setattr(server, 'MESSAGES_PATH', str(state_dir / 'messages.jsonl'))
+    monkeypatch.setattr(server, 'PLAYLIST_FOLDERS_PATH', str(state_dir / 'playlist_folders.json'))
+    monkeypatch.setattr(server, 'PLAYBACK_RESUME_PATH', str(state_dir / 'playback_resume.json'))
+    monkeypatch.setattr(server, 'RECOMMENDATIONS_CACHE_PATH', str(state_dir / 'recommendations_cache.json'))
+    monkeypatch.setattr(server, 'PLAY_COUNTS_PATH', str(state_dir / 'play_counts.json'))
+    monkeypatch.setattr(server, 'CLIENT_PREFS_PATH', str(mma_dir / 'client_prefs.json'))
+    monkeypatch.setattr(server, 'PLAYLISTS_XML', str(mma_dir / 'ServerPlaylists.xml'))
+    notes_src = os.path.join(REPO_ROOT, 'app-release-notes.json')
+    if os.path.isfile(notes_src):
+        shutil.copy2(notes_src, state_dir / 'app-release-notes.json')
+    config_path = state_dir / 'config.json'
+    if not config_path.exists():
+        config_path.write_text(json.dumps({
+            'mobileApi': {
+                'allowOpenLanApi': True,
+                'allowOpenLanMedia': True,
+                'token': 'test-mobile-token',
+            },
+        }), encoding='utf-8')
     return tmp_path
 
 

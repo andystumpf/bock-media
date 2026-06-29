@@ -58,7 +58,7 @@ def _put(path, tok, timeout=20):
         r.read()
 
 
-def machine_id(tok=None):
+def machine_id(tok=None, timeout=20):
     now = time.time()
     if _MID_CACHE['id'] and (now - _MID_CACHE['ts']) < _MID_TTL:
         return _MID_CACHE['id']
@@ -66,12 +66,22 @@ def machine_id(tok=None):
     if not tok:
         return None
     try:
-        mid = _get('/', tok).get('machineIdentifier')
+        mid = _get('/', tok, timeout=timeout).get('machineIdentifier')
     except Exception:
         return None
-    _MID_CACHE['id'] = mid
-    _MID_CACHE['ts'] = now
+    if mid:
+        _MID_CACHE['id'] = mid
+        _MID_CACHE['ts'] = now
     return mid
+
+
+def status(timeout=2):
+    """Health summary: configured + reachable + machine id (best-effort)."""
+    tok = token()
+    if not tok:
+        return {'configured': False, 'reachable': False, 'machineId': None}
+    mid = machine_id(tok, timeout=timeout)
+    return {'configured': True, 'reachable': bool(mid), 'machineId': mid}
 
 
 def playlist_ratingkey_from_source(source_path):
@@ -116,12 +126,3 @@ def add_track_to_playlist(playlist_rating_key, track_path):
         return True
     except Exception:
         return False
-
-
-def status():
-    """Health summary: configured + reachable + machine id (best-effort)."""
-    tok = token()
-    if not tok:
-        return {'configured': False, 'reachable': False, 'machineId': None}
-    mid = machine_id(tok)
-    return {'configured': True, 'reachable': bool(mid), 'machineId': mid}

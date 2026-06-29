@@ -1,0 +1,20 @@
+{
+  "history": [
+    { "playlist": "Road Trip", "filepath": "/m/a.mp3", "track": "Song A", "artist": "Artist A" },
+    { "playlist": "Automations - Daily", "filepath": "/m/b.mp3", "track": "Song B", "artist": "Artist B" },
+    { "playlist": "Chill Vibes", "filepath": "/m/c.mp3", "track": "Song C", "artist": "Artist C" },
+    { "track": "Song D", "filepath": "/m/d.mp3", "artist": "Artist D" }
+  ],
+  "analytics": null,
+  "allPlaylists": [
+    { "id": "p1", "name": "Road Trip", "trackCount": 20 },
+    { "id": "p2", "name": "Chill Vibes", "trackCount": 15 },
+    { "id": "p3", "name": "Automations - Daily", "trackCount": 5 },
+    { "id": "p4", "name": "Workout", "trackCount": 30 }
+  ],
+  "smartPlaylists": [],
+  "favorites": [],
+  "dashboard": null,
+  "libraryGenres": [],
+  "shuffleSeed": 12345
+}

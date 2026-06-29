@@ -21,55 +21,10 @@ Re-run whenever calls start failing with "not_authenticated" (cookies expire).
 import argparse
 import asyncio
 import os
-import socket
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import alexa_remote  # noqa: E402
-
-
-def _lan_ip():
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(('8.8.8.8', 80))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
-    except Exception:
-        return '127.0.0.1'
-
-
-async def proxy_login(host_ip, port):
-    from alexapy import AlexaProxy
-    login = alexa_remote.make_login(debug=bool(os.environ.get('ALEXA_DEBUG')))
-    base_url = f'http://{host_ip}:{port}'
-    proxy = AlexaProxy(login, base_url)
-    await proxy.start_proxy(host='0.0.0.0')
-    print('\n' + '=' * 64)
-    print('Open this URL in a browser on the same network and sign in:')
-    print(f'    {base_url}')
-    print('(Email/password/OTP are pre-filled from config; complete any passkey')
-    print(' or 2FA prompt yourself. Choose "password" if passkey is offered.)')
-    print('Waiting for login to complete… (Ctrl-C to abort)')
-    print('=' * 64)
-    try:
-        for _ in range(600):  # ~10 min
-            if getattr(login, 'access_token', None):
-                break
-            await asyncio.sleep(1)
-    finally:
-        await proxy.stop_proxy()
-    if not getattr(login, 'access_token', None):
-        await login.close()
-        sys.exit('Timed out waiting for login.')
-    await login.login()  # oauth path now has the captured token -> get_tokens
-    ok = await login.test_loggedin()
-    if ok:
-        await login.save_cookiefile()
-        print(f'\nLogin successful as {login.email}. Session saved.')
-    await login.close()
-    if not ok:
-        sys.exit('Token captured but session test failed; try again.')
 
 
 async def import_cookies(path):
@@ -87,7 +42,8 @@ async def import_cookies(path):
         return
     await login.close()
     sys.exit('Imported cookies did not authenticate. Make sure you exported '
-             'amazon.com cookies while logged into the Alexa site, and that '
+             'cookies for your Alexa Amazon domain (e.g. amazon.com or amazon.co.uk) '
+             'while logged into the Alexa site, and that '
              'config.json -> alexaRemote.email matches that account.')
 
 
@@ -110,7 +66,38 @@ async def main():
         sys.exit('config.json -> alexaRemote.email is required first.')
 
     if args.proxy:
-        await proxy_login(args.host or _lan_ip(), args.port)
+        # Shared with Settings → Start browser login (alexa_remote.start_proxy_login).
+        import time
+        host = args.host or alexa_remote.lan_ip()
+        port = args.port
+        try:
+            st = alexa_remote.start_proxy_login(host=host, port=port)
+        except alexa_remote.AlexaRemoteError as e:
+            sys.exit(str(e))
+        url = st.get('url') or f'http://{host}:{port}'
+        print('\n' + '=' * 64)
+        print('Open this URL in a browser on the same network and sign in:')
+        print(f'    {url}')
+        print('(Choose "password" if passkey is offered.)')
+        print('Waiting for login to complete… (Ctrl-C to abort)')
+        print('=' * 64)
+        try:
+            deadline = time.time() + alexa_remote.login_timeout_sec()
+            while time.time() < deadline:
+                st = alexa_remote.proxy_login_state()
+                if st.get('status') == 'success':
+                    print(f'\nLogin successful. Session saved.')
+                    return
+                if st.get('status') == 'error':
+                    sys.exit(st.get('error') or 'Login failed.')
+                if st.get('status') == 'stopped':
+                    sys.exit('Login stopped.')
+                time.sleep(1)
+        except KeyboardInterrupt:
+            alexa_remote.stop_proxy_login()
+            sys.exit('Aborted.')
+        mins = alexa_remote.login_timeout_sec() // 60
+        sys.exit(f'Timed out waiting for login ({mins} min).')
         return
 
     if args.cookies:

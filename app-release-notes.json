@@ -1,0 +1,519 @@
+{
+  "_comment": "Update this file whenever you upload a new APK/IPA to /app. Shown on GET /app.",
+    "releases": [
+    {
+      "version": "2.6.47",
+      "date": "2026-06-28",
+      "items": [
+        {"kind": "fix", "text": "Playlist playback — wait for authenticated stream client before play (fixes rapid skip through queue on phone)"},
+        {"kind": "fix", "text": "Genre mixes, radio, and Browse by genre — load tracks by genre + Resonance; genre pages and tile navigation fixed"}
+      ]
+    },
+    {
+      "version": "2.6.46",
+      "date": "2026-06-28",
+      "items": [
+        {"kind": "fix", "text": "Who's listening? — tapping your profile now saves locally first and dismisses the picker even if server sync is slow"},
+        {"kind": "fix", "text": "Profile picker — removed duplicate bind call that could hang the dialog; loading spinner while syncing"}
+      ]
+    },
+    {
+      "version": "2.6.45",
+      "date": "2026-06-27",
+      "items": [
+        {"kind": "fix", "text": "Bug hunt fixes — shuffle state from server, continue-after-queue on browser, startup connection gate, NP poll stability"},
+        {"kind": "fix", "text": "Server — LAN GET auth when password set; MSP continue-after-queue; shuffle in now playing API"}
+      ]
+    },
+    {
+      "version": "2.6.44",
+      "date": "2026-06-27",
+      "items": [
+        {"kind": "fix", "text": "Analytics — household-wide stats match web (no profile filter); device table + heatmap parity"}
+      ]
+    },
+    {
+      "version": "2.6.43",
+      "date": "2026-06-27",
+      "items": [
+        {"kind": "fix", "text": "Now Playing Up next — fade the black plate behind the list, not the track text"}
+      ]
+    },
+    {
+      "version": "2.6.42",
+      "date": "2026-06-27",
+      "items": [
+        {"kind": "fix", "text": "Now Playing — bottom fade scrim over art/video and softened Up next list into black (cover + video modes)"}
+      ]
+    },
+    {
+      "version": "2.6.41",
+      "date": "2026-06-27",
+      "items": [
+        {"kind": "fix", "text": "Now Playing art + music video — clip blurred backdrop and use SurfaceView fixed-height crop (fixes top-of-frame wrapping to bottom)"}
+      ]
+    },
+    {
+      "version": "2.6.40",
+      "date": "2026-06-27",
+      "items": [
+        {"kind": "fix", "text": "Music video black screen — server uses Deno + yt-dlp for YouTube HLS URLs; ExoPlayer HLS module added"},
+        {"kind": "fix", "text": "Show thumbnail + error instead of empty black when stream fails; /play returns 503 when no stream"}
+      ]
+    },
+    {
+      "version": "2.6.39",
+      "date": "2026-06-27",
+      "items": [
+        {"kind": "fix", "text": "Now Playing crash on open — use BockMediaApp.get() instead of invalid Application cast"}
+      ]
+    },
+    {
+      "version": "2.6.38",
+      "date": "2026-06-27",
+      "items": [
+        {"kind": "fix", "text": "Music video — ExoPlayer stream from server instead of YouTube WebView (avoids bot / sign-in embed errors)"},
+        {"kind": "fix", "text": "Server streams via yt-dlp with youtube-cookies.txt — run scripts/youtube_cookies.sh once from your Mac"}
+      ]
+    },
+    {
+      "version": "2.6.37",
+      "date": "2026-06-27",
+      "items": [
+        {"kind": "fix", "text": "Music video embed — send YouTube-required Referer header (fixes “video player configuration error” in Now Playing)"}
+      ]
+    },
+    {
+      "version": "2.6.36",
+      "date": "2026-06-27",
+      "items": [
+        {"kind": "feat", "text": "Now Playing music video — Switch to video shows a muted YouTube clip behind controls while Bock audio keeps playing"},
+        {"kind": "fix", "text": "Music video lookup uses yt-dlp search on the server (Piped fallback); fixes 1979, 28, and other tracks with official videos"}
+      ]
+    },
+    {
+      "version": "2.6.35",
+      "date": "2026-06-27",
+      "items": [
+        {"kind": "fix", "text": "Profile switch — save outgoing prefs before loading the new profile (fixes crossfade, when-queue-ends, and downloads bleeding between profiles)"},
+        {"kind": "fix", "text": "Downloads list, settings, library, and home reload when Acting as changes; incoming profile’s offline queue resumes from server"}
+      ]
+    },
+    {
+      "version": "2.6.34",
+      "date": "2026-06-27",
+      "items": [
+        {"kind": "fix", "text": "Security #18 — LAN API writes require Basic auth or mobileApi token (opt-in allowOpenLanApi); stream/artwork require credentials, HMAC sig, or allowOpenLanMedia"},
+        {"kind": "fix", "text": "Cloudflare tunnel trust — Cf-* headers honored only from loopback (cloudflared), blocking forged headers on port-forward"},
+        {"kind": "fix", "text": "Alexa stream URLs signed; web console uses /api/media/sign for artwork and browser playback when media auth is enabled"},
+        {"kind": "fix", "text": "Android downloads follow active profile — switching profiles hides the other profile’s downloads, pauses sync, and resumes when you switch back"}
+      ]
+    },
+    {
+      "version": "2.6.33",
+      "date": "2026-06-27",
+      "items": [
+        {"kind": "fix", "text": "Bug hunt stability — queue and Now Playing state use cross-process file locks; NP poll no longer writes on GET"},
+        {"kind": "fix", "text": "Playlist reliability — atomic ServerPlaylists.xml and .m3u writes; Plex sync defers m3u until XML commits and prunes orphan files"},
+        {"kind": "fix", "text": "Stop-after-N and sleep timer honored on skip; add-to-playlist dedupes tracks and updates track count"}
+      ]
+    },
+    {
+      "version": "2.6.32",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "feat", "text": "Room queue UX — add tracks to a speaker's shared up-next from search, albums, playlists, and Now Playing; approve kid-safe requests from Family"},
+        {"kind": "feat", "text": "Now Playing shows household requests with requester names; parents can approve, remove, and reorder the room queue"},
+        {"kind": "feat", "text": "Android and iOS: Add to room on search/album/playlist/NP; Family tab pending requests"}
+      ]
+    },
+    {
+      "version": "2.6.31",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "feat", "text": "Playlist sharing — share from playlist detail with household member picker; owner/shared badges on library tiles (web, Android, iOS)"},
+        {"kind": "fix", "text": "Office Show and MSP streams show the correct room name in Now Playing instead of generic Alexa labels"},
+        {"kind": "fix", "text": "Sharing a playlist sets visibility to shared so recipients see it in their scoped library"}
+      ]
+    },
+    {
+      "version": "2.6.30",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "feat", "text": "Web home tile rotation — tiles you haven't opened in 4+ days swap for fresh library picks (matches Android/iOS)"},
+        {"kind": "feat", "text": "Library UI prefs sync per profile — sort order, grid/list view, and last library tab follow you across web, Android, and iOS"},
+        {"kind": "feat", "text": "Web playlist sort (name/tracks, A–Z) syncs with your profile; tapping Library restores your last sub-tab"},
+        {"kind": "fix", "text": "Per-member ratings hardened against race conditions and profile mix-ups (server + web + iOS favorites API)"}
+      ]
+    },
+    {
+      "version": "2.6.29",
+      "date": "2026-06-27",
+      "items": [
+        {"kind": "feat", "text": "Web profile prefs sync — search scope, recents, last/pinned speakers, continue-after-queue, and home tile engagement sync across web, Android, and iOS"},
+        {"kind": "feat", "text": "Daily mixes are per household profile — each member gets their own daily playlists based on their listening"},
+        {"kind": "improve", "text": "Web device picker — pin/unpin speakers to your profile with ☆/★ toggle"}
+      ]
+    },
+    {
+      "version": "2.6.28",
+      "date": "2026-06-27",
+      "items": [
+        {"kind": "feat", "text": "Discover Weekly, Continue listening, and Analytics now follow your active household profile (Android, iOS, web)"},
+        {"kind": "feat", "text": "Search Aural Fixations pins are per profile — each member has their own shortcuts; legacy pins migrate on first load"},
+        {"kind": "feat", "text": "Switching profile on web reloads home and search with that member’s recommendations"},
+        {"kind": "improve", "text": "Analytics CSV export respects active profile filter"}
+      ]
+    },
+    {
+      "version": "2.6.27",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "feat", "text": "Library Artists & Albums — infinite scroll loads 60 at a time as you browse; search debounced server-side"},
+        {"kind": "fix", "text": "Library Artists/Albums no longer blank — paginated API replaces bulk fetch that timed out on large libraries"},
+        {"kind": "feat", "text": "Offline downloads sync per profile — saved playlists restore after reinstall and auto-resume downloading"},
+        {"kind": "feat", "text": "Downloads tab filters by active household profile (Android & iOS)"}
+      ]
+    },
+    {
+      "version": "2.6.26",
+      "date": "2026-06-26",
+      "items": [
+        {"kind": "fix", "text": "Analytics charts — visible bar/line graphs with axis labels on dark theme; activity chart trims empty leading days"}
+      ]
+    },
+    {
+      "version": "2.6.25",
+      "date": "2026-06-26",
+      "items": [
+        {"kind": "fix", "text": "Device picker Alexa speakers — always refresh device list on open; stale cache no longer hides Echo devices for up to 60s"}
+      ]
+    },
+    {
+      "version": "2.6.24",
+      "date": "2026-06-26",
+      "items": [
+        {"kind": "fix", "text": "Rated Songs Alexa play — virtual playlists now materialize your profile’s tracks; app sends member context"}
+      ]
+    },
+    {
+      "version": "2.6.23",
+      "date": "2026-06-26",
+      "items": [
+        {"kind": "fix", "text": "Alexa playlist auto-advance from app — track-end fallback when Echo Show drops lifecycle events; file-token routing"}
+      ]
+    },
+    {
+      "version": "2.6.22",
+      "date": "2026-06-26",
+      "items": [
+        {"kind": "fix", "text": "Alexa playlists auto-advance reliably — Finished fallback when ENQUEUE fails; queue materialized at play start"}
+      ]
+    },
+    {
+      "version": "2.6.21",
+      "date": "2026-06-26",
+      "items": [
+        {"kind": "feat", "text": "Home Yacht Rock row after Italian music — all playlists with “yacht” in the name"},
+        {"kind": "fix", "text": "Profile restore after reinstall — settings/rated songs reload from server; stale home cache cleared"},
+        {"kind": "fix", "text": "Alexa playlists auto-advance to the next track without manual skip"}
+      ]
+    },
+    {
+      "version": "2.6.20",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "fix", "text": "Pinned Alexa devices and last-played speaker now sync per profile — restored after reinstall"}
+      ]
+    },
+    {
+      "version": "2.6.19",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "feat", "text": "Home Browse by genre row — top library genres as tiles (tap opens genre)"},
+        {"kind": "feat", "text": "Library Needs attention banner — Picard folders, duplicate artists, one-tap merge"},
+        {"kind": "feat", "text": "Album tiles show year + your average star rating; merge artists API for cleaner browse"}
+      ]
+    },
+    {
+      "version": "2.6.18",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "feat", "text": "Star ratings are per household profile — each member has their own 1★–5★ buckets"},
+        {"kind": "fix", "text": "Legacy household-wide ratings auto-migrate to your profile on first use after upgrade"}
+      ]
+    },
+    {
+      "version": "2.6.17",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "feat", "text": "Library Rated Songs — separate 5★–1★ playlists instead of one flat list; tap row to browse or ▶ to play all at that level"},
+        {"kind": "ui", "text": "Home no longer shows duplicate Highly rated row — use Rated Songs star buckets only"}
+      ]
+    },
+    {
+      "version": "2.6.16",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "feat", "text": "Home Rated Songs row — 1★–5★ virtual playlists refreshed on every home load"},
+        {"kind": "feat", "text": "Tap a star bucket to open full playlist detail and play all rated tracks at that level"}
+      ]
+    },
+    {
+      "version": "2.6.15",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "feat", "text": "Settings & preferences sync to server — restored after reinstall when you pick your profile"},
+        {"kind": "feat", "text": "Crossfade, Wi‑Fi downloads, continue-after-queue, search recents, pinned devices saved per profile on NAS"}
+      ]
+    },
+    {
+      "version": "2.6.14",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "ui", "text": "Bottom nav shows icons only — Home, Search, Library, Downloads, Automations"}
+      ]
+    },
+    {
+      "version": "2.6.13",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "feat", "text": "Star ratings replace heart favorites — Now Playing, Search, Rated screen, and Home highly-rated row"},
+        {"kind": "feat", "text": "5-star ratings on songs via /api/ratings (favorites API now backed by ratings on server)"}
+      ]
+    },
+    {
+      "version": "2.6.12",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "feat", "text": "Home & Library playlist tiles use 2×2 track collage art (same as playlist detail)"},
+        {"kind": "feat", "text": "More playlists per home row — Jump Back In, Mixes, Discover, and More Playlists expanded"}
+      ]
+    },
+    {
+      "version": "2.6.11",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "fix", "text": "Library Artists/Albums: load full catalog, not capped at 100"},
+        {"kind": "fix", "text": "Play on playlist, album, artist opens device picker (phone or Alexa)"}
+      ]
+    },
+    {
+      "version": "2.6.10",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "feat", "text": "Playlist detail: Plexamp layout — collage art, track summary, art rows, immersive backdrop"},
+        {"kind": "fix", "text": "Artist page: popular tracks load with album-artist fallback when tags differ"}
+      ]
+    },
+    {
+      "version": "2.6.9",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "feat", "text": "Artist page: Plexamp layout — albums, singles/EPs, track pager, similar artists, styles"},
+        {"kind": "feat", "text": "Album detail: immersive backdrop, disc tracklist, duration fix, artist tag fallback"}
+      ]
+    },
+    {
+      "version": "2.6.8",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "feat", "text": "Search: watch-folder source picker, pin editor, Sonic Adventure browse, messages in results"},
+        {"kind": "feat", "text": "Web + iOS: Plexamp idle browse, selection-based recents, analytics rankings parity"}
+      ]
+    },
+    {
+      "version": "2.6.7",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "feat", "text": "Search idle: Plexamp Aural Fixations + Sonic Explorations + recent selections (not query strings)"},
+        {"kind": "feat", "text": "Top Artists/Albums/Tracks/Best Of from your listening analytics"}
+      ]
+    },
+    {
+      "version": "2.6.6",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "fix", "text": "Search albums: match [year] Gish titles and albums by artist (smashing → Pumpkins albums)"}
+      ]
+    },
+    {
+      "version": "2.6.5",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "feat", "text": "Search: Plexamp-style sections (Tracks, Artists, Albums) with album counts"},
+        {"kind": "feat", "text": "Album view: art + year header, play album button, track count & duration, disc tracklist"}
+      ]
+    },
+    {
+      "version": "2.6.4",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "fix", "text": "Search: back from artist/album/playlist returns to the same results (not empty browse)"}
+      ]
+    },
+    {
+      "version": "2.6.3",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "fix", "text": "Search: prefix + fuzzy matching (rem → R.E.M.); no mid-word matches (Premjee excluded)"}
+      ]
+    },
+    {
+      "version": "2.6.2",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "feat", "text": "Plexamp-style Search: grouped results (Radio, Sonically similar, Playlists, Smart, Artists, Albums, Genres, Songs)"},
+        {"kind": "feat", "text": "Search: Show all per section, recent searches on idle, All libraries / Current source toggle"},
+        {"kind": "feat", "text": "Search: Resonance similar tracks and radio launch points from top matches"},
+        {"kind": "feat", "text": "Search: Aural fixations shortcuts via /api/search/pins"}
+      ]
+    },
+    {
+      "version": "2.6.1",
+      "date": "2026-06-25",
+      "items": [
+        {"kind": "fix", "text": "Remove debug version label from Home greeting"}
+      ]
+    },
+    {
+      "version": "2.6.0",
+      "date": "2026-06-24",
+      "items": [
+        {"kind": "fix", "text": "Home quick-access cards: tap goes straight to device select to play (no Play/Download buttons on the small cards)"}
+      ]
+    },
+    {
+      "version": "2.5.9",
+      "date": "2026-06-24",
+      "items": [
+        {"kind": "fix", "text": "Show app version under the Home greeting so installed build is easy to confirm"}
+      ]
+    },
+    {
+      "version": "2.5.8",
+      "date": "2026-06-24",
+      "items": [
+        {"kind": "fix", "text": "/app sideload APK is now signed — unsigned builds failed to install on Android (you may have been stuck on an old build)"},
+        {"kind": "fix", "text": "Artwork auth re-reads the mobile token on every image request (fixes missing covers on fresh install / external URL)"},
+        {"kind": "fix", "text": "Home shortcut rows now show Play and Download like Library tiles"}
+      ]
+    },
+    {
+      "version": "2.5.7",
+      "date": "2026-06-24",
+      "items": [
+        {"kind": "fix", "text": "Fresh install: Coil image loader now starts after credentials are hydrated, and rebuilds after sign-in — fixes missing artwork and stuck placeholder tiles"},
+        {"kind": "fix", "text": "Sideload APK embeds mobile API token from config.json when local.properties is absent"}
+      ]
+    },
+    {
+      "version": "2.5.6",
+      "date": "2026-06-24",
+      "items": [
+        {"kind": "fix", "text": "Home & Library playlist tiles: use server 384px artwork thumbnails (matches web), warm inline cover paths on load, and fix JPEG decode on tiles"}
+      ]
+    },
+    {
+      "version": "2.5.5",
+      "date": "2026-06-24",
+      "items": [
+        {"kind": "fix", "text": "Fresh install / reinstall: artwork URLs refresh when the server endpoint resolves (no stuck placeholder tiles)"},
+        {"kind": "fix", "text": "Home playlist tiles: Play and Download overlays render as direct tile children (matches Library grid)"}
+      ]
+    },
+    {
+      "version": "2.5.4",
+      "date": "2026-06-24",
+      "items": [
+        {"kind": "fix", "text": "Home playlist tiles: Play and Download overlays now render on top of artwork (same shared component as Library grid)"}
+      ]
+    },
+    {
+      "version": "2.5.3",
+      "date": "2026-06-24",
+      "items": [
+        {"kind": "fix", "text": "Home & Library tiles always show the green Play button and Download control (Play works on this phone even when the Alexa remote isn't available)"}
+      ]
+    },
+    {
+      "version": "2.5.2",
+      "date": "2026-06-24",
+      "items": [
+        {"kind": "fix", "text": "Home: tapping a genre Mix now opens that genre (not the seed artist); tap a playlist to open it, Play to pick a speaker, Download to save offline"}
+      ]
+    },
+    {
+      "version": "2.5.1",
+      "date": "2026-06-24",
+      "items": [
+        {"kind": "fix", "text": "Artwork: home & library tiles load cover art instantly from the playlist list (no per-tile fetch) and stay put when navigating"},
+        {"kind": "fix", "text": "Server caches each playlist's cover art so it loads fast on any network and survives restarts"}
+      ]
+    },
+    {
+      "version": "2.5.0",
+      "date": "2026-06-24",
+      "items": [
+        {"kind": "feat", "text": "New daily mixes: fresh auto-built playlists (Discovery, Rotation, Throwback, Energy, Chill, Genre) that change every day — Save any to keep it in your library"},
+        {"kind": "fix", "text": "Home: far more of your playlists now appear and rotate daily so the whole library surfaces over time"},
+        {"kind": "fix", "text": "Home tiles open the track list (like Library); only Play/Download start playback or pick a speaker"},
+        {"kind": "fix", "text": "Home & playlist artwork now uses the playlist's first track instead of stale listening history"}
+      ]
+    },
+    {
+      "version": "2.4.2",
+      "date": "2026-06-22",
+      "items": [
+        {"kind": "feat", "text": "Web: Spotify-style playback in the browser — play here on laptop/phone, or choose Play on speaker…"},
+        {"kind": "fix", "text": "Android: playlist Play starts on this phone; speaker controls work without serial mapping"},
+        {"kind": "fix", "text": "Android: Now Playing focuses this phone; play restarts if the audio service stopped"},
+        {"kind": "fix", "text": "Android: playlist tracks play the full queue from the tapped song"}
+      ]
+    },
+    {
+      "version": "2.4.1",
+      "date": "2026-06-22",
+      "items": [
+        {"kind": "fix", "text": "Android: progress bar advances during remote/streaming playback (library duration fallback when ExoPlayer lacks stream metadata)"},
+        {"kind": "fix", "text": "Android: skip next/previous reliably starts the new track (recover from ENDED/IDLE)"},
+        {"kind": "improve", "text": "Android: Search tab loads genres and new releases first, then enriches in background"}
+      ]
+    },
+    {
+      "version": "2.4.0",
+      "date": "2026-06-21",
+      "items": [
+        {"kind": "feat", "text": "Mix Muse — conversational AI playlists from Claude or OpenAI (prompt or “sounds like this song/album/playlist”)"},
+        {"kind": "feat", "text": "Resonance — library-native similar-vibe mixes and endless radio (genre, year, duration, loudness)"},
+        {"kind": "feat", "text": "Discover Weekly, Release Radar, and Continue Listening on home (iOS, Android, web)"},
+        {"kind": "feat", "text": "Playlist folders, expanded smart rules, unified search with suggestions"},
+        {"kind": "feat", "text": "Playback handoff — move listening between phone and speakers"},
+        {"kind": "feat", "text": "Driving mode + Android Auto browse; CarPlay templates (iOS)"},
+        {"kind": "feat", "text": "Optional loudness normalization on stream (night mode / kid-safe rooms)"},
+        {"kind": "improve", "text": "Long-press songs, albums, or playlists for Mix Muse / Resonance (Android & iOS)"}
+      ]
+    },
+    {
+      "version": "2.3.3",
+      "date": "2026-06-21",
+      "items": [
+        {"kind": "feat", "text": "All lyrics use karaoke view: real LRC when available, smooth scroll for the rest"},
+        {"kind": "feat", "text": "Synced lyrics: current line bold, auto-scroll, ±0.5s timing adjust"},
+        {"kind": "feat", "text": "Smarter LRCLIB matching (retries, normalized titles, prefers timed lyrics)"},
+        {"kind": "fix", "text": "Android: pause → skip tracks → play now resumes correctly"},
+        {"kind": "fix", "text": "Android: switching playlists while another is playing works reliably"},
+        {"kind": "fix", "text": "Device picker stays open until you pick a speaker (Android & iOS)"}
+      ]
+    },
+    {
+      "version": "2.3.2",
+      "date": "2026-06-20",
+      "items": [
+        {"kind": "feat", "text": "Household profiles, room policies, and kid song requests"},
+        {"kind": "feat", "text": "Lyrics panel on Android Now Playing (LRCLIB + sidecar .lrc)"},
+        {"kind": "improve", "text": "Unified source/playlist metadata line for local playback"}
+      ]
+    }
+  ]
+}

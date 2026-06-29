@@ -1,0 +1,12 @@
+[Unit]
+Description=Bock Media health probe (writes health_state.json, logs DOWN transitions)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=bockmedia
+Group=bockmedia
+WorkingDirectory=/opt/bock-media
+Environment=OURMEDIA_DATA_DIR=/var/lib/bockmedia
+ExecStart=/usr/bin/python3 /opt/bock-media/scripts/health_check.py

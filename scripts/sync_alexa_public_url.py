@@ -18,8 +18,10 @@ import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-CONFIG = REPO / "config.json"
-DEFAULT_SKILL = "amzn1.ask.skill.YOUR-CUSTOM-SKILL-ID"
+# Runtime config lives in the data dir (same resolution as server.py DATA_DIR).
+DATA_DIR = Path(os.environ.get("OURMEDIA_DATA_DIR", os.path.join(os.path.dirname(__file__), '..', 'fixtures', 'demo-data')))
+CONFIG = DATA_DIR / "config.json"
+DEFAULT_SKILL = os.environ.get("OURMEDIA_SKILL_ID", "amzn1.ask.skill.YOUR_CUSTOM_SKILL_ID")
 
 
 def _public_url_from_arg(s: str) -> str:

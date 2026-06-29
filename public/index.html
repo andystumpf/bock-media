@@ -3,81 +3,173 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#30426a">
+  <meta name="theme-color" content="#000000">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Bock Media">
-  <title>Bock Media Console</title>
+  <title>Bock Media</title>
   <link rel="icon" type="image/png" sizes="32x32" href="img/icon-32.png">
   <link rel="apple-touch-icon" sizes="180x180" href="img/icon-180.png">
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-  <link rel="stylesheet" href="css/style.css">
-  <script
-    src="https://www.paypal.com/sdk/js?client-id=BAANxCc1w13vgheYKMqxTXL6nsHFVGyzackRub25Zc_4wdz_m5PZKrBK8oBzUXhjNQh3jrc7izbM8m-Kfk&components=hosted-buttons&enable-funding=venmo&currency=USD"
-    crossorigin="anonymous"
-    async></script>
+  <link rel="preload" href="css/shell.css?v=24" as="style">
+  <link rel="preload" href="js/webCache.js?v=2" as="script">
+  <link rel="preload" href="js/boot.js?v=1" as="script">
+  <link rel="stylesheet" href="css/shell.css?v=24">
+  <link rel="stylesheet" href="css/style.css" media="print" onload="this.media='all'">
+  <link rel="stylesheet" href="css/dark-theme.css?v=2" media="print" onload="this.media='all'">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" media="print" onload="this.media='all'">
+  <noscript><link rel="stylesheet" href="css/style.css"><link rel="stylesheet" href="css/dark-theme.css?v=2"><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css"></noscript>
 </head>
-<body>
-<div id="page-wrapper">
+<body class="route-home">
+<div id="app-shell" class="spotify-app">
 
-  <!-- Sidebar -->
-  <div id="sidebar-wrapper">
-    <div class="sidebar-brand">
-      <img class="brand-logo" src="img/bock-media-logo.png" alt="Bock Media">
-    </div>
-
-    <ul class="sidebar-nav">
-      <li><a href="#dashboard" class="nav-link"><span class="nav-icon"><i class="fa fa-tachometer-alt"></i></span><span class="nav-label">Dashboard</span></a></li>
-      <li><a href="#nowplaying" class="nav-link"><span class="nav-icon"><i class="fa fa-play"></i></span><span class="nav-label">Now Playing</span></a></li>
-      <div class="sidebar-divider"></div>
-      <li><a href="#playlists" class="nav-link"><span class="nav-icon"><i class="fa fa-list"></i></span><span class="nav-label">Playlists</span></a></li>
-      <li><a href="#albums" class="nav-link"><span class="nav-icon"><i class="fa fa-compact-disc"></i></span><span class="nav-label">Albums</span></a></li>
-      <li><a href="#artists" class="nav-link"><span class="nav-icon"><i class="fa fa-microphone"></i></span><span class="nav-label">Artists</span></a></li>
-      <li><a href="#songs" class="nav-link"><span class="nav-icon"><i class="fa fa-music"></i></span><span class="nav-label">Songs</span></a></li>
-      <div class="sidebar-divider"></div>
-      <li><a href="#watchfolders" class="nav-link"><span class="nav-icon"><i class="fa fa-folder-open"></i></span><span class="nav-label">Watch Folders</span></a></li>
-      <li><a href="#devices" class="nav-link"><span class="nav-icon"><i class="fa fa-headphones"></i></span><span class="nav-label">Alexa Devices</span></a></li>
-      <li><a href="#automation" class="nav-link"><span class="nav-icon"><i class="fa fa-clock"></i></span><span class="nav-label">Automation</span></a></li>
-      <li><a href="#routines" class="nav-link"><span class="nav-icon"><i class="fa fa-bolt"></i></span><span class="nav-label">Routines</span></a></li>
-      <li><a href="#analytics" class="nav-link"><span class="nav-icon"><i class="fa fa-chart-bar"></i></span><span class="nav-label">Analytics</span></a></li>
-      <div class="sidebar-divider"></div>
-      <li><a href="#settings" class="nav-link"><span class="nav-icon"><i class="fa fa-cog"></i></span><span class="nav-label">Settings</span></a></li>
-      <li><a href="#support" class="nav-link"><span class="nav-icon"><i class="fa fa-heart"></i></span><span class="nav-label">Support</span></a></li>
-    </ul>
-  </div>
-  <!-- End Sidebar -->
-
-  <!-- Content -->
-  <div id="content-wrapper">
-    <div class="page-header">
-      <div style="display:flex;align-items:center;gap:8px">
-        <button class="toggle-btn" id="sidebar-toggle" title="Toggle sidebar">
-          <i class="fa fa-bars"></i>
-        </button>
-        <span class="page-title" id="page-title">Dashboard</span>
+  <!-- Desktop left sidebar (Spotify Web) -->
+  <aside class="spotify-sidebar" aria-label="Sidebar">
+    <a href="#dashboard" class="spotify-logo" aria-label="Home">
+      <img src="img/bock-logo-mark.png?v=2" alt="" class="spotify-logo-mark" width="32" height="32">
+      <span>Bock Media</span>
+    </a>
+    <nav class="spotify-sidebar-nav">
+      <a href="#dashboard" class="sidebar-nav-item" data-tab="home"><i class="fa fa-house"></i><span>Home</span></a>
+      <a href="#search" class="sidebar-nav-item" data-tab="search"><i class="fa fa-magnifying-glass"></i><span>Search</span></a>
+      <a href="#library" class="sidebar-nav-item" data-tab="library"><i class="fa fa-book"></i><span>Your Library</span></a>
+    </nav>
+    <div class="spotify-library-panel">
+      <div class="spotify-library-panel-head">
+        <a href="#library" class="spotify-library-panel-title"><i class="fa fa-book"></i> Your Library</a>
+        <a href="#playlists" class="sidebar-icon-btn" title="Playlists"><i class="fa fa-plus"></i></a>
       </div>
-      <div class="header-right">
-        <div id="now-playing-bar" style="display:none;align-items:center;gap:8px;background:#e8eef9;border-radius:20px;padding:4px 14px;font-size:12px;color:#30426a;max-width:360px;overflow:hidden;cursor:pointer" onclick="window.location='#nowplaying'">
-          <i class="fa fa-music" style="color:#e99d1a"></i>
-          <span id="np-track-text" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></span>
-        </div>
-        <span class="header-badge" id="connection-badge"><i class="fa fa-circle" style="color:#2eaa5a;font-size:8px;margin-right:4px"></i>Running</span>
+      <div id="sidebar-playlist-list" class="sidebar-playlist-list" aria-label="Playlists"></div>
+    </div>
+    <div class="spotify-sidebar-footer">
+      <button type="button" id="account-menu-btn" class="sidebar-user-btn" aria-label="Settings and more">
+        <span class="sidebar-user-avatar"><i class="fa fa-user"></i></span>
+        <span>Settings &amp; more</span>
+      </button>
+    </div>
+  </aside>
+
+  <!-- Mobile drawer (settings / admin) -->
+  <aside id="app-drawer" class="app-drawer" aria-hidden="true">
+    <div class="drawer-header">
+      <span class="drawer-title">Settings &amp; more</span>
+      <button type="button" id="drawer-close" class="icon-btn" aria-label="Close"><i class="fa fa-xmark"></i></button>
+    </div>
+    <nav class="drawer-nav">
+      <a href="#rooms" class="drawer-link"><i class="fa fa-house"></i> Rooms</a>
+      <a href="#devices" class="drawer-link"><i class="fa fa-headphones"></i> Alexa Devices</a>
+      <a href="#family" class="drawer-link"><i class="fa fa-users"></i> Family</a>
+      <a href="#analytics" class="drawer-link"><i class="fa fa-chart-bar"></i> Analytics</a>
+      <a href="#watchfolders" class="drawer-link"><i class="fa fa-folder-open"></i> Watch Folders</a>
+      <a href="#automation" class="drawer-link"><i class="fa fa-clock"></i> Automations</a>
+      <a href="#settings" class="drawer-link"><i class="fa fa-cog"></i> Settings</a>
+    </nav>
+  </aside>
+  <div id="app-backdrop" class="app-backdrop hidden" aria-hidden="true"></div>
+
+  <div class="spotify-main-column">
+    <div class="spotify-mobile-header">
+      <a href="#dashboard" class="spotify-logo" aria-label="Home">
+        <img src="img/bock-logo-mark.png?v=2" alt="" class="spotify-logo-mark" width="28" height="28">
+        <span>Bock Media</span>
+      </a>
+      <div class="topbar-app-links" aria-label="Download mobile app">
+        <a id="mobile-dl-android" class="topbar-app-dl" href="#dashboard" title="Download Android app" aria-label="Download Android app"><i class="fa-brands fa-android" aria-hidden="true"></i></a>
+        <a id="mobile-dl-ios" class="topbar-app-dl" href="#dashboard" title="Install iOS app" aria-label="Install iOS app"><i class="fa-brands fa-apple" aria-hidden="true"></i></a>
       </div>
     </div>
-
     <div id="global-banner"></div>
-
-    <div class="page-content" id="main-content">
-      <div class="spinner-wrap"><div class="spinner"></div></div>
+    <header id="spotify-topbar" class="spotify-topbar">
+      <div class="topbar-nav">
+        <button type="button" class="topbar-nav-btn" id="topbar-back" aria-label="Go back"><i class="fa fa-chevron-left"></i></button>
+        <button type="button" class="topbar-nav-btn" id="topbar-forward" aria-label="Go forward"><i class="fa fa-chevron-right"></i></button>
+      </div>
+      <div class="topbar-search-wrap">
+        <form class="topbar-search" id="topbar-search-form" action="#search">
+          <i class="fa fa-magnifying-glass topbar-search-icon"></i>
+          <input type="search" id="topbar-search-q" class="topbar-search-input" placeholder="What do you want to play?" autocomplete="off" spellcheck="false">
+          <button type="button" class="topbar-search-browse" id="topbar-search-browse" title="Browse"><i class="fa fa-table-cells-large"></i></button>
+        </form>
+      </div>
+      <div class="topbar-actions">
+        <div class="topbar-app-links" aria-label="Download mobile app">
+          <a id="topbar-dl-android" class="topbar-app-dl" href="#dashboard" title="Download Android app" aria-label="Download Android app"><i class="fa-brands fa-android" aria-hidden="true"></i></a>
+          <a id="topbar-dl-ios" class="topbar-app-dl" href="#dashboard" title="Install iOS app" aria-label="Install iOS app"><i class="fa-brands fa-apple" aria-hidden="true"></i></a>
+        </div>
+        <button type="button" class="topbar-action-btn" id="topbar-settings" aria-label="Settings"><i class="fa fa-gear"></i></button>
+        <button type="button" class="topbar-profile-btn" id="topbar-profile" aria-label="Profile"><span class="topbar-profile-avatar">B</span></button>
+      </div>
+    </header>
+    <div class="spotify-content-row">
+      <span id="page-title" hidden aria-hidden="true"></span>
+      <main class="spotify-main-view page-content" id="main-content">
+        <div class="spinner-wrap"><div class="spinner"></div></div>
+      </main>
+      <aside id="spotify-queue" class="spotify-queue hidden" aria-label="Queue">
+        <div class="spotify-queue-head">
+          <h2>Queue</h2>
+          <button type="button" class="icon-btn" id="spotify-queue-close" aria-label="Close queue"><i class="fa fa-xmark"></i></button>
+        </div>
+        <div id="spotify-queue-body" class="spotify-queue-body"></div>
+      </aside>
     </div>
   </div>
-  <!-- End Content -->
 
+  <!-- Spotify-style player bar -->
+  <footer id="now-playing-bar" class="spotify-player hidden" aria-label="Player controls">
+    <div class="player-left" onclick="window.location.hash='nowplaying'" role="button" tabindex="0">
+      <div class="player-art">
+        <img id="np-art" alt="" hidden>
+        <div class="player-art-fallback"><i class="fa fa-music"></i></div>
+      </div>
+      <div class="player-track-info">
+        <span id="np-track-text" class="player-track-name"></span>
+        <span id="np-artist-text" class="player-track-artist"></span>
+      </div>
+      <button type="button" class="player-like" id="np-bar-favorite" aria-label="Favorite" onclick="event.stopPropagation()"><i class="fa-regular fa-heart"></i></button>
+    </div>
+    <div class="player-center">
+      <div class="player-transport">
+        <button type="button" class="player-btn" id="np-bar-shuffle" aria-label="Shuffle" onclick="event.stopPropagation()"><i class="fa fa-shuffle"></i></button>
+        <button type="button" class="player-btn" id="np-bar-prev" aria-label="Previous" onclick="event.stopPropagation()"><i class="fa fa-backward-step"></i></button>
+        <button type="button" class="player-btn player-btn-play" id="np-mini-play" aria-label="Play" onclick="event.stopPropagation()"><i class="fa fa-play"></i></button>
+        <button type="button" class="player-btn" id="np-bar-next" aria-label="Next" onclick="event.stopPropagation()"><i class="fa fa-forward-step"></i></button>
+        <button type="button" class="player-btn" id="np-bar-repeat" aria-label="Repeat" onclick="event.stopPropagation()"><i class="fa fa-repeat"></i></button>
+      </div>
+      <div class="player-progress">
+        <span class="player-time" id="np-bar-time-curr">0:00</span>
+        <div class="player-progress-bar"><div class="player-progress-fill" id="np-bar-progress-fill"></div></div>
+        <span class="player-time" id="np-bar-time-dur">0:00</span>
+      </div>
+    </div>
+    <div class="player-right">
+      <button type="button" class="player-btn" id="np-bar-lyrics" aria-label="Now playing" onclick="window.location.hash='nowplaying';event.stopPropagation()"><i class="fa fa-microphone-lines"></i></button>
+      <button type="button" class="player-btn" id="np-bar-queue" aria-label="Queue" onclick="event.stopPropagation()"><i class="fa fa-list-ul"></i></button>
+      <button type="button" class="player-btn" aria-label="Devices" onclick="window.location.hash='devices'"><i class="fa fa-computer-speaker"></i></button>
+      <div class="player-volume-wrap" id="np-bar-volume-wrap">
+        <button type="button" class="player-btn" id="np-bar-volume-btn" aria-label="Volume" onclick="event.stopPropagation()"><i class="fa fa-volume-high"></i></button>
+        <input type="range" class="player-volume-slider np-volume-slider" id="np-bar-volume" min="0" max="100" value="50" aria-label="Volume" onclick="event.stopPropagation()">
+      </div>
+      <button type="button" class="player-btn" id="np-bar-sleep" aria-label="Sleep timer" onclick="event.stopPropagation()"><i class="fa fa-moon"></i></button>
+      <button type="button" class="player-btn" aria-label="Full screen" onclick="window.location.hash='nowplaying'"><i class="fa fa-up-right-and-down-left-from-center"></i></button>
+    </div>
+  </footer>
+
+  <!-- Mobile bottom nav -->
+  <nav id="bottom-nav" class="bottom-nav" aria-label="Main navigation">
+    <a href="#dashboard" class="bottom-nav-link" data-tab="home"><span class="bottom-nav-icon"><i class="fa fa-house"></i></span><span class="bottom-nav-label">Home</span></a>
+    <a href="#nowplaying" class="bottom-nav-link" data-tab="nowplaying"><span class="bottom-nav-icon"><i class="fa fa-circle-play"></i></span><span class="bottom-nav-label">Now Playing</span></a>
+    <a href="#search" class="bottom-nav-link" data-tab="search"><span class="bottom-nav-icon"><i class="fa fa-magnifying-glass"></i></span><span class="bottom-nav-label">Search</span></a>
+    <a href="#library" class="bottom-nav-link" data-tab="library"><span class="bottom-nav-icon"><i class="fa fa-book"></i></span><span class="bottom-nav-label">Library</span></a>
+  </nav>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-<script src="js/app.js"></script>
+<script src="js/webCache.js?v=2"></script>
+<script src="js/boot.js?v=4"></script>
+<script src="js/homeFeed.js?v=4"></script>
+<script src="js/webPlayback.js?v=4"></script>
+<script src="js/app.js?v=70"></script>
+<script src="js/clientPrefsSync.js?v=4"></script>
 </body>
 </html>

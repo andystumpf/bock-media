@@ -1,0 +1,89 @@
+.home-greeting {
+  color: #ffffff !important;
+  -webkit-text-fill-color: #ffffff !important;
+}
+
+.card {
+  background: var(--spotify-elevated) !important;
+  border: 1px solid var(--border-subtle) !important;
+  border-radius: 8px !important;
+  color: var(--text-primary) !important;
+}
+.card-header {
+  background: transparent !important;
+  border-bottom: 1px solid var(--border-subtle) !important;
+}
+.card-header h3 { color: var(--text-primary) !important; }
+.card-header h3 i { color: var(--bock-green) !important; }
+.stat-card {
+  background: var(--spotify-elevated) !important;
+  border: 1px solid var(--border-subtle) !important;
+}
+.stat-card .stat-value { color: var(--text-primary) !important; }
+.stat-card .stat-label { color: var(--text-muted) !important; }
+.stat-card .stat-icon.blue { background: rgba(29,185,84,0.15) !important; color: var(--bock-green) !important; }
+.stat-card .stat-icon.teal { background: rgba(80,155,245,0.15) !important; color: #509bf5 !important; }
+.stat-card .stat-icon.orange { background: rgba(233,157,26,0.15) !important; color: var(--bock-gold) !important; }
+.stat-card .stat-icon.green { background: rgba(29,185,84,0.15) !important; color: var(--bock-green) !important; }
+.stat-card .stat-icon.purple { background: rgba(80,56,160,0.2) !important; color: #8d67ab !important; }
+.data-table th {
+  background: var(--spotify-surface) !important;
+  color: var(--text-muted) !important;
+  border-bottom: 1px solid var(--border-subtle) !important;
+}
+.data-table td {
+  border-bottom: 1px solid var(--border-subtle) !important;
+  color: var(--text-primary) !important;
+}
+.data-table tbody tr:hover { background: rgba(255,255,255,0.04) !important; }
+.data-table .text-muted { color: var(--text-muted) !important; }
+.data-table .badge { background: var(--spotify-surface) !important; color: var(--text-secondary) !important; }
+.btn-primary { background: var(--bock-green) !important; border-color: var(--bock-green) !important; color: var(--on-green) !important; }
+.btn-primary:hover { background: var(--bock-green-dark) !important; }
+.btn-default { background: var(--spotify-elevated) !important; border-color: var(--border-subtle) !important; color: var(--text-primary) !important; }
+.btn-default:hover { background: var(--spotify-hover) !important; }
+.pl-sort-bar .btn-sm.active { background: var(--bock-green) !important; color: var(--on-green) !important; }
+.search-hit:hover { background: rgba(255,255,255,0.06) !important; }
+.search-hit-link:hover { color: var(--bock-green) !important; }
+.settings-input {
+  background: var(--spotify-surface) !important;
+  border-color: var(--border-subtle) !important;
+  color: var(--text-primary) !important;
+}
+.settings-section h4 { color: var(--text-primary) !important; border-color: var(--border-subtle) !important; }
+.settings-section p.hint, .auto-list-meta { color: var(--text-muted) !important; }
+.modal-box { background: var(--spotify-elevated) !important; color: var(--text-primary) !important; }
+.modal-box .save-btn { background: var(--bock-green) !important; color: var(--on-green) !important; }
+.modal-box .cancel-btn { background: var(--spotify-surface) !important; color: var(--text-primary) !important; }
+.pagination-bar { background: var(--spotify-surface) !important; border-color: var(--border-subtle) !important; color: var(--text-muted) !important; }
+.page-btn { background: var(--spotify-elevated) !important; border-color: var(--border-subtle) !important; color: var(--text-primary) !important; }
+.page-btn:hover, .page-btn.active { background: var(--bock-green) !important; color: var(--on-green) !important; }
+.empty-state { color: var(--text-muted) !important; }
+.spinner { border-color: var(--spotify-elevated) !important; border-top-color: var(--bock-green) !important; }
+.global-alert { background: rgba(233,157,26,0.15) !important; border: 1px solid rgba(233,157,26,0.35) !important; color: var(--text-primary) !important; }
+.health-chip.ok { background: rgba(29,185,84,0.15) !important; color: var(--bock-green) !important; border-color: rgba(29,185,84,0.3) !important; }
+.health-chip.bad { background: rgba(233,20,41,0.15) !important; color: #e91429 !important; }
+.health-chip.unknown { background: var(--spotify-surface) !important; color: var(--text-muted) !important; }
+.np-track { color: var(--text-primary) !important; }
+.np-artist { color: var(--text-secondary) !important; }
+.np-device-row { border-color: var(--border-subtle) !important; }
+.np-group-header { color: var(--text-primary) !important; border-color: var(--border-subtle) !important; }
+.np-progress { background: rgba(255,255,255,0.2) !important; }
+.np-progress-fill { background: var(--bock-green) !important; }
+.np-volume-slider { background: rgba(255,255,255,0.2) !important; }
+.np-volume-slider::-webkit-slider-thumb { background: var(--bock-green) !important; border-color: var(--spotify-bg) !important; }
+.device-list li { border-color: var(--border-subtle) !important; }
+.device-list li:hover { background: rgba(255,255,255,0.04) !important; }
+.device-list .device-name-text { color: var(--text-primary) !important; }
+.room-card { background: var(--spotify-elevated) !important; border-color: var(--border-subtle) !important; }
+.room-card-head { background: var(--spotify-surface) !important; border-color: var(--border-subtle) !important; }
+.folder-card { background: var(--spotify-elevated) !important; border-color: var(--border-subtle) !important; }
+.folder-card .folder-path { color: var(--text-primary) !important; }
+.page-desc { background: var(--spotify-surface) !important; border-color: var(--bock-green) !important; color: var(--text-secondary) !important; }
+.pl-name-link { color: var(--bock-green) !important; }
+.an-period-btn.active { background: var(--bock-green) !important; color: var(--on-green) !important; border-color: var(--bock-green) !important; }
+.dash-quick-item { border-color: var(--border-subtle) !important; }
+.action-btn.action-play, .action-btn.action-run { color: var(--bock-green) !important; }
+.action-btn.action-play:hover { background: rgba(29,185,84,0.12) !important; }
+.back-link { color: var(--text-muted) !important; }
+.back-link:hover { color: var(--text-primary) !important; }

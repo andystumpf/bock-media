@@ -1,4 +1,13 @@
-.venv/
+# macOS / Xcode user state
+.DS_Store
+**/.DS_Store
+**/xcuserdata/
+*.xcuserstate
+*.xcschememanagement.plist
+
+# iOS local build config (copy from Config.xcconfig.example)
+ios/Config.xcconfig
+ios/build/
 
 # Runtime state (auto-generated, not committed)
 *.bak
@@ -6,9 +15,12 @@ nowplaying_state.json
 streaming_history.jsonl
 queues.json
 automations.json
+ratings.json
+favorites.json
 device_groups.json
 selected_state.json
 ignored_tracks.json
+devices.json
 server.log
 server.log.*
 msp_slu_poll.log
@@ -18,20 +30,13 @@ plex-sync.log
 tunnel.log
 health.log
 health_state.json
+.queues.lock
+.nowplaying_state.lock
 
 # Local secrets (use *.example.json templates)
 config.json
+!fixtures/demo-data/config.json
 skill/account-linking.json
-
-# Generated MSP voice catalog (contains your real playlist names; rebuild with
-# scripts/build_msp_catalog.py). Ship catalog_playlists.example.json instead.
-skill/catalog_playlists.json
-
-# Runtime device registry (auto-created on first device contact)
-devices.json
-
-# Demo dataset produced by scripts/seed_demo_data.py
-demo-data/
 
 # Extracted / cached artwork (can be regenerated)
 artwork_cache/
@@ -53,6 +58,18 @@ __pycache__/
 # Node / UI tests
 tests/ui/node_modules/
 tests/ui/package-lock.json
+
+# Android
+android/local.properties
+android/keystore.properties
+android/release.keystore
+android/*.keystore
+android/.gradle/
+android/.kotlin/
+android/app/build/
+android/build/
+android/.idea/
+android/*.iml
 
 # Editor
 .cursor/

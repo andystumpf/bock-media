@@ -1,0 +1,535 @@
+package com.bockmedia.console.ui.navigation
+
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import com.bockmedia.console.ui.testing.BockTestTags
+import androidx.navigation.NavHostController
+import androidx.navigation.NavType
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
+import com.bockmedia.console.data.api.dto.NowPlayingDeviceItem
+import com.bockmedia.console.data.repository.BockMediaRepository
+import com.bockmedia.console.domain.model.PlayTarget
+import com.bockmedia.console.domain.model.PlaybackFocus
+import com.bockmedia.console.ui.AlexaAuthMonitor
+import com.bockmedia.console.ui.refreshAlexaControlsAvailable
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import com.bockmedia.console.ui.analytics.AnalyticsScreen
+import com.bockmedia.console.ui.automation.AutomationScreen
+import com.bockmedia.console.ui.components.DeviceCatalog
+import com.bockmedia.console.ui.components.MiniNowPlayingBar
+import com.bockmedia.console.ui.components.PlayTargetLauncher
+import com.bockmedia.console.ui.downloads.DownloadsScreen
+import com.bockmedia.console.ui.favorites.FavoritesScreen
+import com.bockmedia.console.ui.recent.RecentRequestsScreen
+import com.bockmedia.console.ui.routines.RoutinesScreen
+import com.bockmedia.console.ui.devices.DevicesScreen
+import com.bockmedia.console.ui.driving.DrivingModeScreen
+import com.bockmedia.console.ui.family.FamilyScreen
+import com.bockmedia.console.ui.family.ProfilePickerGate
+import com.bockmedia.console.ui.home.HomeScreen
+import com.bockmedia.console.ui.library.AlbumDetailScreen
+import com.bockmedia.console.ui.library.AlbumsScreen
+import com.bockmedia.console.ui.library.ArtistDetailScreen
+import com.bockmedia.console.ui.library.ArtistsScreen
+import com.bockmedia.console.ui.library.LibraryScreen
+import com.bockmedia.console.ui.library.SongsScreen
+import com.bockmedia.console.ui.nowplaying.NowPlayingScreen
+import com.bockmedia.console.ui.nowplaying.resolveSerial
+import com.bockmedia.console.ui.playlists.PlaylistDetailScreen
+import com.bockmedia.console.ui.playlists.PlaylistsScreen
+import com.bockmedia.console.ui.rooms.RoomsScreen
+import com.bockmedia.console.ui.search.GenreDetailScreen
+import com.bockmedia.console.ui.search.SearchScreen
+import com.bockmedia.console.ui.about.AboutScreen
+import com.bockmedia.console.ui.settings.SettingsScreen
+import java.net.URLDecoder
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun BockApp(repository: BockMediaRepository, deepLinkRoute: String? = null) {
+    val navController = rememberNavController()
+    val snackbarHostState = remember { SnackbarHostState() }
+    var playTarget by remember { mutableStateOf<PlayTarget?>(null) }
+    var pendingOpenNowPlaying by remember { mutableStateOf(false) }
+    var playbackFocusGeneration by remember { mutableIntStateOf(PlaybackFocus.generation) }
+    var remoteOk by remember { mutableStateOf(DeviceCatalog.peek()?.remoteReady == true) }
+    var alexaDevices by remember { mutableStateOf(emptyList<com.bockmedia.console.data.api.dto.AlexaDevice>()) }
+    val scope = rememberCoroutineScope()
+    val appContext = LocalContext.current
+
+    val navBackStackEntry by navController.currentBackStackEntryAsState()
+    val fullRoute = navBackStackEntry?.destination?.route
+    val header = resolveScreenHeader(navBackStackEntry)
+    val showBottomNav = isBottomNavRoute(fullRoute)
+    val showMiniBar = showBottomNav
+    val isBottomNavRoot = isBottomNavRoot(fullRoute)
+    val isNowPlaying = fullRoute?.substringBefore("/") == BockRoute.NowPlaying.route
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(repository) {
+        var prevRemoteOk = remoteOk
+        while (true) {
+            val ok = refreshAlexaControlsAvailable(repository)
+            if (ok && !prevRemoteOk) DeviceCatalog.invalidate()
+            prevRemoteOk = ok
+            remoteOk = ok
+            delay(60_000)
+        }
+    }
+    DisposableEffect(lifecycleOwner, repository, scope) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                scope.launch {
+                    val wasOk = remoteOk
+                    val ok = refreshAlexaControlsAvailable(repository)
+                    if (ok && !wasOk) DeviceCatalog.invalidate()
+                    remoteOk = ok
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    LaunchedEffect(deepLinkRoute) {
+        val dest = deepLinkRoute?.removePrefix("#")?.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
+        // The NavHost installs its graph during its own composition, which can land
+        // after this effect runs. Navigating before the graph exists throws and crashes
+        // the app (killing any in-progress work), so wait until the start destination is
+        // on the back stack, then navigate defensively.
+        snapshotFlow { navController.currentBackStackEntry }.filterNotNull().first()
+        runCatching { navController.navigate(dest) { launchSingleTop = true } }
+    }
+
+    // Land on Now Playing once playback starts, removing the playlist detail screen
+    // (and the device sheet's host) so back returns to the list rather than the picker.
+    fun openNowPlayingAfterPlay() {
+        navController.navigate(BockRoute.NowPlaying.route) {
+            launchSingleTop = true
+            popUpTo(ROUTE_PLAYLIST_DETAIL) { inclusive = true }
+        }
+    }
+
+    LaunchedEffect(playTarget, pendingOpenNowPlaying) {
+        if (!pendingOpenNowPlaying || playTarget != null) return@LaunchedEffect
+        pendingOpenNowPlaying = false
+        openNowPlayingAfterPlay()
+    }
+
+    AlexaAuthMonitor(repository, snackbarHostState)
+
+    PlayTargetLauncher(
+        repository,
+        playTarget,
+        remoteOk,
+        snackbarHostState,
+        onClear = { playTarget = null },
+        onPlayStarted = { _, _ ->
+            playbackFocusGeneration = PlaybackFocus.generation
+            pendingOpenNowPlaying = true
+        },
+        onLocalPlayStarted = {
+            playbackFocusGeneration = PlaybackFocus.generation
+            pendingOpenNowPlaying = true
+        },
+    )
+
+    suspend fun runMiniControl(dev: NowPlayingDeviceItem, action: String) {
+        if (com.bockmedia.console.media.isLocalPhoneDevice(dev.deviceId)) {
+            when (action) {
+                "play", "pause" -> com.bockmedia.console.media.LocalPlaybackController.togglePlayPause(appContext)
+                "next" -> com.bockmedia.console.media.LocalPlaybackController.skip(appContext, forward = true)
+                "previous" -> com.bockmedia.console.media.LocalPlaybackController.skip(appContext, forward = false)
+                "stop" -> com.bockmedia.console.media.LocalPlaybackController.stop(appContext)
+            }
+            return
+        }
+        val serial = resolveSerial(dev, alexaDevices)
+        runCatching {
+            repository.deviceControl(dev.deviceId, dev.deviceName ?: "", serial, action)
+        }
+    }
+
+    val isAlbumDetail = navBackStackEntry?.destination?.route == ROUTE_SONGS_ALBUM
+    val isArtistDetail = navBackStackEntry?.destination?.route == ROUTE_ALBUMS_ARTIST
+    val isPlaylistDetail = navBackStackEntry?.destination?.route == ROUTE_PLAYLIST_DETAIL
+    val isImmersiveDetail = isAlbumDetail || isArtistDetail || isPlaylistDetail
+
+    ProfilePickerGate(repository) {
+    Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
+        containerColor = if (isImmersiveDetail) Color.Transparent else MaterialTheme.colorScheme.background,
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
+        topBar = {
+            if (!isNowPlaying && !isBottomNavRoot && !isImmersiveDetail) {
+                TopAppBar(
+                    modifier = Modifier.statusBarsPadding(),
+                    title = {
+                        Text(
+                            header.title,
+                            maxLines = 1,
+                            color = if (isImmersiveDetail) Color.White else MaterialTheme.colorScheme.onSurface,
+                        )
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = if (isImmersiveDetail) Color.Transparent else MaterialTheme.colorScheme.background,
+                        scrolledContainerColor = if (isImmersiveDetail) Color.Transparent else MaterialTheme.colorScheme.background,
+                        navigationIconContentColor = if (isImmersiveDetail) Color.White else MaterialTheme.colorScheme.onSurface,
+                    ),
+                    navigationIcon = {
+                        if (header.showBack) {
+                            IconButton(onClick = { navController.popBackStack() }) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+                            }
+                        }
+                    },
+                )
+            }
+        },
+        bottomBar = {
+            if (showBottomNav) {
+                NavigationBar(
+                    modifier = Modifier.testTag(BockTestTags.BOTTOM_NAV),
+                    containerColor = MaterialTheme.colorScheme.background,
+                ) {
+                    BockRoute.bottomNavRoutes.forEach { route ->
+                        val selected = fullRoute?.substringBefore("/") == route.route
+                        val navTag = when (route) {
+                            BockRoute.Home -> BockTestTags.NAV_HOME
+                            BockRoute.Search -> BockTestTags.NAV_SEARCH
+                            BockRoute.Library -> BockTestTags.NAV_LIBRARY
+                            BockRoute.Downloads -> BockTestTags.NAV_DOWNLOADS
+                            BockRoute.Automations -> BockTestTags.NAV_AUTOMATIONS
+                            else -> "bock_nav_${route.route}"
+                        }
+                        NavigationBarItem(
+                            modifier = Modifier.testTag(navTag),
+                            selected = selected,
+                            onClick = {
+                                navController.navigate(route.route) {
+                                    launchSingleTop = true
+                                    popUpTo(BockRoute.Home.route) { saveState = true }
+                                    restoreState = true
+                                }
+                            },
+                            icon = { Icon(route.icon, contentDescription = route.title) },
+                            label = {},
+                            alwaysShowLabel = false,
+                        )
+                    }
+                }
+            }
+        },
+    ) { padding ->
+        Box(
+            modifier = when {
+                isNowPlaying -> Modifier.fillMaxSize()
+                isBottomNavRoot || isImmersiveDetail -> Modifier
+                    .fillMaxSize()
+                    .padding(bottom = padding.calculateBottomPadding())
+                else -> Modifier
+                    .padding(padding)
+                    .fillMaxSize()
+            },
+        ) {
+            BockNavHost(
+                navController = navController,
+                repository = repository,
+                remoteOk = remoteOk,
+                snackbarHostState = snackbarHostState,
+                onPlay = { playTarget = it },
+                onLocalPlayStarted = {
+                    playbackFocusGeneration = PlaybackFocus.generation
+                    openNowPlayingAfterPlay()
+                },
+                playbackFocusGeneration = playbackFocusGeneration,
+                modifier = Modifier.fillMaxSize(),
+            )
+            if (showMiniBar) {
+                MiniNowPlayingBar(
+                    repository = repository,
+                    remoteOk = remoteOk,
+                    playbackFocusGeneration = playbackFocusGeneration,
+                    onOpenNowPlaying = {
+                        navController.navigate(BockRoute.NowPlaying.route) {
+                            launchSingleTop = true
+                        }
+                    },
+                    onControl = { dev, action ->
+                        if (alexaDevices.isEmpty()) {
+                            runCatching { alexaDevices = repository.alexaRemoteDevices().devices }
+                        }
+                        runMiniControl(dev, action)
+                    },
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth(),
+                )
+            }
+        }
+    }
+    }
+}
+
+@Composable
+private fun BockNavHost(
+    navController: NavHostController,
+    repository: BockMediaRepository,
+    remoteOk: Boolean,
+    snackbarHostState: SnackbarHostState,
+    onPlay: (PlayTarget) -> Unit,
+    onLocalPlayStarted: () -> Unit = {},
+    playbackFocusGeneration: Int = 0,
+    modifier: Modifier = Modifier,
+) {
+    NavHost(
+        navController,
+        startDestination = BockRoute.Home.route,
+        modifier = modifier,
+        enterTransition = { EnterTransition.None },
+        exitTransition = { ExitTransition.None },
+        popEnterTransition = { EnterTransition.None },
+        popExitTransition = { ExitTransition.None },
+    ) {
+        composable(BockRoute.Home.route) {
+            HomeScreen(
+                repository = repository,
+                remoteOk = remoteOk,
+                onPlay = onPlay,
+                onAccountNavigate = { route ->
+                    navController.navigate(route) { launchSingleTop = true }
+                },
+                onOpenDownloads = {
+                    navController.navigate(BockRoute.Downloads.route) { launchSingleTop = true }
+                },
+                onBrowseHomeCard = { card -> navController.browseHomeCard(card) },
+            )
+        }
+        composable(BockRoute.NowPlaying.route) {
+            NowPlayingScreen(
+                repository = repository,
+                snackbarHostState = snackbarHostState,
+                onBack = { navController.popBackStack() },
+                playbackFocusGeneration = playbackFocusGeneration,
+            )
+        }
+        composable(BockRoute.Library.route) {
+            LibraryScreen(
+                repository = repository,
+                remoteOk = remoteOk,
+                onPlay = onPlay,
+                onOpenPlaylist = { id -> navController.navigate(playlistDetailRoute(id)) },
+                onOpenArtist = { name -> navController.navigate(albumsArtistRoute(name)) },
+                onOpenAlbum = { name, artist -> navController.navigate(songsAlbumRoute(name, artist)) },
+                onOpenFavorites = { navController.navigate(BockRoute.Favorites.route) },
+                onOpenPlaylists = { navController.navigate(BockRoute.Playlists.route) },
+                onAccountNavigate = { route ->
+                    navController.navigate(route) { launchSingleTop = true }
+                },
+            )
+        }
+        composable(BockRoute.Favorites.route) {
+            FavoritesScreen(
+                repository = repository,
+                remoteOk = remoteOk,
+                onPlay = onPlay,
+                onOpenPlaylist = { id -> navController.navigate(playlistDetailRoute(id)) },
+                onBrowseSearch = { navController.navigate(BockRoute.Search.route) },
+                onOpenLibrary = { navController.navigate(BockRoute.Library.route) },
+            )
+        }
+        composable(BockRoute.Downloads.route) {
+            DownloadsScreen(
+                onOpenPlaylist = { id ->
+                    navController.navigate(playlistDetailRoute(id))
+                },
+                snackbarHostState = snackbarHostState,
+                onOpenNowPlaying = {
+                    navController.navigate(BockRoute.NowPlaying.route) { launchSingleTop = true }
+                },
+            )
+        }
+        composable(BockRoute.Routines.route) { RoutinesScreen(repository) }
+        composable(BockRoute.RecentRequests.route) { RecentRequestsScreen(repository) }
+        composable(BockRoute.Search.route) {
+            SearchScreen(
+                repository,
+                remoteOk,
+                onPlay,
+                onOpenArtist = { navController.navigate(albumsArtistRoute(it)) },
+                onOpenAlbum = { album, artist -> navController.navigate(songsAlbumRoute(album, artist)) },
+                onOpenGenre = { name -> navController.navigate(genreRoute(name)) },
+                onOpenPlaylist = { id ->
+                    navController.navigate(playlistDetailRoute(id)) { launchSingleTop = true }
+                },
+                onAccountNavigate = { route ->
+                    navController.navigate(route) { launchSingleTop = true }
+                },
+                snackbarHostState = snackbarHostState,
+            )
+        }
+        composable(
+            ROUTE_GENRE,
+            arguments = listOf(navArgument("name") { type = NavType.StringType }),
+        ) { entry ->
+            val genreName = URLDecoder.decode(entry.arguments?.getString("name") ?: "", "UTF-8")
+            GenreDetailScreen(
+                genreName = genreName,
+                repository = repository,
+                remoteOk = remoteOk,
+                onPlay = onPlay,
+                onOpenArtist = { navController.navigate(albumsArtistRoute(it)) },
+                onOpenAlbum = { album, artist -> navController.navigate(songsAlbumRoute(album, artist)) },
+            )
+        }
+        composable(BockRoute.Automations.route) {
+            AutomationScreen(
+                repository = repository,
+                onAccountNavigate = { route ->
+                    navController.navigate(route) { launchSingleTop = true }
+                },
+            )
+        }
+        composable(BockRoute.Playlists.route) {
+            PlaylistsScreen(repository, remoteOk, onPlay) { id ->
+                navController.navigate(playlistDetailRoute(id))
+            }
+        }
+        composable(
+            ROUTE_PLAYLIST_DETAIL,
+            arguments = listOf(navArgument("id") { type = NavType.StringType }),
+        ) { entry ->
+            PlaylistDetailScreen(
+                repository,
+                entry.arguments?.getString("id") ?: "",
+                remoteOk,
+                onPlay,
+                onBack = { navController.popBackStack() },
+                onLocalPlayStarted = onLocalPlayStarted,
+            )
+        }
+        composable(BockRoute.Artists.route) {
+            ArtistsScreen(repository, remoteOk, onPlay) { artist ->
+                navController.navigate(albumsArtistRoute(artist))
+            }
+        }
+        composable(
+            ROUTE_ALBUMS_ARTIST,
+            arguments = listOf(navArgument("artist") { type = NavType.StringType }),
+        ) { entry ->
+            val artist = URLDecoder.decode(entry.arguments?.getString("artist") ?: "", "UTF-8")
+            ArtistDetailScreen(
+                artistName = artist,
+                repository = repository,
+                remoteOk = remoteOk,
+                onPlay = onPlay,
+                onBack = { navController.popBackStack() },
+                onOpenAlbum = { album, artistName ->
+                    navController.navigate(songsAlbumRoute(album, artistName))
+                },
+                onOpenArtist = { name -> navController.navigate(albumsArtistRoute(name)) },
+                snackbarHostState = snackbarHostState,
+            )
+        }
+        composable(BockRoute.Albums.route) {
+            AlbumsScreen(repository, null, remoteOk, onPlay, { album, artistName ->
+                navController.navigate(songsAlbumRoute(album, artistName))
+            })
+        }
+        composable(
+            ROUTE_SONGS_ARTIST,
+            arguments = listOf(navArgument("artist") { type = NavType.StringType }),
+        ) { entry ->
+            val artist = URLDecoder.decode(entry.arguments?.getString("artist") ?: "", "UTF-8")
+            SongsScreen(repository, artist, null, remoteOk, onPlay)
+        }
+        composable(
+            ROUTE_SONGS_ALBUM,
+            arguments = listOf(
+                navArgument("album") { type = NavType.StringType },
+                navArgument("artist") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
+                },
+            ),
+        ) { entry ->
+            val album = URLDecoder.decode(entry.arguments?.getString("album") ?: "", "UTF-8")
+            val artist = entry.arguments?.getString("artist")?.let {
+                URLDecoder.decode(it, "UTF-8").takeIf { s -> s.isNotBlank() }
+            }
+            AlbumDetailScreen(
+                albumName = album,
+                artistFilter = artist,
+                repository = repository,
+                remoteOk = remoteOk,
+                onPlay = onPlay,
+                onBack = { navController.popBackStack() },
+                snackbarHostState = snackbarHostState,
+            )
+        }
+        composable(BockRoute.Songs.route) { SongsScreen(repository, null, null, remoteOk, onPlay) }
+        composable(BockRoute.Rooms.route) {
+            RoomsScreen(
+                repository = repository,
+                remoteOk = remoteOk,
+                onPlay = onPlay,
+                onOpenNowPlaying = {
+                    navController.navigate(BockRoute.NowPlaying.route) { launchSingleTop = true }
+                },
+            )
+        }
+        composable(BockRoute.Devices.route) { DevicesScreen(repository) }
+        composable(BockRoute.Family.route) { FamilyScreen(repository) }
+        composable(BockRoute.Driving.route) {
+            DrivingModeScreen(
+                repository = repository,
+                onOpenNowPlaying = {
+                    navController.navigate(BockRoute.NowPlaying.route) { launchSingleTop = true }
+                },
+            )
+        }
+        composable(BockRoute.Analytics.route) { AnalyticsScreen(repository) }
+        composable(BockRoute.Settings.route) {
+            SettingsScreen(
+                repository = repository,
+                snackbarHostState = snackbarHostState,
+                onOpenNowPlaying = {
+                    navController.navigate(BockRoute.NowPlaying.route) { launchSingleTop = true }
+                },
+                onOpenPlaylist = { id ->
+                    navController.navigate(playlistDetailRoute(id))
+                },
+                onOpenPlaylists = { navController.navigate(BockRoute.Playlists.route) },
+            )
+        }
+        composable(BockRoute.About.route) {
+            AboutScreen(repository = repository)
+        }
+    }
+}

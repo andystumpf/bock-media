@@ -30,8 +30,8 @@ Config (env, with defaults):
   OURMEDIA_PLEX_URL          http://localhost:32400
   OURMEDIA_PLEX_TOKEN        (else read from OURMEDIA_PLEX_PREFS)
   OURMEDIA_PLEX_PREFS        /var/lib/plexmediaserver/.../Preferences.xml
-  OURMEDIA_DATA_DIR          /home/youruser/.bockmedia      (holds ServerPlaylists.xml)
-  OURMEDIA_MUSIC_ROOT        /srv/music
+  OURMEDIA_DATA_DIR          fixtures/demo-data      (holds ServerPlaylists.xml)
+  OURMEDIA_MUSIC_ROOT        fixtures/demo-data/music
   OURMEDIA_PLEX_PLAYLIST_DIR <MUSIC_ROOT>/exportedPlaylists/plex  (.m3u output)
 """
 import argparse
@@ -47,9 +47,14 @@ from urllib.parse import quote
 from urllib.request import urlopen
 from xml.sax.saxutils import escape
 
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+from playlist_xml_lock import playlist_xml_lock
+
 PLEX_URL   = os.environ.get('OURMEDIA_PLEX_URL', 'http://localhost:32400').rstrip('/')
-DATA_DIR   = os.environ.get('OURMEDIA_DATA_DIR', '/home/youruser/.bockmedia')
-MUSIC_ROOT = os.environ.get('OURMEDIA_MUSIC_ROOT', '/srv/music')
+DATA_DIR   = os.environ.get('OURMEDIA_DATA_DIR', os.path.join(os.path.dirname(__file__), '..', 'fixtures', 'demo-data'))
+MUSIC_ROOT = os.environ.get('OURMEDIA_MUSIC_ROOT', os.path.join(os.path.dirname(__file__), '..', 'fixtures', 'demo-data', 'music'))
 PLAYLIST_DIR = os.environ.get(
     'OURMEDIA_PLEX_PLAYLIST_DIR', os.path.join(MUSIC_ROOT, 'exportedPlaylists', 'plex'))
 PREFS_PATH = os.environ.get(
@@ -125,10 +130,46 @@ def m3u_path_for(name, rating_key):
 
 
 def write_m3u(path, tracks):
-    with open(path, 'w', encoding='utf-8') as f:
+    os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+    tmp = path + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
         f.write('#EXTM3U\n')
         for t in tracks:
             f.write(t + '\n')
+    os.replace(tmp, path)
+
+
+def referenced_m3u_paths(root):
+    paths = set()
+    for entry in root.findall('Entry'):
+        key = entry.find('Key')
+        if key is None:
+            continue
+        src = (key.findtext('SourceID') or '').strip()
+        if src.lower().endswith('.m3u'):
+            paths.add(os.path.normpath(src))
+    return paths
+
+
+def prune_orphan_m3us(root, playlist_dir):
+    """Drop .m3u files under playlist_dir not listed in ServerPlaylists.xml."""
+    if not os.path.isdir(playlist_dir):
+        return 0
+    valid = referenced_m3u_paths(root)
+    removed = 0
+    for fn in os.listdir(playlist_dir):
+        if not fn.lower().endswith('.m3u'):
+            continue
+        full = os.path.normpath(os.path.join(playlist_dir, fn))
+        if full in valid:
+            continue
+        try:
+            os.remove(full)
+            removed += 1
+            log(f'  - ORPHAN  {fn}')
+        except OSError:
+            pass
+    return removed
 
 
 def stable_id(rating_key):
@@ -210,6 +251,8 @@ def main():
     new_state = {}
     entries = []          # (name, xml_string)
     synced_names = set()
+    pending_m3u_writes = {}   # path -> tracks (deferred until XML is committed)
+    pending_m3u_removals = set()
 
     for p in pls:
         key, title, leaf, upd = p['key'], p['title'], p['leafCount'], p['updatedAt']
@@ -225,14 +268,15 @@ def main():
             tracks = [t for t in fetch_tracks(key, token) if os.path.isfile(t)]
             if len(tracks) < args.min_tracks:
                 skipped += 1
+                # Dropped below the threshold: defer removal until XML is committed.
+                if not args.dry_run and prev and prev.get('m3u'):
+                    pending_m3u_removals.add(os.path.normpath(prev['m3u']))
                 continue
             track_count = len(tracks)
             if not args.dry_run:
-                # Plex title may have changed -> remove the old m3u path.
-                if prev and prev.get('m3u') and prev['m3u'] != m3u and os.path.isfile(prev['m3u']):
-                    try: os.remove(prev['m3u'])
-                    except OSError: pass
-                write_m3u(m3u, tracks)
+                if prev and prev.get('m3u') and os.path.normpath(prev['m3u']) != os.path.normpath(m3u):
+                    pending_m3u_removals.add(os.path.normpath(prev['m3u']))
+                pending_m3u_writes[os.path.normpath(m3u)] = tracks
             if prev is None:
                 created += 1; log(f'  + CREATE  {title}  ({track_count} tracks)')
             else:
@@ -253,9 +297,8 @@ def main():
             deleted += 1
             log(f'  - DELETE  {prev.get("name", key)}')
             mp = prev.get('m3u')
-            if mp and os.path.isfile(mp) and not args.dry_run:
-                try: os.remove(mp)
-                except OSError: pass
+            if mp and not args.dry_run:
+                pending_m3u_removals.add(os.path.normpath(mp))
 
     vlog(f'Plex playlists: {len(pls)} (created {created}, updated {updated}, '
          f'unchanged {unchanged}, skipped {skipped}, deleted {deleted}).')
@@ -263,44 +306,74 @@ def main():
     # ── Merge into ServerPlaylists.xml ──────────────────────────────────────
     ET.register_namespace('xsd', XSD)
     ET.register_namespace('xsi', XSI)
-    tree = ET.parse(SERVER_PLAYLISTS)
-    root = tree.getroot()
+    with playlist_xml_lock(DATA_DIR, exclusive=True):
+        tree = ET.parse(SERVER_PLAYLISTS)
+        root = tree.getroot()
 
-    removed_plex = removed_dupe = kept = 0
-    for entry in list(root.findall('Entry')):
-        key = entry.find('Key')
-        if key is None:
-            continue
-        src = (key.findtext('SourceName') or '').strip().lower()
-        nm = (key.findtext('Name') or '').strip().lower()
-        if src == SOURCE_MARKER:
-            root.remove(entry); removed_plex += 1
-        elif nm in synced_names:
-            root.remove(entry); removed_dupe += 1
+        removed_plex = removed_dupe = kept = 0
+        for entry in list(root.findall('Entry')):
+            key = entry.find('Key')
+            if key is None:
+                continue
+            src = (key.findtext('SourceName') or '').strip().lower()
+            nm = (key.findtext('Name') or '').strip().lower()
+            if src == SOURCE_MARKER:
+                root.remove(entry); removed_plex += 1
+            elif nm in synced_names:
+                root.remove(entry); removed_dupe += 1
+            else:
+                kept += 1
+
+        for _, xml_str in entries:
+            root.append(ET.fromstring(xml_str))
+
+        vlog(f'Existing rows: kept {kept} My-Media, replaced {removed_dupe} name-dupes, '
+             f'rebuilt {removed_plex} prior Plex rows.')
+
+        changed_anything = bool(created or updated or deleted or removed_dupe
+                                or removed_plex != len(entries))
+        if args.dry_run:
+            log('DRY RUN — no files written.')
+            return 0
+
+        wrote_xml = False
+        if changed_anything or removed_plex != len(entries):
+            bak = f'{SERVER_PLAYLISTS}.{_dt.datetime.now():%Y%m%d-%H%M%S}.bak'
+            shutil.copy2(SERVER_PLAYLISTS, bak)
+            # Atomic write (temp file + rename) so a crash never leaves a
+            # truncated ServerPlaylists.xml behind.
+            tmp = SERVER_PLAYLISTS + '.tmp'
+            tree.write(tmp, xml_declaration=True, encoding='utf-8')
+            os.replace(tmp, SERVER_PLAYLISTS)
+            wrote_xml = True
+            log(f'Wrote ServerPlaylists.xml ({len(root.findall("Entry"))} entries). Backup: {bak}')
         else:
-            kept += 1
+            vlog('No playlist changes; ServerPlaylists.xml left untouched.')
 
-    for _, xml_str in entries:
-        root.append(ET.fromstring(xml_str))
+        if pending_m3u_removals or pending_m3u_writes:
+            for rm in pending_m3u_removals:
+                if os.path.isfile(rm):
+                    try:
+                        os.remove(rm)
+                    except OSError:
+                        pass
+            for m3u_path, tracks in pending_m3u_writes.items():
+                write_m3u(m3u_path, tracks)
+        orphans = prune_orphan_m3us(root, PLAYLIST_DIR)
+        if orphans:
+            log(f'Pruned {orphans} orphan .m3u file(s).')
+        # Save the cache only after the XML is on disk, so a crash can't leave
+        # the cache ahead of the XML (which would skip the re-sync next run).
+        save_state(new_state)
 
-    vlog(f'Existing rows: kept {kept} My-Media, replaced {removed_dupe} name-dupes, '
-         f'rebuilt {removed_plex} prior Plex rows.')
-
-    changed_anything = bool(created or updated or deleted or removed_dupe
-                            or removed_plex != len(entries))
-    if args.dry_run:
-        log('DRY RUN — no files written.')
-        return 0
-
-    # Always refresh state; only rewrite the (large) XML + backup when needed.
-    save_state(new_state)
-    if changed_anything or removed_plex != len(entries):
-        bak = f'{SERVER_PLAYLISTS}.{_dt.datetime.now():%Y%m%d-%H%M%S}.bak'
-        shutil.copy2(SERVER_PLAYLISTS, bak)
-        tree.write(SERVER_PLAYLISTS, xml_declaration=True, encoding='utf-8')
-        log(f'Wrote ServerPlaylists.xml ({len(root.findall("Entry"))} entries). Backup: {bak}')
-    else:
-        vlog('No playlist changes; ServerPlaylists.xml left untouched.')
+    # Sidecar rebuild takes its own shared lock — must run after the exclusive
+    # lock above is released or it would deadlock against ourselves.
+    if wrote_xml:
+        try:
+            import catalog_cache
+            catalog_cache.rebuild_playlists_index_from_xml(DATA_DIR, SERVER_PLAYLISTS)
+        except Exception as ex:
+            log(f'playlist index sidecar: {ex}')
     return 0
 
 

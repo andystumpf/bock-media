@@ -1,23 +1,30 @@
+# Example systemd unit for Bock Media backend.
+# Copy to the server: sudo cp ourmedia.service.example /etc/systemd/system/ourmedia.service
+#
+# For router port-forward (public IP:3001 -> this host), gunicorn MUST bind 0.0.0.0:3001.
+# Binding 127.0.0.1 only works with Cloudflare tunnel, not direct port-forward.
+
 [Unit]
 Description=Bock Media Flask backend
-Wants=network-online.target
-After=network-online.target
+After=network.target
 
 [Service]
 Type=simple
-User=youruser
-Group=youruser
-WorkingDirectory=/home/youruser/bock-media
-ExecStart=/usr/bin/python3 /home/youruser/bock-media/server.py
+User=bockmedia
+Group=bockmedia
+WorkingDirectory=/opt/bock-media
 Environment=PORT=3001
-# External data locations (override here to relocate; no code changes needed)
-Environment=OURMEDIA_DB_PATH=/srv/music/music_organizer.db
-Environment=OURMEDIA_DATA_DIR=/home/youruser/.bockmedia
-Environment=OURMEDIA_MUSIC_ROOT=/srv/music
+Environment=OURMEDIA_DB_PATH=/var/lib/bockmedia/songs_cache.db
+Environment=OURMEDIA_DATA_DIR=/var/lib/bockmedia
+Environment=OURMEDIA_MUSIC_ROOT=/var/lib/bockmedia/music
+ExecStart=/usr/bin/python3 -m gunicorn \
+    --bind 0.0.0.0:3001 \
+    --workers 1 \
+    --timeout 120 \
+    --access-logfile - \
+    server:app
 Restart=always
-RestartSec=3
-StandardOutput=append:/home/youruser/bock-media/server.log
-StandardError=append:/home/youruser/bock-media/server.log
+RestartSec=5
 
 [Install]
-WantedBy=ourmedia-stack.target
+WantedBy=multi-user.target

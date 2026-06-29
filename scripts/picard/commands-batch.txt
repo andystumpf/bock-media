@@ -1,0 +1,13 @@
+# Picard 2.9+ batch sequence (one folder per picard_batch.sh invocation).
+# LOAD is passed on the command line; this file runs after files are loaded.
+
+CLUSTER
+LOOKUP_CLUSTERED
+SAVE_MATCHED
+REMOVE_SAVED
+REMOVE_EMPTY
+SCAN
+SAVE_MATCHED
+REMOVE_SAVED
+REMOVE_EMPTY
+QUIT force

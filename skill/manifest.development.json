@@ -4,11 +4,14 @@
       "custom": {
         "endpoint": {
           "sslCertificateType": "Wildcard",
-          "uri": "https://your-domain.example.com/alexa"
+          "uri": "https://your-tunnel.example.com/alexa"
         },
         "interfaces": [
           {
             "type": "AUDIO_PLAYER"
+          },
+          {
+            "type": "ALEXA_PRESENTATION_APL"
           }
         ],
         "locales": {}

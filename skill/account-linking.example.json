@@ -1,8 +1,8 @@
 {
   "accountLinkingRequest": {
     "type": "AUTH_CODE",
-    "authorizationUrl": "https://your-domain.example.com/oauth/authorize",
-    "accessTokenUrl": "https://your-domain.example.com/oauth/token",
+    "authorizationUrl": "https://your-tunnel.example.com/oauth/authorize",
+    "accessTokenUrl": "https://your-tunnel.example.com/oauth/token",
     "clientId": "ourmedia-msp-client",
     "clientSecret": "SAME_AS_config.json_mspOauth_clientSecret",
     "accessTokenScheme": "HTTP_BASIC",

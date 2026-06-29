@@ -39,8 +39,8 @@ import xml.etree.ElementTree as ET
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
-DATA_DIR = os.environ.get('OURMEDIA_DATA_DIR', '/home/youruser/.bockmedia')
-DB_PATH = os.environ.get('OURMEDIA_DB_PATH', '/srv/music/music_organizer.db')
+DATA_DIR = os.environ.get('OURMEDIA_DATA_DIR', os.path.join(os.path.dirname(__file__), '..', 'fixtures', 'demo-data'))
+DB_PATH = os.environ.get('OURMEDIA_DB_PATH', os.path.join(os.path.dirname(__file__), '..', 'fixtures', 'demo-data', 'songs_cache.db'))
 SERVER_PLAYLISTS = os.path.join(DATA_DIR, 'ServerPlaylists.xml')
 FFPROBE = os.environ.get('OURMEDIA_FFPROBE', 'ffprobe')
 

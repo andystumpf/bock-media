@@ -36,10 +36,10 @@ from collections import defaultdict
 from difflib import SequenceMatcher
 from pathlib import Path
 
-_MUSIC_ROOT  = os.environ.get('OURMEDIA_MUSIC_ROOT', '/srv/music')
+_MUSIC_ROOT  = os.environ.get('OURMEDIA_MUSIC_ROOT', os.path.join(os.path.dirname(__file__), '..', 'fixtures', 'demo-data', 'music'))
 PLAYLIST_DIR = Path(os.environ.get('OURMEDIA_PLAYLIST_DIR', os.path.join(_MUSIC_ROOT, 'exportedPlaylists')))
 DB_PATH      = Path(os.environ.get('OURMEDIA_DB_PATH', os.path.join(_MUSIC_ROOT, 'music_organizer.db')))
-DATA_DIR     = os.environ.get('OURMEDIA_DATA_DIR', '/home/youruser/.bockmedia')
+DATA_DIR     = os.environ.get('OURMEDIA_DATA_DIR', os.path.join(os.path.dirname(__file__), '..', 'fixtures', 'demo-data'))
 SERVER_PLAYLISTS = Path(DATA_DIR) / 'ServerPlaylists.xml'
 
 

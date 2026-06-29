@@ -16,10 +16,13 @@ if calls start returning not_authenticated.
 import asyncio
 import json
 import os
+import socket
+import threading
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.environ.get('OURMEDIA_DATA_DIR', os.path.expanduser('~/.bockmedia'))
-CONFIG_PATH = os.path.join(HERE, 'config.json')
+CONFIG_PATH = os.path.join(DATA_DIR, 'config.json')
 
 # Device families that can render audio (exclude Fire TV remotes, the app, etc.)
 _PLAYABLE_FAMILIES = {'ECHO', 'ROOK', 'KNIGHT', 'WHA', 'FIRE_TV', 'TABLET'}
@@ -68,6 +71,12 @@ def is_configured():
 # this inline in a request hot path; the health-check timer refreshes it.
 _AUTH_CACHE = {'ts': 0.0, 'ok': None}
 _AUTH_CACHE_TTL = 120.0
+
+
+def invalidate_auth_cache():
+    """Force the next is_authenticated() probe to re-check the session."""
+    _AUTH_CACHE['ts'] = 0.0
+    _AUTH_CACHE['ok'] = None
 
 
 def is_authenticated(max_age=_AUTH_CACHE_TTL):
@@ -149,6 +158,10 @@ class _Device:
 def _playable(d):
     if not (d.get('serialNumber') and d.get('deviceType') and d.get('accountName')):
         return False
+    # Multi-room music groups (WHA) accept TTS but do not invoke custom skills,
+    # which breaks app "play on device" (token → PlayFileTokenIntent).
+    if d.get('deviceFamily') == 'WHA':
+        return False
     caps = d.get('capabilities') or []
     if 'AUDIO_PLAYER' not in caps and d.get('deviceFamily') not in _PLAYABLE_FAMILIES:
         return False
@@ -205,6 +218,8 @@ async def _play_text(target, text):
         dev = _match(devices, target)
         if not dev:
             raise AlexaRemoteError('device_not_found')
+        if dev.get('deviceFamily') == 'WHA':
+            raise AlexaRemoteError('speaker_group_not_supported')
         api = AlexaAPI(_Device(dev), login)
         # run_custom is decorated to swallow exceptions and returns None, so we
         # can only surface auth/lookup errors (handled above), not Alexa-side ones.
@@ -302,3 +317,220 @@ async def _device_control(target, action, alias='bock media'):
 def device_control(target, action, alias='bock media'):
     """Send pause/play/next/previous/shuffle to an Echo by serial or name."""
     return run(_device_control(target, action, alias))
+
+
+# ── Browser proxy login (Settings UI / scripts/alexa_login.py --proxy) ────────
+
+_LOGIN_PROXY = {
+    'status': 'idle',   # idle | waiting | success | error | stopped
+    'error': None,
+    'url': None,
+    'host': None,
+    'port': None,
+    'started_at': None,
+}
+_LOGIN_LOCK = threading.RLock()
+_LOGIN_CANCEL = threading.Event()
+_LOGIN_THREAD = None
+
+
+def _port_in_use(port, host='127.0.0.1'):
+    """True when something is accepting TCP connections on port."""
+    try:
+        with socket.create_connection((host, int(port)), timeout=0.3):
+            return True
+    except (ConnectionRefusedError, TimeoutError, OSError):
+        return False
+
+
+def _wait_for_port_free(port, timeout=8.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not _port_in_use(port):
+            return True
+        time.sleep(0.25)
+    return not _port_in_use(port)
+
+
+def _wait_for_port_ready(port, timeout=20.0):
+    """True once something is accepting connections on port (proxy bound)."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _port_in_use(port):
+            return True
+        time.sleep(0.15)
+    return False
+
+
+def login_timeout_sec():
+    """How long to wait for the user to finish Amazon sign-in."""
+    try:
+        return max(60, int(cfg().get('loginTimeoutSec') or 1800))
+    except (TypeError, ValueError):
+        return 1800
+
+
+def resolve_proxy_host(host=None):
+    """Host advertised in the login URL (must be reachable from the user's browser)."""
+    explicit = (host or '').strip()
+    if explicit:
+        return explicit
+    configured = (cfg().get('loginProxyHost') or '').strip()
+    if configured:
+        return configured
+    return lan_ip()
+
+
+def _join_login_thread(timeout=8.0):
+    """Wait for the background proxy thread to exit and release its socket."""
+    global _LOGIN_THREAD
+    thread = None
+    with _LOGIN_LOCK:
+        thread = _LOGIN_THREAD
+    if thread and thread.is_alive():
+        thread.join(timeout=timeout)
+    with _LOGIN_LOCK:
+        if thread is _LOGIN_THREAD:
+            _LOGIN_THREAD = None
+
+
+def lan_ip():
+    """Best-effort LAN address for the proxy login page."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('8.8.8.8', 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return '127.0.0.1'
+
+
+def _proxy_snapshot_unlocked():
+    return {
+        'status': _LOGIN_PROXY['status'],
+        'error': _LOGIN_PROXY['error'],
+        'url': _LOGIN_PROXY['url'],
+        'host': _LOGIN_PROXY['host'],
+        'port': _LOGIN_PROXY['port'],
+        'startedAt': _LOGIN_PROXY['started_at'],
+    }
+
+
+def proxy_login_state():
+    """Snapshot of in-process proxy login (for API polling)."""
+    with _LOGIN_LOCK:
+        snap = _proxy_snapshot_unlocked()
+    port = snap.get('port')
+    if port and snap.get('status') in ('starting', 'waiting'):
+        snap['portReady'] = _port_in_use(int(port))
+    return snap
+
+
+def _set_proxy(**kwargs):
+    with _LOGIN_LOCK:
+        _LOGIN_PROXY.update(kwargs)
+
+
+async def _proxy_login_async(host, port):
+    from alexapy import AlexaProxy
+
+    base_url = f'http://{host}:{port}'
+    _set_proxy(status='starting', error=None, url=base_url, host=host, port=port,
+               started_at=time.time())
+    login = make_login(debug=bool(os.environ.get('ALEXA_DEBUG')))
+    proxy = AlexaProxy(login, base_url)
+    try:
+        await proxy.start_proxy(host='0.0.0.0')
+        _set_proxy(status='waiting', error=None)
+        deadline = time.time() + login_timeout_sec()
+        while time.time() < deadline:
+            if _LOGIN_CANCEL.is_set():
+                _set_proxy(status='stopped', error=None)
+                return
+            if getattr(login, 'access_token', None):
+                break
+            await asyncio.sleep(1)
+        else:
+            mins = login_timeout_sec() // 60
+            _set_proxy(status='error', error=f'Timed out waiting for login ({mins} min).')
+            return
+
+        await login.login()
+        ok = await login.test_loggedin()
+        if ok:
+            await login.save_cookiefile()
+            invalidate_auth_cache()
+            _set_proxy(status='success', error=None)
+        else:
+            _set_proxy(status='error', error='Token captured but session test failed.')
+    except Exception as e:
+        _set_proxy(status='error', error=str(e))
+    finally:
+        try:
+            await proxy.stop_proxy()
+        except Exception:
+            pass
+        try:
+            await login.close()
+        except Exception:
+            pass
+
+
+def _proxy_login_thread(host, port):
+    global _LOGIN_THREAD
+    try:
+        run(_proxy_login_async(host, port))
+    finally:
+        with _LOGIN_LOCK:
+            if _LOGIN_PROXY['status'] in ('starting', 'waiting'):
+                _LOGIN_PROXY['status'] = 'stopped'
+            _LOGIN_THREAD = None
+
+
+def start_proxy_login(host=None, port=None):
+    """Start the alexapy OAuth proxy on a background thread. Returns state dict."""
+    if not is_configured():
+        raise AlexaRemoteError('not_configured')
+    if not cfg().get('password'):
+        raise AlexaRemoteError(
+            'password_required — add alexaRemote.password in config.json '
+            '(keep your passkey; choose password at Amazon sign-in in the browser).'
+        )
+
+    global _LOGIN_THREAD
+    with _LOGIN_LOCK:
+        if (_LOGIN_THREAD and _LOGIN_THREAD.is_alive()
+                and _LOGIN_PROXY['status'] in ('waiting', 'starting')):
+            return _proxy_snapshot_unlocked()
+
+    stop_proxy_login()
+
+    host = resolve_proxy_host(host)
+    port = int(port or cfg().get('loginProxyPort') or 3005)
+
+    if _port_in_use(port) and not _wait_for_port_free(port):
+        raise AlexaRemoteError(
+            f'port_busy — port {port} is already in use. '
+            f'Run: sudo fuser -k {port}/tcp  (or change alexaRemote.loginProxyPort in config.json)'
+        )
+
+    _LOGIN_CANCEL.clear()
+    _set_proxy(status='starting', error=None, url=f'http://{host}:{port}',
+               host=host, port=port, started_at=time.time())
+    _LOGIN_THREAD = threading.Thread(
+        target=_proxy_login_thread, args=(host, port),
+        daemon=True, name='alexa-proxy-login',
+    )
+    _LOGIN_THREAD.start()
+    return proxy_login_state()
+
+
+def stop_proxy_login():
+    """Cancel an in-progress proxy login."""
+    global _LOGIN_THREAD
+    _LOGIN_CANCEL.set()
+    with _LOGIN_LOCK:
+        _set_proxy(status='stopped', error=None)
+    _join_login_thread(timeout=3.0)
+    return proxy_login_state()

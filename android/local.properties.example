@@ -1,0 +1,6 @@
+# Copy to local.properties (gitignored) to pre-fill the setup screen:
+# bockmedia.localServerUrl=http://127.0.0.1:3001
+# bockmedia.externalServerUrl=http://YOUR_PUBLIC_IP:3001
+# bockmedia.mobileApiToken=your-mobile-api-token
+# bockmedia.adminUser=your-admin-username
+# bockmedia.adminPassword=your-admin-password

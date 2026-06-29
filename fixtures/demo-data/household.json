@@ -1,0 +1,23 @@
+{
+  "members": [
+    {
+      "id": "p-parent",
+      "name": "Parent",
+      "role": "parent"
+    },
+    {
+      "id": "p-teen",
+      "name": "Teen",
+      "role": "kid"
+    },
+    {
+      "id": "p-guest",
+      "name": "Guest",
+      "role": "guest"
+    }
+  ],
+  "deviceOwners": {
+    "demo-kitchen": "p-parent",
+    "demo-office": "p-teen"
+  }
+}

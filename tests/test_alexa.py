@@ -223,7 +223,11 @@ class TestAudioPlayerEvents:
         post_alexa('AudioPlayer.PlaybackStarted', token=token, device_id=did)
         post_alexa('AudioPlayer.PlaybackStopped', token=token, device_id=did)
         np = client.get('/api/nowplaying_devices').get_json()['items']
-        assert all(item['deviceId'] != did for item in np), 'stopped device should be filtered out'
+        # Recently-stopped rows stay visible (resume window) but must be
+        # flagged stopped, never playing/paused.
+        rows = [item for item in np if item['deviceId'] == did]
+        assert all(item['stopped'] and not item['paused'] for item in rows), \
+            'stopped device must be flagged stopped, not paused/playing'
 
     def test_finished_marks_not_playing(self, client, post_alexa, sample_track, isolated_paths):
         token = server.encode_token({'tracks': [sample_track['path']], 'idx': 0})
@@ -231,7 +235,8 @@ class TestAudioPlayerEvents:
         post_alexa('AudioPlayer.PlaybackStarted', token=token, device_id=did)
         post_alexa('AudioPlayer.PlaybackFinished', token=token, device_id=did)
         np = client.get('/api/nowplaying_devices').get_json()['items']
-        assert all(item['deviceId'] != did for item in np)
+        rows = [item for item in np if item['deviceId'] == did]
+        assert all(item['stopped'] and not item['paused'] for item in rows)
 
     def test_failed_advances_to_next(self, post_alexa, sample_track):
         """PlaybackFailed advances to next track when one is available"""
@@ -244,6 +249,29 @@ class TestAudioPlayerEvents:
         d = _audio_play(resp)
         if d:
             assert d['playBehavior'] == 'REPLACE_ALL'
+
+    def test_failed_honors_stop_after(self, post_alexa, sample_track):
+        token = server.encode_token({
+            'tracks': [sample_track['path'], sample_track['path']],
+            'idx': 0,
+            'stopAfterIdx': 0,
+        })
+        resp = post_alexa('AudioPlayer.PlaybackFailed', token=token,
+                          error={'type': 'MEDIA_ERROR', 'message': 'x'})
+        assert _audio_play(resp) is None
+
+    def test_intent_exception_returns_valid_response(self, client, monkeypatch):
+        def boom(_req):
+            raise ValueError('bad slot')
+        monkeypatch.setattr(server, '_alexa_intent_request', boom)
+        body = {
+            'version': '1.0',
+            'context': {'System': {'device': {'deviceId': 'amzn1.ask.device.EXCEPT01'}}},
+            'request': {'type': 'IntentRequest', 'intent': {'name': 'PlayPlaylistIntent', 'slots': {}}},
+        }
+        rv = client.post('/alexa', data=json.dumps(body), content_type='application/json')
+        assert rv.status_code == 200
+        assert rv.get_json()['response']['outputSpeech']['type'] == 'PlainText'
 
     def test_default_device_id_not_registered(self, client, post_alexa):
         """requests without a real deviceId never auto-register a 'default' device"""

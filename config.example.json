@@ -1,29 +1,71 @@
 {
-  "publicUrl": "https://your-domain.example.com",
+  "publicUrl": "https://your-tunnel.example.com",
   "launchPlaylistPrompt": true,
   "identifyPlaylist": "",
+  "deviceDiscovery": {
+    "_comment": "Silent background sweep binds Alexa skill deviceIds to hardware serials. POST /api/devices/discover?force=1 to run immediately.",
+    "enabled": true,
+    "intervalHours": 6,
+    "staleDays": 7,
+    "dwellSeconds": 5,
+    "onlyStale": true
+  },
   "msp": {
-    "skillId": "amzn1.ask.skill.YOUR-MSP-SKILL-ID",
-    "catalogId": "amzn1.ask-catalog.cat.YOUR-CATALOG-ID",
+    "skillId": "amzn1.ask.skill.YOUR_MSP_SKILL_ID",
+    "catalogId": "amzn1.ask-catalog.cat.YOUR_CATALOG_ID",
     "alias": "bock media",
-    "endpoint": "https://your-domain.example.com/music"
+    "endpoint": "https://your-tunnel.example.com/music"
   },
   "mspOauth": {
-    "clientId": "ourmedia-msp-client",
+    "clientId": "bockmedia-msp-client",
     "clientSecret": "GENERATE_AND_SET_LOCALLY",
     "accessToken": "GENERATE_AND_SET_LOCALLY",
     "refreshToken": "GENERATE_AND_SET_LOCALLY",
     "redirectUriPrefixes": [
       "https://alexa.amazon.com/",
       "https://layla.amazon.com/",
-      "https://pitangui.amazon.com/"
+      "https://pitangui.amazon.com/",
+      "https://alexa.amazon.co.uk/",
+      "https://layla.amazon.co.uk/",
+      "https://pitangui.amazon.co.uk/"
     ]
   },
+  "claude": {
+    "_comment": "Optional. Powers Mix Muse conversational playlists.",
+    "apiKey": "SET_LOCALLY",
+    "model": "claude-sonnet-4-20250514"
+  },
+  "openai": {
+    "_comment": "Optional. Alternative LLM provider for Mix Muse.",
+    "apiKey": "SET_LOCALLY",
+    "model": "gpt-4o-mini"
+  },
+  "mixMuse": {
+    "_comment": "Optional. Force provider: claude | openai.",
+    "provider": ""
+  },
   "alexaRemote": {
-    "_comment": "Optional. Enables 'Play on device' in the web UI via the unofficial Alexa API (alexapy). Run scripts/alexa_login.py once after filling these in.",
+    "_comment": "Optional. Unofficial Alexa API for Play on device. url = amazon.com | amazon.co.uk | etc.",
     "url": "amazon.com",
     "email": "SET_LOCALLY",
     "password": "SET_LOCALLY",
-    "otpSecret": ""
+    "otpSecret": "",
+    "loginProxyHost": "",
+    "loginProxyPort": 3005,
+    "loginTimeoutSec": 1800
+  },
+  "mobileApi": {
+    "_comment": "Bearer token for mobile apps and external API access.",
+    "token": "GENERATE_AND_SET_LOCALLY",
+    "allowTunnelApi": false,
+    "allowExternalAccess": false
+  },
+  "appDownload": {
+    "_comment": "Basic auth for GET /app (APK/IPA downloads). Falls back to WebPassword if omitted.",
+    "username": "admin",
+    "password": "SET_LOCALLY"
+  },
+  "appAbout": {
+    "githubPublic": "https://github.com/andystumpf/bock-media"
   }
 }

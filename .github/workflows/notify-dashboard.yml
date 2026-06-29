@@ -7,7 +7,6 @@ on:
 jobs:
   notify:
     runs-on: ubuntu-latest
-    # Skip pushes to the dashboard repo itself
     if: github.repository != 'andystumpf/github-progress-dashboard'
     steps:
       - name: Trigger dashboard update
