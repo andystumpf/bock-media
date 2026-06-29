@@ -119,8 +119,9 @@ upload_apk_remote() {
 }
 
 echo "Deploying to ${NAS}…"
-if scp "$APK" "${NAS}:${DATA_REMOTE}/bockmedia-console.apk" \
-  && ssh "$NAS" "printf '%s' '${GRADLE_VER}' > '${DATA_REMOTE}/bockmedia-console.version'" \
+# Use scp/ssh paths relative to remote $HOME (`.bockmedia/…`) so local `~` is never expanded.
+if scp "$APK" "${NAS}:.bockmedia/bockmedia-console.apk" \
+  && ssh "$NAS" "mkdir -p .bockmedia && printf '%s' '${GRADLE_VER}' > .bockmedia/bockmedia-console.version" \
   && scp "$NOTES" "${NAS}:${REPO_REMOTE}/app-release-notes.json" \
   && scp "$GRADLE" "${NAS}:${REPO_REMOTE}/android/app/build.gradle.kts" \
   && scp "$REPO_ROOT/server.py" "${NAS}:${REPO_REMOTE}/server.py" \

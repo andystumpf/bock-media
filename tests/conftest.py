@@ -136,6 +136,30 @@ def _ensure_demo_db():
 _ensure_demo_db()
 
 
+def _ensure_demo_music():
+    """Copy silent mp3 stubs for indexed demo paths so playback tests can stream."""
+    silent = os.path.join(REPO_ROOT, 'assets', 'silent-correlation.mp3')
+    if not os.path.isfile(silent) or not os.path.isfile(REAL_DB_PATH):
+        return
+    music_root = os.path.join(REPO_ROOT, 'fixtures', 'demo-data', 'music')
+    conn = sqlite3.connect(REAL_DB_PATH)
+    paths = [r[0] for r in conn.execute(
+        'SELECT DISTINCT path FROM songs_cache WHERE path IS NOT NULL'
+    ).fetchall()]
+    conn.close()
+    for rel in paths:
+        dest = server._path_under_music_root(rel)
+        if not dest:
+            stripped = rel[len('demo/music/'):] if rel.startswith('demo/music/') else rel
+            dest = os.path.join(music_root, stripped)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        if not os.path.isfile(dest):
+            shutil.copy2(silent, dest)
+
+
+_ensure_demo_music()
+
+
 @pytest.fixture(scope='session')
 def db_conn():
     if not os.path.exists(REAL_DB_PATH):
@@ -186,7 +210,7 @@ def sample_track(db_conn):
 @pytest.fixture
 def sample_tracks(sample_track):
     """A few real, on-disk track paths for queue/sleep-timer tests."""
-    p = sample_track['path']
+    p = server._path_under_music_root(sample_track['path']) or sample_track['path']
     return [p, p, p, p]
 
 
@@ -213,6 +237,8 @@ def sample_playlist():
                     if not line or line.startswith('#'):
                         continue
                     track = line if os.path.isabs(line) else os.path.normpath(os.path.join(os.path.dirname(src), line))
+                    if not os.path.isfile(track):
+                        track = server._path_under_music_root(line) or track
                     if os.path.isfile(track):
                         return {'name': name, 'source': src, 'track': track}
         except Exception:
@@ -223,6 +249,7 @@ def sample_playlist():
 @pytest.fixture(autouse=True)
 def reset_play_intent_state():
     """Clear play-intent correlation globals so tests don't leak into each other."""
+    server._LYRICS_CACHE.clear()
     with server._PLAY_INTENT_LOCK:
         server._PLAY_INTENTS.clear()
         server._PLAY_GROUP_UNTIL = 0.0

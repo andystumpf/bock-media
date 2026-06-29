@@ -25,9 +25,9 @@ def test_rebind_client_from_phone(tmp_path, monkeypatch):
         'members': [{'id': 'p-parent', 'name': 'Parent', 'role': 'parent'}],
         'clientBindings': {},
         'deviceOwners': {},
-        'phoneBindings': {phone: 'p-andy'},
+        'phoneBindings': {phone: 'p-parent'},
     }), encoding='utf-8')
     mid = server._rebind_client_from_phone('new-client-uuid', phone)
-    assert mid == 'p-andy'
+    assert mid == 'p-parent'
     h = json.loads((tmp_path / 'household.json').read_text(encoding='utf-8'))
-    assert h['clientBindings']['client-new-client-uuid'] == 'p-andy'
+    assert h['clientBindings']['client-new-client-uuid'] == 'p-parent'

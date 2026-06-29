@@ -688,7 +688,7 @@ class TestLyricsApi:
             'syncedLyrics': '',
         })
         rv = client.get('/api/lyrics', query_string={
-            'path': '/music/track.mp3',
+            'path': '/music/estimated-karaoke-lines-test.mp3',
             'title': 'Track',
             'artist': 'Artist',
             'duration': '120',
@@ -812,7 +812,10 @@ class TestAppDownload:
     def test_app_info_api(self, client, isolated_paths):
         import json
         cfg = isolated_paths / 'state' / 'config.json'
-        cfg.write_text(json.dumps({'publicUrl': 'https://alexa.example.test'}))
+        cfg.write_text(json.dumps({
+            'publicUrl': 'https://alexa.example.test',
+            'mobileApi': {'allowOpenLanApi': True},
+        }))
         apk = isolated_paths / 'mma' / 'bockmedia-console.apk'
         apk.write_bytes(b'PK\x03\x04fake')
         sidecar = isolated_paths / 'mma' / 'bockmedia-console.version'
@@ -826,7 +829,9 @@ class TestAppDownload:
 
     def test_app_info_uses_sidecar_over_gradle(self, client, isolated_paths):
         import json
-        (isolated_paths / 'state' / 'config.json').write_text('{}')
+        (isolated_paths / 'state' / 'config.json').write_text(json.dumps({
+            'mobileApi': {'allowOpenLanApi': True},
+        }))
         (isolated_paths / 'mma' / 'bockmedia-console.apk').write_bytes(b'PK\x03\x04fake')
         (isolated_paths / 'mma' / 'bockmedia-console.version').write_text('9.9.9', encoding='utf-8')
         data = client.get('/api/app/info').get_json()

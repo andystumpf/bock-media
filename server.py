@@ -5858,10 +5858,12 @@ def _member_id_for_room_name(device_name, members):
         name = (m.get('name') or '').strip()
         if not name:
             continue
+        nl = name.lower()
         first = name.split()[0].lower()
         if len(first) < 2:
             continue
         markers = (
+            f"{nl}'s",
             f"{first}'s",
             f"{first}s room",
             f"{first}s bedroom",
@@ -8297,7 +8299,12 @@ def can_stream_track(path):
 
 def normalize_track_queue(tracks):
     """Return tracks that can actually be streamed right now."""
-    return [p for p in tracks if can_stream_track(p)]
+    out = []
+    for p in tracks:
+        resolved = _path_under_music_root(p) or p
+        if can_stream_track(resolved):
+            out.append(resolved)
+    return out
 
 _FFMPEG_AVAILABLE = None
 
@@ -8491,6 +8498,22 @@ def encode_token(data):
             playlist_id=data.get('playlist_id'),
             context=data.get('context'),
         )
+    if 'stopAfterIdx' in data or 'stopAt' in data:
+        with _QUEUES_LOCK:
+            queues = _load_queues()
+            entry = queues.get(qid)
+            if entry:
+                if 'stopAfterIdx' in data:
+                    if data.get('stopAfterIdx') is None:
+                        entry.pop('stopAfterIdx', None)
+                    else:
+                        entry['stopAfterIdx'] = int(data['stopAfterIdx'])
+                if 'stopAt' in data:
+                    if data.get('stopAt') is None:
+                        entry.pop('stopAt', None)
+                    else:
+                        entry['stopAt'] = data['stopAt']
+                _save_queues(queues)
     return f"{qid}:{idx}"
 
 def decode_token(token):
@@ -8567,6 +8590,10 @@ def parse_m3u(filepath, verify_exists=True):
                 if not line or line.startswith('#'):
                     continue
                 path = line if os.path.isabs(line) else os.path.normpath(os.path.join(base_dir, line))
+                if verify_exists and not os.path.isfile(path):
+                    alt = _path_under_music_root(line)
+                    if alt:
+                        path = alt
                 if os.path.splitext(path)[1].lower() not in SUPPORTED_EXTS:
                     continue
                 if verify_exists and not os.path.isfile(path):
@@ -8688,6 +8715,27 @@ def _music_root_abs():
     return os.path.abspath(MUSIC_ROOT)
 
 
+def _path_under_music_root(path):
+    """Resolve a DB or playlist-relative path to an existing file under MUSIC_ROOT."""
+    if not path or not str(path).strip():
+        return None
+    raw = str(path).strip()
+    root = _music_root_abs()
+    candidates = []
+    if os.path.isabs(raw):
+        candidates.append(os.path.normpath(raw))
+    else:
+        candidates.append(os.path.normpath(os.path.join(root, raw)))
+        if raw.startswith('demo/music/'):
+            candidates.append(os.path.normpath(os.path.join(root, raw[len('demo/music/'):])))
+        data_root = os.path.dirname(root)
+        candidates.append(os.path.normpath(os.path.join(data_root, raw)))
+    for abs_path in candidates:
+        if abs_path.startswith(root) and os.path.isfile(abs_path):
+            return abs_path
+    return None
+
+
 def _resolve_library_path(path, title=None, artist=None):
     """Map a playlist/library path to an on-disk file under MUSIC_ROOT.
 
@@ -8696,12 +8744,12 @@ def _resolve_library_path(path, title=None, artist=None):
     """
     if not path or not str(path).strip():
         return None
+    resolved = _path_under_music_root(path)
+    if resolved:
+        return resolved
     raw = str(path).strip()
-    abs_path = os.path.abspath(raw if raw.startswith('/') else '/' + raw)
     root = _music_root_abs()
-    if abs_path.startswith(root) and os.path.isfile(abs_path):
-        return abs_path
-    base = os.path.basename(abs_path)
+    base = os.path.basename(raw)
     if not base:
         return None
     rows = db_query(
@@ -8714,24 +8762,24 @@ def _resolve_library_path(path, title=None, artist=None):
             if (row.get('title') or '').strip().lower() == tl:
                 p = row.get('path')
                 if p:
-                    ap = os.path.abspath(p)
-                    if ap.startswith(root) and os.path.isfile(ap):
-                        return ap
+                    hit = _path_under_music_root(p)
+                    if hit:
+                        return hit
     if artist:
         al = str(artist).strip().lower()
         for row in rows:
             if (row.get('artist') or '').strip().lower() == al:
                 p = row.get('path')
                 if p:
-                    ap = os.path.abspath(p)
-                    if ap.startswith(root) and os.path.isfile(ap):
-                        return ap
+                    hit = _path_under_music_root(p)
+                    if hit:
+                        return hit
     for row in rows:
         p = row.get('path')
         if p:
-            ap = os.path.abspath(p)
-            if ap.startswith(root) and os.path.isfile(ap):
-                return ap
+            hit = _path_under_music_root(p)
+            if hit:
+                return hit
     return None
 
 
@@ -11970,6 +12018,8 @@ def alexa_skill():
                                      play_behavior='REPLACE_ALL')
             if advanced is not None:
                 return advanced
+        elif event_token and state.get('token') and event_token != state.get('token'):
+            return alexa_empty()
         state['playing'] = False
         write_np_state(state)
         return alexa_empty()
@@ -12483,6 +12533,8 @@ def _alexa_intent_request(req):
         playlist_q = sv('PlaylistName')
         state = read_np_state() or {}
         current_path = state.get('filepath')
+        if current_path:
+            current_path = _path_under_music_root(current_path) or current_path
         if not current_path or not os.path.isfile(current_path):
             return alexa_speak("Nothing is currently playing to add.")
         if not playlist_q:

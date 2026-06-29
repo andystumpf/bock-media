@@ -281,14 +281,16 @@ class TestCanStream:
 class TestParseM3U:
     def test_skips_missing_and_comments(self, isolated_paths, tmp_path, sample_track):
         """parse_m3u keeps only existing supported files; skips comments and missing"""
+        track_path = server._path_under_music_root(sample_track['path'])
+        assert track_path and os.path.isfile(track_path), track_path
         m3u = tmp_path / 'pl.m3u'
         m3u.write_text(
             "#EXTM3U\n"
             "/no/such/file.mp3\n"
-            f"{sample_track['path']}\n"
+            f"{track_path}\n"
         )
         out = server.parse_m3u(str(m3u))
-        assert sample_track['path'] in out
+        assert track_path in out
         assert '/no/such/file.mp3' not in out
 
 
