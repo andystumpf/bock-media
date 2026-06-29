@@ -8,17 +8,17 @@ services:
     runtime: python
     plan: free
     branch: main
-    buildCommand: pip install -r requirements.txt && python scripts/seed_demo_data.py --base demo-data --state-dir . --config --alexa-remote
+    buildCommand: pip install -r requirements.txt && python3 scripts/seed_demo_library.py
     startCommand: bash scripts/render_start.sh
     healthCheckPath: /api/summary
     envVars:
       - key: PYTHON_VERSION
         value: "3.12.7"
       - key: OURMEDIA_DATA_DIR
-        value: demo-data
+        value: fixtures/demo-data
       - key: OURMEDIA_DB_PATH
-        value: demo-data/music_organizer.db
+        value: fixtures/demo-data/songs_cache.db
       - key: OURMEDIA_MUSIC_ROOT
-        value: demo-data/music
+        value: fixtures/demo-data/music
       - key: OURMEDIA_ALLOW_PUBLIC_CONSOLE
         value: "true"
