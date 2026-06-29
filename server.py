@@ -411,9 +411,17 @@ def _allow_open_lan_media():
     return _cfg_flag('mobileApi', 'allowOpenLanMedia')
 
 def _allow_public_console():
-    """Public demo (e.g. Render blueprint) — browse UI + read APIs without auth."""
+    """Public demo (e.g. Render) — browse UI + read APIs without auth."""
     v = os.environ.get('OURMEDIA_ALLOW_PUBLIC_CONSOLE', '').strip().lower()
-    return v in ('1', 'true', 'yes', 'on')
+    if v in ('1', 'true', 'yes', 'on'):
+        return True
+    if os.environ.get('RENDER', '').strip().lower() == 'true':
+        return True
+    # Demo fixture path (Render blueprint sets this; also the server default).
+    dd = os.environ.get('OURMEDIA_DATA_DIR', DATA_DIR).replace('\\', '/')
+    if dd.endswith('fixtures/demo-data') or '/fixtures/demo-data' in dd:
+        return True
+    return False
 
 def _credentials_configured():
     if get_pref('WebPassword', '').strip():
@@ -502,6 +510,7 @@ def _api_read_auth_ok():
 _API_LAN_GET_PUBLIC = frozenset({
     '/api/health',
     '/api/auth/info',
+    '/api/summary',
 })
 
 def _api_auth_required():
@@ -881,7 +890,7 @@ def check_auth():
     external = _is_external_request()
     tunnel = _is_tunnel_request()
 
-    if external and not tunnel and _allow_public_console():
+    if _allow_public_console():
         if any(request.path.startswith(p) for p in ('/alexa', '/music', '/oauth/')):
             return _forbidden('Alexa and OAuth endpoints are not available on the public demo')
         return None

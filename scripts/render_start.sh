@@ -7,6 +7,7 @@ cd "$ROOT"
 export OURMEDIA_DATA_DIR="${OURMEDIA_DATA_DIR:-$ROOT/fixtures/demo-data}"
 export OURMEDIA_DB_PATH="${OURMEDIA_DB_PATH:-$OURMEDIA_DATA_DIR/songs_cache.db}"
 export OURMEDIA_MUSIC_ROOT="${OURMEDIA_MUSIC_ROOT:-$OURMEDIA_DATA_DIR/music}"
+export OURMEDIA_ALLOW_PUBLIC_CONSOLE="${OURMEDIA_ALLOW_PUBLIC_CONSOLE:-true}"
 
 if [[ ! -f "$OURMEDIA_DB_PATH" ]]; then
   echo "Seeding demo data (first boot)…"

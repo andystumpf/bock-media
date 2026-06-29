@@ -3,7 +3,7 @@
   "launchPlaylistPrompt": false,
   "mobileApi": {
     "token": "DEMO_TOKEN_REPLACE_IN_PRODUCTION",
-    "allowExternalAccess": false,
+    "allowExternalAccess": true,
     "allowOpenLanApi": true,
     "allowOpenLanMedia": true
   },

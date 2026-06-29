@@ -42,6 +42,20 @@ class TestBrowse:
         rv = client.get('/api/summary', headers={'Host': 'bock-media.onrender.com'})
         assert rv.status_code == 200
 
+    def test_summary_render_internal_health_check(self, client, monkeypatch):
+        """Render probes from 10.x with localhost Host — must not 403."""
+        monkeypatch.delenv('OURMEDIA_ALLOW_PUBLIC_CONSOLE', raising=False)
+        monkeypatch.setenv('RENDER', 'true')
+        rv = client.get('/api/summary', headers={'Host': 'localhost:10000'})
+        assert rv.status_code == 200
+
+    def test_summary_demo_fixture_without_env(self, client, monkeypatch):
+        """Demo DATA_DIR alone enables public console (no Render env vars required)."""
+        monkeypatch.delenv('OURMEDIA_ALLOW_PUBLIC_CONSOLE', raising=False)
+        monkeypatch.delenv('RENDER', raising=False)
+        rv = client.get('/api/summary', headers={'Host': 'bock-media.onrender.com'})
+        assert rv.status_code == 200
+
     def test_artists_paginated(self, client):
         """/api/artists returns paginated rows + total"""
         data = client.get('/api/artists?page=1&limit=3').get_json()
