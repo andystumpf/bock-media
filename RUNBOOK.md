@@ -1,0 +1,394 @@
+# ourMedia — Complete Setup Runbook ("Don't Lose It")
+
+This is the authoritative, rebuild-from-scratch reference for the **working** ourMedia
+Alexa setup as of 2026-05-30. If the box dies, this file + the backed-up secret files
+(see [Backup checklist](#15-backup-checklist)) is everything needed to restore it.
+
+> Secret *values* (client secrets, tokens, tunnel credentials) are **not** pasted here —
+> they live in git-ignored files. This file documents their structure and exact location.
+
+---
+
+## 1. Architecture at a glance
+
+```mermaid
+flowchart LR
+  subgraph amazon [Amazon]
+    Echo[Echo device]
+    Custom[Custom skill - bock media]
+    Music[Music skill MSP - bock media]
+  end
+  subgraph cf [Cloudflare]
+    Tunnel["Named tunnel 'ourmedia'<br/>your-domain.example.com"]
+  end
+  subgraph host [Home server - user plex]
+    Flask["Flask backend server.py<br/>127.0.0.1:3001"]
+    DB[("SQLite music_organizer.db<br/>table songs_cache")]
+    Lib[("Music files /srv/music")]
+    PL[("ServerPlaylists.xml")]
+  end
+  Echo --> Custom -->|"POST /alexa"| Tunnel
+  Echo --> Music -->|"POST /music"| Tunnel
+  Tunnel --> Flask
+  Flask --> DB
+  Flask --> Lib
+  Flask --> PL
+  Flask -->|"stream URL"| Echo
+```
+
+Two Alexa skills share one backend and one tunnel:
+- **Custom skill** (`/alexa`) — `"open bock media"`, `"ask bock media to ..."`. Fallback path.
+- **Music skill / MSP** (`/music`) — `"play <playlist> on bock media"`. Native music provider; drives Now Playing.
+
+---
+
+## 2. Key identifiers (memorize / back up)
+
+| Thing | Value |
+|---|---|
+| Custom skill ID | `amzn1.ask.skill.YOUR-CUSTOM-SKILL-ID` |
+| Music (MSP) skill ID | `amzn1.ask.skill.YOUR-MSP-SKILL-ID` |
+| MSP catalog ID | `amzn1.ask-catalog.cat.YOUR-CATALOG-ID` |
+| Catalog type / size | `AMAZON.MusicPlaylist`, 629 entities |
+| Invocation name / alias | `bock media` |
+| Public hostname | `your-domain.example.com` (fixed, never rotates) |
+| Custom endpoint | `https://your-domain.example.com/alexa` |
+| Music endpoint | `https://your-domain.example.com/music` |
+| OAuth endpoints | `https://your-domain.example.com/oauth/authorize` + `/oauth/token` |
+| Cloudflare tunnel name | `ourmedia` |
+| Cloudflare tunnel UUID | `YOUR-TUNNEL-UUID` |
+| Skill stage | `development` (testing kept alive via cron) |
+
+---
+
+## 3. Host paths & environment
+
+| Path | Purpose |
+|---|---|
+| `/home/youruser/bock-media` | Repo / `WorkingDirectory` |
+| `/home/youruser/bock-media/server.py` | Flask backend (entry point) |
+| `/srv/music/music_organizer.db` | SQLite DB (`DB_PATH`), table `songs_cache` |
+| `/srv/music` | `MUSIC_ROOT` — music files |
+| `/home/youruser/.bockmedia/ServerPlaylists.xml` | `DATA_DIR` — playlist source (~22 MB); `.bockmedia` is a symlink → `/home/youruser/.MyMediaForAlexa` (the upstream indexer's data) |
+| `/home/youruser/.cloudflared/` | Tunnel config + credentials |
+
+- Backend listens on **port 3001** (`Environment=PORT=3001`).
+- Service runs as user/group **plex**, interpreter **`/usr/bin/python3`**.
+- `ask` CLI: **v2.30.7** at `/home/linuxbrew/.linuxbrew/bin/ask`.
+
+---
+
+## 4. Backend (`server.py`)
+
+### Key constants
+```
+HERE                  = repo dir
+DB_PATH               = $OURMEDIA_DB_PATH    (default /srv/music/music_organizer.db)
+MUSIC_ROOT            = $OURMEDIA_MUSIC_ROOT  (default /srv/music)
+DATA_DIR              = $OURMEDIA_DATA_DIR    (default /home/youruser/.bockmedia → symlink to indexer data; ServerPlaylists.xml)
+EXPECTED_SKILL_APP_ID = amzn1.ask.skill.YOUR-CUSTOM-SKILL-ID
+MSP_DEVICE_ID         = 'msp-bock-media'      (Now Playing pseudo-device)
+MSP_DEVICE_NAME       = 'Bock Media (Alexa)'
+```
+
+> External data lives outside the repo and is **configurable via environment variables**
+> (`OURMEDIA_DB_PATH`, `OURMEDIA_DATA_DIR`, `OURMEDIA_MUSIC_ROOT`). The code hardcodes nothing
+> machine-specific; defaults preserve this deployment. The values are declared in
+> `ourmedia.service`. Scripts honor the same vars (`scripts/playlist_audit.py`,
+> `scripts/build_msp_catalog.py`, plus `OURMEDIA_PLAYLIST_DIR`).
+
+### Runtime data files (in repo dir, all git-ignored)
+`config.json`, `queues.json`, `devices.json`, `nowplaying_state.json`,
+`streaming_history.jsonl`, `selected_state.json`, `ignored_tracks.json`,
+plus logs `server.log`, `tunnel.log`, `cron-ask.log`, `msp_slu_poll.log`,
+and `artwork_cache/`.
+
+### HTTP routes
+- Web console / static: `/`, `/<path:filename>`
+- Library API: `/api/summary`, `/api/watchfolders`, `/api/playlists` (+`/rename`), `/api/artists`, `/api/albums`, `/api/songs`, `/api/recent`, `/api/analytics`
+- Settings/config: `/api/settings` (GET/POST), `/api/config` (GET/POST), `/api/clearcache`
+- Devices: `/api/devices`, `/api/devices/<id>` (POST/DELETE), `/api/devices/<id>/merge`, `/api/devices/merge_candidates`, `/api/devices/<id>/dismiss_candidate`
+- Now Playing: `/api/nowplaying`, `/api/currenttrack`, `/api/nowplaying_devices`, `/api/selected`
+- Media: `/stream/<path:filepath>`, `/artwork/<path:filepath>`
+- OAuth (account linking): `/oauth/authorize` (GET/POST), `/oauth/token` (POST)
+- Alexa: `/alexa` (custom skill), `/music` (MSP music skill)
+
+### `/music` request shapes (important)
+- **Directives** `{header, payload}` → `_msp_handle()`. Bearer in `Authorization` header
+  OR `payload.requestContext.user.accessToken`.
+- **Playback events** `{request, context}` (`AlexaAudioPlayQueueEvent.*`) → `_msp_handle_event()`.
+  Bearer in `context.System.user.accessToken`. **MSP carries no device id** — all playback is
+  attributed to pseudo-device `msp-bock-media` so the Now Playing UI works.
+
+---
+
+## 5. `config.json` (structure — secrets git-ignored)
+
+Lives at repo root, **git-ignored**. Template: `config.example.json`.
+
+```json
+{
+  "publicUrl": "https://your-domain.example.com",
+  "launchPlaylistPrompt": true,
+  "msp": {
+    "skillId": "amzn1.ask.skill.YOUR-MSP-SKILL-ID",
+    "catalogId": "amzn1.ask-catalog.cat.YOUR-CATALOG-ID",
+    "alias": "bock media",
+    "endpoint": "https://your-domain.example.com/music"
+  },
+  "mspOauth": {
+    "clientId": "<19 chars — SECRET>",
+    "clientSecret": "<43 chars — SECRET>",
+    "accessToken": "<43 chars — SECRET>",
+    "refreshToken": "<43 chars — SECRET>",
+    "redirectUriPrefixes": [
+      "https://alexa.amazon.com/",
+      "https://layla.amazon.com/",
+      "https://pitangui.amazon.com/"
+    ]
+  }
+}
+```
+
+- `mspOauth.accessToken` is the bearer the backend validates on every `/music` call.
+- `launchPlaylistPrompt: true` → `"open bock media"` asks for a playlist and keeps the session open.
+- `alexaRemote {url,email,password,otpSecret}` (optional) — Amazon creds for the "Play on device" feature (see §17).
+
+---
+
+## 17. "Play on device" — play a playlist on a specific Echo from the web UI ✅ WORKING
+
+Amazon has **no official API** to start playback on a chosen Echo from a skill/MSP (playback is always device-initiated), so the `#playlists` ▶ button uses the **unofficial Alexa API** (`alexapy`, the lib Home Assistant uses). It injects a text command on the selected device = exactly like speaking *"ask bock media to start the &lt;name&gt; playlist"*, which runs our **custom skill** and plays the library directly.
+
+### Moving parts
+- **`alexa_remote.py`** — alexapy wrapper: cookie-session reuse (`make_login`/`_login_from_cookie`), `list_devices()`, `play_text(target, text)`. Per-call throwaway asyncio loop (Flask is sync). Pseudo-device shim exposes `_device_type`/`device_serial_number`/`_locale`.
+- **`scripts/alexa_login.py`** — one-time auth, writes session to `<DATA_DIR>/.storage/alexa_media.<email>.pickle`. Modes: `--proxy` (used — browser login), `--cookies <file>` (insufficient — see below), bare (password form login).
+- **Endpoints (`server.py`):** `GET /api/alexa_remote/status` (`{available,configured}`), `GET /api/alexa_remote/devices`, `POST /api/playlists/play` (`{id|name, device, shuffle}`).
+- **Frontend:** per-row ▶ → device-picker modal (`openPlayMenu` in `public/js/app.js`); button shows only when `status.configured`.
+- **Config:** `config.json` → `alexaRemote {url:"amazon.com", email, password, otpSecret}`.
+
+### Exact working settings (2026-06-01)
+- **Dependency (pinned):** `pip3 install --user alexapy "aiohttp>=3.10,<3.11"`. The pin is **mandatory** — alexapy 1.26.9 (last py3.10 build) imports `ALLOWED_CLOSE_CODES`, removed in aiohttp ≥3.11; without it `import alexapy` fails in `alexawebsocket`. Installed: alexapy 1.26.9, aiohttp 3.10.11. Service runs as `plex`, so `--user` is on its path.
+- **Auth = browser proxy login** (account uses a **passkey**; the form-login script and cookie-import both fail — modern Amazon requires an OAuth token that's only minted during a real login/device-registration, which raw web cookies can't provide). A passkey was un-automatable, so a **password was added** to the Amazon account (passkey kept) and:
+  ```bash
+  /usr/bin/python3 scripts/alexa_login.py --proxy --host 192.168.1.187 --port 3005
+  # open http://192.168.1.187:3005 in a browser on the LAN, sign in (choose
+  # password if passkey is offered — passkeys are bound to amazon.com origin and
+  # won't work through the proxy), land on "Successfully logged in…".
+  ```
+- **Command verbs (collision-safe):** non-shuffle → **`start`**, shuffle → **`mix`** (`server.py` `play_playlist_on_device`). NEVER `play`/`shuffle` — Amazon's music domain hijacks those + a music name and routes to the (now-disabled) MSP music skill / default provider.
+- **Two Amazon-side changes were required to stop a "Link your Bock Media account" card** (playback worked underneath it, but the card was annoying):
+  1. **Disabled the MSP music skill** so "bock media" is no longer a music provider:
+     `ask smapi delete-skill-enablement --skill-id amzn1.ask.skill.YOUR-MSP-SKILL-ID --stage development`
+  2. **Removed the (vestigial, unused) account linking from the CUSTOM skill** (it was `IMPLICIT` → `https://your-domain.example.com/login`; the skill never used the token):
+     `ask smapi delete-account-linking-info --skill-id amzn1.ask.skill.YOUR-CUSTOM-SKILL-ID --stage development`
+     (If a device still shows the card, toggle the skill off/on in the Alexa app to refresh cached metadata.)
+  - Note: the 6-hourly enablement cron only re-enables the **custom** skill (`YOUR-CUSTOM-SKILL-ID`), NOT the music skill — so MSP stays disabled. The nightly MSP catalog upload still runs but is harmless.
+
+### Maintenance / gotchas
+- **Cookies expire** → ▶ button fails with `not_authenticated`; re-run the `--proxy` login above and restart `ourmedia`.
+- Unofficial API — can break on Amazon changes (no warning).
+- Device list includes multi-room groups (e.g. "Downstairs") — useful — and Fire TVs, which may not handle the music command well.
+- Re-enabling MSP later (to restore one-shot "play X on bock media") means re-fixing its account linking AND accepting the link-card collision returns unless handled.
+
+---
+
+## 6. Custom skill (`skill/`)
+
+- **`interaction_model.json`** — `invocationName: "bock media"`. Intents:
+  - `PlayPlaylistIntent` (slot `PlaylistName` = `AMAZON.SearchQuery`) — samples include play/queue/start/put on/load.
+  - `ShufflePlaylistIntent` — samples include **mix**/**randomize** (avoid the word "shuffle" to dodge Spotify).
+  - `PlayArtistIntent` and others (artist/album/genre).
+- **`manifest.development.json`** — custom api, `AUDIO_PLAYER` interface, endpoint `https://your-domain.example.com/alexa`, name `Bock Media`.
+
+### Deploy the interaction model (async — wait for SUCCEEDED)
+```bash
+PATH=/home/linuxbrew/.linuxbrew/bin:$PATH ask smapi set-interaction-model \
+  -s amzn1.ask.skill.YOUR-CUSTOM-SKILL-ID -g development -l en-US \
+  --interaction-model "file:skill/interaction_model.json"
+PATH=/home/linuxbrew/.linuxbrew/bin:$PATH ask smapi get-skill-status \
+  --skill-id amzn1.ask.skill.YOUR-CUSTOM-SKILL-ID --resource interactionModel
+```
+
+---
+
+## 7. Music skill / MSP (`skill/music-manifest.json`)
+
+- API `music`, endpoint `https://your-domain.example.com/music` (also set per-region NA and in `events.endpoint`).
+- `aliases: [{ "name": "bock media" }]`, `promptName: "bock media"`.
+- `features: [{ "name": "EXPLICIT_LANGUAGE_FILTER" }]` — required or Alexa blocks with
+  "Explicit Filter is on, and bock media doesn't support filtering".
+- Interfaces (must match `_msp_handle` in server.py):
+  - `Alexa.Media.Search` → `GetPlayableContent`
+  - `Alexa.Media.Playback` → `Initiate`
+  - `Alexa.Media.PlayQueue` → `GetItem`, `SetShuffle`, `SetLoop`
+  - `Alexa.Audio.PlayQueue` → `GetNextItem`, `GetPreviousItem`
+- `events.subscriptions`: SKILL_ENABLED/DISABLED, SKILL_ACCOUNT_LINKED, AUDIO_ITEM_PLAYBACK_STARTED/FINISHED/STOPPED/FAILED.
+
+### Update music manifest + re-enable
+```bash
+SK=amzn1.ask.skill.YOUR-MSP-SKILL-ID
+PATH=/home/linuxbrew/.linuxbrew/bin:$PATH ask smapi update-skill-manifest \
+  -s $SK -g development --manifest "file:skill/music-manifest.json"
+PATH=/home/linuxbrew/.linuxbrew/bin:$PATH ask smapi set-skill-enablement --skill-id $SK --stage development
+```
+> After any capability/feature/alias change, the user must **disable + re-enable** the skill
+> in the Alexa app for devices to pick it up. The simulator updates instantly; devices cache.
+
+---
+
+## 8. Account linking (`skill/account-linking.json`)
+
+**Git-ignored** (holds `clientSecret`). Template: `account-linking.example.json`.
+
+```json
+{
+  "accountLinkingRequest": {
+    "type": "AUTH_CODE",
+    "authorizationUrl": "https://your-domain.example.com/oauth/authorize",
+    "accessTokenUrl": "https://your-domain.example.com/oauth/token",
+    "clientId": "ourmedia-msp-client",
+    "clientSecret": "<43 chars — SECRET>",
+    "accessTokenScheme": "HTTP_BASIC",
+    "scopes": ["music"],
+    "domains": [],
+    "skipOnEnablement": false
+  }
+}
+```
+
+### Push account-linking config
+```bash
+SK=amzn1.ask.skill.YOUR-MSP-SKILL-ID
+PATH=/home/linuxbrew/.linuxbrew/bin:$PATH ask smapi update-account-linking-info \
+  -s $SK -g development --account-linking-request "file:skill/account-linking.json"
+```
+User step: Alexa app → Skills → Your Skills → Bock Media → Settings → **Link Account**.
+
+---
+
+## 9. MSP catalog (playlists for voice resolution)
+
+- Source: `$OURMEDIA_DATA_DIR/ServerPlaylists.xml` (i.e. `/home/youruser/.bockmedia/...`) → generated `skill/catalog_playlists.json` (629 entities).
+- Entity `id` == ServerPlaylists playlist ID; `entityId` from `GetPlayableContent` maps back via `_msp_playlist_by_id`.
+
+```bash
+SK=amzn1.ask.skill.YOUR-MSP-SKILL-ID
+CID=amzn1.ask-catalog.cat.YOUR-CATALOG-ID
+python3 scripts/build_msp_catalog.py                       # regenerate skill/catalog_playlists.json
+python3 scripts/upload_msp_catalog.py --catalog-id "$CID" --file skill/catalog_playlists.json
+PATH=/home/linuxbrew/.linuxbrew/bin:$PATH ask smapi list-uploads-for-catalog -c "$CID"
+```
+> `SLU_MODELING` (voice model) can stay `PENDING` for hours/indefinitely on dev-stage music
+> skills. Entity-resolution (simulator) works once `ER_INGESTION` succeeds; real-device voice
+> one-shots depend on `SLU_MODELING`. Re-uploading **resets** the clock — don't spam it.
+> Poll with `scripts/poll_msp_slu.py` (logs to `msp_slu_poll.log`).
+
+---
+
+## 10. Cloudflare named tunnel
+
+`/home/youruser/.cloudflared/config.yml`:
+```yaml
+tunnel: YOUR-TUNNEL-UUID
+credentials-file: /home/youruser/.cloudflared/YOUR-TUNNEL-UUID.json
+
+ingress:
+  - hostname: your-domain.example.com
+    service: http://127.0.0.1:3001
+  - service: http_status:404
+```
+Directory also contains `cert.pem` and the tunnel credentials JSON. **Both are secret — back them up.**
+Binary: `/usr/local/bin/cloudflared`. Latency to `your-domain.example.com` should be <500 ms (>2 s → Alexa times out).
+
+---
+
+## 11. systemd services
+
+All in `/etc/systemd/system/`, run as user **plex**.
+
+- **`ourmedia.service`** — Flask backend. `ExecStart=/usr/bin/python3 .../server.py`, `Restart=always`, logs → `server.log`. Environment: `PORT=3001`, `OURMEDIA_DB_PATH`, `OURMEDIA_DATA_DIR`, `OURMEDIA_MUSIC_ROOT` (external data locations — change these to relocate). After editing this unit in the repo, copy to `/etc/systemd/system/`, `daemon-reload`, restart.
+- **`ourmedia-tunnel-named.service`** — `cloudflared tunnel --config .../config.yml run ourmedia`. `Requires=ourmedia.service`, `Restart=always`, logs → `tunnel.log`.
+- **`ourmedia-stack.target`** — boot aggregate, `WantedBy=multi-user.target`, wants both services above.
+
+```bash
+sudo systemctl restart ourmedia
+sudo systemctl restart ourmedia-tunnel-named
+systemctl is-active ourmedia ourmedia-tunnel-named ourmedia-stack.target
+sudo systemctl daemon-reload          # after editing unit files
+sudo systemctl enable ourmedia-stack.target
+```
+
+---
+
+## 12. Cron jobs (this project)
+
+```cron
+# Keep development skill-testing enabled (lapses on its own ~hours)
+0 */6 * * * PATH=/home/linuxbrew/.linuxbrew/bin:/usr/bin:/bin /home/linuxbrew/.linuxbrew/bin/ask \
+  smapi set-skill-enablement --skill-id amzn1.ask.skill.YOUR-CUSTOM-SKILL-ID \
+  >> /home/youruser/bock-media/cron-ask.log 2>&1
+```
+> First thing to try if the skill suddenly routes to Spotify/Amazon again: re-run that command.
+> (The crontab also contains unrelated Plex/Spotify music-automation jobs — out of scope here.)
+
+---
+
+## 13. What works (voice + routines)
+
+- **Routines (most reliable)** — trigger phrase → action **Music → bock media → "<playlist>"**.
+  Bypasses NLU arbitration entirely; 100% reliable.
+- **MSP voice**: `"Alexa, play <playlist> on bock media"` (needs `SLU_MODELING` done + account linked).
+- **Custom skill**: `"open bock media"` (LaunchRequest), `"ask bock media to mix <playlist>"`.
+- Prefer **mix / randomize** over **shuffle / play** to avoid Amazon/Spotify grabbing the phrase.
+- Real Echo > simulator. Simulator can't test MSP `simulate-skill` and lacks default-music-provider arbitration.
+
+---
+
+## 14. Disaster-recovery rebuild order
+
+1. Restore repo + restore git-ignored secret files (§15).
+2. Restore the data dir and recreate the symlink: `ln -sfn /home/youruser/.MyMediaForAlexa /home/youruser/.bockmedia` (or point `OURMEDIA_DATA_DIR` wherever `ServerPlaylists.xml` lives); ensure DB at `/srv/music/music_organizer.db`.
+3. Restore `/home/youruser/.cloudflared/` (config.yml + creds JSON + cert.pem). Install `cloudflared`.
+4. Install the 3 systemd units → `daemon-reload` → `enable ourmedia-stack.target` → `start`.
+5. Verify: `curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:3001/api/summary` (200) and
+   `curl -I https://your-domain.example.com/alexa` via tunnel.
+6. Re-push skill artifacts if needed: interaction model (§6), music manifest (§7), account linking (§8), catalog (§9).
+7. Re-enable testing (§12) and re-link the account in the Alexa app.
+
+---
+
+## 15. Backup checklist (CRITICAL — these are NOT in git)
+
+Back these up off-box; without them the above identifiers are not enough:
+
+- [ ] `config.json` (mspOauth client id/secret + access/refresh tokens)
+- [ ] `skill/account-linking.json` (OAuth clientSecret)
+- [ ] `/home/youruser/.cloudflared/config.yml`
+- [ ] `/home/youruser/.cloudflared/YOUR-TUNNEL-UUID.json` (tunnel creds)
+- [ ] `/home/youruser/.cloudflared/cert.pem`
+- [ ] `/home/youruser/.MyMediaForAlexa/ServerPlaylists.xml` (playlist source of truth; reached via the `~/.bockmedia` symlink)
+- [ ] `/srv/music/music_organizer.db` (or the means to rebuild it)
+- [ ] The 3 systemd unit files (also tracked: `ourmedia.service`, `ourmedia-stack.target` in repo)
+- [ ] Amazon developer account credentials + `ask configure` profile (`~/.ask/`)
+
+> Everything else (skill IDs, catalog ID, tunnel UUID, endpoints, manifests, scripts) is in this
+> repo / this file and safe in git.
+
+---
+
+## 16. Quick diagnostics
+
+```bash
+# Is Alexa reaching us?
+grep -E "POST /alexa|POST /music|\[ALEXA\]|\[MSP" server.log | tail -20
+# Stack health
+systemctl is-active ourmedia ourmedia-tunnel-named
+# End-to-end latency (<2 s)
+curl -o /dev/null -s -w "total=%{time_total}s\n" https://your-domain.example.com/alexa -X POST -H "Content-Type: application/json" -d '{}'
+# MSP playback events / Now Playing
+grep "MSP EVENT" server.log | tail
+curl -s "http://127.0.0.1:3001/api/nowplaying_devices"
+```
+
+See also `.cursor/rules/alexa-skill-troubleshooting.mdc` for the full issue/fix history.

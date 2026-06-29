@@ -1,0 +1,12 @@
+[Unit]
+Description=ourMedia health probe (writes health_state.json, logs DOWN transitions)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=plex
+Group=plex
+WorkingDirectory=/home/youruser/bock-media
+Environment=OURMEDIA_DATA_DIR=/home/youruser/.bockmedia
+ExecStart=/usr/bin/python3 /home/youruser/bock-media/scripts/health_check.py

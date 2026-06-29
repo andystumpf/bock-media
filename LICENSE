@@ -1,0 +1,30 @@
+Bock Media — Proprietary Software License
+
+Copyright (c) 2026 Andy Stumpf. All rights reserved.
+
+TRADEMARK NOTICE
+
+"Bock Media" and the Bock Media logo are trademarks of Andy Stumpf. You may not
+use these marks, or any confusingly similar name or branding, to endorse or
+promote a derivative product without prior written permission.
+
+LICENSE GRANT
+
+Permission is granted to use, copy, and modify this software for personal,
+non-commercial purposes only, subject to the following conditions:
+
+1. You must retain this copyright and trademark notice in all copies or
+   substantial portions of the software.
+2. You may not use the software for commercial purposes, including selling
+   access to the software, offering it as a hosted service to third parties for
+   a fee, or bundling it with a commercial product, without prior written
+   permission from the copyright holder.
+3. You may not remove or alter license, copyright, or trademark notices.
+4. The software is provided "as is", without warranty of any kind.
+
+Third-party components (libraries, fonts, icons, and APIs) remain subject to
+their respective licenses. This license applies only to the Bock Media project
+source and branding authored by Andy Stumpf.
+
+For licensing questions or commercial use inquiries, open an issue at:
+https://github.com/andystumpf/bock-media

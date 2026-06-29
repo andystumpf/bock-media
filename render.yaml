@@ -1,0 +1,24 @@
+# Render Blueprint — Bock Media demo (fictional library, UI-only Alexa features).
+# Connect this repo in the Render dashboard; Blueprint sync picks up this file.
+# https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: bock-media-demo
+    runtime: python
+    plan: free
+    branch: main
+    buildCommand: pip install -r requirements.txt && python scripts/seed_demo_data.py --base demo-data --state-dir . --config --alexa-remote
+    startCommand: bash scripts/render_start.sh
+    healthCheckPath: /api/summary
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+      - key: OURMEDIA_DATA_DIR
+        value: demo-data
+      - key: OURMEDIA_DB_PATH
+        value: demo-data/music_organizer.db
+      - key: OURMEDIA_MUSIC_ROOT
+        value: demo-data/music
+      - key: OURMEDIA_ALLOW_PUBLIC_CONSOLE
+        value: "true"
