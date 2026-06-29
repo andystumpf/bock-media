@@ -72,9 +72,8 @@ struct UpNextSheet: View {
                         Button {
                             onPlayAtIndex(idx)
                         } label: {
-                            UpNextTrackRow(repository: repository, track: track, showPlay: isLocal)
+                            UpNextTrackRow(repository: repository, track: track, showPlay: true)
                         }
-                        .disabled(!isLocal)
                     }
                 }
             }

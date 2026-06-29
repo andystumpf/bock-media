@@ -143,4 +143,9 @@
   if (route !== 'dashboard') return;
   const snap = loadHomeSnap();
   if (snap && paintHome(snap)) window.__BOOT_HOME_PAINTED__ = true;
+
+  if ('serviceWorker' in navigator) {
+    const swVer = document.querySelector('script[src*="boot.js"]')?.src?.match(/[?&]v=(\d+)/)?.[1] || '1';
+    navigator.serviceWorker.register(`/sw.js?v=${swVer}`).catch(() => {});
+  }
 })();

@@ -771,6 +771,23 @@ class BockMediaRepository(
         return api().alexaRemoteControl(body)
     }
 
+    suspend fun seekQueueIndex(
+        deviceId: String,
+        deviceName: String,
+        serial: String?,
+        relativeIndex: Int,
+    ): PlayResponse {
+        val body = buildJsonObject {
+            put("deviceId", deviceId)
+            put("device", deviceName)
+            serial?.let { put("serial", it) }
+            put("action", "seek_queue_index")
+            put("index", relativeIndex)
+            put("relative", true)
+        }
+        return api().alexaRemoteControl(body)
+    }
+
     suspend fun setVolume(serial: String, deviceName: String, volume: Int) {
         api().setVolume(buildJsonObject {
             put("serial", serial)

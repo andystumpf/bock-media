@@ -306,7 +306,21 @@ struct NowPlayingView: View {
                             LocalPlaybackController.shared.playAtIndex(localPlayback.state.index + 1 + idx)
                             showUpNext = false
                         } else {
-                            viewModel.error = "Skip from Up Next is not supported on Alexa yet."
+                            Task {
+                                guard let alexa = try? await appState.repository.alexaRemoteDevices(),
+                                      let serial = resolveSerial(device: dev, alexaDevices: alexa.devices) else {
+                                    viewModel.error = "Cannot control this speaker"
+                                    return
+                                }
+                                _ = try? await appState.repository.seekQueueIndex(
+                                    deviceId: dev.deviceId,
+                                    deviceName: dev.deviceName ?? "",
+                                    serial: serial,
+                                    relativeIndex: idx
+                                )
+                                await viewModel.refresh(repository: appState.repository)
+                                showUpNext = false
+                            }
                         }
                     },
                     onDismiss: { showUpNext = false }
@@ -468,6 +482,7 @@ private struct NowPlayingDevicePage: View {
         let hasTrack = dev.filepath?.isEmpty == false
         let isLocalPhone = dev.deviceId == LocalPlaybackIds.localPhoneDeviceId
         let shuffleActive = isLocalPhone ? localPlayback.state.shuffle : dev.shuffle
+        let loopActive = isLocalPhone ? false : dev.loop
 
         ZStack {
             NowPlayingArtBackdrop(url: artURL)
@@ -618,6 +633,20 @@ private struct NowPlayingDevicePage: View {
                             }
                             .buttonStyle(.plain)
                             .padding(.bottom, 8)
+
+                            if !isLocalPhone {
+                                Button {
+                                    Task {
+                                        await viewModel.control(repository: repository, action: "loop", device: dev)
+                                    }
+                                } label: {
+                                    Image(systemName: "repeat")
+                                        .font(.system(size: 24))
+                                        .foregroundStyle(loopActive ? BockColors.green : .white.opacity(0.65))
+                                }
+                                .buttonStyle(.plain)
+                                .padding(.bottom, 8)
+                            }
 
                             HStack(spacing: 40) {
                                 Button {

@@ -29,7 +29,8 @@ class LocalPlaybackQueueResolver(
 
         if (tracks.isEmpty()) return emptyList()
         val capped = maxTracks?.let { tracks.take(it) } ?: tracks
-        return if (shuffle) capped.shuffled() else capped
+        // ExoPlayer applies shuffle when enabled — do not pre-shuffle here.
+        return capped
     }
 
     private suspend fun loadGenreRadioTracks(target: PlayTarget.Radio, maxTracks: Int?): List<LocalTrack> {

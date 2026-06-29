@@ -381,7 +381,7 @@ def _mobile_api_token_ok():
     try:
         ma = load_config().get('mobileApi') or {}
         expected = ma.get('token', '').strip()
-        if not expected or token != expected:
+        if not expected or not hmac.compare_digest(token, expected):
             return False
         ext = _is_external_request() and not _is_tunnel_request()
         tun = _is_tunnel_request()
@@ -922,15 +922,18 @@ def check_auth():
                 'API writes require authentication — set credentials or mobileApi.allowOpenLanApi'
             )
 
-    # Read-only API on LAN — require auth when credentials are configured (C-01 partial).
+    # Read-only API on LAN — default-deny unless allowOpenLanApi or credentials (C-01).
     if (request.path.startswith('/api/')
             and request.method == 'GET'
             and request.path not in _API_LAN_GET_PUBLIC
             and _is_lan_request()
-            and not tunnel
-            and _credentials_configured()):
+            and not tunnel):
         if not _api_read_auth_ok():
-            return _auth_required()
+            if _credentials_configured():
+                return _auth_required()
+            return _forbidden(
+                'LAN API reads require authentication — set credentials or mobileApi.allowOpenLanApi'
+            )
 
     if request.path.startswith('/api/') and _mobile_api_token_ok():
         return None
@@ -1906,6 +1909,35 @@ def _optimistic_np_skip(device_id, delta):
         **src,
     })
 
+def _np_seek_queue_index(device_id, target_index, *, serial=None):
+    """Jump Echo queue to target_index — updates NP state and plays via alexa_remote."""
+    st = read_np_state_for_device(device_id) or {}
+    token = st.get('token') or ''
+    if not token:
+        return False, 'nothing_playing'
+    data = decode_token(token) or {}
+    tracks = data.get('tracks') or []
+    try:
+        target_index = int(target_index)
+    except (TypeError, ValueError):
+        return False, 'invalid_index'
+    if target_index < 0 or target_index >= len(tracks):
+        return False, 'index_out_of_range'
+    next_path = tracks[target_index]
+    if not next_path:
+        return False, 'track_unavailable'
+    qid = data.get('qid')
+    next_token = f"{qid}:{target_index}" if qid else encode_token({**data, 'idx': target_index})
+    _np_eager_track_state(next_path, next_token, prev_state=st, device_id=device_id)
+    serial = (serial or '').strip() or _np_serial_for_device(device_id)
+    if serial:
+        title, artist, album, _ = track_metadata_fast(next_path)
+        text = _build_play_text('song', title, False, artist=artist, path=next_path)
+        import alexa_remote
+        alexa_remote.play_text_timed(serial, text)
+    return True, {'index': target_index}
+
+
 @app.route('/api/alexa_remote/control', methods=['POST'])
 def alexa_remote_control():
     """Pause/play/skip/shuffle on a specific Echo (unofficial Alexa API)."""
@@ -1914,15 +1946,47 @@ def alexa_remote_control():
     device_id = (data.get('deviceId') or '').strip()
     serial = (data.get('serial') or '').strip()
     action = (data.get('action') or '').strip().lower()
-    allowed = {'pause', 'play', 'stop', 'next', 'previous', 'shuffle_on', 'shuffle_off'}
+    allowed = {
+        'pause', 'play', 'stop', 'next', 'previous',
+        'shuffle_on', 'shuffle_off', 'loop', 'seek_queue_index',
+    }
     target = serial or device
+    if action == 'seek_queue_index':
+        if not device_id:
+            return jsonify({'error': 'deviceId required'}), 400
+        try:
+            index = int(data.get('index', data.get('queueIndex', -1)))
+        except (TypeError, ValueError):
+            return jsonify({'error': 'invalid index'}), 400
+        if data.get('relative'):
+            st = read_np_state_for_device(device_id) or {}
+            tok_data = decode_token(st.get('token') or '') or {}
+            index = int(tok_data.get('idx', 0)) + 1 + index
+        ok, payload = _np_seek_queue_index(device_id, index, serial=serial or None)
+        if not ok:
+            status = 409 if payload == 'nothing_playing' else 400
+            return jsonify({'error': payload}), status
+        return jsonify({'ok': True, **payload})
+    if action == 'loop':
+        if not device_id:
+            return jsonify({'error': 'deviceId required'}), 400
+        st = read_np_state_for_device(device_id) or {}
+        token = st.get('token') or ''
+        if not token:
+            return jsonify({'error': 'nothing_playing'}), 409
+        tok_data = decode_token(token) or {}
+        qid = tok_data.get('qid')
+        new_loop = not bool(tok_data.get('loop'))
+        if qid:
+            _update_queue_flags(qid, loop=new_loop)
+        return jsonify({'ok': True, 'loop': new_loop})
     if not target:
         return jsonify({'error': 'device required'}), 400
     if action not in allowed:
         return jsonify({'error': 'invalid action'}), 400
     try:
         import alexa_remote
-        result = alexa_remote.device_control(target, action, _alexa_alias())
+        result = alexa_remote.device_control_timed(target, action, _alexa_alias())
         # Keep UI state in sync without waiting for the skill round-trip.
         if device_id:
             st = read_np_state_for_device(device_id) or {}
@@ -1944,6 +2008,8 @@ def alexa_remote_control():
         return jsonify({'error': 'alexapy not installed', 'code': 'not_installed'}), 503
     except Exception as e:
         code = str(e)
+        if code == 'timeout':
+            return jsonify({'error': 'timeout', 'code': 'timeout'}), 503
         status = 400 if code in ('not_configured', 'not_authenticated', 'device_not_found', 'invalid_action') else 500
         return jsonify({'error': code, 'code': code}), status
 
@@ -2365,7 +2431,8 @@ def _play_named_playlist_if_strong_match(query, shuffle=False):
                          playlist=name, playlist_id=pid, source=source)
 
 
-def _build_play_text(kind, name, shuffle, artist=None, path=None, playlist_id=None, playlist_source=None):
+def _build_play_text(kind, name, shuffle, artist=None, path=None, playlist_id=None, playlist_source=None,
+                     member_id=None):
     """Build a collision-safe utterance that routes to our custom skill.
 
     "play"/"shuffle" get grabbed by Amazon's music domain; "start"/"mix" route
@@ -2395,7 +2462,12 @@ def _build_play_text(kind, name, shuffle, artist=None, path=None, playlist_id=No
         pid = (playlist_id or '').strip()
         src = (playlist_source or '').strip()
         if pid:
-            rated = _resolve_rated_playlist(pid, _ratings_member_from_request())
+            if member_id is None:
+                try:
+                    member_id = _ratings_member_from_request()
+                except RuntimeError:
+                    member_id = ''
+            rated = _resolve_rated_playlist(pid, member_id)
             if rated:
                 rname, paths = rated
                 if rname:
@@ -3412,6 +3484,7 @@ def _fire_automation(auto):
         'playlist', pl_name, shuffle,
         playlist_id=pid or None,
         playlist_source=src,
+        member_id='',
     )
     print(f'[AUTOMATION] {auto.get("name")!r} device={auto.get("deviceName")!r} playlist={pl_name!r} text={text!r}', flush=True)
     import alexa_remote
@@ -3436,7 +3509,13 @@ def _fire_automation(auto):
             errors.append(f'{member_name}: {e}')
     if not results:
         raise RuntimeError('; '.join(errors) or 'play_failed')
-    return {'count': len(results), 'errors': errors}
+    devices = [r.get('device') for r in results if r.get('device')]
+    return {
+        'count': len(results),
+        'errors': errors,
+        'device': devices[0] if devices else None,
+        'devices': devices,
+    }
 
 
 def _tick_automations():
@@ -3457,8 +3536,9 @@ def _tick_automations():
         if auto.get('lastFiredAt') == slot_key:
             continue
         try:
-            _fire_automation(auto)
-            auto['lastRunStatus'] = 'ok'
+            result = _fire_automation(auto)
+            errs = result.get('errors') or []
+            auto['lastRunStatus'] = 'ok' + (f'; {"; ".join(errs)}' if errs else '')
             print(f'AUTOMATION ok: {auto.get("name")} -> {auto.get("deviceName")} at {slot_key}')
         except Exception as e:
             auto['lastRunStatus'] = str(e)
@@ -8348,7 +8428,10 @@ def _update_queue_flags(qid, **kwargs):
         if qid not in queues:
             return
         for k, v in kwargs.items():
-            queues[qid][k] = v
+            if k == 'tracks' and v is None:
+                queues[qid].pop('tracks', None)
+            else:
+                queues[qid][k] = v
         _save_queues(queues)
 
 def _set_queue_stop(qid, minutes=None, songs=None, current_idx=0):
@@ -9415,7 +9498,7 @@ def move_playlist_track(playlist_id):
     return jsonify({'ok': True, 'fromIndex': from_index, 'toIndex': to_index, 'trackCount': len(paths)})
 
 
-def _continue_after_queue_mode():
+def _household_continue_after_queue_mode():
     try:
         tree = ET.parse(os.path.join(DATA_DIR, 'Preferences.xml'))
         root = tree.getroot()
@@ -9425,9 +9508,47 @@ def _continue_after_queue_mode():
         return 'off'
 
 
-def _continue_after_queue_paths(data, tracks, current_idx):
+def _device_id_for_queue_context(data):
+    """Best-effort device id for per-member continue-after-queue resolution."""
+    try:
+        did = getattr(g, 'device_id', None)
+    except RuntimeError:
+        did = None
+    if did and str(did).strip() and str(did) != 'default':
+        return str(did).strip()
+    qid = (data or {}).get('qid')
+    if not qid:
+        return None
+    payload = _read_all_np() or {}
+    for dev_id, st in (payload.get('devices') or {}).items():
+        tok = (st.get('token') or '')
+        if tok.startswith(f'{qid}:'):
+            return dev_id
+    return None
+
+
+def _continue_after_queue_mode(device_id=None):
+    """Household XML default, overridden by per-member client prefs when set."""
+    if device_id:
+        st = read_np_state_for_device(device_id) or {}
+        member_id = (st.get('memberId') or '').strip()
+        if member_id:
+            try:
+                merged = bock_client_prefs.get_prefs(
+                    CLIENT_PREFS_PATH, member_id=member_id).get('merged') or {}
+                raw = merged.get('continueAfterQueue')
+                if raw is not None and str(raw).strip():
+                    return str(raw).strip().lower()
+            except Exception:
+                pass
+    return _household_continue_after_queue_mode()
+
+
+def _continue_after_queue_paths(data, tracks, current_idx, device_id=None):
     """Return extra track paths to append when a queue ends, or None."""
-    mode = _continue_after_queue_mode()
+    if device_id is None:
+        device_id = _device_id_for_queue_context(data)
+    mode = _continue_after_queue_mode(device_id)
     if mode in ('', 'off', 'false', '0', 'none'):
         return None
     if not tracks or current_idx < 0 or current_idx >= len(tracks):
@@ -9466,8 +9587,10 @@ def _continue_after_queue_paths(data, tracks, current_idx):
     return extra[:30] or None
 
 
-def _try_continue_queue(data, tracks, idx):
-    extra = _continue_after_queue_paths(data, tracks, idx)
+def _try_continue_queue(data, tracks, idx, device_id=None):
+    if device_id is None:
+        device_id = _device_id_for_queue_context(data)
+    extra = _continue_after_queue_paths(data, tracks, idx, device_id=device_id)
     if not extra:
         return None
     new_tracks = (tracks + extra)[:_QUEUE_TRACK_LIMIT]
@@ -10643,6 +10766,7 @@ def nowplaying_devices():
             'paused':     paused,
             'stopped':    not playing and not paused,
             'shuffle':    bool(token_data.get('shuffle')),
+            'loop':       bool(token_data.get('loop')),
             'sleep':      _sleep_info_for_token(token),
             'upcoming':   _upcoming_tracks_for_token(token, limit=5),
             'playlist': src.get('playlist'),
@@ -10855,8 +10979,27 @@ def _np_play_path(path, token, *, offset_ms=0, previous_token=None,
                       title=title, subtitle=subtitle, artwork_url=artwork_url,
                       filepath=path)
 
-def _np_eager_track_state(path, token, prev_state=None):
+def _np_eager_track_state(path, token, prev_state=None, device_id=None):
     """Refresh Now Playing metadata when issuing the next/prev track (before PlaybackStarted)."""
+    if device_id:
+        state = dict(prev_state or read_np_state_for_device(device_id) or {})
+        title, artist, album, _ = track_metadata_fast(path)
+        src = _np_source_fields(token, device_id)
+        write_np_state_for_device(device_id, {
+            **state,
+            'track': title,
+            'artist': artist,
+            'album': album,
+            'filepath': path,
+            'token': token,
+            'playing': True,
+            'paused': False,
+            'timestamp': time.time(),
+            'duration_ms': _duration_ms_for_path(path),
+            'offset_ms': 0,
+            **src,
+        })
+        return
     state = dict(prev_state or read_np_state() or {})
     title, artist, album, _ = track_metadata_fast(path)
     src = _np_source_fields(token, _np_device_id())
@@ -11236,6 +11379,10 @@ def _msp_cfg():
 
 @app.route('/oauth/authorize', methods=['GET', 'POST'])
 def oauth_authorize():
+    if not _basic_auth_ok() and not _mobile_api_token_ok():
+        if _credentials_configured():
+            return _auth_required()
+        return _forbidden('OAuth requires admin authentication')
     cfg = _msp_cfg()
     src = request.form if request.method == 'POST' else request.args
     client_id    = src.get('client_id', '')
@@ -11281,6 +11428,10 @@ def oauth_authorize():
 
 @app.route('/oauth/token', methods=['POST'])
 def oauth_token():
+    if not _basic_auth_ok() and not _mobile_api_token_ok():
+        if _credentials_configured():
+            return _auth_required()
+        return _forbidden('OAuth requires admin authentication')
     cfg = _msp_cfg()
     grant = request.form.get('grant_type', '')
 
@@ -11651,7 +11802,8 @@ def music_skill():
         if not token:
             token = ((payload.get('requestContext') or {}).get('user') or {}).get('accessToken', '') or ''
 
-    if token != cfg.get('accessToken'):
+    expected = (cfg.get('accessToken') or '')
+    if not expected or not hmac.compare_digest(token or '', expected):
         kind = body.get('request', {}).get('type', '') if is_event else \
                f"{(body.get('directive') or body).get('header',{}).get('namespace','')}." \
                f"{(body.get('directive') or body).get('header',{}).get('name','')}"
@@ -12489,12 +12641,20 @@ def _alexa_intent_request(req):
         token = state.get('token', '')
         if token:
             data = decode_token(token) or {}
-            # Reshuffle remaining tracks from current position and persist
-            idx = data.get('idx', 0)
-            remaining = data.get('tracks', [])[idx:]
-            random.shuffle(remaining)
-            new_tracks = data.get('tracks', [])[:idx] + remaining
-            _update_queue_flags(data.get('qid'), shuffle=True, tracks=new_tracks)
+            qid = data.get('qid')
+            idx = int(data.get('idx', 0) or 0)
+            if not qid:
+                return alexa_speak("Nothing is playing to shuffle.")
+            seed = random.randint(0, 2**31 - 1)
+            entry = _load_queues().get(qid) or {}
+            if entry.get('lazy'):
+                _update_queue_flags(qid, shuffle=True, shuffle_seed=seed, tracks=None)
+            else:
+                tracks = data.get('tracks') or []
+                remaining = list(tracks[idx:])
+                random.shuffle(remaining)
+                new_tracks = tracks[:idx] + remaining
+                _update_queue_flags(qid, shuffle=True, shuffle_seed=seed, tracks=new_tracks)
             return alexa_speak("Shuffle on.")
         return alexa_speak("Nothing is playing to shuffle.")
 

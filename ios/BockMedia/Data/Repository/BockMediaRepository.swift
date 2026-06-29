@@ -545,6 +545,19 @@ final class BockMediaRepository: ObservableObject {
         return try await api.alexaRemoteControl(body: body)
     }
 
+    func seekQueueIndex(deviceId: String, deviceName: String, serial: String?, relativeIndex: Int) async throws -> PlayResponse {
+        try await ensureAPI()
+        var body: [String: Any] = [
+            "deviceId": deviceId,
+            "device": deviceName,
+            "action": "seek_queue_index",
+            "index": relativeIndex,
+            "relative": true,
+        ]
+        if let serial { body["serial"] = serial }
+        return try await api.alexaRemoteControl(body: body)
+    }
+
     func getVolume(serial: String) async throws -> Int? {
         try await ensureAPI()
         return try await api.getVolume(serial: serial).volume

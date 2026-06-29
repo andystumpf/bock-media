@@ -10,6 +10,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.bockmedia.console.ui.testing.BockTestTags
+import com.bockmedia.console.data.api.httpErrorMessage
 import com.bockmedia.console.data.api.dto.AutomationItem
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.AutomationSessionCache
@@ -51,6 +52,7 @@ fun AutomationScreen(
     onAccountNavigate: (String) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
+    val snackbar = remember { SnackbarHostState() }
     val cachedAutomation = AutomationSessionCache.peek()
     var automations by remember { mutableStateOf(cachedAutomation?.items.orEmpty()) }
     var remoteOk by remember { mutableStateOf(cachedAutomation?.remoteOk ?: false) }
@@ -93,6 +95,7 @@ fun AutomationScreen(
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
+        snackbarHost = { SnackbarHost(snackbar) },
         floatingActionButton = {
             if (remoteOk) {
                 FloatingActionButton(onClick = { editItem = null; showSheet = true }) {
@@ -137,7 +140,28 @@ fun AutomationScreen(
                             },
                             trailingContent = {
                                 Row {
-                                    TextButton(onClick = { scope.launch { repository.runAutomation(auto.id) } }) {
+                                    TextButton(onClick = {
+                                        scope.launch {
+                                            try {
+                                                val resp = repository.runAutomation(auto.id)
+                                                val target = resp.devices.firstOrNull()
+                                                    ?: resp.device
+                                                    ?: auto.deviceName
+                                                    ?: "device"
+                                                val msg = if (resp.errors.isNotEmpty()) {
+                                                    "Sent to $target — ${resp.errors.joinToString("; ")}"
+                                                } else {
+                                                    "Started on $target"
+                                                }
+                                                snackbar.showSnackbar(msg)
+                                                load()
+                                            } catch (e: Exception) {
+                                                snackbar.showSnackbar(
+                                                    httpErrorMessage(e, "Automation failed"),
+                                                )
+                                            }
+                                        }
+                                    }) {
                                         Text("Run")
                                     }
                                     TextButton(onClick = {

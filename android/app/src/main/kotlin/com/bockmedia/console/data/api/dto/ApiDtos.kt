@@ -15,6 +15,17 @@ data class OkResponse(
 )
 
 @Serializable
+data class AutomationRunResponse(
+    val ok: Boolean = false,
+    val error: String? = null,
+    val code: String? = null,
+    val count: Int = 0,
+    val device: String? = null,
+    val devices: List<String> = emptyList(),
+    val errors: List<String> = emptyList(),
+)
+
+@Serializable
 data class SummaryResponse(
     val songs: Int = 0,
     val artists: Int = 0,
@@ -180,6 +191,7 @@ data class NowPlayingDeviceItem(
     val offset_ms: Long = 0,
     val paused: Boolean = false,
     val shuffle: Boolean = false,
+    val loop: Boolean = false,
     val playlist: String? = null,
     val playlistId: String? = null,
     val sourceLabel: String? = null,

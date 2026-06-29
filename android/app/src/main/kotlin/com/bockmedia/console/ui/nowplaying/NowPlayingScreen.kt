@@ -17,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
@@ -42,6 +43,7 @@ import com.bockmedia.console.domain.model.PlaybackFocus
 import com.bockmedia.console.domain.model.computeNowPlayingProgress
 import com.bockmedia.console.domain.model.formatPlaybackTime
 import com.bockmedia.console.media.LocalPlaybackController
+import com.bockmedia.console.media.NowPlayingPollService
 import com.bockmedia.console.media.isLocalPhoneDevice
 import com.bockmedia.console.local.ActiveProfileStore
 import com.bockmedia.console.local.ClientPrefsSync
@@ -109,9 +111,24 @@ fun NowPlayingScreen(
     var showHistory by remember { mutableStateOf(false) }
     val volumes = remember { mutableStateMapOf<String, Int?>() }
     val shuffleOn = remember { mutableStateMapOf<String, Boolean>() }
+    val loopOn = remember { mutableStateMapOf<String, Boolean>() }
     val volumeTimers = remember { mutableStateMapOf<String, kotlinx.coroutines.Job?>() }
 
+    DisposableEffect(repository) {
+        NowPlayingPollService.configure(repository)
+        NowPlayingPollService.addSubscriber()
+        onDispose {
+            NowPlayingPollService.removeSubscriber()
+            volumeTimers.values.forEach { it?.cancel() }
+            volumeTimers.clear()
+        }
+    }
+    val polledItems by NowPlayingPollService.items.collectAsState()
+    val polledControls by NowPlayingPollService.controlsAvailable.collectAsState()
+    val polledAlexa by NowPlayingPollService.alexaDevices.collectAsState()
+
     suspend fun refreshLive() {
+        NowPlayingPollService.refreshNow()
         val np = repository.nowPlayingDevices()
         items = np.items.filter { !it.deviceId.startsWith("client-") }
         controlsAvailable = np.controlsAvailable
@@ -123,9 +140,20 @@ fun NowPlayingScreen(
         for (dev in np.items) {
             if (!canControlDevice(dev, alexaDevices, controlsAvailable, remoteOk)) continue
             shuffleOn[dev.deviceId] = dev.shuffle
+            loopOn[dev.deviceId] = dev.loop
             if (volumes.containsKey(dev.deviceId)) continue
             val serial = resolveSerial(dev, alexaDevices) ?: continue
             runCatching { volumes[dev.deviceId] = repository.getVolume(serial).volume }
+        }
+    }
+
+    LaunchedEffect(polledItems, polledControls, polledAlexa) {
+        if (polledItems.isNotEmpty()) items = polledItems
+        controlsAvailable = polledControls
+        if (polledAlexa.isNotEmpty()) alexaDevices = polledAlexa
+        for (dev in polledItems) {
+            shuffleOn[dev.deviceId] = dev.shuffle
+            loopOn[dev.deviceId] = dev.loop
         }
     }
 
@@ -158,6 +186,9 @@ fun NowPlayingScreen(
             }
             return
         }
+        if (action == "loop") {
+            loopOn[dev.deviceId] = !(loopOn[dev.deviceId] == true)
+        }
         val serial = resolveSerial(dev, alexaDevices)
         runCatching {
             repository.deviceControl(dev.deviceId, dev.deviceName ?: "", serial, action)
@@ -175,12 +206,6 @@ fun NowPlayingScreen(
     }
     LaunchedEffect(playbackFocusGeneration) {
         if (playbackFocusGeneration > 0) {
-            runCatching { refreshLive() }
-        }
-    }
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(5_000)
             runCatching { refreshLive() }
         }
     }
@@ -337,6 +362,7 @@ fun NowPlayingScreen(
                             repository = repository,
                             volumes = volumes,
                             shuffleOn = shuffleOn,
+                            loopOn = loopOn,
                             volumeTimers = volumeTimers,
                             scope = scope,
                             snackbarHostState = snackbarHostState,
@@ -524,6 +550,7 @@ private fun SpotifyNowPlayingPage(
     repository: BockMediaRepository,
     volumes: MutableMap<String, Int?>,
     shuffleOn: MutableMap<String, Boolean>,
+    loopOn: MutableMap<String, Boolean>,
     volumeTimers: MutableMap<String, kotlinx.coroutines.Job?>,
     scope: kotlinx.coroutines.CoroutineScope,
     snackbarHostState: SnackbarHostState,
@@ -809,9 +836,11 @@ private fun SpotifyNowPlayingPage(
                     SpotifyTransportControls(
                         dev = displayDev,
                         shuffleOn = shuffleOn,
+                        loopOn = loopOn,
                         onControl = onControl,
                         onSleep = onSleep,
                         showShuffle = true,
+                        showLoop = !isLocal,
                         showSleep = !isLocal,
                         enabled = canControl,
                         modifier = Modifier.padding(top = 4.dp),
@@ -954,11 +983,24 @@ private fun SpotifyNowPlayingPage(
                     }
                     showUpNext = false
                 },
-                onAlexaUnsupported = {
+                onPlayNowAlexa = { upNextIndex ->
                     scope.launch {
-                        snackbarHostState.showSnackbar("Skip from Up Next not supported on Alexa yet")
+                        val serial = resolveSerial(displayDev, alexaDevices)
+                        runCatching {
+                            repository.seekQueueIndex(
+                                displayDev.deviceId,
+                                displayDev.deviceName ?: "",
+                                serial,
+                                upNextIndex,
+                            )
+                            onRefresh()
+                            showUpNext = false
+                        }.onFailure {
+                            snackbarHostState.showSnackbar(controlErrorMessage(it))
+                        }
                     }
                 },
+                onAlexaUnsupported = {},
                 onDismiss = { showUpNext = false },
             )
         }
@@ -1305,14 +1347,17 @@ private fun SpotifyProgressBar(
 private fun SpotifyTransportControls(
     dev: NowPlayingDeviceItem,
     shuffleOn: MutableMap<String, Boolean>,
+    loopOn: MutableMap<String, Boolean>,
     onControl: (NowPlayingDeviceItem, String) -> Unit,
     onSleep: (NowPlayingDeviceItem) -> Unit,
     showShuffle: Boolean = true,
+    showLoop: Boolean = false,
     showSleep: Boolean = true,
     enabled: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     val shuffled = shuffleOn[dev.deviceId] == true
+    val looped = loopOn[dev.deviceId] == true
     val iconTint = if (enabled) Color.White else Color.White.copy(alpha = 0.3f)
     Row(
         modifier
@@ -1341,6 +1386,21 @@ private fun SpotifyTransportControls(
             }
         } else {
             Spacer(Modifier.size(48.dp))
+        }
+        if (showLoop) {
+            IconButton(
+                onClick = { onControl(dev, "loop") },
+                enabled = enabled,
+                modifier = Modifier.size(48.dp),
+            ) {
+                Icon(
+                    Icons.Default.Repeat,
+                    contentDescription = "Loop",
+                    tint = if (!enabled) iconTint
+                        else if (looped) MaterialTheme.colorScheme.secondary
+                        else Color.White.copy(alpha = 0.85f),
+                )
+            }
         }
         IconButton(
             onClick = { onControl(dev, "previous") },

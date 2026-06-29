@@ -2,6 +2,15 @@
   "_comment": "Update this file whenever you upload a new APK/IPA to /app. Shown on GET /app.",
     "releases": [
     {
+      "version": "2.6.48",
+      "date": "2026-06-28",
+      "items": [
+        {"kind": "feat", "text": "Echo engine — per-member continue-after-queue, lazy shuffle seed, Up Next queue jump, loop control"},
+        {"kind": "feat", "text": "Parity — Android/iOS loop + mini-bar shuffle, shared NP poller, handoff UI, LAN security default-deny"},
+        {"kind": "fix", "text": "Automations — surface run errors in app/web; document OURMEDIA_SKILL_ID in systemd"}
+      ]
+    },
+    {
       "version": "2.6.47",
       "date": "2026-06-28",
       "items": [

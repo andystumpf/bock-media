@@ -17,6 +17,8 @@ Environment=PORT=3001
 Environment=OURMEDIA_DB_PATH=/var/lib/bockmedia/songs_cache.db
 Environment=OURMEDIA_DATA_DIR=/var/lib/bockmedia
 Environment=OURMEDIA_MUSIC_ROOT=/var/lib/bockmedia/music
+# Required for automations / Alexa remote — must match your custom skill id (Alexa Developer Console).
+Environment=OURMEDIA_SKILL_ID=amzn1.ask.skill.YOUR_CUSTOM_SKILL_ID
 ExecStart=/usr/bin/python3 -m gunicorn \
     --bind 0.0.0.0:3001 \
     --workers 1 \

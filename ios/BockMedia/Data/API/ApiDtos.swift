@@ -133,6 +133,7 @@ struct AlexaRemoteStatus: Codable {
     var host: String?
     var loginProxyPort: Int?
     var port: Int?
+    var portReady: Bool?
 
     var effectiveLoginStatus: String? {
         let s = loginStatus?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -171,6 +172,7 @@ struct NowPlayingDeviceItem: Codable, Identifiable {
     var offset_ms: Int64 = 0
     var paused: Bool = false
     var shuffle: Bool = false
+    var loop: Bool = false
     var playlist: String?
     var playlistId: String?
     var sourceLabel: String?

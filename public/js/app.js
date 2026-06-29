@@ -179,6 +179,7 @@ function artworkUrl(filepath, sizePx) {
     const hit = _mediaSignCache.get(path);
     if (hit) return hit.url;
     signMediaPath(path).catch(() => {});
+    return null;
   }
   return path;
 }
@@ -1295,9 +1296,9 @@ function renderQueuePanel() {
     : '';
   const nextLabel = src ? `Next from: ${src}` : 'Next up';
   const nextHtml = upcoming.length
-    ? `<div class="queue-section-label">${escHtml(nextLabel)}</div>${upcoming.map((t) => {
+    ? `<div class="queue-section-label">${escHtml(nextLabel)}</div>${upcoming.map((t, qi) => {
       const url = t.path ? artworkUrl(t.path) : null;
-      return `<div class="queue-track">
+      return `<div class="queue-track queue-track-seek" data-queue-index="${qi}" data-device-id="${escHtml(d.deviceId || '')}">
         <div class="queue-track-art">${url ? `<img src="${escHtml(url)}" alt="" loading="lazy">` : ''}</div>
         <div class="queue-track-meta">
           <div class="queue-track-title">${escHtml(t.title || 'Track')}</div>
@@ -1925,6 +1926,7 @@ async function loadPlaybackCard() {
 // ── Now Playing ──────────────────────────────────────────────────────────────
 let _npPage = 1;
 let _npPollTimer = null;
+let _npPollInFlight = false;
 let _npTickTimer = null;
 let _npGlobalTickTimer = null;
 
@@ -2019,8 +2021,11 @@ register('nowplaying', async () => {
   clearInterval(_npTickTimer);
   await loadNowPlaying();
   _npPollTimer = setInterval(async () => {
-    await refreshCurrentTrack();
-  }, 2000);
+    if (_npPollInFlight) return;
+    if (typeof WebPlayback !== 'undefined' && WebPlayback.active && !window._npShowSpeakers) return;
+    _npPollInFlight = true;
+    try { await refreshCurrentTrack(); } finally { _npPollInFlight = false; }
+  }, 5000);
   if (!_npGlobalTickTimer) {
     _npGlobalTickTimer = setInterval(npTickTimes, 1000);
   }
@@ -2118,10 +2123,17 @@ async function reorderRoomRequest(deviceId, requestId, delta) {
   const j = i + delta;
   if (j < 0 || j >= ids.length) return;
   [ids[i], ids[j]] = [ids[j], ids[i]];
+  const fresh = await fetch(`/api/rooms/${encodeURIComponent(deviceId)}/queue`).then(r => r.json()).catch(() => null);
+  const order = (fresh && fresh.queue) ? fresh.queue.map(r => r.id).filter(Boolean) : ids;
+  const fi = order.indexOf(requestId);
+  if (fi < 0) return;
+  const fj = fi + delta;
+  if (fj < 0 || fj >= order.length) return;
+  [order[fi], order[fj]] = [order[fj], order[fi]];
   const res = await fetch(`/api/rooms/${encodeURIComponent(deviceId)}/requests/reorder`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ order: ids }),
+    body: JSON.stringify({ order }),
   });
   if (!res.ok) return showToast('Could not reorder', true);
   await refreshCurrentTrack();
@@ -2377,28 +2389,39 @@ function renderPlayerBar() {
 }
 
 async function refreshCurrentTrack() {
+  const webActive = typeof WebPlayback !== 'undefined' && WebPlayback.active && !window._npShowSpeakers;
   try {
-    const [data, remote] = await Promise.all([
-      API('/api/nowplaying_devices'),
-      ensureAlexaRemoteStatus().catch(() => ({})),
-    ]);
-    if (data && Array.isArray(data.items)) {
-      window._npItems = data.items;
-      window._npShuffle = window._npShuffle || {};
-      for (const it of data.items) {
-        if (it.deviceId && typeof it.shuffle === 'boolean') {
-          window._npShuffle[it.deviceId] = it.shuffle;
+    if (!webActive) {
+      const [data, remote] = await Promise.all([
+        API('/api/nowplaying_devices'),
+        ensureAlexaRemoteStatus().catch(() => ({})),
+      ]);
+      if (data && Array.isArray(data.items)) {
+        window._npItems = data.items;
+        window._npShuffle = window._npShuffle || {};
+        window._npLoop = window._npLoop || {};
+        for (const it of data.items) {
+          if (it.deviceId && typeof it.shuffle === 'boolean') {
+            window._npShuffle[it.deviceId] = it.shuffle;
+          }
+          if (it.deviceId && typeof it.loop === 'boolean') {
+            window._npLoop[it.deviceId] = it.loop;
+          }
         }
       }
-    }
-    window._npControlsAvailable = !!(data && data.controlsAvailable) && !!(remote && remote.configured);
-    if (window._npControlsAvailable && window._npItems.length) {
-      await ensureAlexaDevices().catch(() => []);
+      window._npControlsAvailable = !!(data && data.controlsAvailable) && !!(remote && remote.configured);
+      if (window._npControlsAvailable && window._npItems.length) {
+        await ensureAlexaDevices().catch(() => []);
+      }
     }
   } catch (_e) {
     // Keep the last good snapshot when a poll fails briefly.
   }
   renderPlayerBar();
+  if (webActive) {
+    if (!document.getElementById('spotify-queue')?.classList.contains('hidden')) renderQueuePanel();
+    return;
+  }
   const card = document.getElementById('np-current-card');
   if (card) card.outerHTML = buildCurrentCard(window._npItems, window._npControlsAvailable);
   if (!document.getElementById('spotify-queue')?.classList.contains('hidden')) renderQueuePanel();
@@ -2415,11 +2438,13 @@ function buildDeviceRow(d, controlsAvailable = false) {
       ${actionBtn({ kind: 'muted', onclick: "npControlEl(this,'pause')", title: 'Pause', icon: 'pause', dataAttrs: devAttr })}
       ${actionBtn({ kind: 'muted', onclick: "npControlEl(this,'next')", title: 'Next', icon: 'forward-step', dataAttrs: devAttr })}
       ${actionBtn({ kind: 'muted', onclick: 'npToggleShuffleEl(this)', title: 'Shuffle', icon: 'shuffle', extraClass: `np-shuffle-btn np-shuffle-${shuffleCls}`, dataAttrs: devAttr })}
+      ${actionBtn({ kind: 'muted', onclick: "npControlEl(this,'loop')", title: 'Loop', icon: 'repeat', extraClass: npDeviceIdClass(d.deviceId) + (window._npLoop && window._npLoop[d.deviceId] ? ' active' : ''), dataAttrs: devAttr })}
       ${actionBtn({ kind: 'muted', onclick: 'npOpenSleepEl(this)', title: 'Sleep timer', icon: 'moon', dataAttrs: devAttr })}
       ${d.filepath ? actionBtn({ kind: 'muted', onclick: 'npFavoriteEl(this)', title: 'Add to favorites', icon: 'star', dataAttrs: devAttr }) : ''}
       ${d.filepath ? actionBtn({ kind: 'muted', onclick: 'npNeverAgainEl(this)', title: 'Never play this song again', icon: 'ban', dataAttrs: devAttr }) : ''}
       ${d.filepath ? actionBtn({ kind: 'muted', onclick: 'npAddToRoomEl(this)', title: 'Add to room queue', icon: 'plus', dataAttrs: devAttr }) : ''}
       ${actionBtn({ kind: 'delete', onclick: "npControlEl(this,'stop')", title: 'Stop', icon: 'stop', dataAttrs: devAttr })}
+      ${d.filepath && canControl ? actionBtn({ kind: 'muted', onclick: `npHandoff('${escHtml(d.deviceId)}','local-phone')`, title: 'Continue on phone', icon: 'mobile', dataAttrs: devAttr }) : ''}
     </div>` : '';
   const sleepBadge = d.sleep ? `<span class="np-sleep-badge" title="Sleep timer armed"><i class="fa fa-moon"></i> ${
     d.sleep.type === 'time' ? `${d.sleep.remainingMin}m` : `${d.sleep.remaining} left`}</span>` : '';
@@ -2545,6 +2570,56 @@ async function npControlEl(btn, action) {
   await npControl(deviceId, action);
 }
 
+async function npSeekQueueIndex(deviceId, relativeIndex) {
+  const d = (window._npItems || []).find(x => x.deviceId === deviceId);
+  if (!d || !d.deviceName) return;
+  const serial = npResolveSerial(d);
+  if (!serial) return showToast('Cannot control this device', true);
+  try {
+    const res = await fetch('/api/alexa_remote/control', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        deviceId: d.deviceId, device: d.deviceName, serial,
+        action: 'seek_queue_index', index: relativeIndex, relative: true,
+      }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      return showToast(data.error || 'Seek failed', true);
+    }
+    await refreshCurrentTrack();
+    renderQueuePanel();
+  } catch (e) {
+    showToast(e.message || 'Seek failed', true);
+  }
+}
+window.npSeekQueueIndex = npSeekQueueIndex;
+
+async function npHandoff(fromDeviceId, toDeviceId) {
+  const d = (window._npItems || []).find(x => x.deviceId === fromDeviceId) || {};
+  const offsetMs = d.offset_ms || 0;
+  const ctx = { path: d.filepath, filepath: d.filepath, title: d.track, artist: d.artist };
+  try {
+    const res = await fetch('/api/playback/handoff', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fromDeviceId, toDeviceId, offsetMs, context: ctx }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return showToast(data.error || 'Handoff failed', true);
+    if (data.method === 'local' && data.streamUrl && typeof WebPlayback !== 'undefined') {
+      await WebPlayback.play({ kind: 'song', name: d.track || 'Track', path: data.filepath }, { offsetMs: data.offsetMs || 0 });
+    } else {
+      showToast('Playback moved');
+      await refreshCurrentTrack();
+    }
+  } catch (e) {
+    showToast(e.message || 'Handoff failed', true);
+  }
+}
+window.npHandoff = npHandoff;
+
 async function npControl(deviceId, action) {
   const d = (window._npItems || []).find(x => x.deviceId === deviceId);
   if (!d || !d.deviceName) return;
@@ -2570,6 +2645,10 @@ async function npControl(deviceId, action) {
         return showToast('Alexa session expired — sign in to continue', true);
       }
       return showToast(data.error || 'Control failed', true);
+    }
+    if (action === 'loop') {
+      window._npLoop = window._npLoop || {};
+      window._npLoop[deviceId] = !!data.loop;
     }
     const fresh = await API('/api/nowplaying_devices');
     window._npItems = (fresh && fresh.items) || window._npItems;
@@ -5384,7 +5463,12 @@ async function runAutomationNow(id) {
   const res = await fetch(`/api/automations/${encodeURIComponent(id)}/run`, { method: 'POST' });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) return showToast(data.error || 'Run failed', true);
-  showToast(`Started on ${data.device || 'device'}`);
+  const target = (data.devices && data.devices.length)
+    ? data.devices.join(', ')
+    : (data.device || 'device');
+  const errs = data.errors || [];
+  if (errs.length) showToast(`Sent to ${target} — ${errs.join('; ')}`, true);
+  else showToast(`Started on ${target}`);
   await loadAutomation();
 }
 
@@ -7191,6 +7275,13 @@ function setupShellListeners() {
   document.getElementById('topbar-profile')?.addEventListener('click', openAppDrawer);
   document.getElementById('topbar-back')?.addEventListener('click', () => window.history.back());
   document.getElementById('spotify-queue-close')?.addEventListener('click', () => toggleQueuePanel(false));
+  document.getElementById('spotify-queue-body')?.addEventListener('click', (e) => {
+    const row = e.target.closest('.queue-track-seek[data-queue-index]');
+    if (!row) return;
+    const deviceId = row.getAttribute('data-device-id');
+    const idx = parseInt(row.getAttribute('data-queue-index'), 10);
+    if (deviceId && !Number.isNaN(idx)) npSeekQueueIndex(deviceId, idx);
+  });
   document.getElementById('np-bar-queue')?.addEventListener('click', (e) => {
     e.stopPropagation();
     toggleQueuePanel();

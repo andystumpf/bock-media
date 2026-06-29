@@ -7,6 +7,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.*
@@ -24,6 +25,7 @@ import com.bockmedia.console.data.api.dto.NowPlayingDeviceItem
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.PlaybackFocus
 import com.bockmedia.console.media.LocalPlaybackController
+import com.bockmedia.console.media.NowPlayingPollService
 import com.bockmedia.console.media.toNowPlayingDevice
 import com.bockmedia.console.ui.nowplaying.canControlDevice
 import com.bockmedia.console.ui.theme.MiniBarBottom
@@ -50,7 +52,16 @@ fun MiniNowPlayingBar(
 
     val localItem = remember(localState) { localState.toNowPlayingDevice() }
 
-    suspend fun refreshRemote() {
+    DisposableEffect(repository) {
+        NowPlayingPollService.configure(repository)
+        NowPlayingPollService.addSubscriber()
+        onDispose { NowPlayingPollService.removeSubscriber() }
+    }
+    val polledItems by NowPlayingPollService.items.collectAsState()
+    val polledControls by NowPlayingPollService.controlsAvailable.collectAsState()
+    val polledAlexa by NowPlayingPollService.alexaDevices.collectAsState()
+
+    val refreshRemote: suspend () -> Unit = {
         runCatching {
             val np = repository.nowPlayingDevices()
             controlsAvailable = np.controlsAvailable
@@ -62,16 +73,18 @@ fun MiniNowPlayingBar(
         }
     }
 
-    LaunchedEffect(Unit) {
-        refreshRemote()
-        while (true) {
-            delay(5_000)
+    LaunchedEffect(polledItems, polledControls, polledAlexa, playbackFocusGeneration) {
+        if (polledItems.isNotEmpty()) {
+            controlsAvailable = polledControls
+            if (polledAlexa.isNotEmpty()) alexaDevices = polledAlexa
+            PlaybackFocus.syncPendingFocus(polledItems, alexaDevices)
+            item = PlaybackFocus.resolveFocusedItem(polledItems, alexaDevices)
+        } else if (playbackFocusGeneration > 0) {
             refreshRemote()
         }
     }
-    LaunchedEffect(playbackFocusGeneration) {
-        if (playbackFocusGeneration > 0) refreshRemote()
-    }
+
+    LaunchedEffect(Unit) { refreshRemote() }
 
     val dev = localItem ?: item ?: return
     val localArtFile = localState.current?.localFile
@@ -84,6 +97,7 @@ fun MiniNowPlayingBar(
     } else {
         canControlDevice(dev, alexaDevices, controlsAvailable, remoteOk)
     }
+
     val barGradient = Brush.verticalGradient(colors = listOf(MiniBarTop, MiniBarBottom))
 
     Box(modifier.fillMaxWidth().background(barGradient)) {
@@ -124,6 +138,23 @@ fun MiniNowPlayingBar(
                 )
             }
             if (canControl) {
+                if (localItem != null) {
+                    IconButton(
+                        onClick = {
+                            scope.launch {
+                                LocalPlaybackController.setShuffle(context, !localState.shuffle)
+                            }
+                        },
+                        modifier = Modifier.size(36.dp),
+                    ) {
+                        Icon(
+                            Icons.Default.Shuffle,
+                            contentDescription = "Shuffle",
+                            tint = if (localState.shuffle) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
                 IconButton(
                     onClick = {
                         scope.launch {

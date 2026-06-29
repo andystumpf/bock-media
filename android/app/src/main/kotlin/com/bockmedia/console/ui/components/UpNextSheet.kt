@@ -21,7 +21,7 @@ fun UpNextSheet(
     repository: BockMediaRepository,
     isLocalPlayback: Boolean = false,
     onPlayAtIndex: (Int) -> Unit = {},
-    onPlayNowAlexa: suspend (Int) -> Boolean = { false },
+    onPlayNowAlexa: (Int) -> Unit = {},
     onAlexaUnsupported: () -> Unit = {},
     onDismiss: () -> Unit,
 ) {
@@ -48,12 +48,12 @@ fun UpNextSheet(
                     artPath = track.path,
                     modifier = Modifier.clickable {
                         if (isLocalPlayback) onPlayAtIndex(index)
-                        else onAlexaUnsupported()
+                        else onPlayNowAlexa(index)
                     },
                     trailing = {
                         IconButton(onClick = {
                             if (isLocalPlayback) onPlayAtIndex(index)
-                            else onAlexaUnsupported()
+                            else onPlayNowAlexa(index)
                         }) {
                             Icon(Icons.Default.PlayArrow, contentDescription = "Play now")
                         }

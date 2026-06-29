@@ -283,7 +283,7 @@ interface BockMediaApi {
     suspend fun deleteAutomation(@Path("id") id: String): OkResponse
 
     @POST("api/automations/{id}/run")
-    suspend fun runAutomation(@Path("id") id: String): OkResponse
+    suspend fun runAutomation(@Path("id") id: String): AutomationRunResponse
 
     @POST("api/clients/report")
     suspend fun reportClientEvent(@Body body: JsonObject): OkResponse

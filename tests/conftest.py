@@ -112,6 +112,30 @@ def client(isolated_paths):
 
 # Real-DB row probes — used to make Alexa intent tests resilient.
 
+def _ensure_demo_db():
+    """Create a minimal songs_cache.db when fixtures are missing (CI)."""
+    if os.path.exists(REAL_DB_PATH):
+        return
+    os.makedirs(os.path.dirname(REAL_DB_PATH), exist_ok=True)
+    conn = sqlite3.connect(REAL_DB_PATH)
+    conn.execute(
+        'CREATE TABLE songs_cache (path TEXT PRIMARY KEY, title TEXT, artist TEXT, album TEXT)'
+    )
+    for i, (title, artist) in enumerate([
+        ('Track A', 'Artist One'), ('Track B', 'Artist One'),
+        ('Track C', 'Artist Two'), ('Track D', 'Artist Two'),
+    ]):
+        conn.execute(
+            'INSERT INTO songs_cache (path, title, artist, album) VALUES (?, ?, ?, ?)',
+            (f'/fixtures/demo/track{i}.mp3', title, artist, 'Album'),
+        )
+    conn.commit()
+    conn.close()
+
+
+_ensure_demo_db()
+
+
 @pytest.fixture(scope='session')
 def db_conn():
     if not os.path.exists(REAL_DB_PATH):
