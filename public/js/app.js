@@ -21,6 +21,7 @@ async function signMediaPath(relativePath) {
   const data = await r.json().catch(() => ({}));
   if (data.url) {
     _mediaSignCache.set(relativePath, { url: data.url, expires: data.expires || 0 });
+    if (typeof ArtCache !== 'undefined') ArtCache.applyNetworkUrl(relativePath, data.url);
     return data.url;
   }
   return relativePath;
@@ -175,13 +176,49 @@ function artworkUrl(filepath, sizePx) {
   const encoded = rel.split('/').map(seg => encodeURIComponent(seg)).join('/');
   const q = sizePx ? `?size=${sizePx}` : '';
   const path = `/artwork/${encoded}${q}`;
+  const cacheKey = (typeof ArtCache !== 'undefined') ? ArtCache.pathKey(filepath, sizePx) : path;
   if (_mediaAuthRequired) {
     const hit = _mediaSignCache.get(path);
-    if (hit) return hit.url;
+    if (hit && hit.expires > Date.now() / 1000 + 30) return hit.url;
     signMediaPath(path).catch(() => {});
     return null;
   }
+  if (typeof ArtCache !== 'undefined') ArtCache.prefetch(cacheKey, path).catch(() => {});
   return path;
+}
+
+async function ensureArtworkSigned(filepaths, sizes = [undefined, 96, 384]) {
+  if (!_mediaAuthRequired) return;
+  const paths = new Set();
+  for (const fp of (filepaths || []).filter(Boolean)) {
+    for (const sz of sizes) {
+      const key = (typeof ArtCache !== 'undefined')
+        ? ArtCache.pathKey(fp, sz)
+        : `/artwork/${String(fp).replace(/^\/+/, '').split('/').map((s) => encodeURIComponent(s)).join('/')}${sz ? `?size=${sz}` : ''}`;
+      paths.add(key);
+    }
+  }
+  const need = [...paths].filter((p) => {
+    const hit = _mediaSignCache.get(p);
+    return !hit || hit.expires <= Date.now() / 1000 + 30;
+  });
+  if (!need.length) return;
+  await Promise.all(need.map((p) => signMediaPath(p).catch(() => null)));
+}
+
+function artKeyAttr(filepath, sizePx) {
+  if (!filepath || typeof ArtCache === 'undefined') return '';
+  const key = ArtCache.pathKey(filepath, sizePx);
+  return key ? ` data-art-key="${escHtml(key)}"` : '';
+}
+
+function prefetchArtworkPaths(paths, sizes = [96, 384]) {
+  if (typeof ArtCache === 'undefined') return;
+  if (_mediaAuthRequired) {
+    ensureArtworkSigned(paths, sizes).catch(() => {});
+    return;
+  }
+  ArtCache.warmPaths(paths, sizes).catch(() => {});
 }
 
 const _artistPortraitCache = new Map();
@@ -208,8 +245,9 @@ async function resolveArtistPortraitPath(name) {
 function upgradeArtistPortraitImages(items) {
   (items || []).slice(0, 24).forEach((a) => {
     if ((a.art_path || '').includes('artist-portrait-')) return;
-    resolveArtistPortraitPath(a.artist).then((path) => {
+    resolveArtistPortraitPath(a.artist).then(async (path) => {
       if (!path) return;
+      await ensureArtworkSigned([path], [256]);
       const url = artworkUrl(path, 256);
       if (!url) return;
       document.querySelectorAll('.spotify-artist-card').forEach((card) => {
@@ -233,7 +271,7 @@ function spotifyCardArtHtml(artPath, seed, icon, sizePx = 384, opts) {
     return `<div class="spotify-card-art" style="background:${grad}"><i class="fa ${ic}"></i>${badge}</div>`;
   }
   return `<div class="spotify-card-art spotify-card-art-img" style="background:${grad}">
-    <img src="${escHtml(url)}" alt="" loading="lazy"
+    <img src="${url ? escHtml(url) : ''}" alt="" loading="lazy"${artKeyAttr(artPath, sizePx)}
       onerror="this.closest('.spotify-card-art').classList.add('spotify-card-art-fallback');this.remove();">
     ${badge}
   </div>`;
@@ -247,7 +285,7 @@ function spotifyShortcutArtHtml(artPath, seed, icon) {
     return `<span class="spotify-shortcut-art" style="background:${grad}"><i class="fa ${ic}"></i></span>`;
   }
   return `<span class="spotify-shortcut-art spotify-shortcut-art-img" style="background:${grad}">
-    <img src="${escHtml(url)}" alt="" loading="lazy"
+    <img src="${url ? escHtml(url) : ''}" alt="" loading="lazy"${artKeyAttr(artPath, 128)}
       onerror="this.closest('.spotify-shortcut-art').classList.add('spotify-shortcut-art-fallback');this.remove();">
   </span>`;
 }
@@ -260,7 +298,7 @@ function playlistRowArtHtml(playlistId, coverPath, seed, isAudiobook) {
     return `<div class="pl-row-art" style="background:${grad}"><i class="fa ${icon}"></i></div>`;
   }
   return `<div class="pl-row-art pl-row-art-img" style="background:${grad}">
-    <img src="${escHtml(url)}" alt="" loading="lazy"
+    <img src="${url ? escHtml(url) : ''}" alt="" loading="lazy"${artKeyAttr(coverPath, 96)}
       onerror="this.closest('.pl-row-art').classList.add('pl-row-art-fallback');this.remove();">
   </div>`;
 }
@@ -348,13 +386,30 @@ function warmBackgroundCaches() {
   }, 1500);
 }
 
+function npFormatYear(year) {
+  const y = parseInt(year, 10);
+  return Number.isFinite(y) && y >= 1900 && y <= 2100 ? ` (${y})` : '';
+}
+
+function npAlbumWithYear(album, year) {
+  const a = (album || '').trim();
+  if (!a) return npFormatYear(year).trim();
+  return a + npFormatYear(year);
+}
+
+function npPlayerSubline(artist, album, year, suffix) {
+  const meta = [artist, npAlbumWithYear(album, year)].filter(Boolean).join(' · ');
+  if (!suffix) return meta;
+  return meta ? `${meta}${suffix}` : suffix.replace(/^ · /, '');
+}
+
 function npArtworkHtml(filepath) {
   const url = artworkUrl(filepath);
   if (!url) {
     return '<div class="np-artwork np-artwork-fallback" aria-hidden="true"><i class="fa fa-compact-disc"></i></div>';
   }
   return `<div class="np-artwork" aria-hidden="true">
-    <img src="${escHtml(url)}" alt="" loading="lazy" class="np-artwork-img"
+    <img src="${escHtml(url)}" alt="" loading="eager" fetchpriority="high" class="np-artwork-img"${artKeyAttr(filepath)} 
       onerror="this.closest('.np-artwork').classList.add('np-artwork-fallback');this.remove();">
   </div>`;
 }
@@ -956,6 +1011,15 @@ function folderCardHtml(f) {
     </div>`;
 }
 
+function libArtPaths() {
+  const covers = window._libCovers || {};
+  return [
+    ...Object.values(covers),
+    ...(window._libPlaylists || []).map((p) => p.artPath),
+    ...(window._libSmart || []).map((s) => (s.linkedPlaylistId && covers[s.linkedPlaylistId]) || null),
+  ].filter(Boolean);
+}
+
 async function loadLibrary(opts = {}) {
   if (typeof WebCache !== 'undefined' && WebCache.shouldSkipLibraryReload()) return;
   const [plItems, smartData, folders, genres, remote] = await Promise.all([
@@ -975,12 +1039,14 @@ async function loadLibrary(opts = {}) {
     ...window._libSmart.map((s) => s.linkedPlaylistId),
   ].filter(Boolean);
   window._libCovers = coverIds.length ? await fetchPlaylistCovers(coverIds) : {};
+  await ensureArtworkSigned(libArtPaths());
   if (typeof WebCache !== 'undefined') {
     WebCache.putLibrary({
       playlists: window._libPlaylists,
       smart: window._libSmart,
       folders: window._libFolders,
       genres: window._libGenres,
+      covers: window._libCovers,
     });
     WebCache.markLibraryLoaded();
   }
@@ -1190,13 +1256,15 @@ async function refreshSidebarPlaylists() {
     const slice = items || [];
     const ids = slice.map((p) => p.id).filter(Boolean);
     const covers = ids.length ? await fetchPlaylistCovers(ids) : {};
+    await ensureArtworkSigned(Object.values(covers), [96]);
     const route = (window.location.hash || '').replace('#', '');
     el.innerHTML = slice.map((p) => {
       const href = `#playlists/detail/${encodeURIComponent(p.id)}`;
       const active = route === `playlists/detail/${p.id}` ? ' active' : '';
       const cover = covers[p.id];
-      const art = cover
-        ? `<img src="${escHtml(artworkUrl(cover, 96))}" alt="" loading="lazy">`
+      const artUrl = cover ? artworkUrl(cover, 96) : null;
+      const art = artUrl
+        ? `<img src="${escHtml(artUrl)}" alt="" loading="lazy"${artKeyAttr(cover, 96)}>`
         : `<i class="fa fa-list"></i>`;
       return `<a href="${href}" class="sidebar-pl-item${active}"><span class="sidebar-pl-art">${art}</span><span>${escHtml(p.name)}</span></a>`;
     }).join('') || '<p class="hint" style="padding:8px;font-size:12px;color:var(--text-muted)">No playlists yet</p>';
@@ -1240,9 +1308,9 @@ function renderQueuePanel() {
     const src = st.sourceLabel || st.playlist || '';
     const nextLabel = src ? `Next from: ${src}` : 'Next up';
     const nextHtml = upcoming.length
-      ? `<div class="queue-section-label">${escHtml(nextLabel)}</div>${upcoming.map((tr) => {
+      ? `<div class="queue-section-label">${escHtml(nextLabel)}</div>${upcoming.map((tr, qi) => {
         const url = tr.path ? artworkUrl(tr.path) : null;
-        return `<div class="queue-track">
+        return `<div class="queue-track queue-track-seek" data-queue-offset="${qi}" data-queue-mode="web">
           <div class="queue-track-art">${url ? `<img src="${escHtml(url)}" alt="" loading="lazy">` : ''}</div>
           <div class="queue-track-meta">
             <div class="queue-track-title">${escHtml(tr.title || 'Track')}</div>
@@ -1798,6 +1866,14 @@ async function loadDashboard(opts = {}) {
     discoverWeeklyCards: discoverWeeklyCardsFromApi(discover),
   });
 
+  const homeArt = [
+    ...Object.values(covers || {}),
+    releaseLabel ? (newAlbums[0]?.path || null) : null,
+    ...(feed.sections || []).flatMap((s) => (s.cards || []).map((c) => c.artPath)),
+    continueData?.resume?.path,
+  ].filter(Boolean);
+  await ensureArtworkSigned(homeArt);
+
   renderDashboardUI(feed, covers, remote);
   if (typeof WebCache !== 'undefined') {
     WebCache.putHome(feed, covers);
@@ -1810,6 +1886,7 @@ async function loadDashboard(opts = {}) {
       WebCache.saveHomeToDisk(feed, newCovers);
     }
     if (currentRoute === 'dashboard') renderDashboardUI(feed, newCovers, remote);
+    prefetchArtworkPaths(Object.values(newCovers || {}));
   }).catch(() => {});
 
   warmBackgroundCaches();
@@ -2214,7 +2291,21 @@ function renderWebPlayerBar(st) {
   if (txt) txt.textContent = t.title || '—';
   if (sub) {
     const src = st.sourceLabel ? ` · ${st.sourceLabel}` : '';
-    sub.textContent = (t.artist || '') + src;
+    sub.textContent = npPlayerSubline(t.artist, t.album, t.year, src);
+  }
+  if (t.path && !t.year && typeof API === 'function') {
+    API(`/api/track_meta?path=${encodeURIComponent(t.path)}`).then((meta) => {
+      if (!meta?.year || !WebPlayback.active) return;
+      const cur = WebPlayback.getState()?.current;
+      if (!cur || cur.path !== t.path) return;
+      cur.year = meta.year;
+      if (meta.album && !cur.album) cur.album = meta.album;
+      const subEl = document.getElementById('np-artist-text');
+      if (subEl) {
+        const src2 = st.sourceLabel ? ` · ${st.sourceLabel}` : '';
+        subEl.textContent = npPlayerSubline(cur.artist, cur.album, cur.year, src2);
+      }
+    }).catch(() => {});
   }
 
   const artImg = document.getElementById('np-art');
@@ -2315,7 +2406,7 @@ function renderPlayerBar() {
     const devLabel = items.length > 1
       ? ` · ${items.length} devices`
       : (d.deviceName ? ` · ${d.deviceName}` : '');
-    sub.textContent = artist ? `${artist}${devLabel}` : devLabel.replace(/^ · /, '');
+    sub.textContent = npPlayerSubline(artist, d.album, d.year, devLabel);
   }
 
   const artImg = document.getElementById('np-art');
@@ -2431,7 +2522,8 @@ async function refreshCurrentTrack() {
 function buildDeviceRow(d, controlsAvailable = false) {
   const devAttr = ` data-device-id="${escHtml(d.deviceId)}"`;
   const shuffleCls = npDeviceIdClass(d.deviceId);
-  const controls = npCanControl(d, controlsAvailable) ? `
+  const canControl = npCanControl(d, controlsAvailable);
+  const controls = canControl ? `
     <div class="np-controls row-actions">
       ${actionBtn({ kind: 'muted', onclick: "npControlEl(this,'previous')", title: 'Previous', icon: 'backward-step', dataAttrs: devAttr })}
       ${actionBtn({ kind: 'play', onclick: "npControlEl(this,'play')", title: 'Play', icon: 'play', dataAttrs: devAttr })}
@@ -2448,7 +2540,6 @@ function buildDeviceRow(d, controlsAvailable = false) {
     </div>` : '';
   const sleepBadge = d.sleep ? `<span class="np-sleep-badge" title="Sleep timer armed"><i class="fa fa-moon"></i> ${
     d.sleep.type === 'time' ? `${d.sleep.remainingMin}m` : `${d.sleep.remaining} left`}</span>` : '';
-  const canControl = npCanControl(d, controlsAvailable);
   window._npVolume = window._npVolume || {};
   const knownVol = window._npVolume[d.deviceId];
   const vol = (knownVol == null) ? 50 : knownVol;
@@ -2466,7 +2557,7 @@ function buildDeviceRow(d, controlsAvailable = false) {
         <div class="np-device-meta">
           <div class="np-track">${escHtml(d.track || '—')} ${sleepBadge}</div>
           ${d.artist ? `<div class="np-artist">${escHtml(d.artist)}</div>` : ''}
-          ${d.album ? `<div class="np-album">${escHtml(d.album)}</div>` : ''}
+          ${(d.album || d.year) ? `<div class="np-album">${escHtml(npAlbumWithYear(d.album, d.year))}</div>` : ''}
           ${(d.sourceLabel || d.playlist) ? `<div class="np-playlist"><i class="fa fa-list"></i> ${escHtml(d.sourceLabel || d.playlist)}</div>` : ''}
           <div class="np-device-label">Device: ${escHtml(d.deviceName || (d.deviceId || '').slice(-12) || 'default')}${d.platform ? ` <span class="badge" style="font-size:10px;text-transform:uppercase">${escHtml(d.platform)}</span>` : (String(d.deviceId || '').startsWith('client-') ? ' <span class="badge" style="font-size:10px">mobile</span>' : '')}<span class="np-time" data-device-id="${escHtml(d.deviceId)}">${npTimeText(d)}</span></div>
           ${npProgressHtml(d)}
@@ -2790,7 +2881,7 @@ function buildGroupRow(g, controlsAvailable) {
             <span class="np-group-name">${escHtml(g.name)}</span>
             <span class="np-group-count">${g.members.length} speakers</span>
           </div>
-          <span class="np-group-track">${escHtml(g.track || '—')}${g.artist ? ' — ' + escHtml(g.artist) : ''}${g.members[0] && (g.members[0].sourceLabel || g.members[0].playlist) ? ' · <i class="fa fa-list"></i> ' + escHtml(g.members[0].sourceLabel || g.members[0].playlist) : ''}</span>
+          <span class="np-group-track">${escHtml(g.track || '—')}${g.artist ? ' — ' + escHtml(g.artist) : ''}${g.members[0] && (g.members[0].album || g.members[0].year) ? ' · ' + escHtml(npAlbumWithYear(g.members[0].album, g.members[0].year)) : ''}${g.members[0] && (g.members[0].sourceLabel || g.members[0].playlist) ? ' · <i class="fa fa-list"></i> ' + escHtml(g.members[0].sourceLabel || g.members[0].playlist) : ''}</span>
         </div>
       </div>
       <div class="np-group-members">${sub}</div>
@@ -2844,6 +2935,12 @@ async function loadNowPlaying() {
     }
   }
 
+  const npPaths = [
+    ...(window._npItems || []).map((d) => d.filepath),
+    ...items.map((e) => e.filepath),
+  ].filter(Boolean);
+  await ensureArtworkSigned(npPaths);
+
   const currentCard = buildCurrentCard(window._npItems, window._npControlsAvailable);
 
   const rows = items.map(e => `
@@ -2874,6 +2971,10 @@ async function loadNowPlaying() {
     </div>`);
   npLoadVolumes();
   renderPlayerBar();
+  prefetchArtworkPaths([
+    ...(window._npItems || []).map((d) => d.filepath),
+    ...items.map((e) => e.filepath),
+  ].filter(Boolean));
 }
 
 
@@ -2886,7 +2987,10 @@ register('library', async () => {
       window._libSmart = snap.smart || [];
       window._libFolders = snap.folders || [];
       window._libGenres = snap.genres || [];
+      window._libCovers = snap.covers || {};
       window._libRemote = window._plRemote || window._libRemote || {};
+      renderLibraryPage();
+      await ensureArtworkSigned(libArtPaths());
       renderLibraryPage();
       painted = true;
     }
@@ -3811,20 +3915,19 @@ async function loadPlaylists(showSpinner) {
     _plAllCacheSearch = searchKey;
   }
   window._plRemote = remoteStatus || window._plRemote || {};
-  renderPlaylistsPage();
-  const pageIds = (window._playlists || []).map((p) => p.id).filter(Boolean);
+  const { items } = getPlaylistsPageItems();
   const smartIds = (window._smartPlaylists || []).map((s) => s.linkedPlaylistId).filter(Boolean);
+  const pageIds = items.map((p) => p.id).filter(Boolean);
   const coverIds = [...new Set(pageIds.concat(smartIds))];
   if (coverIds.length) {
     const covers = await fetchPlaylistCovers(coverIds);
     window._plCovers = { ...(window._plCovers || {}), ...covers };
-    renderPlaylistsPage();
   }
+  await ensureArtworkSigned(playlistArtPaths(items));
+  renderPlaylistsPage();
 }
 
-function renderPlaylistsPage() {
-  const remote = window._plRemote || {};
-  const canPlay = true;
+function getPlaylistsPageItems() {
   let sorted = _plAllCache || [];
   const libSort = getLibSort('playlists');
   if (libSort.by === 'recents') {
@@ -3833,15 +3936,30 @@ function renderPlaylistsPage() {
     const by = libSort.by === 'tracks' ? 'trackCount' : 'name';
     sorted = plSortPlaylistsInMemory(sorted, by, libSort.order);
   }
-  sorted = sorted
-    .filter(p => {
-      if (!_plFolderFilter) return true;
-      const assignments = window._plFolderAssignments || {};
-      return assignments[p.id] === _plFolderFilter;
-    });
+  sorted = sorted.filter((p) => {
+    if (!_plFolderFilter) return true;
+    const assignments = window._plFolderAssignments || {};
+    return assignments[p.id] === _plFolderFilter;
+  });
   const total = sorted.length;
   const start = (_plPage - 1) * _plPageSize;
   const items = sorted.slice(start, start + _plPageSize);
+  return { items, total, libSort };
+}
+
+function playlistArtPaths(items) {
+  const covers = window._plCovers || {};
+  return [
+    ...Object.values(covers),
+    ...(items || []).map((p) => p.artPath),
+    ...(window._smartPlaylists || []).map((s) => (s.linkedPlaylistId && covers[s.linkedPlaylistId]) || null),
+  ].filter(Boolean);
+}
+
+function renderPlaylistsPage() {
+  const remote = window._plRemote || {};
+  const canPlay = true;
+  const { items, total, libSort } = getPlaylistsPageItems();
   window._playlists = items;
   const covers = window._plCovers || {};
 
@@ -3907,7 +4025,7 @@ function renderPlaylistsPage() {
     </tr>`).join('');
 
   const folderChips = (window._plFolders || []).map(f =>
-    `<button class="btn-sm btn-default" onclick="_plFolderFilter='${escHtml(f.id)}';renderPlaylistsPage()">${escHtml(f.name)}</button>`
+    `<button class="btn-sm btn-default" onclick="_plFolderFilter='${escHtml(f.id)}';loadPlaylists()">${escHtml(f.name)}</button>`
   ).join(' ');
   const plCards = items.map((p, i) => {
     const art = covers[p.id] || null;
@@ -3947,10 +4065,10 @@ function renderPlaylistsPage() {
   renderPage('Playlists', spotifyBrowsePage('Playlists', libraryFiltersHtml('playlists'), `
     ${libraryBrowseToolbar('playlists', { search: _plSearch, searchPlaceholder: 'Search playlists…', onSearchFn: 'libSearchInput', total, extraHtml: plActions })}
     ${folderChips ? `<div class="home-filters" style="margin-bottom:16px">${folderChips}
-      <button type="button" class="home-filter${_plFolderFilter ? '' : ' active'}" onclick="_plFolderFilter='';renderPlaylistsPage()">All</button></div>` : ''}
+      <button type="button" class="home-filter${_plFolderFilter ? '' : ' active'}" onclick="_plFolderFilter='';loadPlaylists()">All</button></div>` : ''}
     ${smartCards ? spotifySection('Smart playlists', '#playlists', smartCards) : ''}
     ${plCards ? `<section class="spotify-section"><div class="spotify-section-header"><h2 class="spotify-section-title">Your playlists</h2><span class="hint">${fmtNum(total)} total · sorted by ${sortLabel} ${sortArrow}</span></div><div class="spotify-carousel library-playlist-grid">${plCards}</div></section>` : '<div class="empty-state"><i class="fa fa-list"></i><p>No playlists found.</p></div>'}
-    ${buildPagination(total, _plPage, _plPageSize, (p) => { _plPage = p; renderPlaylistsPage(); })}
+    ${buildPagination(total, _plPage, _plPageSize, (p) => { _plPage = p; loadPlaylists(); })}
   `), { header: false });
 }
 
@@ -4325,6 +4443,7 @@ async function loadArtists() {
   }
   window._artists = items;
   const canPlay = true;
+  await ensureArtworkSigned(items.map((a) => a.art_path).filter(Boolean), [256]);
 
   const cards = items.map((a, i) => {
     const artPath = a.art_path || null;
@@ -4402,6 +4521,7 @@ async function loadAlbums() {
   }
   window._albums = items;
   const canPlay = true;
+  await ensureArtworkSigned(items.map((a) => a.art_path).filter(Boolean));
 
   const cards = items.map((a, i) => {
     const unplayed = a.played === false;
@@ -4468,16 +4588,16 @@ async function loadSongs() {
   const rows = items.map((s, i) => {
     const title = s.title || path2name(s.path);
     const playBtn = canPlay
-      ? `<button type="button" class="spotify-play-fab" style="position:static;opacity:1;width:32px;height:32px" onclick="playSongAt(${i})" aria-label="Play"><i class="fa fa-play"></i></button>`
+      ? actionBtn({ kind: 'play', onclick: `playSongAt(${i})`, title: 'Play', icon: 'play' })
       : '';
     const roomBtn = s.path
-      ? `<button type="button" class="spotify-play-fab" style="position:static;opacity:1;width:32px;height:32px;margin-left:4px" onclick="openAddToRoomModal({path:${JSON.stringify(s.path)},track:${JSON.stringify(title)},artist:${JSON.stringify(s.artist || '')}})" aria-label="Add to room"><i class="fa fa-plus"></i></button>`
+      ? actionBtn({ kind: 'muted', onclick: `openAddToRoomModal({path:${JSON.stringify(s.path)},track:${JSON.stringify(title)},artist:${JSON.stringify(s.artist || '')}})`, title: 'Add to room', icon: 'plus' })
       : '';
     return `<div class="spotify-track-row">
       <span class="text-muted">${s.track_number || i + 1}</span>
       <span class="track-title">${escHtml(title)}</span>
       <span>${escHtml(s.album || '—')}</span>
-      <span>${playBtn}${roomBtn}</span>
+      <span class="track-actions">${playBtn}${roomBtn}</span>
     </div>`;
   }).join('');
 
@@ -5872,8 +5992,17 @@ async function clearImageCache() {
 
 // ── Analytics ─────────────────────────────────────────────────────────────
 
-let _anFrom = '', _anTo = '';
+let _anFrom = '', _anTo = '', _anMember = '';
 window._anCharts = window._anCharts || {};
+
+function _analyticsTodayStats(d) {
+  const daySeries = (d && d.activity && d.activity.day) || [];
+  const last = daySeries[daySeries.length - 1];
+  return {
+    label: last?.label || '',
+    count: last?.count || 0,
+  };
+}
 
 async function _loadAnalytics() {
   Object.values(window._anCharts || {}).forEach(c => { try { c && c.destroy(); } catch {} });
@@ -5881,10 +6010,11 @@ async function _loadAnalytics() {
   loading();
   let url = '/api/analytics';
   const params = [];
-  if (_anFrom) params.push(`from=${_anFrom}`);
-  if (_anTo)   params.push(`to=${_anTo}`);
-  const memberId = activeMemberId();
-  if (memberId) params.push(`member=${encodeURIComponent(memberId)}`);
+  if (_anFrom) params.push(`from=${encodeURIComponent(_anFrom)}`);
+  if (_anTo)   params.push(`to=${encodeURIComponent(_anTo)}`);
+  // Household-wide by default — matches Android AnalyticsScreen (householdWide = true).
+  // Active profile is for ratings/continue, not analytics scoping.
+  if (_anMember) params.push(`member=${encodeURIComponent(_anMember)}`);
   if (params.length) url += '?' + params.join('&');
   const data = await API(url);
   const hasDeviceActivity = (data?.deviceBreakdown || []).some(d =>
@@ -5918,19 +6048,29 @@ async function _loadAnalytics() {
 function _restoreDateInputs() {
   const fi = document.getElementById('an-date-from');
   const ti = document.getElementById('an-date-to');
+  const mi = document.getElementById('an-member-filter');
   if (fi) fi.value = _anFrom;
   if (ti) ti.value = _anTo;
+  if (mi) mi.value = _anMember;
 }
 
 function _anDatePickerHtml(data) {
   const dr = (data || {}).dateRange || {};
-  const activeFilter = dr.from || dr.to;
+  const activeFilter = dr.from || dr.to || _anMember;
+  const members = (window._household?.members || []);
+  const memberOpts = members.length
+    ? `<select id="an-member-filter" class="settings-input" style="font-size:12px;padding:4px 8px" onchange="_anMember=this.value;_loadAnalytics()">
+        <option value="">Everyone</option>
+        ${members.map((m) => `<option value="${escHtml(m.id)}"${_anMember === m.id ? ' selected' : ''}>${escHtml(m.name)}</option>`).join('')}
+      </select>`
+    : '';
   return `<div class="card-body" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 16px">
     <span style="font-size:13px;font-weight:600;color:#556">Date Range</span>
     <input type="date" id="an-date-from" style="padding:4px 8px;border:1px solid #ccd;border-radius:4px;font-size:12px" onchange="_anFrom=this.value;_loadAnalytics()">
     <span style="font-size:12px;color:#aab">to</span>
     <input type="date" id="an-date-to" style="padding:4px 8px;border:1px solid #ccd;border-radius:4px;font-size:12px" onchange="_anTo=this.value;_loadAnalytics()">
-    ${activeFilter ? `<button class="btn-sm btn-default" onclick="_anFrom='';_anTo='';_loadAnalytics()"><i class="fa fa-times"></i> Clear</button>` : ''}
+    ${memberOpts}
+    ${activeFilter ? `<button class="btn-sm btn-default" onclick="_anFrom='';_anTo='';_anMember='';_loadAnalytics()"><i class="fa fa-times"></i> Clear</button>` : ''}
     ${activeFilter ? `<span style="font-size:11px;color:#e99d1a"><i class="fa fa-filter"></i> Filtered</span>` : ''}
     <a class="btn-sm btn-default" href="${anExportUrl()}" style="margin-left:auto"><i class="fa fa-download"></i> Export CSV</a>
   </div>`;
@@ -5940,12 +6080,19 @@ function anExportUrl() {
   let url = '/api/analytics/export?';
   if (_anFrom) url += `from=${encodeURIComponent(_anFrom)}&`;
   if (_anTo) url += `to=${encodeURIComponent(_anTo)}&`;
-  const memberId = activeMemberId();
-  if (memberId) url += `member=${encodeURIComponent(memberId)}&`;
+  if (_anMember) url += `member=${encodeURIComponent(_anMember)}&`;
   return url;
 }
 
-register('analytics', async () => { _anFrom = ''; _anTo = ''; await _loadAnalytics(); });
+register('analytics', async () => {
+  _anFrom = '';
+  _anTo = '';
+  _anMember = '';
+  if (!window._household) {
+    await API('/api/household').then((h) => { window._household = h; }).catch(() => {});
+  }
+  await _loadAnalytics();
+});
 
 // ── Library search ───────────────────────────────────────────────────────────
 let _searchTimer = null;
@@ -5966,19 +6113,113 @@ register('search', async () => {
     const scope = searchScopeQuery();
     const cacheKey = `${q}\0${scope}`;
     if (el && window._lastSearchRunKey === cacheKey && window._lastSearchData) {
-      renderSearchResultsUI(el, window._lastSearchData, q);
+      await renderSearchResultsUI(el, window._lastSearchData, q);
     }
     libSearchDebounced(q);
   } else if (q.length === 1) {
     libSearchDebounced(q);
   } else if (cached) {
     const el = document.getElementById('lib-search-results');
-    if (el) renderSearchBrowseUI(el, cached, window._plRemote || {});
+    if (el) {
+      await ensureArtworkSigned(searchBrowseSignPaths(cached), [96, 256, 384]);
+      renderSearchBrowseUI(el, cached, window._plRemote || {});
+    }
     loadSearchBrowse();
   } else {
     await loadSearchBrowse();
   }
 });
+
+function searchVisibleItems(data, expanded, key) {
+  const bucket = expanded && expanded[key];
+  if (bucket && bucket[key]) return bucket[key];
+  return (data && data[key]) || [];
+}
+
+function searchPlaylistIds(data, expanded) {
+  const ids = new Set();
+  for (const p of searchVisibleItems(data, expanded, 'playlists')) {
+    if (p.id) ids.add(p.id);
+  }
+  for (const s of searchVisibleItems(data, expanded, 'smartPlaylists')) {
+    if (s.linkedPlaylistId) ids.add(s.linkedPlaylistId);
+    else if (s.id) ids.add(s.id);
+  }
+  return [...ids];
+}
+
+function searchResultArtPaths(data, covers = {}, expanded = {}) {
+  const c = covers || window._searchPlaylistCovers || {};
+  const paths = [...Object.values(c)];
+  for (const key of ['songs', 'artists', 'albums', 'radios', 'similar', 'genres', 'messages']) {
+    for (const item of searchVisibleItems(data, expanded, key)) {
+      if (item.path) paths.push(item.path);
+    }
+  }
+  return paths.filter(Boolean);
+}
+
+async function hydrateSearchResultArt(el, data, expanded) {
+  if (!el) return;
+  window._searchPlaylistCovers = window._searchPlaylistCovers || {};
+  const seq = window._searchArtSeq || 0;
+  const needCoverIds = searchPlaylistIds(data, expanded)
+    .filter((id) => !window._searchPlaylistCovers[id]);
+  if (needCoverIds.length) {
+    Object.assign(
+      window._searchPlaylistCovers,
+      await fetchPlaylistCovers(needCoverIds).catch(() => ({})) || {},
+    );
+  }
+  if (seq !== window._searchArtSeq) return;
+  patchSearchResultArtwork(el);
+  const signPaths = searchResultArtPaths(data, window._searchPlaylistCovers, expanded);
+  if (signPaths.length) {
+    if (_mediaAuthRequired) await ensureArtworkSigned(signPaths, [96]).catch(() => {});
+    else if (typeof ArtCache !== 'undefined') await ArtCache.warmPaths(signPaths, [96]).catch(() => {});
+  }
+  if (seq !== window._searchArtSeq) return;
+  patchSearchResultArtwork(el);
+}
+
+function patchSearchResultArtwork(root) {
+  if (!root) return;
+  root.querySelectorAll('.search-hit').forEach((hit) => {
+    let artPath = hit.getAttribute('data-art-path');
+    if (!artPath) {
+      const pid = hit.getAttribute('data-playlist-id')
+        || hit.querySelector('[data-play-id]')?.getAttribute('data-play-id');
+      if (pid) artPath = (window._searchPlaylistCovers || {})[pid] || null;
+    }
+    if (!artPath) return;
+    const url = artworkUrl(artPath, 96);
+    if (!url) return;
+    const kind = [...hit.classList].find((c) => c.startsWith('search-hit-') && c !== 'search-hit-art')?.slice('search-hit-'.length) || 'song';
+    const seed = hit.getAttribute('data-art-seed') || '';
+    const unplayed = hit.querySelector('.unplayed-album-badge') != null;
+    const actions = hit.querySelector('.search-hit-actions');
+    const main = hit.querySelector('.search-hit-main');
+    const thumbHtml = searchThumbHtml(kind, artPath, seed, null, unplayed);
+    const thumbEl = hit.querySelector('.search-hit-art');
+    if (thumbEl) thumbEl.outerHTML = thumbHtml;
+    else if (main) main.insertAdjacentHTML('beforebegin', thumbHtml);
+    else if (actions) actions.insertAdjacentHTML('beforebegin', thumbHtml);
+    hit.setAttribute('data-art-path', artPath);
+  });
+}
+
+function searchBrowseArtPaths(data) {
+  if (!data) return [];
+  const covers = data.playlistCovers || {};
+  const genreItems = (data.genres && data.genres.items) || (Array.isArray(data.genres) ? data.genres : []);
+  const albums = (data.newAlbums && data.newAlbums.albums) || [];
+  return [
+    ...Object.values(covers),
+    ...genreItems.map((g) => g.art_path || g.path),
+    ...albums.map((a) => a.path || a.art_path),
+    ...(data.playlists || []).slice(0, 12).flatMap((p) => [covers[p.id], p.artPath]),
+  ].filter(Boolean);
+}
 
 function searchThumbHtml(kind, artPath, seed, icon, unplayed) {
   const round = kind === 'artist';
@@ -5991,7 +6232,7 @@ function searchThumbHtml(kind, artPath, seed, icon, unplayed) {
     return `<span class="${cls}" style="background:${grad}"><i class="fa ${ic}"></i>${badge}</span>`;
   }
   return `<span class="${cls} search-hit-art-img" style="background:${grad}">
-    <img src="${escHtml(url)}" alt="" loading="lazy"
+    <img src="${escHtml(url)}" alt="" loading="lazy"${artKeyAttr(artPath, 96)}
       onerror="this.closest('.search-hit-art').classList.add('search-hit-art-fallback');this.remove();">
     ${badge}
   </span>`;
@@ -6073,7 +6314,12 @@ function libSearchHit(opts) {
   const main = href
     ? `<a href="${href}" class="search-hit-main">${mainInner}</a>`
     : `<div class="search-hit-main">${mainInner}</div>`;
-  return `<div class="search-hit search-hit-${kind}">${thumb}${main}<div class="search-hit-actions row-actions">${extraActions}${playBtn}</div></div>`;
+  const plIdAttr = (kind === 'playlist' && playOpts && playOpts.id)
+    ? ` data-playlist-id="${escHtml(playOpts.id)}"`
+    : '';
+  const artAttr = artPath ? ` data-art-path="${escHtml(artPath)}"` : '';
+  const seedAttr = seed ? ` data-art-seed="${escHtml(String(seed).slice(0, 120))}"` : '';
+  return `<div class="search-hit search-hit-${kind}"${artAttr}${seedAttr}${plIdAttr}>${thumb}${main}<div class="search-hit-actions row-actions">${extraActions}${playBtn}</div></div>`;
 }
 
 function searchScopeQuery() {
@@ -6126,47 +6372,137 @@ function clearSearchRecentSelections() {
 
 window.addSearchRecentSelection = addSearchRecentSelection;
 
+function searchBrowseSignPaths(data) {
+  const recentPlays = (data?.quick?.recent) || [];
+  return [
+    ...searchBrowseArtPaths(data),
+    ...recentPlays.map((item) => item.filepath),
+    ...loadSearchRecentSelections().map((r) => r.path),
+  ].filter(Boolean);
+}
+
+function searchBrowseLinkRow(label, onclick, icon) {
+  return `<button type="button" class="search-browse-link-row" onclick="${onclick}">
+    <i class="fa ${icon || 'fa-circle'} search-browse-link-icon" aria-hidden="true"></i>
+    <span class="search-browse-link-label">${escHtml(label)}</span>
+    <i class="fa fa-chevron-right search-browse-link-chevron" aria-hidden="true"></i>
+  </button>`;
+}
+
+function searchAuralChip(label, onclick, icon) {
+  return `<button type="button" class="search-aural-chip" onclick="${onclick}">
+    <i class="fa ${icon}" aria-hidden="true"></i>
+    <span>${escHtml(label)}</span>
+  </button>`;
+}
+
+function searchRecentRow(r, i) {
+  const kind = r.kind || 'song';
+  const thumbKind = kind === 'artist' ? 'artist' : (kind === 'album' ? 'album' : 'song');
+  const thumb = searchThumbHtml(thumbKind, r.path, r.title, null, false);
+  const sub = r.subtitle ? `<span class="search-browse-recent-sub">${escHtml(r.subtitle)}</span>` : '';
+  return `<div class="search-browse-recent-row">
+    <button type="button" class="search-browse-recent-main" onclick="openSearchRecentByIndex(${i})">
+      ${thumb}
+      <span class="search-browse-recent-text"><strong>${escHtml(r.title)}</strong>${sub}</span>
+    </button>
+    <button type="button" class="search-browse-recent-remove" onclick="removeSearchRecentByIndex(${i});loadSearchBrowse();" aria-label="Remove"><i class="fa fa-times"></i></button>
+  </div>`;
+}
+
+function searchJumpBackRow(item) {
+  const title = item.track || item.title || 'Track';
+  const artist = item.artist || '';
+  const thumb = searchThumbHtml('album', item.filepath, title, null, false);
+  const playOpts = item.filepath
+    ? `{kind:'song',name:${JSON.stringify(title)},artist:${JSON.stringify(artist)},path:${JSON.stringify(item.filepath)}}`
+    : null;
+  const playBtn = playOpts
+    ? `<button type="button" class="action-btn action-play lib-search-play" data-play-kind="song" data-play-name="${escHtml(title)}" data-play-artist="${escHtml(artist)}" data-play-path="${escHtml(item.filepath || '')}" title="Play" aria-label="Play"><i class="fa fa-play"></i></button>`
+    : '';
+  return `<div class="search-hit search-hit-song">${thumb}
+    <div class="search-hit-main"><span class="search-hit-title">${escHtml(title)}</span>${artist ? `<span class="search-hit-sub">${escHtml(artist)}</span>` : ''}</div>
+    <div class="search-hit-actions row-actions">${playBtn}</div>
+  </div>`;
+}
+
 function renderSearchBrowseUI(el, data, remote) {
   const recents = loadSearchRecentSelections();
   const pinItems = data.pins || [];
   window._searchBrowsePins = pinItems;
+  const genres = (data.genres && data.genres.items) || (Array.isArray(data.genres) ? data.genres : []);
+  const albums = (data.newAlbums && data.newAlbums.albums) || [];
+  const covers = data.playlistCovers || {};
+  const playlists = (data.playlists || []).slice(0, 12);
   const sec = (title, body, extraHeader) => body
     ? `<section class="spotify-section search-browse-section"><div class="spotify-section-header" style="display:flex;align-items:center;justify-content:space-between;gap:12px"><h2 class="spotify-section-title home-greeting">${escHtml(title)}</h2>${extraHeader || ''}</div>${body}</section>`
     : '';
 
-  const linkRow = (label, onclick) => `<button type="button" class="search-browse-link-row" onclick="${onclick}"><span>${escHtml(label)}</span><i class="fa fa-chevron-right"></i></button>`;
+  let browseAllBody = '';
+  if (albums.length || genres.length) {
+    const topRow = `<div class="search-browse-tiles-row">${searchNewReleasesTile(albums)}${genres[0] ? searchGenreTileHtml(genres[0]) : ''}</div>`;
+    const restGenres = genres.slice(1);
+    browseAllBody = topRow + (restGenres.length
+      ? `<div class="search-genre-grid">${restGenres.map((g) => searchGenreTileHtml(g)).join('')}</div>`
+      : '');
+  } else {
+    browseAllBody = `<div class="search-browse-tiles-row">
+      <a href="#albums" class="search-browse-tile search-browse-tile-fallback" style="background:linear-gradient(135deg,#5038a0 0%,#1db954 100%)">
+        <span class="search-browse-tile-icon"><i class="fa fa-bolt"></i></span>
+        <span class="search-browse-tile-label">New Releases</span>
+      </a>
+      <a href="#genres" class="search-browse-tile search-browse-tile-fallback" style="background:linear-gradient(135deg,#e91429 0%,#ff6b35 100%)">
+        <span class="search-browse-tile-icon"><i class="fa fa-tag"></i></span>
+        <span class="search-browse-tile-label">Browse Genres</span>
+      </a>
+    </div>`;
+  }
 
-  const auralBody = `<div class="search-browse-list">
-    ${linkRow('Top Artists', 'openSearchRanking(\'artists\')')}
-    ${linkRow('Top Albums', 'openSearchRanking(\'albums\')')}
-    ${linkRow('Top Tracks', 'openSearchRanking(\'tracks\')')}
-    ${linkRow('Best Of…', 'openSearchRanking(\'bestof\')')}
-    ${pinItems.map((p, i) => linkRow(p.title || p.name || 'Shortcut', `openSearchPinByIndex(${i})`)).join('')}
-  </div>`;
+  const recentPlays = (data.quick && data.quick.recent) || [];
+  const jumpBackBody = recentPlays.length
+    ? `<div class="search-browse-list search-jump-back">${recentPlays.slice(0, 5).map((item) => searchJumpBackRow(item)).join('')}</div>`
+    : '';
 
-  const sonicBody = `<div class="search-browse-list">
-    ${linkRow('Sonic Adventure', 'openAcquireIdeasModal({explore:true})')}
-    ${linkRow('Sonic Sage', 'openMixMuseModal && openMixMuseModal()')}
+  const playlistCards = playlists.map((p) => spotifyMediaCard(
+    p.name,
+    `${fmtNum(p.trackCount || 0)} tracks`,
+    p.id ? `#playlists/detail/${encodeURIComponent(p.id)}` : '#playlists',
+    'fa-list',
+    p.name,
+    p.id ? `searchPlayPlaylist(${JSON.stringify(p.id)}, ${JSON.stringify(p.name)})` : null,
+    covers[p.id] || p.artPath || null,
+  )).join('');
+  const playlistsBody = playlistCards
+    ? `<div class="spotify-carousel search-playlist-carousel">${playlistCards}</div>`
+    : '';
+
+  const auralBody = `<div class="search-aural-grid">
+    ${searchAuralChip('Top Artists', "openSearchRanking('artists')", 'fa-microphone')}
+    ${searchAuralChip('Top Albums', "openSearchRanking('albums')", 'fa-compact-disc')}
+    ${searchAuralChip('Top Tracks', "openSearchRanking('tracks')", 'fa-music')}
+    ${searchAuralChip('Best Of…', "openSearchRanking('bestof')", 'fa-star')}
+  </div>${pinItems.length ? `<div class="search-browse-list search-pin-list">${pinItems.map((p, i) => searchBrowseLinkRow(p.title || p.name || 'Shortcut', `openSearchPinByIndex(${i})`, 'fa-bookmark')).join('')}</div>` : ''}`;
+
+  const sonicBody = `<div class="search-sonic-grid">
+    ${searchAuralChip('Sonic Adventure', 'openAcquireIdeasModal({explore:true})', 'fa-compass')}
+    ${searchAuralChip('Sonic Sage', 'openMixMuseModal && openMixMuseModal()', 'fa-wand-magic-sparkles')}
   </div>`;
 
   const recentBody = recents.length
     ? `<div class="search-browse-list">${recents.map((r, i) => {
       window._searchBrowseRecents = recents;
-      const sub = r.subtitle ? `<span class="text-muted">${escHtml(r.subtitle)}</span>` : '';
-      return `<div class="search-browse-recent-row">
-        <button type="button" class="search-browse-recent-main" onclick="openSearchRecentByIndex(${i})">
-          <strong>${escHtml(r.title)}</strong>${sub}
-        </button>
-        <button type="button" class="btn-sm btn-default" onclick="removeSearchRecentByIndex(${i});loadSearchBrowse();" aria-label="Remove"><i class="fa fa-times"></i></button>
-      </div>`;
+      return searchRecentRow(r, i);
     }).join('')}</div>`
     : '';
 
   el.innerHTML = [
     searchScopeBarHtml(),
-    sec('Aural fixations', auralBody, '<button type="button" class="btn-sm btn-default" onclick="editSearchPins()">Edit</button>'),
+    browseAllBody ? sec('Browse all', browseAllBody) : '',
+    jumpBackBody ? sec('Jump back in', jumpBackBody) : '',
+    playlistsBody ? sec('Your playlists', playlistsBody, '<a href="#playlists" class="spotify-section-link">Show all</a>') : '',
+    sec('Aural fixations', auralBody, pinItems.length ? '<button type="button" class="btn-sm btn-default" onclick="editSearchPins()">Edit pins</button>' : ''),
     sec('Sonic explorations', sonicBody),
-    recentBody ? sec('Recent', recentBody, recents.length ? '<button type="button" class="btn-sm btn-default" onclick="clearSearchRecentSelections();loadSearchBrowse();">Clear</button>' : '') : '',
+    recentBody ? sec('Recent searches', recentBody, recents.length ? '<button type="button" class="btn-sm btn-default" onclick="clearSearchRecentSelections();loadSearchBrowse();">Clear</button>' : '') : '',
   ].filter(Boolean).join('') || '<div class="empty-state"><p>Nothing in your library yet.</p></div>';
 }
 
@@ -6225,6 +6561,7 @@ async function openSearchRanking(kind, periodDelta) {
     : kind === 'albums' ? 'Top Albums'
       : kind === 'tracks' ? 'Top Tracks'
         : 'Best Of…';
+  await ensureArtworkSigned((rows || []).map((row) => row.path).filter(Boolean), [96]);
   const playLabel = (n) => (n === 1 ? '1 play' : `${n} plays`);
   const body = (rows || []).slice(0, 50).map((row, index) => {
     const name = row.name || row.label || '—';
@@ -6342,6 +6679,9 @@ async function loadSearchBrowse() {
   const cached = typeof WebCache !== 'undefined' ? WebCache.peekSearchBrowse() : null;
   if (cached) {
     renderSearchBrowseUI(el, cached, window._plRemote || {});
+    ensureArtworkSigned(searchBrowseSignPaths(cached), [96, 256, 384])
+      .then(() => renderSearchBrowseUI(el, cached, window._plRemote || {}))
+      .catch(() => {});
   } else {
     el.innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
   }
@@ -6358,6 +6698,9 @@ async function loadSearchBrowse() {
   const data = { quick, genres, playlists: plItems, newAlbums, playlistCovers, pins: pins?.pins || [] };
   if (typeof WebCache !== 'undefined') WebCache.putSearchBrowse(data);
   renderSearchBrowseUI(el, data, remote);
+  ensureArtworkSigned(searchBrowseSignPaths(data), [96, 256, 384])
+    .then(() => renderSearchBrowseUI(el, data, remote))
+    .catch(() => {});
 }
 window.loadSearchBrowse = loadSearchBrowse;
 
@@ -6368,18 +6711,10 @@ function libSearchDebounced(q) {
     const trimmed = (q || '').trim();
     if (trimmed.length === 1) libSearchSuggest(trimmed);
     else libSearchRun(trimmed);
-  }, 280);
+  }, 180);
 }
 
-async function libSearchSuggest(q) {
-  const el = document.getElementById('lib-search-results');
-  if (!el) return;
-  el.innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
-  const data = await API(`/api/search/suggest?q=${encodeURIComponent(q)}`).catch(() => null);
-  if (!data) {
-    el.innerHTML = '<p class="hint">Suggestions unavailable.</p>';
-    return;
-  }
+function paintSearchSuggest(el, data) {
   const rows = [];
   const pushRows = (kind, items, mapFn) => {
     for (const item of items || []) {
@@ -6426,6 +6761,31 @@ async function libSearchSuggest(q) {
   el.innerHTML = rows.length
     ? `<section class="search-suggest-section"><h2 class="search-section-title home-greeting">Suggestions</h2><div class="search-browse-list">${rows.join('')}</div></section>`
     : '<p class="hint">Keep typing to search your library.</p>';
+}
+
+async function libSearchSuggest(q) {
+  const el = document.getElementById('lib-search-results');
+  if (!el) return;
+  el.innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
+  const data = await API(`/api/search/suggest?q=${encodeURIComponent(q)}`).catch(() => null);
+  if (!data) {
+    el.innerHTML = '<p class="hint">Suggestions unavailable.</p>';
+    return;
+  }
+  if ((window._lastSearchQ || '').trim() !== q) return;
+  window._lastSuggestData = data;
+  paintSearchSuggest(el, data);
+  const suggestPaths = [
+    ...(data.artists || []).map((a) => a.path),
+    ...(data.albums || []).map((a) => a.path),
+    ...(data.songs || []).map((s) => s.path),
+  ].filter(Boolean);
+  if (suggestPaths.length) {
+    ensureArtworkSigned(suggestPaths, [96]).then(() => {
+      if ((window._lastSearchQ || '').trim() !== q) return;
+      paintSearchSuggest(el, window._lastSuggestData);
+    }).catch(() => {});
+  }
 }
 
 function libSearchPlayOptsFromBtn(btn) {
@@ -6501,35 +6861,46 @@ async function libSearchRun(q) {
   }
   const scope = searchScopeQuery();
   const cacheKey = `${q}\0${scope}`;
+  const seq = (window._searchRunSeq = (window._searchRunSeq || 0) + 1);
   if (window._lastSearchRunKey === cacheKey && window._lastSearchData) {
-    renderSearchResultsUI(el, window._lastSearchData, q);
+    await renderSearchResultsUI(el, window._lastSearchData, q);
     return;
   }
   el.innerHTML = `${searchScopeBarHtml()}<div class="spinner-wrap"><div class="spinner"></div></div>`;
-  const data = await API(`/api/search?q=${encodeURIComponent(q)}&limit=30&preview=5${scope}`).catch(() => null);
+  const data = await API(`/api/search?q=${encodeURIComponent(q)}&limit=30&preview=5&fast=1${scope}`).catch(() => null);
+  if (seq !== window._searchRunSeq) return;
   if (!data) {
     el.innerHTML = `${searchScopeBarHtml()}<p class="hint" style="padding:12px">Search failed — try again.</p>`;
     return;
   }
   window._lastSearchRunKey = cacheKey;
   window._lastSearchData = data;
-  renderSearchResultsUI(el, data, q);
+  window._lastSearchExpanded = {};
+  window._searchPlaylistCovers = {};
+  await renderSearchResultsUI(el, data, q);
 }
 window.libSearchRun = libSearchRun;
 
 async function libSearchExpandSection(section, q) {
   const scope = searchScopeQuery();
-  const data = await API(`/api/search?q=${encodeURIComponent(q)}&section=${encodeURIComponent(section)}&limit=50&preview=50${scope}`).catch(() => null);
-  if (!data) return;
+  const seq = (window._searchExpandSeq = (window._searchExpandSeq || 0) + 1);
+  const el = document.getElementById('lib-search-results');
+  if (el) {
+    el.querySelectorAll('.search-show-all').forEach((btn) => {
+      if (btn.getAttribute('data-section') === section) btn.disabled = true;
+    });
+  }
+  const data = await API(`/api/search?q=${encodeURIComponent(q)}&section=${encodeURIComponent(section)}&limit=50&preview=50&fast=0${scope}`).catch(() => null);
+  if (seq !== window._searchExpandSeq || !data) return;
+  if ((window._lastSearchQ || '').trim() !== q) return;
   window._lastSearchExpanded = window._lastSearchExpanded || {};
   window._lastSearchExpanded[section] = data;
-  const el = document.getElementById('lib-search-results');
-  if (el && window._lastSearchData) renderSearchResultsUI(el, window._lastSearchData, q);
+  if (el && window._lastSearchData) {
+    await renderSearchResultsUI(el, window._lastSearchData, q);
+  }
 }
 
-function renderSearchResultsUI(el, data, q) {
-  const plIds = (data.playlists || []).map((p) => p.id).filter(Boolean);
-  const smartIds = (data.smartPlaylists || []).map((s) => s.id).filter(Boolean);
+async function renderSearchResultsUI(el, data, q, opts = {}) {
   const expanded = window._lastSearchExpanded || {};
   const preview = data.preview || 5;
 
@@ -6560,15 +6931,18 @@ function renderSearchResultsUI(el, data, q) {
     showPlay: !!p.id,
   })).join('');
 
-  const smartRows = (items) => (items || []).map((s) => libSearchHit({
-    kind: 'playlist',
-    titleHtml: `${escHtml(s.name)} <span class="text-muted">· smart</span>`,
-    artPath: s.id ? (window._searchPlaylistCovers || {})[s.id] : null,
-    seed: s.name,
-    href: s.id ? `#playlists/detail/${encodeURIComponent(s.id)}` : null,
-    playOpts: s.id ? { kind: 'playlist', name: s.name, id: s.id } : null,
-    showPlay: !!s.id,
-  })).join('');
+  const smartRows = (items) => (items || []).map((s) => {
+    const coverId = s.linkedPlaylistId || s.id;
+    return libSearchHit({
+      kind: 'playlist',
+      titleHtml: `${escHtml(s.name)} <span class="text-muted">· smart</span>`,
+      artPath: coverId ? (window._searchPlaylistCovers || {})[coverId] : null,
+      seed: s.name,
+      href: coverId ? `#playlists/detail/${encodeURIComponent(coverId)}` : null,
+      playOpts: coverId ? { kind: 'playlist', name: s.name, id: coverId } : null,
+      showPlay: !!coverId,
+    });
+  }).join('');
 
   const artistRows = (items) => (items || []).map((a) => libSearchHit({
     kind: 'artist',
@@ -6613,40 +6987,40 @@ function renderSearchResultsUI(el, data, q) {
   const sectionHtml = (key, rowsFn, items) => {
     if (!items || !items.length) return '';
     const total = (data.counts && data.counts[key]) || items.length;
-    const body = expanded[key] ? rowsFn(expanded[key][key] || items) : rowsFn(items);
+    const visible = searchVisibleItems(data, expanded, key);
+    const body = expanded[key] ? rowsFn(visible) : rowsFn(items);
     const more = !expanded[key] && total > preview
       ? `<button type="button" class="btn-sm btn-default search-show-all" data-section="${escHtml(key)}" data-q="${escHtml(q)}">Show all ${total}</button>`
       : '';
     return `<section class="search-results-section"><h2 class="search-section-title home-greeting">${escHtml(sectionTitle(key))}</h2><div class="search-browse-list">${body}</div>${more}</section>`;
   };
 
-  Promise.all([
-    plIds.length || smartIds.length ? fetchPlaylistCovers([...new Set(plIds.concat(smartIds))]) : Promise.resolve({}),
-  ]).then(([covers]) => {
-    window._searchPlaylistCovers = covers || {};
-    const radio = (data.radios || []).map((r) => libSearchHit({
-      kind: 'song',
-      titleHtml: escHtml(r.displayTitle || `${r.name} Radio`),
-      subtitle: 'Radio',
-      artPath: r.path,
-      seed: r.name,
-      playOpts: { kind: 'artist', name: r.name || '' },
-      showPlay: true,
-    })).join('');
+  const radioRows = (items) => (items || []).map((r) => libSearchHit({
+    kind: 'song',
+    titleHtml: escHtml(r.displayTitle || `${r.name} Radio`),
+    subtitle: 'Radio',
+    artPath: r.path,
+    seed: r.name,
+    playOpts: { kind: 'artist', name: r.name || '' },
+    showPlay: true,
+  })).join('');
 
-    const body = [
-      sectionHtml('songs', songRows, data.songs),
-      sectionHtml('artists', artistRows, data.artists),
-      sectionHtml('albums', albumRows, data.albums),
-      sectionHtml('radios', () => radio, data.radios),
-      sectionHtml('similar', songRows, data.similar),
-      sectionHtml('playlists', playlistRows, data.playlists),
-      sectionHtml('smartPlaylists', smartRows, data.smartPlaylists),
-      sectionHtml('genres', genreRows, data.genres),
-      sectionHtml('messages', songRows, data.messages),
-    ].filter(Boolean).join('');
-    el.innerHTML = `${searchScopeBarHtml()}${body || '<p class="hint" style="padding:12px">No matches.</p>'}`;
-  });
+  const body = [
+    sectionHtml('songs', songRows, data.songs),
+    sectionHtml('artists', artistRows, data.artists),
+    sectionHtml('albums', albumRows, data.albums),
+    sectionHtml('radios', radioRows, data.radios),
+    sectionHtml('similar', songRows, data.similar),
+    sectionHtml('playlists', playlistRows, data.playlists),
+    sectionHtml('smartPlaylists', smartRows, data.smartPlaylists),
+    sectionHtml('genres', genreRows, data.genres),
+    sectionHtml('messages', songRows, data.messages),
+  ].filter(Boolean).join('');
+  el.innerHTML = `${searchScopeBarHtml()}${body || '<p class="hint" style="padding:12px">No matches.</p>'}`;
+  if (!opts.artOnly) {
+    window._searchArtSeq = (window._searchArtSeq || 0) + 1;
+    hydrateSearchResultArt(el, data, expanded).catch(() => {});
+  }
 }
 window.renderSearchResultsUI = renderSearchResultsUI;
 window.libSearchExpandSection = libSearchExpandSection;
@@ -6721,11 +7095,16 @@ function _buildAnalyticsHTML(d) {
   const hasGenres  = (d.topGenres  || []).length > 0;
   const hasDecades = (d.topDecades || []).length > 0;
   const uniqueDays = Object.keys(d.playsPerDay || {}).length;
+  const today = _analyticsTodayStats(d);
 
   return `
     <div class="card" style="margin-bottom:20px">${_anDatePickerHtml(d)}</div>
 
     <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-icon green"><i class="fa fa-calendar-day"></i></div>
+        <div class="stat-info"><div class="stat-value">${fmtNum(today.count)}</div><div class="stat-label">Plays Today${today.label ? ` · ${escHtml(today.label)}` : ''}</div></div>
+      </div>
       <div class="stat-card">
         <div class="stat-icon blue"><i class="fa fa-headphones"></i></div>
         <div class="stat-info"><div class="stat-value">${fmtNum(d.totalPlays)}</div><div class="stat-label">Total Plays</div></div>
@@ -7276,8 +7655,14 @@ function setupShellListeners() {
   document.getElementById('topbar-back')?.addEventListener('click', () => window.history.back());
   document.getElementById('spotify-queue-close')?.addEventListener('click', () => toggleQueuePanel(false));
   document.getElementById('spotify-queue-body')?.addEventListener('click', (e) => {
-    const row = e.target.closest('.queue-track-seek[data-queue-index]');
+    const row = e.target.closest('.queue-track-seek');
     if (!row) return;
+    if (row.getAttribute('data-queue-mode') === 'web') {
+      const offset = parseInt(row.getAttribute('data-queue-offset'), 10);
+      if (Number.isNaN(offset) || typeof WebPlayback === 'undefined' || !WebPlayback.active) return;
+      WebPlayback.seekToUpcomingOffset(offset).then(() => renderQueuePanel()).catch(() => {});
+      return;
+    }
     const deviceId = row.getAttribute('data-device-id');
     const idx = parseInt(row.getAttribute('data-queue-index'), 10);
     if (deviceId && !Number.isNaN(idx)) npSeekQueueIndex(deviceId, idx);

@@ -107,6 +107,7 @@ struct SearchView: View {
             TextField("What do you want to listen to?", text: $query)
                 .focused($searchFocused)
                 .submitLabel(.search)
+                .accessibilityIdentifier(BockTestTags.searchField)
                 .onSubmit { Task { await runSearch() } }
             if !query.isEmpty {
                 Button {
@@ -439,6 +440,7 @@ struct SearchView: View {
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
+        .accessibilityIdentifier(BockTestTags.searchResults)
     }
 
     @ViewBuilder
@@ -517,7 +519,7 @@ struct SearchView: View {
     private func radioHits(from results: SearchResponse) -> [SearchHit] {
         let src = expandedSections.contains("radios") ? (expandedResults["radios"] ?? results) : results
         return src.radios.map {
-            SearchHit(name: $0.displayTitle ?? $0.name, artist: $0.artist, path: $0.path, title: $0.displayTitle)
+            SearchHit(name: $0.displayTitle ?? $0.name, title: $0.displayTitle, artist: $0.artist, path: $0.path)
         }
     }
 

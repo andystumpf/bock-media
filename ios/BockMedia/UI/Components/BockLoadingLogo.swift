@@ -46,5 +46,6 @@ struct LoadingBox: View {
     var body: some View {
         BockLoadingLogo(size: logoSize)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .accessibilityIdentifier(BockTestTags.screenLoading)
     }
 }

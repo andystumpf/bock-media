@@ -18,8 +18,9 @@
     ],
     "createdAt": 1781660729.088022,
     "updatedAt": 1782697529.088022,
-    "lastRunAt": 1782695729.088022,
-    "lastRunStatus": "ok start"
+    "lastRunAt": 1782736204.531808,
+    "lastRunStatus": "G2A0...K1TC: No module named 'alexapy'",
+    "lastFiredAt": "2026-06-29 07:30"
   },
   {
     "id": "edece9af-7def-4c18-bbff-efa150b48ef4",

@@ -21,6 +21,7 @@ struct HomeHeaderView: View {
                 Text(HomeGreeting.text)
                     .font(.title2.bold())
                     .foregroundStyle(BockColors.onSurface)
+                    .accessibilityIdentifier(BockTestTags.homeGreeting)
                 Spacer()
                 AccountMenuButton(route: $accountRoute)
             }

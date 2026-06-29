@@ -3,6 +3,11 @@
   -webkit-text-fill-color: #ffffff !important;
 }
 
+.spotify-player .player-track-name {
+  color: var(--text-primary) !important;
+  -webkit-text-fill-color: var(--text-primary) !important;
+}
+
 .card {
   background: var(--spotify-elevated) !important;
   border: 1px solid var(--border-subtle) !important;

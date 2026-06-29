@@ -147,6 +147,7 @@ struct HomeView: View {
             }
             .padding(.bottom, 24)
         }
+        .accessibilityIdentifier(BockTestTags.homeFeed)
         .refreshable {
             await HomeLoadCoordinator.withLoadLock {
                 await viewModel.load(repository: appState.repository)

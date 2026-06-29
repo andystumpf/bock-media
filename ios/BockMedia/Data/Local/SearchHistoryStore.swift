@@ -41,7 +41,7 @@ struct SearchRecentSelection: Codable, Equatable {
         switch kind {
         case "artist":
             guard let name = hit.name else { return nil }
-            return fromArtist(name, albumCount: hit.albums)
+            return fromArtist(name, albumCount: hit.tracks)
         case "album":
             guard let name = hit.name else { return nil }
             return fromAlbum(name, artist: hit.artist)
@@ -82,7 +82,7 @@ enum SearchHistoryStore {
         var current = selections().filter { $0.selectionKey != selection.selectionKey }
         current.insert(selection, at: 0)
         saveSelections(Array(current.prefix(maxItems)))
-        ClientPrefsSync.schedulePush()
+        Task { @MainActor in ClientPrefsSync.schedulePush() }
     }
 
     static func removeSelection(_ selection: SearchRecentSelection) {

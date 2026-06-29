@@ -73,6 +73,7 @@ struct ProfilePickerGate<Content: View>: View {
             .clipShape(RoundedRectangle(cornerRadius: 16))
             .padding(24)
         }
+        .accessibilityIdentifier(BockTestTags.profilePicker)
     }
 
     private func pickMemberId(_ memberId: String) async {

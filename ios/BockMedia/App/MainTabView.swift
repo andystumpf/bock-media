@@ -27,6 +27,7 @@ struct MainTabView: View {
         }
         .tint(BockColors.green)
         .background(BockColors.black)
+        .accessibilityIdentifier(BockTestTags.bottomNav)
         .sheet(isPresented: $showNowPlaying) {
             NavigationStack {
                 NowPlayingView(appState: appState)

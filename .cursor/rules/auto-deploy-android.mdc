@@ -1,0 +1,16 @@
+---
+description: Always deploy Android after mobile/server changes — never ask
+alwaysApply: true
+---
+
+# Auto-deploy Android
+
+After completing any Android app change, server API change used by mobile, or when the user says deploy/build/ship:
+
+1. **Do not ask** whether to deploy to Android. Just deploy.
+2. Run from repo root: `./scripts/deploy_mobile_app.sh`
+3. Before deploy, ensure `android/app/build.gradle.kts` `versionName` matches `app-release-notes.json` latest `version`. Bump both and add release notes when behavior changed.
+4. If `adb devices` shows a connected device, the script installs automatically — no extra prompt needed.
+5. Report deploy result (version, NAS OK, phone install OK or adb connect hint). Do not end with "want me to deploy?"
+
+Only skip deploy when the user explicitly says not to deploy, or the task was read-only (questions, reviews with no code changes).

@@ -1,0 +1,40 @@
+---
+description: Bock Media NAS deploy and smoke verification
+alwaysApply: false
+---
+
+# Bock Media deploy & smoke
+
+Production host: `plex@192.168.1.187`, systemd unit `ourmedia`, data dir `~/.bockmedia`.
+
+## Web + server
+
+```bash
+scp server.py plex@192.168.1.187:/home/plex/Documents/github/ourMedia/server.py
+./scripts/deploy_web.sh
+```
+
+`deploy_web.sh` rsyncs all of `public/` and restarts `ourmedia`. When editing JS/CSS, bump cache-bust query params in `public/index.html` **and** update matching paths in `public/sw.js` (increment `CACHE` name when shell assets change).
+
+## Android debug to phone
+
+```bash
+cd android && ./gradlew assembleDebug
+adb -s <serial> install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+Device smoke: `ANDROID_SERIAL=<serial> ./scripts/android-device-smoke.sh`
+
+## Release APK to /app page
+
+Requires matching versions in `android/app/build.gradle.kts` and `app-release-notes.json`:
+
+```bash
+./scripts/deploy_mobile_app.sh
+```
+
+## Post-deploy checks
+
+- `curl -s http://192.168.1.187:3001/api/health` — watchdog fresh, LAN security flags
+- Web hard refresh — Dashboard Service Health, Home tiles
+- Force-quit mobile app after server changes that affect home feed or auth

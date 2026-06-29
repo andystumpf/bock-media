@@ -202,6 +202,146 @@ struct NowPlayingView: View {
     }
 
     var body: some View {
+        nowPlayingWithLifecycle
+    }
+
+    private var nowPlayingWithLifecycle: some View {
+        nowPlayingWithSheets
+            .onAppear {
+                scrollPage = viewModel.selectedIndex
+                viewModel.start(repository: appState.repository)
+            }
+            .onDisappear { viewModel.stop() }
+            .onChange(of: scrollPage) { _, page in
+                guard let page, page != viewModel.selectedIndex else { return }
+                viewModel.selectedIndex = page
+            }
+            .onChange(of: viewModel.selectedIndex) { _, idx in
+                guard scrollPage != idx else { return }
+                scrollPage = idx
+            }
+            .onChange(of: appState.playbackFocusGeneration) { _, _ in
+                Task { await viewModel.refresh(repository: appState.repository) }
+            }
+    }
+
+    private var nowPlayingWithSheets: some View {
+        nowPlayingCore
+            .sheet(isPresented: $showSleep) { sleepSheetContent }
+            .sheet(isPresented: $showUpNext) { upNextSheetContent }
+            .sheet(isPresented: $showRoomRequests) { roomRequestsSheetContent }
+            .sheet(isPresented: $showAddToRoom) { addToRoomSheetContent }
+            .sheet(isPresented: $showHistory) { historySheetContent }
+    }
+
+    private var nowPlayingCore: some View {
+        nowPlayingStack
+            .toolbarBackground(.hidden, for: .navigationBar)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { nowPlayingToolbar }
+    }
+
+    @ViewBuilder
+    private var sleepSheetContent: some View {
+        if let dev = sheetDevice {
+            SleepTimerSheet(
+                deviceName: dev.deviceName ?? dev.deviceId,
+                hasSleep: dev.sleep != nil,
+                onSetMinutes: { min in
+                    try? await appState.repository.setSleep(deviceId: dev.deviceId, minutes: min)
+                    appState.toast = "Sleeping in \(min) min"
+                    await viewModel.refresh(repository: appState.repository)
+                },
+                onSetSongs: { songs in
+                    try? await appState.repository.setSleep(deviceId: dev.deviceId, songs: songs)
+                    appState.toast = songs == 1 ? "Stopping after this song" : "Stopping after \(songs) songs"
+                    await viewModel.refresh(repository: appState.repository)
+                },
+                onCancel: {
+                    try? await appState.repository.setSleep(deviceId: dev.deviceId)
+                    appState.toast = "Sleep timer cancelled"
+                    await viewModel.refresh(repository: appState.repository)
+                },
+                onDismiss: { showSleep = false }
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var upNextSheetContent: some View {
+        if let dev = sheetDevice {
+            UpNextSheet(
+                repository: appState.repository,
+                tracks: upNextTracks(for: dev),
+                isLocal: dev.deviceId == LocalPlaybackIds.localPhoneDeviceId,
+                onPlayAtIndex: { idx in
+                    if dev.deviceId == LocalPlaybackIds.localPhoneDeviceId {
+                        LocalPlaybackController.shared.playAtIndex(localPlayback.state.index + 1 + idx)
+                        showUpNext = false
+                    } else {
+                        Task {
+                            guard let alexa = try? await appState.repository.alexaRemoteDevices(),
+                                  let serial = resolveSerial(device: dev, alexaDevices: alexa) else {
+                                viewModel.error = "Cannot control this speaker"
+                                return
+                            }
+                            _ = try? await appState.repository.seekQueueIndex(
+                                deviceId: dev.deviceId,
+                                deviceName: dev.deviceName ?? "",
+                                serial: serial,
+                                relativeIndex: idx
+                            )
+                            await viewModel.refresh(repository: appState.repository)
+                            showUpNext = false
+                        }
+                    }
+                },
+                onDismiss: { showUpNext = false }
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var roomRequestsSheetContent: some View {
+        if let dev = sheetDevice {
+            RoomRequestsSheet(
+                appState: appState,
+                deviceId: dev.deviceId,
+                deviceName: dev.deviceName,
+                requests: dev.upNext,
+                onUpdated: {
+                    await viewModel.refresh(repository: appState.repository)
+                    return viewModel.devices.first(where: { $0.deviceId == dev.deviceId })?.upNext ?? []
+                },
+                onDismiss: { showRoomRequests = false }
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var addToRoomSheetContent: some View {
+        if let dev = sheetDevice, let path = dev.filepath {
+            AddToRoomSheet(
+                repository: appState.repository,
+                path: path,
+                track: dev.track ?? "Track",
+                artist: dev.artist,
+                remoteOk: appState.remoteOk,
+                onDismiss: { showAddToRoom = false },
+                onDone: { msg in
+                    appState.toast = msg
+                    showAddToRoom = false
+                }
+            )
+        }
+    }
+
+    private var historySheetContent: some View {
+        StreamHistorySheet(appState: appState, onDismiss: { showHistory = false })
+    }
+
+    @ViewBuilder
+    private var nowPlayingStack: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
@@ -226,156 +366,50 @@ struct NowPlayingView: View {
                 }
             }
         }
-        .toolbarBackground(.hidden, for: .navigationBar)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button("Close") { dismiss() }
+    }
+
+    @ToolbarContentBuilder
+    private var nowPlayingToolbar: some ToolbarContent {
+        ToolbarItem(placement: .topBarLeading) {
+            Button("Close") { dismiss() }
+                .foregroundStyle(.white)
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+            Menu {
+                Button {
+                    sheetDeviceId = viewModel.device?.deviceId
+                    showUpNext = true
+                } label: { Label("Up next", icon: .musicNote) }
+                Button {
+                    sheetDeviceId = viewModel.device?.deviceId
+                    showSleep = true
+                } label: { Label("Sleep timer", icon: .bedtime) }
+                Button { showHistory = true } label: { Label("Recently played", icon: .history) }
+                if let dev = viewModel.device, viewModel.canControl(dev) {
+                    Button(role: .destructive) {
+                        Task { await viewModel.control(repository: appState.repository, action: "stop", device: dev) }
+                    } label: { Label("Stop playback", icon: .stop) }
+                }
+                if let dev = viewModel.device, let path = dev.filepath {
+                    Button {
+                        Task {
+                            try? await appState.repository.addFavorite(
+                                path: path, title: dev.track, artist: dev.artist, album: dev.album
+                            )
+                            appState.toast = "Added to favorites"
+                        }
+                    } label: { Label("Add to favorites", icon: .favorite) }
+                    Button(role: .destructive) {
+                        Task {
+                            try? await appState.repository.addIgnored(path: path)
+                            appState.toast = "Track ignored"
+                        }
+                    } label: { Label("Never play again", icon: .block) }
+                }
+            } label: {
+                BockIcon(icon: .moreHoriz, size: 22)
                     .foregroundStyle(.white)
             }
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Button {
-                        sheetDeviceId = viewModel.device?.deviceId
-                        showUpNext = true
-                    } label: { Label("Up next", icon: .musicNote) }
-                    Button {
-                        sheetDeviceId = viewModel.device?.deviceId
-                        showSleep = true
-                    } label: { Label("Sleep timer", icon: .bedtime) }
-                    Button { showHistory = true } label: { Label("Recently played", icon: .history) }
-                    if let dev = viewModel.device, viewModel.canControl(dev) {
-                        Button(role: .destructive) {
-                            Task { await viewModel.control(repository: appState.repository, action: "stop", device: dev) }
-                        } label: { Label("Stop playback", icon: .stop) }
-                    }
-                    if let dev = viewModel.device, let path = dev.filepath {
-                        Button {
-                            Task {
-                                try? await appState.repository.addFavorite(
-                                    path: path, title: dev.track, artist: dev.artist, album: dev.album
-                                )
-                                appState.toast = "Added to favorites"
-                            }
-                        } label: { Label("Add to favorites", icon: .favorite) }
-                        Button(role: .destructive) {
-                            Task {
-                                try? await appState.repository.addIgnored(path: path)
-                                appState.toast = "Track ignored"
-                            }
-                        } label: { Label("Never play again", icon: .block) }
-                    }
-                } label: {
-                    BockIcon(icon: .moreHoriz, size: 22)
-                        .foregroundStyle(.white)
-                }
-            }
-        }
-        .sheet(isPresented: $showSleep) {
-            if let dev = sheetDevice {
-                SleepTimerSheet(
-                    deviceName: dev.deviceName ?? dev.deviceId,
-                    hasSleep: dev.sleep != nil,
-                    onSetMinutes: { min in
-                        try? await appState.repository.setSleep(deviceId: dev.deviceId, minutes: min)
-                        appState.toast = "Sleeping in \(min) min"
-                        await viewModel.refresh(repository: appState.repository)
-                    },
-                    onSetSongs: { songs in
-                        try? await appState.repository.setSleep(deviceId: dev.deviceId, songs: songs)
-                        appState.toast = songs == 1 ? "Stopping after this song" : "Stopping after \(songs) songs"
-                        await viewModel.refresh(repository: appState.repository)
-                    },
-                    onCancel: {
-                        try? await appState.repository.setSleep(deviceId: dev.deviceId)
-                        appState.toast = "Sleep timer cancelled"
-                        await viewModel.refresh(repository: appState.repository)
-                    },
-                    onDismiss: { showSleep = false }
-                )
-            }
-        }
-        .sheet(isPresented: $showUpNext) {
-            if let dev = sheetDevice {
-                UpNextSheet(
-                    repository: appState.repository,
-                    tracks: upNextTracks(for: dev),
-                    isLocal: dev.deviceId == LocalPlaybackIds.localPhoneDeviceId,
-                    onPlayAtIndex: { idx in
-                        if dev.deviceId == LocalPlaybackIds.localPhoneDeviceId {
-                            LocalPlaybackController.shared.playAtIndex(localPlayback.state.index + 1 + idx)
-                            showUpNext = false
-                        } else {
-                            Task {
-                                guard let alexa = try? await appState.repository.alexaRemoteDevices(),
-                                      let serial = resolveSerial(device: dev, alexaDevices: alexa.devices) else {
-                                    viewModel.error = "Cannot control this speaker"
-                                    return
-                                }
-                                _ = try? await appState.repository.seekQueueIndex(
-                                    deviceId: dev.deviceId,
-                                    deviceName: dev.deviceName ?? "",
-                                    serial: serial,
-                                    relativeIndex: idx
-                                )
-                                await viewModel.refresh(repository: appState.repository)
-                                showUpNext = false
-                            }
-                        }
-                    },
-                    onDismiss: { showUpNext = false }
-                )
-            }
-        }
-        .sheet(isPresented: $showRoomRequests) {
-            if let dev = sheetDevice {
-                RoomRequestsSheet(
-                    appState: appState,
-                    deviceId: dev.deviceId,
-                    deviceName: dev.deviceName,
-                    requests: dev.upNext,
-                    onUpdated: {
-                        await viewModel.refresh(repository: appState.repository)
-                        return viewModel.devices.first(where: { $0.deviceId == dev.deviceId })?.upNext ?? []
-                    },
-                    onDismiss: { showRoomRequests = false }
-                )
-            }
-        }
-        .sheet(isPresented: $showAddToRoom) {
-            if let dev = sheetDevice, let path = dev.filepath {
-                AddToRoomSheet(
-                    repository: appState.repository,
-                    path: path,
-                    track: dev.track ?? "Track",
-                    artist: dev.artist,
-                    remoteOk: appState.remoteOk,
-                    onDismiss: { showAddToRoom = false },
-                    onDone: { msg in
-                        appState.toast = msg
-                        showAddToRoom = false
-                    }
-                )
-            }
-        }
-        .sheet(isPresented: $showHistory) {
-            StreamHistorySheet(appState: appState, onDismiss: { showHistory = false })
-        }
-        .onAppear {
-            scrollPage = viewModel.selectedIndex
-            viewModel.start(repository: appState.repository)
-        }
-        .onDisappear { viewModel.stop() }
-        .onChange(of: scrollPage) { _, page in
-            guard let page, page != viewModel.selectedIndex else { return }
-            viewModel.selectedIndex = page
-        }
-        .onChange(of: viewModel.selectedIndex) { _, idx in
-            guard scrollPage != idx else { return }
-            scrollPage = idx
-        }
-        .onChange(of: appState.playbackFocusGeneration) { _, _ in
-            Task { await viewModel.refresh(repository: appState.repository) }
         }
     }
 

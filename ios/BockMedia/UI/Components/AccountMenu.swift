@@ -75,5 +75,7 @@ struct AccountMenuButton: View {
                 .background(BockColors.surfaceVariant.opacity(0.92))
                 .clipShape(Circle())
         }
+        .accessibilityIdentifier(BockTestTags.accountMenuButton)
+        .accessibilityLabel("Account menu")
     }
 }

@@ -117,6 +117,7 @@
       title: row.title || row.track || path2name(path),
       artist: row.artist || '',
       album: row.album || '',
+      year: row.year || null,
       durationMs: Math.max(0, (row.duration_seconds ?? row.duration ?? 0) * 1000),
     };
   }
@@ -537,6 +538,21 @@
     await loadIndex(currentIndex());
   }
 
+  async function seekToUpcomingOffset(qi) {
+    if (!state.tracks.length) return;
+    const offset = Math.max(0, parseInt(qi, 10) || 0);
+    if (state.shuffle && state.order.length) {
+      const pos = state.orderPos + 1 + offset;
+      if (pos >= state.order.length) return;
+      state.orderPos = pos;
+    } else {
+      const idx = state.orderPos + 1 + offset;
+      if (idx >= state.tracks.length) return;
+      state.orderPos = idx;
+    }
+    await loadIndex(currentIndex());
+  }
+
   async function seekToIndex(index) {
     if (index < 0 || index >= state.tracks.length) return;
     state.orderPos = state.shuffle ? Math.max(0, state.order.indexOf(index)) : index;
@@ -590,6 +606,7 @@
     setVolume,
     setShuffle,
     seekToIndex,
+    seekToUpcomingOffset,
     stop,
     streamUrl,
   };

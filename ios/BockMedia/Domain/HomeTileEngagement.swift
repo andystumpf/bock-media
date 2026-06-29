@@ -45,7 +45,7 @@ enum HomeTileEngagement {
             map[cardId] = TileEngagementEntry(firstSeenMs: now, lastSelectedMs: now)
         }
         save(map)
-        ClientPrefsSync.schedulePush()
+        Task { @MainActor in ClientPrefsSync.schedulePush() }
     }
 
     static func exportJson() -> String? {

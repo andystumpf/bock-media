@@ -14,9 +14,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.bockmedia.console.ui.navigation.BockRoute
+import com.bockmedia.console.ui.testing.BockTestTags
 import com.bockmedia.console.ui.theme.BockGreen
 import com.bockmedia.console.ui.theme.BockMuted
 import com.bockmedia.console.ui.theme.SpotifyElevated
@@ -44,7 +46,10 @@ fun AccountMenuButton(onNavigate: (String) -> Unit) {
     var open by remember { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
-    IconButton(onClick = { open = true }) {
+    IconButton(
+        onClick = { open = true },
+        modifier = Modifier.testTag(BockTestTags.ACCOUNT_MENU_BUTTON),
+    ) {
         Surface(
             shape = CircleShape,
             color = SpotifyElevated,
@@ -79,7 +84,9 @@ fun AccountMenuButton(onNavigate: (String) -> Unit) {
             },
         ) {
             LazyColumn(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag(BockTestTags.ACCOUNT_MENU),
                 contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 36.dp),
             ) {
                 item {

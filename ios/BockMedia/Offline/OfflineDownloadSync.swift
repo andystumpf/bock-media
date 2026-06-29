@@ -41,7 +41,7 @@ enum OfflineDownloadSync {
             map[memberId] = mergeRecords(records)
             saveMap(map)
         }
-        restoreMissing(records, repository: repository)
+        Task { @MainActor in restoreMissing(records, repository: repository) }
     }
 
     @MainActor
@@ -117,7 +117,7 @@ private extension OfflineDownloadRecord {
         case "artist": return .artist(name: title)
         case "album": return .album(name: title, artist: nil)
         case "song": return .song(path: "", title: title)
-        case "mix", "radio": return .radio(name: title, seedKind: .artist, seedName: title)
+        case "mix", "radio": return .radio(displayTitle: title, seedKind: .artist, name: title, path: nil)
         default:
             let pid = sourcePlaylistId ?? id.replacingOccurrences(of: "pl-", with: "")
             return .playlist(id: pid, name: title)

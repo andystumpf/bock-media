@@ -1,6 +1,7 @@
 import XCTest
 @testable import BockMedia
 
+@MainActor
 final class ClientPrefsSyncTests: XCTestCase {
     func testApplyMergedRestoresSettings() {
         let prefs = AppPreferences()

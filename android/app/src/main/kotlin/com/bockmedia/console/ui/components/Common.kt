@@ -21,6 +21,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.bockmedia.console.data.api.dto.AlexaDevice
 import com.bockmedia.console.data.api.dto.DeviceGroup
 import com.bockmedia.console.data.repository.BockMediaRepository
@@ -72,6 +73,22 @@ fun TabScreenHeader(
         )
         trailing?.invoke(this)
     }
+}
+
+/** Uppercase section label used on browse/detail sub-pages (genres, search, sonic adventure). */
+@Composable
+fun BockDetailSectionHeader(
+    title: String,
+    modifier: Modifier = Modifier,
+) {
+    Text(
+        title.uppercase(),
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        letterSpacing = 1.sp,
+        modifier = modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+    )
 }
 
 /** Matches iOS `ProgressView().tint(BockColors.green)` — thin Spotify-green spinner. */

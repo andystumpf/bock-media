@@ -113,6 +113,26 @@ final class AppPreferences: ObservableObject {
         get { defaults.string(forKey: "search_source_path")?.nilIfBlank }
         set { defaults.set(newValue, forKey: "search_source_path") }
     }
+
+    var libraryTab: String {
+        get { defaults.string(forKey: "library_tab") ?? "all" }
+        set { defaults.set(newValue, forKey: "library_tab") }
+    }
+
+    var libraryViewMode: String {
+        get { defaults.string(forKey: "library_view_mode") ?? "list" }
+        set { defaults.set(newValue, forKey: "library_view_mode") }
+    }
+
+    var librarySortBy: String {
+        get { defaults.string(forKey: "library_sort_by") ?? "recents" }
+        set { defaults.set(newValue, forKey: "library_sort_by") }
+    }
+
+    var librarySortOrder: String {
+        get { defaults.string(forKey: "library_sort_order") ?? "desc" }
+        set { defaults.set(newValue, forKey: "library_sort_order") }
+    }
 }
 
 private extension String {

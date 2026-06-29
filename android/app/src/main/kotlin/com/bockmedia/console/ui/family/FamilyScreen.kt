@@ -14,6 +14,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.bockmedia.console.data.api.dto.*
@@ -22,6 +23,7 @@ import com.bockmedia.console.local.ActiveProfileStore
 import com.bockmedia.console.local.ClientPrefsSync
 import com.bockmedia.console.ui.theme.BockGreen
 import com.bockmedia.console.ui.theme.BockMuted
+import com.bockmedia.console.ui.testing.BockTestTags
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonObject
@@ -84,6 +86,7 @@ fun FamilyScreen(repository: BockMediaRepository) {
                         selectedId = activeMemberId,
                         includeNone = true,
                         noneLabel = "Unattributed",
+                        menuTestTag = BockTestTags.FAMILY_ACTING_AS,
                     ) { id ->
                         val previous = ActiveProfileStore.activeMemberId(context)
                         activeMemberId = id
@@ -318,21 +321,41 @@ private fun MemberDropdown(
     includeNone: Boolean,
     noneLabel: String,
     modifier: Modifier = Modifier,
+    menuTestTag: String? = null,
     onSelect: (String) -> Unit,
 ) {
     var open by remember { mutableStateOf(false) }
     val label = members.firstOrNull { it.id == selectedId }?.name ?: noneLabel
     Box(modifier) {
-        OutlinedButton(onClick = { open = true }) {
+        OutlinedButton(
+            onClick = { open = true },
+            modifier = if (menuTestTag != null) Modifier.testTag(menuTestTag) else Modifier,
+        ) {
             Text(label, modifier = Modifier.weight(1f, fill = false))
             Icon(Icons.Default.ArrowDropDown, null)
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             if (includeNone) {
-                DropdownMenuItem(text = { Text(noneLabel) }, onClick = { open = false; onSelect("") })
+                DropdownMenuItem(
+                    text = { Text(noneLabel) },
+                    onClick = { open = false; onSelect("") },
+                    modifier = if (menuTestTag != null) {
+                        Modifier.testTag("${menuTestTag}_pick_none")
+                    } else {
+                        Modifier
+                    },
+                )
             }
             members.forEach { m ->
-                DropdownMenuItem(text = { Text(m.name) }, onClick = { open = false; onSelect(m.id) })
+                DropdownMenuItem(
+                    text = { Text(m.name) },
+                    onClick = { open = false; onSelect(m.id) },
+                    modifier = if (menuTestTag != null) {
+                        Modifier.testTag("${menuTestTag}_pick_${m.id}")
+                    } else {
+                        Modifier
+                    },
+                )
             }
         }
     }

@@ -37,7 +37,7 @@ enum HomeFeedRules {
         if g.isEmpty { return false }
         if name.localizedCaseInsensitiveContains(g) { return true }
         let tokens = g.split(separator: " ").map(String.init).filter { $0.count > 1 }
-        return tokens.count > 1 && tokens.all { name.localizedCaseInsensitiveContains($0) }
+        return tokens.count > 1 && tokens.allSatisfy { name.localizedCaseInsensitiveContains($0) }
     }
 
     static func bestGenreMixPlaylist(_ all: [PlaylistSummary], genre: String) -> PlaylistSummary? {

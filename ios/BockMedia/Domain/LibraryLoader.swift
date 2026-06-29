@@ -125,8 +125,8 @@ enum LibraryLoader {
                 title: pl.name,
                 subtitle: "\(pl.tracks) songs",
                 kind: .playlist,
-                artPath: pl.artPath,
                 playTarget: .playlist(id: pl.id, name: pl.name),
+                artPath: pl.artPath,
                 playlistId: pl.id
             )
         }

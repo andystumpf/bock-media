@@ -12,10 +12,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.ui.components.HealthStatusCard
+import com.bockmedia.console.ui.testing.BockTestTags
 import com.bockmedia.console.ui.components.LibraryStatsCard
 import com.bockmedia.console.ui.components.LoadingBox
 import com.bockmedia.console.BockMediaApp
@@ -62,7 +64,13 @@ fun SettingsScreen(
         continueAfterQueue = app.preferences.getContinueAfterQueueSync()
     }
 
-    Column(Modifier.fillMaxSize().bockVerticalScroll().padding(16.dp)) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .testTag(BockTestTags.SETTINGS_BODY)
+            .bockVerticalScroll()
+            .padding(16.dp),
+    ) {
         message?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
         if (loading) LoadingBox() else {
             LibraryStatsCard(repository = repository, modifier = Modifier.padding(bottom = 16.dp))
@@ -104,6 +112,7 @@ fun SettingsScreen(
                                 ClientPrefsSync.schedulePush(context)
                             }
                         },
+                        modifier = Modifier.testTag(BockTestTags.SETTINGS_WIFI_ONLY),
                     )
                 }
             }
@@ -142,7 +151,10 @@ fun SettingsScreen(
                     Text("When queue ends", fontWeight = FontWeight.SemiBold)
                     continueOptions.forEach { (value, label) ->
                         Row(
-                            Modifier.fillMaxWidth().clickable {
+                            Modifier
+                                .fillMaxWidth()
+                                .testTag(BockTestTags.settingsContinue(value))
+                                .clickable {
                                 continueAfterQueue = value
                                 scope.launch {
                                     app.preferences.setContinueAfterQueue(value)

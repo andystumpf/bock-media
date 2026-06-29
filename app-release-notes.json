@@ -2,6 +2,27 @@
   "_comment": "Update this file whenever you upload a new APK/IPA to /app. Shown on GET /app.",
     "releases": [
     {
+      "version": "2.6.51",
+      "date": "2026-06-29",
+      "items": [
+        {"kind": "fix", "text": "Analytics — scope listen history and metrics to the active household profile instead of always showing household-wide totals"}
+      ]
+    },
+    {
+      "version": "2.6.50",
+      "date": "2026-06-29",
+      "items": [
+        {"kind": "fix", "text": "Genre detail — hero art banner, real album/artist artwork, section headers matching search/library pages"}
+      ]
+    },
+    {
+      "version": "2.6.49",
+      "date": "2026-06-28",
+      "items": [
+        {"kind": "fix", "text": "Launch — show splash immediately; move image loader init off main thread (fixes white screen on cold start)"}
+      ]
+    },
+    {
       "version": "2.6.48",
       "date": "2026-06-28",
       "items": [

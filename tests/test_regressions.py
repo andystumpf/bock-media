@@ -149,6 +149,37 @@ class TestStuckNowPlaying:
         assert server.read_np_state_for_device(did) is None
 
 
+class TestQueueSeek:
+    """Queue panel seek must resume the full playlist, not a one-track play."""
+
+    def test_start_playing_honors_start_idx(self, sample_track, monkeypatch):
+        paths = [_playable(sample_track['path']), _playable(sample_track['path'])]
+        captured = {}
+
+        def fake_play_path(path, token, **kw):
+            captured['path'] = path
+            captured['token'] = token
+            return None
+
+        monkeypatch.setattr(server, '_np_play_path', fake_play_path)
+        monkeypatch.setattr(server, 'write_np_state', lambda *a, **k: None)
+        server._start_playing_impl(paths, start_idx=1)
+        assert captured['path'] == paths[1]
+        data = server.decode_token(captured['token'])
+        assert data['idx'] == 1
+        assert len(data['tracks']) == 2
+
+    def test_register_queue_seek_token(self, sample_track):
+        paths = [_playable(sample_track['path']), _playable(sample_track['path'])]
+        data = {'tracks': paths, 'playlist': 'Test List', 'shuffle': False, 'loop': False}
+        tok = server._register_play_queue_seek_token(data, 1)
+        assert tok
+        entry = server._consume_play_playlist_token(tok)
+        assert entry['kind'] == 'queue_seek'
+        assert entry['start_idx'] == 1
+        assert len(entry['tracks']) == 2
+
+
 # ─────────────────────────── device correlation ──────────────────────────────
 
 class TestPlayIntentCorrelation:

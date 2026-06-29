@@ -14,6 +14,7 @@ struct RootView: View {
             case true:
                 ProfilePickerGate(appState: appState) {
                     MainTabView(appState: appState)
+                        .overlay { UITestSupport.clientIdProbe() }
                 }
             }
         }
@@ -38,6 +39,7 @@ struct RootView: View {
             }
         }
         .onOpenURL { url in
+            if UITestSupport.handle(url: url, appState: appState) { return }
             guard let link = DeepLink.parse(url: url) else { return }
             guard appState.isConnected == true else { return }
             if case .control(let deviceId, let action) = link {

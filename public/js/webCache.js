@@ -107,6 +107,7 @@
         smart: data.smart || [],
         folders: data.folders || [],
         genres: data.genres || [],
+        covers: data.covers || {},
       }));
     } catch { /* quota */ }
   }
@@ -117,6 +118,8 @@
 
   function shouldSkipLibraryReload() {
     if (!libMem || !libMem.data) return false;
+    const covers = libMem.data.covers;
+    if (!covers || !Object.keys(covers).length) return false;
     return now() - lastLibLoadMs < LIB_SESSION_TTL_MS;
   }
 
@@ -132,6 +135,7 @@
         smart: dto.smart || [],
         folders: dto.folders || [],
         genres: dto.genres || [],
+        covers: dto.covers || {},
       };
       if (!data.playlists.length) return null;
       libMem = { data, at: now() };

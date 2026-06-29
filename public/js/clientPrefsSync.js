@@ -433,17 +433,7 @@
   }
 
   function searchScopeBarHtml() {
-    const all = getSearchAllLibraries();
-    const path = getSearchSourcePath();
-    const pathHint = path ? ` · ${path.split('/').filter(Boolean).slice(-1)[0] || path}` : '';
-    return `<div class="search-scope-bar hint" style="padding:8px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-      <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;margin:0">
-        <input type="checkbox" id="search-all-libraries" ${all ? 'checked' : ''}
-          onchange="ClientPrefsSync.setSearchAllLibraries(this.checked); if(window._lastSearchRunKey) window._lastSearchRunKey=''; if(typeof loadSearchBrowse==='function') loadSearchBrowse();">
-        All libraries
-      </label>
-      ${path && !all ? `<span class="text-muted" style="font-size:12px">Folder${pathHint}</span>` : ''}
-    </div>`;
+    return '';
   }
 
   root.ClientPrefsSync = {

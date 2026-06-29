@@ -47,6 +47,7 @@ struct SettingsView: View {
                         ClientPrefsSync.schedulePush()
                     }
                 ))
+                .accessibilityIdentifier(BockTestTags.settingsWifiOnly)
             }
             Section("This Phone playback") {
                 let seconds = appState.preferences.crossfadeSeconds
@@ -78,6 +79,8 @@ struct SettingsView: View {
                     Text("Similar songs").tag("similar")
                     Text("Artist radio").tag("artist_radio")
                 }
+                .pickerStyle(.menu)
+                .accessibilityIdentifier(BockTestTags.settingsContinue("picker"))
             }
             Section("Watch folders") {
                 if watchFolders.isEmpty {
@@ -159,6 +162,7 @@ struct SettingsView: View {
         }
         .scrollContentBackground(.hidden)
         .bockBackground()
+        .accessibilityIdentifier(BockTestTags.settingsBody)
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

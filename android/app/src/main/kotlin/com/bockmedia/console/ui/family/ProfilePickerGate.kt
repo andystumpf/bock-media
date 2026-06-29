@@ -9,7 +9,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import com.bockmedia.console.ui.testing.BockTestTags
 import com.bockmedia.console.data.api.dto.HouseholdMember
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.local.ActiveProfileStore
@@ -48,6 +50,7 @@ fun ProfilePickerGate(
         else -> {
             AlertDialog(
                 onDismissRequest = {},
+                modifier = Modifier.testTag(BockTestTags.PROFILE_PICKER),
                 title = { Text("Who's listening?") },
                 text = {
                     Column(Modifier.fillMaxWidth()) {

@@ -20,7 +20,9 @@ enum LibraryPrefsStore {
         prefs.libraryViewMode = viewMode == .grid ? "grid" : "list"
         prefs.librarySortBy = sort == .recents ? "recents" : "name"
         prefs.librarySortOrder = sort == .recents ? "desc" : "asc"
-        if push { ClientPrefsSync.schedulePush() }
+        if push {
+            Task { @MainActor in ClientPrefsSync.schedulePush() }
+        }
     }
 
     static func applyRemote(
@@ -78,27 +80,5 @@ enum LibraryPrefsStore {
         case "name", "alphabetical": return .name
         default: return nil
         }
-    }
-}
-
-extension AppPreferences {
-    var libraryTab: String {
-        get { defaults.string(forKey: "library_tab") ?? "all" }
-        set { defaults.set(newValue, forKey: "library_tab") }
-    }
-
-    var libraryViewMode: String {
-        get { defaults.string(forKey: "library_view_mode") ?? "list" }
-        set { defaults.set(newValue, forKey: "library_view_mode") }
-    }
-
-    var librarySortBy: String {
-        get { defaults.string(forKey: "library_sort_by") ?? "recents" }
-        set { defaults.set(newValue, forKey: "library_sort_by") }
-    }
-
-    var librarySortOrder: String {
-        get { defaults.string(forKey: "library_sort_order") ?? "desc" }
-        set { defaults.set(newValue, forKey: "library_sort_order") }
     }
 }

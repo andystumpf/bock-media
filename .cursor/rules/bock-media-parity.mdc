@@ -1,0 +1,27 @@
+---
+description: Cross-platform parity for Bock Media home feed, playback, and API changes
+globs: "{android/**,ios/**,public/js/**,server.py,shared/**}"
+alwaysApply: false
+---
+
+# Bock Media cross-platform parity
+
+When changing home feed, playback launch, or shared API behavior, update **all three clients** unless the task is explicitly single-platform:
+
+| Surface | Primary files |
+|---------|---------------|
+| Server | `server.py`, `shared/api-contract/api-contract.yaml` |
+| Web | `public/js/homeFeed.js`, `public/js/app.js`, `public/js/webPlayback.js` |
+| Android | `android/.../domain/model/HomeFeedComposer.kt`, `PlayLauncher.kt`, `NowPlayingScreen.kt` |
+| iOS | `ios/BockMedia/Domain/HomeFeedComposer.swift`, `Features/Play/PlayLauncher.swift`, `Features/NowPlaying/` |
+
+## Home feed checklist
+
+- Mirror logic in `HomeFeedRules` (Kotlin + Swift + JS)
+- `registerCard` must claim `artPath` into `usedArtPaths`
+- Genre mix tiles pass `genreHint` to `playlistCard` / `resolvePlaylistArt`
+- Run golden tests: `HomeFeedComposerGoldenTest`, `HomeFeedComposerGoldenTests`, `tests/ui/test_homeFeed.mjs`
+
+## Deploy reminder
+
+After server + web changes: `scripts/deploy_web.sh` and copy `server.py` to NAS. After Android UI changes: `./gradlew assembleDebug` + adb install. Bump `?v=` on changed JS/CSS and match `public/sw.js` SHELL entries.

@@ -114,6 +114,7 @@ struct LibraryView: View {
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
+            .accessibilityIdentifier(BockTestTags.libraryList)
         }
     }
 

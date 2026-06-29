@@ -23,6 +23,7 @@ import com.bockmedia.console.domain.model.HomeCachePersistence
 import com.bockmedia.console.domain.model.HomeFeedCache
 import com.bockmedia.console.domain.model.LibraryCachePersistence
 import com.bockmedia.console.domain.model.LibrarySessionCache
+import com.bockmedia.console.domain.model.SessionDiskHydrator
 import com.bockmedia.console.ui.navigation.BockApp
 import com.bockmedia.console.ui.setup.SetupScreen
 import com.bockmedia.console.ui.components.SplashScreen
@@ -32,12 +33,9 @@ import androidx.lifecycle.lifecycleScope
 import com.bockmedia.console.widget.NowPlayingWidget
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
-import com.bockmedia.console.domain.model.SessionDiskHydrator
-import retrofit2.HttpException
-
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import retrofit2.HttpException
 
 private suspend fun retryTestConnection(app: BockMediaApp, attempts: Int = 3): Boolean {
     repeat(attempts) { attempt ->
@@ -93,25 +91,23 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val app = BockMediaApp.get(applicationContext)
         NetworkReachability.update(applicationContext)
-        val coldBoot = runBlocking(Dispatchers.IO) { coldBootFast(applicationContext) }
-        BockImageLoader.install(applicationContext, app)
-        lifecycleScope.launch(Dispatchers.IO) {
-            SessionDiskHydrator.warmHomeArtwork(applicationContext, app)
-        }
         val deepRoute = intent.getStringExtra(EXTRA_ROUTE)
 
         setContent {
             BockMediaTheme {
                 val app = remember { BockMediaApp.get(this) }
-                var hasServer by remember { mutableStateOf<Boolean?>(if (coldBoot.showApp) true else null) }
+                var hasServer by remember { mutableStateOf<Boolean?>(null) }
                 val notificationPermission = rememberLauncherForActivityResult(
                     ActivityResultContracts.RequestPermission(),
                 ) { }
 
                 var autoLoginError by remember { mutableStateOf<String?>(null) }
+
                 LaunchedEffect(Unit) {
                     NowPlayingNotificationManager.ensureChannel(this@MainActivity)
-                    if (coldBoot.showApp) {
+                    val boot = withContext(Dispatchers.IO) { coldBootFast(applicationContext) }
+                    if (boot.showApp) {
+                        hasServer = true
                         launch(Dispatchers.IO) {
                             if (retryTestConnection(app)) {
                                 app.preferences.setHasConnected(true)
@@ -238,6 +234,11 @@ class MainActivity : ComponentActivity() {
                     )
                 }
             }
+        }
+
+        lifecycleScope.launch(Dispatchers.IO) {
+            BockImageLoader.install(applicationContext, app)
+            SessionDiskHydrator.warmHomeArtwork(applicationContext, app)
         }
     }
 

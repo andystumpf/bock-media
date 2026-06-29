@@ -60,6 +60,7 @@ struct AutomationsView: View {
                     .scrollContentBackground(.hidden)
                 }
             }
+            .accessibilityIdentifier(BockTestTags.automationsContent)
 
             if remoteOk {
                 Button {

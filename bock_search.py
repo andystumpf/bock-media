@@ -324,8 +324,10 @@ def search_genres(db_query, q, limit, prefix=None):
 def search_playlists_by_name(query, load_entries_fn, score_fn, limit):
     playlists = []
     for pid, name, src in load_entries_fn():
+        if not field_matches_query(query, name):
+            continue
         s = score_fn(query, name)
-        if s >= 0.5 and field_matches_query(query, name):
+        if s >= 0.5:
             playlists.append({'id': pid, 'name': name, 'source': src, '_score': s})
     playlists.sort(key=lambda x: (-x['_score'], (x.get('name') or '').lower()))
     for p in playlists:
@@ -340,9 +342,14 @@ def search_playlists_by_tracks(query, load_entries_fn, playlist_paths_fn, song_p
     path_set = set(song_paths[:30])
     found = []
     seen_ids = set()
+    scanned = 0
+    max_scan = max(limit * 8, 80)
     for pid, name, src in load_entries_fn():
+        scanned += 1
         if pid in seen_ids:
             continue
+        if scanned > max_scan and len(found) >= limit:
+            break
         try:
             paths = playlist_paths_fn(pid, src) or []
         except Exception:
@@ -450,6 +457,7 @@ def run_search(
     include_rooms=True,
     include_messages=False,
     include_resonance=True,
+    fast=False,
     ensure_fts_fn=None,
     load_playlist_entries_fn=None,
     score_playlist_fn=None,
@@ -499,7 +507,8 @@ def run_search(
     if load_playlist_entries_fn and score_playlist_fn:
         by_name = search_playlists_by_name(q, load_playlist_entries_fn, score_playlist_fn, limit)
         by_tracks = []
-        if playlist_paths_fn and song_paths:
+        need_content = (not fast or section == 'playlists') and len(by_name) < limit
+        if need_content and playlist_paths_fn and song_paths:
             by_tracks = search_playlists_by_tracks(
                 q, load_playlist_entries_fn, playlist_paths_fn, song_paths, limit,
             )
@@ -509,14 +518,14 @@ def run_search(
     if load_smart_playlists_fn:
         for sp in load_smart_playlists_fn():
             name = sp.get('name') or ''
-            if field_matches_query(q, name) or score_text(q, name) >= 0.6:
+            if field_matches_query(q, name) or (not fast and score_text(q, name) >= 0.6):
                 smart_all.append({'id': sp.get('id'), 'name': name})
             if len(smart_all) >= limit:
                 break
         smart_all.sort(key=lambda x: -score_text(q, x.get('name') or ''))
 
     rooms_all = []
-    if include_rooms and list_devices_fn:
+    if include_rooms and list_devices_fn and not fast:
         try:
             for d in list_devices_fn() or []:
                 nm = d.get('name') or ''
@@ -556,7 +565,9 @@ def run_search(
     genre_items = [{'name': r['genre'], 'path': r.get('path')} for r in genres_all]
 
     radios = build_radios(q, artist_items, album_items, song_items)
-    similar = build_similar(db_one, db_query, resonance_mod if include_resonance else None, song_items)
+    similar = []
+    if include_resonance and song_items and (not fast or section == 'similar'):
+        similar = build_similar(db_one, db_query, resonance_mod, song_items)
 
     counts = {
         'playlists': len(playlists_all),

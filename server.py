@@ -1827,6 +1827,7 @@ def library_search():
     preview = min(max(int(request.args.get('preview', 5) or 5), 1), 15)
     section = (request.args.get('section') or '').strip() or None
     source = (request.args.get('source') or '').strip() or None
+    fast = request.args.get('fast', '1' if not section else '0') != '0'
 
     payload = bock_search.run_search(
         db_query=db_query,
@@ -1836,6 +1837,7 @@ def library_search():
         preview=preview,
         section=section,
         source=source,
+        fast=fast,
         include_rooms=request.args.get('includeRooms', '1') != '0',
         include_messages=request.args.get('includeMessages') == '1',
         include_resonance=request.args.get('includeResonance', '1') != '0',
@@ -1931,10 +1933,17 @@ def _np_seek_queue_index(device_id, target_index, *, serial=None):
     _np_eager_track_state(next_path, next_token, prev_state=st, device_id=device_id)
     serial = (serial or '').strip() or _np_serial_for_device(device_id)
     if serial:
-        title, artist, album, _ = track_metadata_fast(next_path)
-        text = _build_play_text('song', title, False, artist=artist, path=next_path)
-        import alexa_remote
-        alexa_remote.play_text_timed(serial, text)
+        seek_token = _register_play_queue_seek_token(data, target_index)
+        if seek_token:
+            alias = _alexa_alias()
+            text = f"ask {alias} to start file token {seek_token}"
+            import alexa_remote
+            alexa_remote.play_text_timed(serial, text)
+        else:
+            title, artist, album, _ = track_metadata_fast(next_path)
+            text = _build_play_text('song', title, False, artist=artist, path=next_path)
+            import alexa_remote
+            alexa_remote.play_text_timed(serial, text)
     return True, {'index': target_index}
 
 
@@ -2303,7 +2312,34 @@ def _register_play_playlist_token(playlist_id, name, source, shuffle=False, trac
     return token
 
 
-def _register_play_album_token(album, artist=None, shuffle=False):
+def _register_play_queue_seek_token(data, target_index):
+    """Short-lived token so queue seek resumes the full playlist at target_index."""
+    tracks = data.get('tracks') or []
+    try:
+        target_index = int(target_index)
+    except (TypeError, ValueError):
+        return None
+    if not tracks or target_index < 0 or target_index >= len(tracks):
+        return None
+    token = _new_playlist_token_id()
+    now = time.time()
+    with _PLAYLIST_TOKEN_LOCK:
+        for k in [k for k, v in _PLAYLIST_TOKENS.items() if v.get('exp', 0) < now]:
+            del _PLAYLIST_TOKENS[k]
+        _PLAYLIST_TOKENS[token] = {
+            'kind': 'queue_seek',
+            'tracks': list(tracks),
+            'start_idx': target_index,
+            'shuffle': bool(data.get('shuffle')),
+            'loop': bool(data.get('loop')),
+            'name': data.get('playlist') or data.get('context') or 'playlist',
+            'id': data.get('playlist_id'),
+            'source': data.get('source'),
+            'exp': now + _PLAYLIST_TOKEN_TTL,
+        }
+        _save_playlist_tokens()
+    print(f'[PLAY TOKEN] registered {token} queue_seek idx={target_index} tracks={len(tracks)}', flush=True)
+    return token
     """Short-lived token so UI album plays avoid fuzzy NLU on album titles."""
     token = _new_playlist_token_id()
     now = time.time()
@@ -2352,6 +2388,8 @@ def _start_playlist_token_entry(token_entry, shuffle=None):
     pid = token_entry.get('id')
     source = token_entry.get('source')
     inline = token_entry.get('tracks')
+    start_idx = int(token_entry.get('start_idx') or 0)
+    do_loop = bool(token_entry.get('loop'))
     if pid:
         rated = _resolve_rated_playlist(pid)
         if rated:
@@ -2370,7 +2408,8 @@ def _start_playlist_token_entry(token_entry, shuffle=None):
         if not queue:
             return alexa_speak("Sorry, I couldn't find any tracks to play.")
         return start_playing(queue, shuffle=do_shuffle, speech=None,
-                            playlist=name, playlist_id=pid)
+                            playlist=name, playlist_id=pid,
+                            start_idx=start_idx, loop=do_loop)
     # App-initiated token plays: skip TTS — outputSpeech + AudioPlayer on Echo
     # Show often drops lifecycle events (no NearlyFinished → no auto-advance).
     return start_playing(None, shuffle=do_shuffle, speech=None,
@@ -8623,6 +8662,7 @@ BOCK_PLAYLIST_DIR = os.path.join(
 BOCK_SOURCE_NAME = 'bockmedia'
 # Enriched track lists for large playlists (keyed by playlist id + m3u mtime).
 _PLAYLIST_TRACKS_CACHE = {}
+_PLAYLIST_ENTRIES_CACHE = {'mtime': 0, 'entries': ()}
 _XSI = 'http://www.w3.org/2001/XMLSchema-instance'
 _XSD = 'http://www.w3.org/2001/XMLSchema'
 
@@ -8650,6 +8690,8 @@ def _save_playlists_tree(tree):
         tmp = PLAYLISTS_XML + '.tmp'
         tree.write(tmp, xml_declaration=True, encoding='utf-8')
         os.replace(tmp, PLAYLISTS_XML)
+    _PLAYLIST_ENTRIES_CACHE.clear()
+    _PLAYLIST_ENTRIES_CACHE.update({'mtime': 0, 'entries': ()})
 
 
 def _write_m3u_file(path, track_paths):
@@ -10083,6 +10125,14 @@ def _score_playlist(query, name):
 
 def _load_playlist_entries():
     """[(id, name, source), …] from ServerPlaylists.xml."""
+    global _PLAYLIST_ENTRIES_CACHE
+    try:
+        mtime = os.path.getmtime(PLAYLISTS_XML)
+    except OSError:
+        mtime = 0
+    cached = _PLAYLIST_ENTRIES_CACHE
+    if cached.get('mtime') == mtime and cached.get('entries'):
+        return list(cached['entries'])
     entries = []
     try:
         tree = _load_playlists_tree()
@@ -10095,6 +10145,7 @@ def _load_playlist_entries():
                 entries.append((key.findtext('ID') or '', name, xml_text(key, 'SourceID')))
     except Exception as e:
         print(f'Playlist load error: {e}')
+    _PLAYLIST_ENTRIES_CACHE = {'mtime': mtime, 'entries': tuple(entries)}
     return entries
 
 def best_playlist_entry(query, cutoff=0.5):
@@ -11349,11 +11400,13 @@ def _filter_ignored_queue(queue):
     return filtered if filtered else queue
 
 def start_playing(tracks, shuffle=False, speech=None, loop=False,
-                  playlist=None, playlist_id=None, context=None, source=None):
+                  playlist=None, playlist_id=None, context=None, source=None,
+                  start_idx=0):
     try:
         return _start_playing_impl(
             tracks, shuffle=shuffle, speech=speech, loop=loop,
             playlist=playlist, playlist_id=playlist_id, context=context, source=source,
+            start_idx=start_idx,
         )
     except Exception as ex:
         import traceback
@@ -11362,9 +11415,14 @@ def start_playing(tracks, shuffle=False, speech=None, loop=False,
 
 
 def _start_playing_impl(tracks, shuffle=False, speech=None, loop=False,
-                        playlist=None, playlist_id=None, context=None, source=None):
+                        playlist=None, playlist_id=None, context=None, source=None,
+                        start_idx=0):
     t0 = time.time()
     shuffle_seed = None
+    try:
+        start_idx = max(0, int(start_idx or 0))
+    except (TypeError, ValueError):
+        start_idx = 0
     if playlist_id and not source:
         _, source = _msp_playlist_by_id(playlist_id)
     use_lazy = bool(playlist_id and source)
@@ -11380,21 +11438,23 @@ def _start_playing_impl(tracks, shuffle=False, speech=None, loop=False,
         queue = queue[:_QUEUE_TRACK_LIMIT]
         if not queue:
             return alexa_speak("Sorry, I couldn't find any tracks to play.")
-        first = queue[0]
+        start_idx = min(start_idx, len(queue) - 1)
+        first = queue[start_idx]
         qid = _store_queue(
             queue, shuffle=shuffle, loop=loop,
             playlist=playlist, playlist_id=playlist_id, context=context,
         )
-        token = f"{qid}:0"
+        token = f"{qid}:{start_idx}"
     else:
         queue = _filter_ignored_queue(normalize_track_queue(tracks or []))
         if not queue:
             return alexa_speak("Sorry, I couldn't find any tracks to play.")
         if shuffle:
             random.shuffle(queue)
-        first = queue[0]
+        start_idx = min(start_idx, len(queue) - 1)
+        first = queue[start_idx]
         token_data = {
-            'tracks': queue[:_QUEUE_TRACK_LIMIT], 'idx': 0, 'shuffle': shuffle, 'loop': loop,
+            'tracks': queue[:_QUEUE_TRACK_LIMIT], 'idx': start_idx, 'shuffle': shuffle, 'loop': loop,
             'playlist': playlist, 'playlist_id': playlist_id, 'context': context,
         }
         token = encode_token(token_data)
