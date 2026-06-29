@@ -1,0 +1,32 @@
+{
+  "amzn1.ask.device.67C135F825C9403592C57B213345DD06": {
+    "name": "Kitchen Show",
+    "firstSeen": 1776822329.087674,
+    "lastSeen": 1782686729.087674,
+    "serial": "G2A0...K1TC"
+  },
+  "amzn1.ask.device.E2D3C056F83B408EACE0E52AE97BB7B4": {
+    "name": "Living Room",
+    "firstSeen": 1775180729.087674,
+    "lastSeen": 1782690329.087674,
+    "serial": "G091...LVRM"
+  },
+  "amzn1.ask.device.577CB7F6E7134CEA998DF42AFCA97FB1": {
+    "name": "Office",
+    "firstSeen": 1774921529.087674,
+    "lastSeen": 1782697529.087674,
+    "serial": "H4B2...OFFC"
+  },
+  "amzn1.ask.device.F970FCB3519642A6937D6D4CF2BFBA9E": {
+    "name": "Bedroom",
+    "firstSeen": 1779759929.087674,
+    "lastSeen": 1782690329.087674,
+    "serial": "J7C5...BDRM"
+  },
+  "amzn1.ask.device.FDD2E578410C42BA9B6273D55EDA5CFA": {
+    "name": "Echo 7K2L9P",
+    "firstSeen": 1777254329.087674,
+    "lastSeen": 1782697529.087674,
+    "auto": true
+  }
+}

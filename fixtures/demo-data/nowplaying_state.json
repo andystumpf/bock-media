@@ -1,0 +1,34 @@
+{
+  "devices": {
+    "amzn1.ask.device.67C135F825C9403592C57B213345DD06": {
+      "track": "Reverie",
+      "artist": "The Midnight Echoes",
+      "album": "Static Bloom",
+      "filepath": "fixtures/demo-data/music/The Midnight Echoes/Static Bloom/04 Reverie.mp3",
+      "timestamp": 1782697415.089349,
+      "playing": true,
+      "paused": false,
+      "token": "e9bfccf1:0"
+    },
+    "amzn1.ask.device.E2D3C056F83B408EACE0E52AE97BB7B4": {
+      "track": "Lantern",
+      "artist": "River & Stone",
+      "album": "Tall Pines",
+      "filepath": "fixtures/demo-data/music/River & Stone/Tall Pines/04 Lantern.mp3",
+      "timestamp": 1782697338.089349,
+      "playing": true,
+      "paused": false,
+      "token": "3f98e6f9:0"
+    },
+    "amzn1.ask.device.577CB7F6E7134CEA998DF42AFCA97FB1": {
+      "track": "Slow Burn",
+      "artist": "Velvet Hours",
+      "album": "Slow Burn",
+      "filepath": "fixtures/demo-data/music/Velvet Hours/Slow Burn/01 Slow Burn.mp3",
+      "timestamp": 1782697331.089349,
+      "playing": false,
+      "paused": true,
+      "token": "df0409a5:0"
+    }
+  }
+}

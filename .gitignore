@@ -21,6 +21,10 @@ device_groups.json
 selected_state.json
 ignored_tracks.json
 devices.json
+!fixtures/demo-data/devices.json
+!fixtures/demo-data/automations.json
+!fixtures/demo-data/streaming_history.jsonl
+!fixtures/demo-data/nowplaying_state.json
 server.log
 server.log.*
 msp_slu_poll.log

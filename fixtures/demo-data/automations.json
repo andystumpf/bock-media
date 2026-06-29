@@ -1,0 +1,65 @@
+[
+  {
+    "id": "30dba34b-9cf6-43c9-a44d-4a78e0a8e1b8",
+    "name": "Morning Coffee",
+    "enabled": true,
+    "playlistId": "",
+    "playlistName": "Morning Coffee",
+    "device": "G2A0...K1TC",
+    "deviceName": "Kitchen Show",
+    "shuffle": false,
+    "time": "07:30",
+    "days": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "createdAt": 1781660729.088022,
+    "updatedAt": 1782697529.088022,
+    "lastRunAt": 1782695729.088022,
+    "lastRunStatus": "ok start"
+  },
+  {
+    "id": "edece9af-7def-4c18-bbff-efa150b48ef4",
+    "name": "Weekend road trip",
+    "enabled": true,
+    "playlistId": "",
+    "playlistName": "Road Trip",
+    "device": "G091...LVRM",
+    "deviceName": "Living Room",
+    "shuffle": true,
+    "time": "17:00",
+    "days": [
+      5,
+      6
+    ],
+    "createdAt": 1781660729.088022,
+    "updatedAt": 1782697529.088022,
+    "lastRunAt": 1782695729.088022,
+    "lastRunStatus": "ok mix"
+  },
+  {
+    "id": "7e0b4929-6cb0-4aa1-8bf9-dadcb4071c7b",
+    "name": "Late night jazz",
+    "enabled": false,
+    "playlistId": "",
+    "playlistName": "Late Night Jazz",
+    "device": "H4B2...OFFC",
+    "deviceName": "Office",
+    "shuffle": false,
+    "time": "22:15",
+    "days": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "createdAt": 1781660729.088022,
+    "updatedAt": 1782697529.088022
+  }
+]
