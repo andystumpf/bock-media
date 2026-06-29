@@ -5,7 +5,7 @@
     <string name="server_url_hint">Server URL</string>
     <string name="server_url_helper">Use your LAN IP and port 3001, or your public URL</string>
     <string name="connect">Connect</string>
-    <string name="setup_examples">Examples:\n• http://192.168.1.187:3001\n• https://alexa.morejava.bid</string>
+    <string name="setup_examples">Examples:\n• http://127.0.0.1:3001\n• https://your-tunnel.example.com</string>
     <string name="invalid_url">Enter a valid http or https URL</string>
     <string name="refresh">Refresh</string>
     <string name="change_server">Change server</string>

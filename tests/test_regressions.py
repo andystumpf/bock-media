@@ -433,7 +433,7 @@ class TestCacheBusting:
 class TestPlexClient:
     def test_ratingkey_from_synced_m3u(self):
         import plex_client
-        src = '/mnt/bock/Music/exportedPlaylists/plex/Daily Music.123456.m3u'
+        src = '/demo/music/exportedPlaylists/plex/Daily Music.123456.m3u'
         assert plex_client.playlist_ratingkey_from_source(src) == '123456'
 
     def test_ratingkey_none_for_mymedia_playlist(self):

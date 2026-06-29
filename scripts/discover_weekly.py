@@ -13,8 +13,8 @@ import bock_discover  # noqa: E402
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data-dir', default=os.environ.get('OURMEDIA_DATA_DIR', '/home/plex/.bockmedia'))
-    parser.add_argument('--db', default=os.environ.get('OURMEDIA_DB_PATH', '/mnt/bock/Music/music_organizer.db'))
+    parser.add_argument('--data-dir', default=os.environ.get('OURMEDIA_DATA_DIR', os.path.join(os.path.dirname(__file__), '..', 'fixtures', 'demo-data')))
+    parser.add_argument('--db', default=os.environ.get('OURMEDIA_DB_PATH', os.path.join(os.path.dirname(__file__), '..', 'fixtures', 'demo-data', 'songs_cache.db')))
     args = parser.parse_args()
 
     import sqlite3

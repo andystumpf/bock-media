@@ -35,9 +35,9 @@ android {
                 ?: ""
         }
         val localServerUrl = prop("bockmedia.localServerUrl")
-            .ifBlank { "http://192.168.1.187:3001" }
+            .ifBlank { "http://10.0.2.2:3001" }
         val externalServerUrl = prop("bockmedia.externalServerUrl")
-            .ifBlank { "http://142.56.8.193:3001" }
+            .ifBlank { "http://127.0.0.1:3001" }
         val mobileApiToken = prop("bockmedia.mobileApiToken").ifBlank { configMobileApiToken() }
         val adminUser = prop("bockmedia.adminUser")
         val adminPassword = prop("bockmedia.adminPassword")

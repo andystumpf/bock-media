@@ -2,11 +2,11 @@
 """Prune dead tracks from Bock Media playlists; optionally drop a playlist from the catalog.
 
 Reads check_playlist_playability.py report (status\\tpath\\tpl1|pl2…).
-Does not modify excluded playlists' .m3u files (default: "Ethan and dad movies").
+Does not modify excluded playlists' .m3u files (default: "Demo exclude playlist").
 
   python3 scripts/prune_unplayable.py --report /tmp/unplayable.txt --dry-run
   python3 scripts/prune_unplayable.py --report /tmp/unplayable.txt --fix
-  python3 scripts/prune_unplayable.py --drop-playlist "Ethan and dad movies" --fix
+  python3 scripts/prune_unplayable.py --drop-playlist "Demo exclude playlist" --fix
 
 Config (env): OURMEDIA_DATA_DIR, OURMEDIA_DB_PATH
 """
@@ -17,11 +17,11 @@ import shutil
 import sys
 import xml.etree.ElementTree as ET
 
-DATA_DIR = os.environ.get('OURMEDIA_DATA_DIR', '/home/plex/.bockmedia')
+DATA_DIR = os.environ.get('OURMEDIA_DATA_DIR', os.path.join(os.path.dirname(__file__), '..', 'fixtures', 'demo-data'))
 SERVER_PLAYLISTS = os.path.join(DATA_DIR, 'ServerPlaylists.xml')
 
 # Never edit these playlists' .m3u (may be non-music / Plex movie lists).
-DEFAULT_EXCLUDE = {'Ethan and dad movies'}
+DEFAULT_EXCLUDE = {'Demo exclude playlist'}
 
 
 XSI = 'http://www.w3.org/2001/XMLSchema-instance'
@@ -173,7 +173,7 @@ def main():
     ap.add_argument('--drop-playlist', action='append', default=[],
                     help='Remove playlist from ServerPlaylists.xml (m3u untouched)')
     ap.add_argument('--exclude-playlist', action='append', default=[],
-                    help='Do not edit this playlist m3u (default: Ethan and dad movies)')
+                    help='Do not edit this playlist m3u (default: Demo exclude playlist)')
     ap.add_argument('--status', action='append', default=['missing'],
                     help='Report statuses to prune (default: missing)')
     args = ap.parse_args()

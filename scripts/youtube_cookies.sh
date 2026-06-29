@@ -4,8 +4,8 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-NAS="${NAS:-plex@192.168.1.187}"
-DATA_REMOTE="${DATA_REMOTE:-/home/plex/.bockmedia}"
+NAS="${NAS:-user@your-server.local}"
+DATA_REMOTE="${DATA_REMOTE:-~/.bockmedia}"
 BROWSER="${YOUTUBE_COOKIES_BROWSER:-chrome}"
 OUT="${1:-/tmp/youtube-cookies.txt}"
 REMOTE="${DATA_REMOTE}/youtube-cookies.txt"

@@ -36,7 +36,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from lib import tag_io  # noqa: E402
 
-DB_PATH = os.environ.get('OURMEDIA_DB_PATH', '/mnt/bock/Music/music_organizer.db')
+DB_PATH = os.environ.get('OURMEDIA_DB_PATH', os.path.join(os.path.dirname(__file__), '..', 'fixtures', 'demo-data', 'songs_cache.db'))
 
 # Field name == songs_cache column name for everything we manage.
 DEFAULT_FIELDS = ['title', 'artist', 'album', 'album_artist', 'track_number', 'disc_number']

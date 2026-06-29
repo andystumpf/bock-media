@@ -5572,7 +5572,7 @@ register('settings', async () => {
           <div id="s-pass-fields" style="${requirePw ? '' : 'display:none'}; margin-top:10px">
             <div class="settings-row">
               <label style="font-size:12px;color:#667;min-width:100px">Username</label>
-              <input type="text" id="s-web-username" class="settings-input" value="${escHtml(settings.webUsername || 'morejava')}" autocomplete="username">
+              <input type="text" id="s-web-username" class="settings-input" value="${escHtml(settings.webUsername || 'admin')}" autocomplete="username">
               <button class="btn-sm btn-primary" onclick="saveWebUsername()">Set</button>
             </div>
             <div class="settings-row" style="margin-top:8px">
@@ -7414,7 +7414,7 @@ function renderFamily() {
             ${actionBtn({ kind: 'delete', onclick: `deleteMember('${escHtml(m.id)}','${escHtml(m.name)}')`, title: 'Remove member', icon: 'trash' })}
           </li>`).join('')}</ul>` : '<p class="hint" style="margin:0 0 12px">No members yet. Add the people in your household.</p>'}
         <div class="settings-row" style="gap:8px">
-          <input type="text" id="new-member-name" class="settings-input" placeholder="Name (e.g. Emma)" style="max-width:200px">
+          <input type="text" id="new-member-name" class="settings-input" placeholder="Name (e.g. Teen)" style="max-width:200px">
           <select id="new-member-role" class="settings-input" style="max-width:110px">
             <option value="kid">Kid</option><option value="parent">Parent</option>
           </select>
@@ -7428,7 +7428,7 @@ function renderFamily() {
     <div class="card" style="margin-bottom:16px">
       <div class="card-header"><h3><i class="fa fa-house"></i> Rooms — owner &amp; kid-safe</h3></div>
       <div class="card-body">
-        <p class="hint" style="margin:0 0 10px">Assign a room to a person (e.g. Office Show → Andy). Leave community rooms (Kitchen, Living Room, Basement, Garage) <b>Unattributed</b>. Kid-safe settings need a parent PIN.</p>
+        <p class="hint" style="margin:0 0 10px">Assign a room to a person (e.g. Office → Parent). Leave community rooms (Kitchen, Living Room, Basement, Garage) <b>Unattributed</b>. Kid-safe settings need a parent PIN.</p>
         ${rooms.length ? `<ul class="device-list" style="margin:0">${rooms.map(d => `
           <li style="flex-wrap:wrap;gap:8px">
             <span class="device-icon-col"><i class="fa fa-headphones"></i></span>

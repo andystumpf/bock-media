@@ -6,9 +6,9 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 GRADLE="$REPO_ROOT/android/app/build.gradle.kts"
 NOTES="$REPO_ROOT/app-release-notes.json"
-NAS="${NAS:-plex@192.168.1.187}"
-DATA_REMOTE="${DATA_REMOTE:-/home/plex/.bockmedia}"
-REPO_REMOTE="${REPO_REMOTE:-/home/plex/Documents/github/ourMedia}"
+NAS="${NAS:-user@your-server.local}"
+DATA_REMOTE="${DATA_REMOTE:-~/.bockmedia}"
+REPO_REMOTE="${REPO_REMOTE:-~/bock-media}"
 
 version_from_gradle() {
   grep 'versionName' "$GRADLE" | head -1 | sed -E 's/.*"([^"]+)".*/\1/'
@@ -96,7 +96,7 @@ if props.exists():
         if line.startswith("bockmedia.externalServerUrl="):
             print(line.split("=", 1)[1].strip().rstrip("/"))
             raise SystemExit(0)
-print("http://142.56.8.193:3001")
+print("http://127.0.0.1:3001")
 PY
 }
 
@@ -136,7 +136,7 @@ else
 fi
 
 echo "Deployed v${GRADLE_VER} ($(du -h "$APK" | awk '{print $1}'))"
-echo "Verify: http://192.168.1.187:3001/app (download label and release notes should both say ${GRADLE_VER})"
+echo "Verify: http://127.0.0.1:3001/app (download label and release notes should both say ${GRADLE_VER})"
 
 ADB_SERIAL="${ANDROID_DEVICE:-}"
 if [[ -z "$ADB_SERIAL" ]]; then
@@ -149,5 +149,5 @@ if [[ -n "$ADB_SERIAL" ]]; then
   echo "Phone install OK (${ADB_SERIAL})"
 else
   echo "Phone: run from repo root after wireless pairing:"
-  echo "  adb connect 192.168.1.66:PORT && adb install -r android/app/build/outputs/apk/sideload/app-sideload.apk"
+  echo "  adb connect YOUR_DEVICE_IP:PORT && adb install -r android/app/build/outputs/apk/sideload/app-sideload.apk"
 fi

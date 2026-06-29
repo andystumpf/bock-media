@@ -35,7 +35,7 @@ for line in ext.splitlines():
         print(line.split("=", 1)[1].strip().rstrip("/"))
         break
 else:
-    print("http://142.56.8.193:3001")
+    print("http://127.0.0.1:3001")
 PY
 )}"
 

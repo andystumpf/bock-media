@@ -45,11 +45,11 @@ class HomeArtworkCacheTest {
         val mix = HomeCard(
             id = "mix-rock",
             title = "Rock Mix",
-            artPath = "/mnt/bock/Music/rock-cover.mp3",
+            artPath = "/demo/music/rock-cover.mp3",
             playTarget = PlayTarget.Artist("Some Artist"),
             kind = HomeSectionKind.TopMixes,
         )
-        assertEquals("/mnt/bock/Music/rock-cover.mp3", HomeArtworkCache.mediaPathFor(mix))
+        assertEquals("/demo/music/rock-cover.mp3", HomeArtworkCache.mediaPathFor(mix))
     }
 
     @Test
@@ -59,21 +59,21 @@ class HomeArtworkCacheTest {
 
     @Test
     fun isFullyWarmed_falseWhenPathsMissing() {
-        HomeArtworkCache.storePlaylistPath("p1", "/mnt/bock/Music/a.mp3")
+        HomeArtworkCache.storePlaylistPath("p1", "/demo/music/a.mp3")
         assertFalse(HomeArtworkCache.isFullyWarmed(listOf(cardA, cardB)))
     }
 
     @Test
     fun isFullyWarmed_trueWhenAllPathsKnown() {
-        HomeArtworkCache.storePlaylistPath("p1", "/mnt/bock/Music/a.mp3")
-        HomeArtworkCache.storePlaylistPath("p2", "/mnt/bock/Music/b.mp3")
+        HomeArtworkCache.storePlaylistPath("p1", "/demo/music/a.mp3")
+        HomeArtworkCache.storePlaylistPath("p2", "/demo/music/b.mp3")
         assertTrue(HomeArtworkCache.isFullyWarmed(listOf(cardA, cardB)))
     }
 
     @Test
     fun extractMediaPath_stripsHost() {
         val path = ArtworkPaths.extractMediaPath(
-            "http://192.168.1.187:3001/artwork/mnt/bock/Music/song.mp3",
+            "http://127.0.0.1:3001/artwork/demo/music/song.mp3",
         )
         assertTrue(path?.contains("song.mp3") == true)
     }

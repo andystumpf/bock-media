@@ -25,7 +25,7 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 from playlist_xml_lock import playlist_xml_lock
 
-DATA_DIR = os.environ.get('OURMEDIA_DATA_DIR', '/home/plex/.bockmedia')
+DATA_DIR = os.environ.get('OURMEDIA_DATA_DIR', os.path.join(HERE, 'fixtures', 'demo-data'))
 PLAYLISTS_XML = os.path.join(DATA_DIR, 'ServerPlaylists.xml')
 
 # Words that add no entity-resolution value and only pollute the voice model.

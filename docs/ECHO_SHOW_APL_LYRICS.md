@@ -27,7 +27,7 @@ The custom skill must declare the APL interface. In-repo template: `skill/manife
 ```bash
 cd skill
 ask smapi update-skill-manifest \
-  --skill-id amzn1.ask.skill.c13622d4-8780-4bea-93a5-0ded84307466 \
+  --skill-id amzn1.ask.skill.YOUR_CUSTOM_SKILL_ID \
   --stage development \
   --manifest file:manifest.development.json
 ```

@@ -6,10 +6,10 @@ info:
     REST API contract shared by Android and iOS clients.
     Source of truth: android/.../BockMediaApi.kt + dto/ApiDtos.kt
 servers:
-  - url: http://192.168.1.187:3001
-    description: LAN
-  - url: http://142.56.8.193:3001
-    description: External
+  - url: http://127.0.0.1:3001
+    description: Local demo
+  - url: http://10.0.2.2:3001
+    description: Android emulator
 paths:
   /api/health:
     get:

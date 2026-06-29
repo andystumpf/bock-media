@@ -35,9 +35,9 @@ def _public_url():
     try:
         with open(CONFIG_PATH) as f:
             url = (json.load(f) or {}).get('publicUrl') or ''
-        return url.rstrip('/') or 'https://alexa.morejava.bid'
+        return url.rstrip('/') or 'https://your-tunnel.example.com'
     except Exception:
-        return 'https://alexa.morejava.bid'
+        return 'https://your-tunnel.example.com'
 
 
 def _is_active(unit):

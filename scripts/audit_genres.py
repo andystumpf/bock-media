@@ -14,7 +14,7 @@ import os
 import sqlite3
 import sys
 
-DB_PATH = os.environ.get('OURMEDIA_DB_PATH', '/mnt/bock/Music/music_organizer.db')
+DB_PATH = os.environ.get('OURMEDIA_DB_PATH', os.path.join(os.path.dirname(__file__), '..', 'fixtures', 'demo-data', 'songs_cache.db'))
 
 AUDIO_EXT = "LOWER(SUBSTR(path, -4)) IN ('.mp3', '.m4a', '.aac', '.flac', '.ogg', '.wav', '.wma')"
 

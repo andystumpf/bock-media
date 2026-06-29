@@ -30,7 +30,7 @@ class TestTunnelTrust:
         rv = client.get(
             '/api/health',
             headers={
-                'Host': '192.168.1.187:3001',
+                'Host': '192.168.1.100:3001',
                 'Cf-Connecting-Ip': '203.0.113.1',
                 'Cf-Ray': 'fake',
             },

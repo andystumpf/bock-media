@@ -12,8 +12,8 @@ import bock_loudness  # noqa: E402
 
 def main():
     parser = argparse.ArgumentParser(description='Analyze loudness for songs_cache')
-    parser.add_argument('--db', default=os.environ.get('OURMEDIA_DB_PATH', '/mnt/bock/Music/music_organizer.db'))
-    parser.add_argument('--music-root', default=os.environ.get('OURMEDIA_MUSIC_ROOT', '/mnt/bock/Music'))
+    parser.add_argument('--db', default=os.environ.get('OURMEDIA_DB_PATH', os.path.join(os.path.dirname(__file__), '..', 'fixtures', 'demo-data', 'songs_cache.db')))
+    parser.add_argument('--music-root', default=os.environ.get('OURMEDIA_MUSIC_ROOT', os.path.join(os.path.dirname(__file__), '..', 'fixtures', 'demo-data', 'music')))
     parser.add_argument('--force', action='store_true')
     parser.add_argument('--limit', type=int, default=0)
     parser.add_argument('--ffmpeg', default='ffmpeg')

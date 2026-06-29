@@ -64,7 +64,7 @@ Usage: $0 {start|install|logs|all}
 Env: ANDROID_HOME (default $ANDROID_HOME), AVD_NAME (default $AVD_NAME)
 
 Emulator reaches the host server at 10.0.2.2:<port> (maps to this machine's localhost).
-For LAN IP 192.168.1.187:3001 use that directly if the emulator network can reach it.
+For LAN IP http://127.0.0.1:3001 use that directly if the emulator network can reach it.
 EOF
     ;;
 esac

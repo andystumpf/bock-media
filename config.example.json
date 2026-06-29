@@ -1,9 +1,9 @@
 {
-  "publicUrl": "https://alexa.morejava.bid",
+  "publicUrl": "https://your-tunnel.example.com",
   "launchPlaylistPrompt": true,
   "identifyPlaylist": "",
   "deviceDiscovery": {
-    "_comment": "Silent background sweep: mutes each Echo, plays a ~250ms silent track via the skill, stops, restores volume — binds rotated Alexa skill deviceIds to hardware serials without audible playback. POST /api/devices/discover?force=1 to run immediately.",
+    "_comment": "Silent background sweep binds Alexa skill deviceIds to hardware serials. POST /api/devices/discover?force=1 to run immediately.",
     "enabled": true,
     "intervalHours": 6,
     "staleDays": 7,
@@ -11,13 +11,13 @@
     "onlyStale": true
   },
   "msp": {
-    "skillId": "amzn1.ask.skill.5a3f1b96-1e0d-4a39-ac7a-1bacd6f4438a",
-    "catalogId": "amzn1.ask-catalog.cat.8d881399-7f6b-4d02-93c9-6c4b44043406",
+    "skillId": "amzn1.ask.skill.YOUR_MSP_SKILL_ID",
+    "catalogId": "amzn1.ask-catalog.cat.YOUR_CATALOG_ID",
     "alias": "bock media",
-    "endpoint": "https://alexa.morejava.bid/music"
+    "endpoint": "https://your-tunnel.example.com/music"
   },
   "mspOauth": {
-    "clientId": "ourmedia-msp-client",
+    "clientId": "bockmedia-msp-client",
     "clientSecret": "GENERATE_AND_SET_LOCALLY",
     "accessToken": "GENERATE_AND_SET_LOCALLY",
     "refreshToken": "GENERATE_AND_SET_LOCALLY",
@@ -31,21 +31,21 @@
     ]
   },
   "claude": {
-    "_comment": "Optional. Powers Mix Muse conversational playlists (Anthropic API).",
+    "_comment": "Optional. Powers Mix Muse conversational playlists.",
     "apiKey": "SET_LOCALLY",
     "model": "claude-sonnet-4-20250514"
   },
   "openai": {
-    "_comment": "Optional. Alternative LLM provider for Mix Muse (OpenAI API).",
+    "_comment": "Optional. Alternative LLM provider for Mix Muse.",
     "apiKey": "SET_LOCALLY",
     "model": "gpt-4o-mini"
   },
   "mixMuse": {
-    "_comment": "Optional. Force provider: claude | openai. Auto-detects from keys if omitted.",
+    "_comment": "Optional. Force provider: claude | openai.",
     "provider": ""
   },
   "alexaRemote": {
-    "_comment": "Optional. Enables 'Play on device' in the web UI via the unofficial Alexa API (alexapy). Use Settings → Start browser login, or scripts/alexa_login.py --proxy. For remote login, forward TCP 3005 and set loginProxyHost to your public IP (e.g. 142.56.8.193). Set url to the Amazon domain where your Echo account lives (amazon.com, amazon.co.uk, amazon.de, …). US and UK installs use the same code — different config only.",
+    "_comment": "Optional. Unofficial Alexa API for Play on device. url = amazon.com | amazon.co.uk | etc.",
     "url": "amazon.com",
     "email": "SET_LOCALLY",
     "password": "SET_LOCALLY",
@@ -55,24 +55,17 @@
     "loginTimeoutSec": 1800
   },
   "mobileApi": {
-    "_comment": "Required for Android app over port-forward or Cloudflare tunnel. Generate token: python3 -c \"import secrets; print(secrets.token_urlsafe(32))\"",
+    "_comment": "Bearer token for mobile apps and external API access.",
     "token": "GENERATE_AND_SET_LOCALLY",
     "allowTunnelApi": false,
-    "allowExternalAccess": true
+    "allowExternalAccess": false
   },
   "appDownload": {
-    "_comment": "Basic auth for GET /app and mobile app downloads (Android APK + iPhone IPA). Falls back to WebPassword if password omitted.",
-    "_releaseNotes": "Edit app-release-notes.json in the repo root whenever you upload a new build.",
-    "username": "morejava",
+    "_comment": "Basic auth for GET /app (APK/IPA downloads). Falls back to WebPassword if omitted.",
+    "username": "admin",
     "password": "SET_LOCALLY"
   },
-  "alexaAplLyrics": {
-    "_comment": "Echo Show karaoke lyrics via APL. Requires skill manifest APL interface + redeploy. See docs/ECHO_SHOW_APL_LYRICS.md.",
-    "enabled": false
-  },
   "appAbout": {
-    "_comment": "Links shown in mobile app About screen (account menu).",
-    "githubPublic": "https://github.com/andystumpf/ourMedia",
-    "githubPrivate": "https://github.com/andystumpf/ourMedia"
+    "githubPublic": "https://github.com/andystumpf/bock-media"
   }
 }

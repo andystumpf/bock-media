@@ -7,8 +7,8 @@ class StableArtCacheKeyTest {
 
     @Test
     fun lanAndExternalHostsShareOneKey() {
-        val lan = stableArtCacheKey("http://192.168.1.187:3001/artwork/Music/a%20b/cover.jpg")
-        val ext = stableArtCacheKey("http://142.56.8.193:3001/artwork/Music/a%20b/cover.jpg")
+        val lan = stableArtCacheKey("http://192.168.1.100:3001/artwork/Music/a%20b/cover.jpg")
+        val ext = stableArtCacheKey("http://203.0.113.10:3001/artwork/Music/a%20b/cover.jpg")
         assertEquals(lan, ext)
         assertEquals("/artwork/Music/a%20b/cover.jpg", lan)
     }

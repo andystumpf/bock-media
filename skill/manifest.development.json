@@ -4,7 +4,7 @@
       "custom": {
         "endpoint": {
           "sslCertificateType": "Wildcard",
-          "uri": "https://alexa.morejava.bid/alexa"
+          "uri": "https://your-tunnel.example.com/alexa"
         },
         "interfaces": [
           {

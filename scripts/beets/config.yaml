@@ -1,7 +1,7 @@
 # Headless MusicBrainz autotag — tags files in place, no move/rename.
 # Used by scripts/beets_batch.sh (BEETSDIR points here).
 
-directory: /mnt/bock/Music
+directory: fixtures/demo-data/music
 library: ~/.bockmedia/beetslibrary.db
 
 import:

@@ -23,8 +23,8 @@ import server  # noqa: E402
 
 # ─────────────────────────── helpers ─────────────────────────────────────────
 
-REAL_DATA_DIR = os.environ.get('OURMEDIA_DATA_DIR', '/home/plex/.bockmedia')
-REAL_DB_PATH = os.environ.get('OURMEDIA_DB_PATH', '/mnt/bock/Music/music_organizer.db')
+REAL_DATA_DIR = os.environ.get('OURMEDIA_DATA_DIR', os.path.join(REPO_ROOT, 'fixtures', 'demo-data'))
+REAL_DB_PATH = os.environ.get('OURMEDIA_DB_PATH', os.path.join(REPO_ROOT, 'fixtures', 'demo-data', 'songs_cache.db'))
 
 # XML files in the data dir we want to copy into tmp so tests can read them.
 MMA_XML_FILES = [

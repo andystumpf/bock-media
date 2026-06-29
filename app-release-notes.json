@@ -13,7 +13,7 @@
       "version": "2.6.46",
       "date": "2026-06-28",
       "items": [
-        {"kind": "fix", "text": "Who's listening? — tapping your profile (e.g. Andy) now saves locally first and dismisses the picker even if server sync is slow"},
+        {"kind": "fix", "text": "Who's listening? — tapping your profile now saves locally first and dismisses the picker even if server sync is slow"},
         {"kind": "fix", "text": "Profile picker — removed duplicate bind call that could hang the dialog; loading spinner while syncing"}
       ]
     },
@@ -95,7 +95,7 @@
       "version": "2.6.35",
       "date": "2026-06-27",
       "items": [
-        {"kind": "fix", "text": "Profile switch — save outgoing prefs before loading the new profile (fixes crossfade, when-queue-ends, and downloads bleeding between Andy/Laura)"},
+        {"kind": "fix", "text": "Profile switch — save outgoing prefs before loading the new profile (fixes crossfade, when-queue-ends, and downloads bleeding between profiles)"},
         {"kind": "fix", "text": "Downloads list, settings, library, and home reload when Acting as changes; incoming profile’s offline queue resumes from server"}
       ]
     },
@@ -106,7 +106,7 @@
         {"kind": "fix", "text": "Security #18 — LAN API writes require Basic auth or mobileApi token (opt-in allowOpenLanApi); stream/artwork require credentials, HMAC sig, or allowOpenLanMedia"},
         {"kind": "fix", "text": "Cloudflare tunnel trust — Cf-* headers honored only from loopback (cloudflared), blocking forged headers on port-forward"},
         {"kind": "fix", "text": "Alexa stream URLs signed; web console uses /api/media/sign for artwork and browser playback when media auth is enabled"},
-        {"kind": "fix", "text": "Android downloads follow active profile — switching Andy/Laura hides the other profile’s downloads, pauses sync, and resumes when you switch back"}
+        {"kind": "fix", "text": "Android downloads follow active profile — switching profiles hides the other profile’s downloads, pauses sync, and resumes when you switch back"}
       ]
     },
     {
@@ -215,7 +215,7 @@
       "date": "2026-06-26",
       "items": [
         {"kind": "feat", "text": "Home Yacht Rock row after Italian music — all playlists with “yacht” in the name"},
-        {"kind": "fix", "text": "Profile restore after reinstall — Andy/settings/rated songs reload from server; stale home cache cleared"},
+        {"kind": "fix", "text": "Profile restore after reinstall — settings/rated songs reload from server; stale home cache cleared"},
         {"kind": "fix", "text": "Alexa playlists auto-advance to the next track without manual skip"}
       ]
     },

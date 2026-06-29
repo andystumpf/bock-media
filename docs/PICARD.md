@@ -69,7 +69,7 @@ Work in **folders**, not all 46k files at once — Picard and MusicBrainz rate l
 ```bash
 # Example: Flatpak (often newer than apt)
 flatpak install flathub org.musicbrainz.Picard
-flatpak run org.musicbrainz.Picard -e "LOAD /mnt/bock/Music/SomeArtist" \
+flatpak run org.musicbrainz.Picard -e "LOAD /path/to/your/music/SomeArtist" \
   -e FROM_FILE ~/Documents/github/ourMedia/scripts/picard/commands.txt
 ```
 
@@ -108,7 +108,7 @@ Run **after** `music_organizer` index scans. Optional weekly:
 
 ```cron
 # After Picard sessions (manual), refresh DB from tags:
-30 6 * * 0 cd /home/plex/Documents/github/ourMedia && ./scripts/after_picard.sh >> ~/.bockmedia/picard-sync.log 2>&1
+30 6 * * 0 cd /opt/bock-media && ./scripts/after_picard.sh >> ~/.bockmedia/picard-sync.log 2>&1
 ```
 
 ## Tips

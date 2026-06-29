@@ -56,8 +56,10 @@ _LAST_ALEXA_HIT = 0.0
 #   OURMEDIA_DB_PATH    – SQLite music index (table songs_cache)
 #   OURMEDIA_DATA_DIR   – library data dir (Preferences/WatchFolders/ServerPlaylists XML, ImageCache)
 #   OURMEDIA_MUSIC_ROOT – root of the music library that gets streamed
-DB_PATH = os.environ.get('OURMEDIA_DB_PATH', '/mnt/bock/Music/music_organizer.db')
-DATA_DIR = os.environ.get('OURMEDIA_DATA_DIR', '/home/plex/.bockmedia')
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__)))
+_DEMO_MUSIC_ROOT = os.path.join(REPO_ROOT, 'fixtures', 'demo-data', 'music')
+DB_PATH = os.environ.get('OURMEDIA_DB_PATH', os.path.join(REPO_ROOT, 'fixtures', 'demo-data', 'songs_cache.db'))
+DATA_DIR = os.environ.get('OURMEDIA_DATA_DIR', os.path.join(REPO_ROOT, 'fixtures', 'demo-data'))
 
 _MEMBER_DATA_BASENAMES = frozenset({
     'ratings.json', 'client_prefs.json', 'household.json', 'favorites.json',
@@ -357,7 +359,7 @@ def _cfg_flag(section, key, default=False):
         return default
 
 def _web_username():
-    return (get_pref('WebUsername', '') or 'morejava').strip() or 'morejava'
+    return (get_pref('WebUsername', '') or 'admin').strip() or 'admin'
 
 def _basic_auth_ok():
     stored = get_pref('WebPassword', '').strip()
@@ -514,7 +516,8 @@ def _forbidden(msg='Forbidden'):
 
 # Alexa request-signature verification per
 # https://developer.amazon.com/en-US/docs/alexa/custom-skills/host-a-custom-skill-as-a-web-service.html
-EXPECTED_SKILL_APP_ID = 'amzn1.ask.skill.c13622d4-8780-4bea-93a5-0ded84307466'
+EXPECTED_SKILL_APP_ID = os.environ.get(
+    'OURMEDIA_SKILL_ID', 'amzn1.ask.skill.YOUR_CUSTOM_SKILL_ID')
 _ALEXA_CERT_HOST = 's3.amazonaws.com'
 _ALEXA_CERT_PATH_PREFIX = '/echo.api/'
 _ALEXA_SIG_SAN = 'echo-api.amazon.com'
@@ -596,7 +599,7 @@ def _app_download_user():
         ad = load_config().get('appDownload') or {}
     except Exception:
         ad = {}
-    return (ad.get('username') or _web_username() or 'morejava').strip()
+    return (ad.get('username') or _web_username() or 'admin').strip()
 
 def _app_download_password():
     try:
@@ -1615,7 +1618,7 @@ def health():
 
 PLEX_SYNC_LOG = os.path.join(HERE, 'plex-sync.log')
 PLEX_SYNC_STATE = os.path.join(
-    os.environ.get('OURMEDIA_MUSIC_ROOT', '/mnt/bock/Music'),
+    os.environ.get('OURMEDIA_MUSIC_ROOT', _DEMO_MUSIC_ROOT),
     'exportedPlaylists', 'plex', '.plex_sync_state.json',
 )
 
@@ -5320,7 +5323,7 @@ def _entry_serial(entry, primary, store):
 def _live_alexa_name(entry, primary, store):
     """Current Alexa-app room name via the device's bound hardware serial.
 
-    The friendly name ("Emma's Room") lives only in the unofficial-API/serial
+    The friendly name ("Teen's Room") lives only in the unofficial-API/serial
     identity space — the custom-skill `deviceId` never carries it. Resolving
     through the live roster means Alexa-app renames appear immediately and a
     correlated device never falls back to "Echo XXXXXX".
@@ -5383,7 +5386,7 @@ def devices():
 def _relabel_devices_from_roster():
     """Persist current Alexa-app room names onto device entries by serial.
 
-    A device's friendly name ("Emma's Room") lives only in the unofficial-API
+    A device's friendly name ("Teen's Room") lives only in the unofficial-API
     roster, keyed by hardware serial. This backfills it onto any entry whose
     serial we've correlated, so stale/auto "Echo XXXXXX" names are replaced
     even if the live roster is later unavailable. Returns entries updated.
@@ -5698,7 +5701,7 @@ def recent():
         return jsonify({'items': [], 'total': 0})
 
 # ── Household members (profiles), bindings & attribution ─────────────────────
-# A "member" is a person in the household (Andy, Emma, Jack). Members own taste,
+# A "member" is a person in the household (Parent, Teen, Guest). Members own taste,
 # history, recommendations, playlists and messages. They are *bound* to devices
 # for attribution: a phone install → its active member; an Echo → the room's
 # default member (Amazon never tells a skill who is speaking). This is an
@@ -5767,7 +5770,7 @@ def _member_by_id(member_id, household=None):
 
 
 def _member_id_for_room_name(device_name, members):
-    """Map a room label like \"Emma's Room\" to household member p-emma."""
+    """Map a room label like \"Teen's Room\" to household member p-teen."""
     dn = (device_name or '').strip().lower()
     if not dn or not members:
         return None
@@ -7703,7 +7706,7 @@ def cfg_bool(key, default=False):
     return default
 
 
-_DEFAULT_ALEXA_PUBLIC_URL = 'https://alexa.morejava.bid'
+_DEFAULT_ALEXA_PUBLIC_URL = 'https://your-tunnel.example.com'
 
 def get_public_url():
     raw = (load_config().get('publicUrl') or '').strip().rstrip('/')
@@ -7744,7 +7747,7 @@ def config_endpoint():
             if url and not url.startswith('https://'):
                 return jsonify({'error': 'publicUrl must start with https:// (use your Cloudflare tunnel hostname, not a bare IP)'}), 400
             if url and re.match(r'^https://\d+\.\d+\.\d+\.\d+', url):
-                return jsonify({'error': 'publicUrl must be a tunnel hostname (e.g. https://alexa.morejava.bid), not a raw IP'}), 400
+                return jsonify({'error': 'publicUrl must be a tunnel hostname (e.g. https://your-tunnel.example.com), not a raw IP'}), 400
         cfg.update(data)
         with open(CONFIG_PATH, 'w') as f:
             json.dump(cfg, f, indent=2)
@@ -7756,7 +7759,7 @@ def config_endpoint():
 
 # ── Audio Streaming ───────────────────────────────────────────────────────────
 
-MUSIC_ROOT = os.environ.get('OURMEDIA_MUSIC_ROOT', '/mnt/bock/Music')
+MUSIC_ROOT = os.environ.get('OURMEDIA_MUSIC_ROOT', _DEMO_MUSIC_ROOT)
 NATIVE_EXTS   = {'.mp3', '.m4a', '.aac'}
 TRANSCODE_EXTS = {'.flac', '.wma', '.wav', '.ogg', '.aif', '.aiff'}
 SUPPORTED_EXTS = NATIVE_EXTS | TRANSCODE_EXTS
@@ -8504,7 +8507,7 @@ def _m3u_has_track(m3u_path, track_path):
 
 PLAYLISTS_XML = os.path.join(DATA_DIR, 'ServerPlaylists.xml')
 BOCK_PLAYLIST_DIR = os.path.join(
-    os.environ.get('OURMEDIA_MUSIC_ROOT', '/mnt/bock/Music'),
+    os.environ.get('OURMEDIA_MUSIC_ROOT', _DEMO_MUSIC_ROOT),
     'exportedPlaylists', 'bockmedia',
 )
 BOCK_SOURCE_NAME = 'bockmedia'

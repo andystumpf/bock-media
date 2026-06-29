@@ -14,8 +14,8 @@ Full **Jetpack Compose** client for the Bock Media Flask API — feature parity 
 2. Optional `android/local.properties`:
    ```
    sdk.dir=/path/to/Android/sdk
-   bockmedia.localServerUrl=http://192.168.1.187:3001
-   bockmedia.externalServerUrl=http://142.56.8.193:3001
+   bockmedia.localServerUrl=http://127.0.0.1:3001
+   bockmedia.externalServerUrl=http://10.0.2.2:3001
    bockmedia.mobileApiToken=your-token
    ```
 3. Debug: `./gradlew assembleDebug`

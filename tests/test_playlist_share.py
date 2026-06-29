@@ -6,9 +6,9 @@ def test_share_playlist_makes_visible_to_recipient(isolated_paths, client, monke
     pid = 'pregame-mix-id'
     server._save_household({
         'members': [
-            {'id': 'p-andy', 'name': 'Andy', 'role': 'parent'},
-            {'id': 'p-jack', 'name': 'Jack', 'role': 'parent'},
-            {'id': 'p-emma', 'name': 'Emma', 'role': 'kid'},
+            {'id': 'p-parent', 'name': 'Parent', 'role': 'parent'},
+            {'id': 'p-guest', 'name': 'Guest', 'role': 'parent'},
+            {'id': 'p-teen', 'name': 'Teen', 'role': 'kid'},
         ],
         'clientBindings': {},
         'deviceOwners': {},
@@ -16,26 +16,26 @@ def test_share_playlist_makes_visible_to_recipient(isolated_paths, client, monke
     monkeypatch.setattr(server, '_msp_playlist_by_id', lambda _: ('Pregame Mix', '/fake.m3u'))
 
     resp = client.post(f'/api/playlists/{pid}/share', json={
-        'toMemberIds': ['p-jack'],
-        'memberId': 'p-andy',
+        'toMemberIds': ['p-guest'],
+        'memberId': 'p-parent',
     })
     assert resp.status_code == 200
     body = resp.get_json()
     assert body['ok'] is True
-    assert 'p-jack' in body['sharedWith']
+    assert 'p-guest' in body['sharedWith']
 
     meta = server._load_playlist_meta()[pid]
-    assert meta['ownerMemberId'] == 'p-andy'
+    assert meta['ownerMemberId'] == 'p-parent'
     assert meta['visibility'] == 'shared'
-    assert server._playlist_visible_to(meta, 'p-jack')
-    assert not server._playlist_visible_to(meta, 'p-emma')
+    assert server._playlist_visible_to(meta, 'p-guest')
+    assert not server._playlist_visible_to(meta, 'p-teen')
 
 
 def test_private_daily_mix_hidden_from_other_members(isolated_paths):
     meta = {
-        'ownerMemberId': 'p-andy',
+        'ownerMemberId': 'p-parent',
         'visibility': 'private',
         'daily': True,
     }
-    assert server._playlist_visible_to(meta, 'p-andy')
-    assert not server._playlist_visible_to(meta, 'p-jack')
+    assert server._playlist_visible_to(meta, 'p-parent')
+    assert not server._playlist_visible_to(meta, 'p-guest')

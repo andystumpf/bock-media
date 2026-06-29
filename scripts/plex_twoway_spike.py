@@ -11,7 +11,7 @@ to actually add the resolved track to that playlist and then remove it again,
 proving the round-trip without leaving a mess.
 
 Usage:
-  python3 scripts/plex_twoway_spike.py --path "/mnt/bock/Music/.../song.mp3"
+  python3 scripts/plex_twoway_spike.py --path "/path/to/your/music/.../song.mp3"
   python3 scripts/plex_twoway_spike.py --path "..." --write <playlistRatingKey>
 """
 import argparse

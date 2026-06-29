@@ -30,14 +30,14 @@ class TestPin:
 
 class TestMemberIds:
     def test_slug(self):
-        assert server._slug("Emma's Room") == 'emma-s-room'
+        assert server._slug("Kid One's Room") == 'kid-one-s-room'
         assert server._slug('   ') == 'member'
 
     def test_unique(self):
         """duplicate names get distinct ids"""
         members = [{'id': 'p-jack'}, {'id': 'p-jack-2'}]
         assert server._gen_member_id('Jack', members) == 'p-jack-3'
-        assert server._gen_member_id('Andy', members) == 'p-andy'
+        assert server._gen_member_id('Parent', members) == 'p-parent'
 
 
 # ─────────────────────────────── quiet hours ─────────────────────────────────
@@ -105,58 +105,58 @@ class TestVolumeClamp:
 class TestAttribution:
     def test_room_name_inference(self):
         members = [
-            {'id': 'p-emma', 'name': 'Emma', 'role': 'kid'},
-            {'id': 'p-ethan', 'name': 'Ethan', 'role': 'kid'},
-            {'id': 'p-noah', 'name': 'Noah', 'role': 'kid'},
+            {'id': 'p-kid1', 'name': 'Kid One', 'role': 'kid'},
+            {'id': 'p-kid2', 'name': 'Kid Two', 'role': 'kid'},
+            {'id': 'p-kid3', 'name': 'Kid Three', 'role': 'kid'},
         ]
-        assert server._member_id_for_room_name("Emma's Room", members) == 'p-emma'
-        assert server._member_id_for_room_name("Ethan's Echo Dot", members) == 'p-ethan'
-        assert server._member_id_for_room_name("Noah's Bedroom", members) == 'p-noah'
-        assert server._member_id_for_room_name('Kitchen Show', members) is None
+        assert server._member_id_for_room_name("Kid One's Room", members) == 'p-kid1'
+        assert server._member_id_for_room_name("Kid Two's Echo Dot", members) == 'p-kid2'
+        assert server._member_id_for_room_name("Kid Three's Bedroom", members) == 'p-kid3'
+        assert server._member_id_for_room_name('Kitchen Demo', members) is None
 
     def test_sync_default_room_owners(self, isolated_paths):
         h = {
             'members': [
-                {'id': 'p-emma', 'name': 'Emma', 'role': 'kid'},
-                {'id': 'p-ethan', 'name': 'Ethan', 'role': 'kid'},
+                {'id': 'p-kid1', 'name': 'Kid One', 'role': 'kid'},
+                {'id': 'p-kid2', 'name': 'Kid Two', 'role': 'kid'},
             ],
             'clientBindings': {},
             'deviceOwners': {},
         }
         store = {
-            'echo-emma': {'name': "Emma's Room"},
-            'echo-ethan': {'name': "Ethan's Echo Dot"},
-            'echo-kitchen': {'name': 'Kitchen Show'},
+            'demo-kid1': {'name': "Kid One's Room"},
+            'demo-kid2': {'name': "Kid Two's Echo Dot"},
+            'demo-kitchen': {'name': 'Kitchen Demo'},
         }
         assert server._sync_default_room_owners(h, store) is True
-        assert h['deviceOwners']['echo-emma'] == 'p-emma'
-        assert h['deviceOwners']['echo-ethan'] == 'p-ethan'
-        assert 'echo-kitchen' not in h['deviceOwners']
+        assert h['deviceOwners']['demo-kid1'] == 'p-kid1'
+        assert h['deviceOwners']['demo-kid2'] == 'p-kid2'
+        assert 'demo-kitchen' not in h['deviceOwners']
 
     def test_priority(self, isolated_paths):
         """explicit > phone install > room default"""
         server._save_household({
-            'members': [{'id': 'p-andy', 'name': 'Andy', 'role': 'parent'},
-                        {'id': 'p-emma', 'name': 'Emma', 'role': 'kid'}],
-            'clientBindings': {'client-abc': 'p-andy'},
-            'deviceOwners': {'echo-emma': 'p-emma'},
+            'members': [{'id': 'p-parent', 'name': 'Parent', 'role': 'parent'},
+                        {'id': 'p-kid1', 'name': 'Kid One', 'role': 'kid'}],
+            'clientBindings': {'client-abc': 'p-parent'},
+            'deviceOwners': {'demo-kid1': 'p-kid1'},
         })
         # explicit wins
-        assert server.resolve_play_member(device_id='echo-emma', client_id='abc',
-                                          explicit_member='p-andy') == 'p-andy'
+        assert server.resolve_play_member(device_id='demo-kid1', client_id='abc',
+                                          explicit_member='p-parent') == 'p-parent'
         # phone install over room
-        assert server.resolve_play_member(device_id='echo-emma', client_id='abc') == 'p-andy'
+        assert server.resolve_play_member(device_id='demo-kid1', client_id='abc') == 'p-parent'
         # room default
-        assert server.resolve_play_member(device_id='echo-emma') == 'p-emma'
+        assert server.resolve_play_member(device_id='demo-kid1') == 'p-kid1'
         # unknown -> empty
-        assert server.resolve_play_member(device_id='echo-nope') == ''
+        assert server.resolve_play_member(device_id='demo-nope') == ''
 
     def test_row_member_infers_owner(self, isolated_paths):
         """a history row without memberId resolves via the device owner"""
-        server._save_household({'members': [{'id': 'p-emma', 'name': 'Emma', 'role': 'kid'}],
-                                'clientBindings': {}, 'deviceOwners': {'echo-emma': 'p-emma'}})
-        assert server._row_member({'deviceId': 'echo-emma'}) == 'p-emma'
-        assert server._row_member({'deviceId': 'echo-emma', 'memberId': 'p-x'}) == 'p-x'
+        server._save_household({'members': [{'id': 'p-kid1', 'name': 'Kid One', 'role': 'kid'}],
+                                'clientBindings': {}, 'deviceOwners': {'demo-kid1': 'p-kid1'}})
+        assert server._row_member({'deviceId': 'demo-kid1'}) == 'p-kid1'
+        assert server._row_member({'deviceId': 'demo-kid1', 'memberId': 'p-x'}) == 'p-x'
 
 
 # ──────────────────────────── playlist visibility ────────────────────────────
@@ -166,14 +166,14 @@ class TestVisibility:
         assert server._playlist_visible_to(None, 'p-jack')
 
     def test_private(self):
-        meta = {'ownerMemberId': 'p-andy', 'visibility': 'private'}
-        assert server._playlist_visible_to(meta, 'p-andy')
+        meta = {'ownerMemberId': 'p-parent', 'visibility': 'private'}
+        assert server._playlist_visible_to(meta, 'p-parent')
         assert not server._playlist_visible_to(meta, 'p-jack')
 
     def test_shared(self):
-        meta = {'ownerMemberId': 'p-andy', 'visibility': 'shared', 'sharedWith': ['p-jack']}
+        meta = {'ownerMemberId': 'p-parent', 'visibility': 'shared', 'sharedWith': ['p-jack']}
         assert server._playlist_visible_to(meta, 'p-jack')
-        assert not server._playlist_visible_to(meta, 'p-emma')
+        assert not server._playlist_visible_to(meta, 'p-kid1')
 
 
 # ─────────────────────────── request queue (P3) ──────────────────────────────
@@ -204,15 +204,15 @@ class TestRequests:
 class TestMessages:
     def test_post_and_visibility(self, isolated_paths):
         """direct messages are visible to sender and recipient only"""
-        server._post_message(from_member='p-jack', to_member='p-andy',
+        server._post_message(from_member='p-jack', to_member='p-parent',
                              scope='direct', text='pregame')
         msgs = server._read_messages()
         assert len(msgs) == 1
         m = msgs[0]
-        assert server._message_visible_to(m, 'p-andy')
+        assert server._message_visible_to(m, 'p-parent')
         assert server._message_visible_to(m, 'p-jack')
-        assert not server._message_visible_to(m, 'p-emma')
+        assert not server._message_visible_to(m, 'p-kid1')
 
     def test_household_visible_to_all(self):
-        m = {'scope': 'household', 'fromMemberId': 'p-andy'}
-        assert server._message_visible_to(m, 'p-emma')
+        m = {'scope': 'household', 'fromMemberId': 'p-parent'}
+        assert server._message_visible_to(m, 'p-kid1')

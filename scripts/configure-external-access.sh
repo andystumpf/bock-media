@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Run ON THE BOCK MEDIA SERVER (192.168.1.187), not on your phone/Mac.
+# Run ON THE BOCK MEDIA SERVER, not on your phone/Mac.
 # Opens OS firewall for router port-forwards and verifies the backend is listening.
 #
 # Usage (on server):
-#   cd /home/plex/Documents/github/ourMedia
+#   cd ~/bock-media
 #   sudo bash scripts/configure-external-access.sh
 
 set -euo pipefail

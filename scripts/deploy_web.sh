@@ -4,8 +4,8 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-NAS="${NAS:-plex@192.168.1.187}"
-REPO_REMOTE="${REPO_REMOTE:-/home/plex/Documents/github/ourMedia}"
+NAS="${NAS:-user@your-server.local}"
+REPO_REMOTE="${REPO_REMOTE:-~/bock-media}"
 PUBLIC="$REPO_ROOT/public"
 REMOTE_PUBLIC="${REPO_REMOTE}/public"
 

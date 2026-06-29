@@ -10,8 +10,8 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
 
-DATA_DIR = os.environ.get('OURMEDIA_DATA_DIR', '/home/plex/.bockmedia')
-MUSIC_ROOT = os.environ.get('OURMEDIA_MUSIC_ROOT', '/mnt/bock/Music')
+DATA_DIR = os.environ.get('OURMEDIA_DATA_DIR', os.path.join(os.path.dirname(__file__), '..', 'fixtures', 'demo-data'))
+MUSIC_ROOT = os.environ.get('OURMEDIA_MUSIC_ROOT', os.path.join(os.path.dirname(__file__), '..', 'fixtures', 'demo-data', 'music'))
 XML = os.path.join(DATA_DIR, 'ServerPlaylists.xml')
 FILE_M3U = os.path.join(MUSIC_ROOT, 'exportedPlaylists', 'Best ITALIAN hits of all time.m3u')
 PLEX_M3U = os.path.join(MUSIC_ROOT, 'exportedPlaylists', 'plex', 'Best ITALIAN hits of all time__.2118385.m3u')

@@ -30,8 +30,8 @@ Config (env, with defaults):
   OURMEDIA_PLEX_URL          http://localhost:32400
   OURMEDIA_PLEX_TOKEN        (else read from OURMEDIA_PLEX_PREFS)
   OURMEDIA_PLEX_PREFS        /var/lib/plexmediaserver/.../Preferences.xml
-  OURMEDIA_DATA_DIR          /home/plex/.bockmedia      (holds ServerPlaylists.xml)
-  OURMEDIA_MUSIC_ROOT        /mnt/bock/Music
+  OURMEDIA_DATA_DIR          fixtures/demo-data      (holds ServerPlaylists.xml)
+  OURMEDIA_MUSIC_ROOT        fixtures/demo-data/music
   OURMEDIA_PLEX_PLAYLIST_DIR <MUSIC_ROOT>/exportedPlaylists/plex  (.m3u output)
 """
 import argparse
@@ -53,8 +53,8 @@ if REPO_ROOT not in sys.path:
 from playlist_xml_lock import playlist_xml_lock
 
 PLEX_URL   = os.environ.get('OURMEDIA_PLEX_URL', 'http://localhost:32400').rstrip('/')
-DATA_DIR   = os.environ.get('OURMEDIA_DATA_DIR', '/home/plex/.bockmedia')
-MUSIC_ROOT = os.environ.get('OURMEDIA_MUSIC_ROOT', '/mnt/bock/Music')
+DATA_DIR   = os.environ.get('OURMEDIA_DATA_DIR', os.path.join(os.path.dirname(__file__), '..', 'fixtures', 'demo-data'))
+MUSIC_ROOT = os.environ.get('OURMEDIA_MUSIC_ROOT', os.path.join(os.path.dirname(__file__), '..', 'fixtures', 'demo-data', 'music'))
 PLAYLIST_DIR = os.environ.get(
     'OURMEDIA_PLEX_PLAYLIST_DIR', os.path.join(MUSIC_ROOT, 'exportedPlaylists', 'plex'))
 PREFS_PATH = os.environ.get(

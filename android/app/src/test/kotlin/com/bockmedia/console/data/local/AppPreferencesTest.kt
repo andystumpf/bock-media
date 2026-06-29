@@ -8,8 +8,8 @@ class AppPreferencesTest {
 
     @Test
     fun normalizeUrl_addsHttp() {
-        assertTrue(AppPreferences.isValidUrl("192.168.1.187:3001"))
-        assertTrue(AppPreferences.normalizeUrl("192.168.1.187:3001").startsWith("http://"))
+        assertTrue(AppPreferences.isValidUrl("192.168.1.100:3001"))
+        assertTrue(AppPreferences.normalizeUrl("192.168.1.100:3001").startsWith("http://"))
     }
 
     @Test

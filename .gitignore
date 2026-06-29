@@ -35,6 +35,7 @@ health_state.json
 
 # Local secrets (use *.example.json templates)
 config.json
+!fixtures/demo-data/config.json
 skill/account-linking.json
 
 # Extracted / cached artwork (can be regenerated)

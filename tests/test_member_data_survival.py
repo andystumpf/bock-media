@@ -22,7 +22,7 @@ def test_rebind_client_from_phone(tmp_path, monkeypatch):
     monkeypatch.setattr(server, 'HOUSEHOLD_PATH', str(tmp_path / 'household.json'))
     phone = 'abc123deadbeef'
     (tmp_path / 'household.json').write_text(json.dumps({
-        'members': [{'id': 'p-andy', 'name': 'Andy', 'role': 'parent'}],
+        'members': [{'id': 'p-parent', 'name': 'Parent', 'role': 'parent'}],
         'clientBindings': {},
         'deviceOwners': {},
         'phoneBindings': {phone: 'p-andy'},

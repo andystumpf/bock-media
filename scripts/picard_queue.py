@@ -22,7 +22,7 @@ HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(HERE, 'scripts'))
 from lib import tag_io  # noqa: E402
 
-DB_PATH = os.environ.get('OURMEDIA_DB_PATH', '/mnt/bock/Music/music_organizer.db')
+DB_PATH = os.environ.get('OURMEDIA_DB_PATH', os.path.join(os.path.dirname(__file__), '..', 'fixtures', 'demo-data', 'songs_cache.db'))
 OUT_DIR = os.environ.get('OURMEDIA_DATA_DIR', os.path.expanduser('~/.bockmedia'))
 
 AUDIO_WHERE = '(' + ' OR '.join(f"LOWER(path) LIKE '%{ext}'" for ext in sorted(tag_io.SUPPORTED)) + ')'

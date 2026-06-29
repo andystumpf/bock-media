@@ -5,7 +5,7 @@ import server
 def _seed_household(isolated_paths):
     server._save_household({
         'members': [
-            {'id': 'p-andy', 'name': 'Andy', 'role': 'parent', 'pinHash': server._hash_pin('1234')},
+            {'id': 'p-parent', 'name': 'Parent', 'role': 'parent', 'pinHash': server._hash_pin('1234')},
             {'id': 'p-jack', 'name': 'Jack', 'role': 'kid'},
         ],
         'clientBindings': {},

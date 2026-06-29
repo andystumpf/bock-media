@@ -6,7 +6,7 @@ Native SwiftUI client for the Bock Media server. Mirrors the Android app (`andro
 
 - **macOS** with **Xcode 15+** (full Xcode, not Command Line Tools only)
 - iOS 17+ device or simulator
-- Bock Media server on LAN (`http://192.168.1.187:3001`) or external URL
+- Bock Media server on LAN (`http://127.0.0.1:3001`) or your external URL
 
 ## Point Xcode at the full app (once)
 
@@ -39,7 +39,7 @@ Optional LAN/external URLs can be pre-filled in `ios/Config.xcconfig` (from `Con
 
 ## App Transport Security
 
-HTTP to the home server is allowed via `NSAllowsLocalNetworking` and an exception for `192.168.1.187` in `project.yml` / `Info.plist`.
+HTTP to the home server is allowed via `NSAllowsLocalNetworking` in `project.yml` / `Info.plist`.
 
 ## Icons
 

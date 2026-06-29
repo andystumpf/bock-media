@@ -107,7 +107,7 @@ struct FamilyView: View {
                 }
             }
             HStack {
-                TextField("Name (e.g. Emma)", text: $newMemberName)
+                TextField("Name (e.g. Teen)", text: $newMemberName)
                 Picker("", selection: $newMemberRole) {
                     Text("Kid").tag("kid")
                     Text("Parent").tag("parent")
@@ -150,7 +150,7 @@ struct FamilyView: View {
         } header: {
             Text("Rooms — owner & kid-safe")
         } footer: {
-            Text("Assign a room to a person (e.g. Office → Andy). Leave community rooms (Kitchen, Living Room, Basement, Garage) unattributed.")
+            Text("Assign a room to a person (e.g. Office → Parent). Leave community rooms (Kitchen, Living Room, Basement, Garage) unattributed.")
         }
     }
 

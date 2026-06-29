@@ -112,7 +112,7 @@ Parallel stores (not m3u):
 
 ## 4. Database schema
 
-Add tables to **`OURMEDIA_DB_PATH`** (default `/mnt/bock/Music/music_organizer.db`), alongside `songs_cache`.
+Add tables to **`OURMEDIA_DB_PATH`** (default `fixtures/demo-data/songs_cache.db`), alongside `songs_cache`.
 
 ### 4.1 `playlist_sources`
 

@@ -773,7 +773,7 @@ class TestAppDownload:
         import json
         cfg = isolated_paths / 'state' / 'config.json'
         cfg.write_text(json.dumps({
-            'appDownload': {'username': 'morejava', 'password': 'test-dl-pass'},
+            'appDownload': {'username': 'demo', 'password': 'test-dl-pass'},
         }))
         assert client.get('/app').status_code == 401
         assert client.get('/download/bockmedia-console.apk').status_code == 401
@@ -784,14 +784,14 @@ class TestAppDownload:
         import json
         cfg = isolated_paths / 'state' / 'config.json'
         cfg.write_text(json.dumps({
-            'appDownload': {'username': 'morejava', 'password': 'test-dl-pass'},
+            'appDownload': {'username': 'demo', 'password': 'test-dl-pass'},
             'publicUrl': 'https://alexa.example.test',
         }))
         apk = isolated_paths / 'mma' / 'bockmedia-console.apk'
         apk.write_bytes(b'PK\x03\x04fake')
         ipa = isolated_paths / 'mma' / 'bockmedia-console.ipa'
         ipa.write_bytes(b'PK\x03\x04fake-ipa')
-        auth = ('morejava', 'test-dl-pass')
+        auth = ('demo', 'test-dl-pass')
         rv = client.get('/app', auth=auth)
         assert rv.status_code == 200
         assert b'Download APK' in rv.data

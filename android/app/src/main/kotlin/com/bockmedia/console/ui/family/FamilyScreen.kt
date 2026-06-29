@@ -134,7 +134,7 @@ fun FamilyScreen(repository: BockMediaRepository) {
             item {
                 SectionCard("Rooms — owner & kid-safe") {
                     Text(
-                        "Assign a room to a person (e.g. Office → Andy). Leave community rooms unattributed.",
+                        "Assign a room to a person (e.g. Office → Parent). Leave community rooms unattributed.",
                         style = MaterialTheme.typography.bodySmall,
                         color = BockMuted,
                     )
