@@ -1,1 +1,23 @@
-{"members": [{"id": "p-parent", "name": "Parent", "role": "parent"}, {"id": "p-teen", "name": "Teen", "role": "kid"}, {"id": "p-guest", "name": "Guest", "role": "guest"}], "clientBindings": {"client-1740ea8b-5749-4d37-8828-ade869f101bf": "p-parent"}, "deviceOwners": {"demo-kitchen": "p-parent", "demo-office": "p-teen"}, "phoneBindings": {"403828992aa8bb7e777ee613c66f9d6a9e6eaa7ac2a8ca92bedd73b466875524": "p-parent"}}
+{
+  "members": [
+    {
+      "id": "p-parent",
+      "name": "Parent",
+      "role": "parent"
+    },
+    {
+      "id": "p-teen",
+      "name": "Teen",
+      "role": "kid"
+    },
+    {
+      "id": "p-guest",
+      "name": "Guest",
+      "role": "guest"
+    }
+  ],
+  "deviceOwners": {
+    "demo-kitchen": "p-parent",
+    "demo-office": "p-teen"
+  }
+}

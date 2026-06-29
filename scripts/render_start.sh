@@ -4,20 +4,21 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-export OURMEDIA_DATA_DIR="${OURMEDIA_DATA_DIR:-$ROOT/demo-data}"
-export OURMEDIA_DB_PATH="${OURMEDIA_DB_PATH:-$OURMEDIA_DATA_DIR/music_organizer.db}"
+export OURMEDIA_DATA_DIR="${OURMEDIA_DATA_DIR:-$ROOT/fixtures/demo-data}"
+export OURMEDIA_DB_PATH="${OURMEDIA_DB_PATH:-$OURMEDIA_DATA_DIR/songs_cache.db}"
 export OURMEDIA_MUSIC_ROOT="${OURMEDIA_MUSIC_ROOT:-$OURMEDIA_DATA_DIR/music}"
 
 if [[ ! -f "$OURMEDIA_DB_PATH" ]]; then
   echo "Seeding demo data (first boot)…"
-  python scripts/seed_demo_data.py --base "$OURMEDIA_DATA_DIR" --state-dir "$ROOT" --config --alexa-remote
+  python3 scripts/seed_demo_library.py
 fi
 
-if [[ -n "${RENDER_EXTERNAL_URL:-}" ]] && [[ -f "$ROOT/config.json" ]]; then
-  export ROOT
-  python - <<'PY'
+cfg_path="$OURMEDIA_DATA_DIR/config.json"
+if [[ -n "${RENDER_EXTERNAL_URL:-}" ]] && [[ -f "$cfg_path" ]]; then
+  export cfg_path
+  python3 - <<'PY'
 import json, os
-path = os.path.join(os.environ["ROOT"], "config.json")
+path = os.environ["cfg_path"]
 with open(path) as f:
     cfg = json.load(f)
 cfg["publicUrl"] = os.environ["RENDER_EXTERNAL_URL"].rstrip("/")
@@ -27,4 +28,4 @@ print("Set config publicUrl from RENDER_EXTERNAL_URL")
 PY
 fi
 
-exec python server.py
+exec python3 server.py

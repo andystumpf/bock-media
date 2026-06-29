@@ -36,6 +36,12 @@ class TestBrowse:
         assert 'albums' in data
         assert isinstance(data['songs'], int)
 
+    def test_summary_external_public_console(self, client, monkeypatch):
+        """Render health checks use a public Host; demo mode must allow /api/summary."""
+        monkeypatch.setenv('OURMEDIA_ALLOW_PUBLIC_CONSOLE', 'true')
+        rv = client.get('/api/summary', headers={'Host': 'bock-media.onrender.com'})
+        assert rv.status_code == 200
+
     def test_artists_paginated(self, client):
         """/api/artists returns paginated rows + total"""
         data = client.get('/api/artists?page=1&limit=3').get_json()

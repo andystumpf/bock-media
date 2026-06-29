@@ -410,6 +410,11 @@ def _allow_open_lan_api():
 def _allow_open_lan_media():
     return _cfg_flag('mobileApi', 'allowOpenLanMedia')
 
+def _allow_public_console():
+    """Public demo (e.g. Render blueprint) — browse UI + read APIs without auth."""
+    v = os.environ.get('OURMEDIA_ALLOW_PUBLIC_CONSOLE', '').strip().lower()
+    return v in ('1', 'true', 'yes', 'on')
+
 def _credentials_configured():
     if get_pref('WebPassword', '').strip():
         return True
@@ -875,6 +880,11 @@ def check_auth():
     is_alexa_tunnel_path = any(request.path.startswith(p) for p in _ALEXA_TUNNEL_PREFIXES)
     external = _is_external_request()
     tunnel = _is_tunnel_request()
+
+    if external and not tunnel and _allow_public_console():
+        if any(request.path.startswith(p) for p in ('/alexa', '/music', '/oauth/')):
+            return _forbidden('Alexa and OAuth endpoints are not available on the public demo')
+        return None
 
     # Direct port-forward / public-IP access (:3001) — never expose Alexa paths or
     # anonymous streams. Require admin Basic auth and/or mobileApi Bearer token.

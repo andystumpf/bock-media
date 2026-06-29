@@ -8,7 +8,7 @@ services:
     runtime: python
     plan: free
     branch: main
-    buildCommand: pip install -r requirements.txt && python3 scripts/seed_demo_library.py
+    buildCommand: pip install -r requirements.txt && python3 scripts/seed_demo_library.py && python3 scripts/verify_web_assets.py
     startCommand: bash scripts/render_start.sh
     healthCheckPath: /api/summary
     envVars:
