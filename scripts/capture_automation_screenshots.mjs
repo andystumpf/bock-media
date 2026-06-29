@@ -16,6 +16,7 @@ import http from 'node:http';
 
 const REPO = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = path.join(REPO, 'img', 'screenshots');
+const DATA_DIR = process.env.OURMEDIA_DATA_DIR || path.join(REPO, 'fixtures', 'demo-data');
 const port = Number(process.argv.find((a, i) => process.argv[i - 1] === '--port') || 3033);
 const base = `http://127.0.0.1:${port}`;
 
@@ -52,16 +53,16 @@ async function main() {
       env: {
         ...process.env,
         PORT: String(port),
-        OURMEDIA_DATA_DIR: path.join(REPO, 'demo-data'),
-        OURMEDIA_DB_PATH: path.join(REPO, 'demo-data', 'music_organizer.db'),
-        OURMEDIA_MUSIC_ROOT: path.join(REPO, 'demo-data', 'music'),
+        OURMEDIA_DATA_DIR: DATA_DIR,
+        OURMEDIA_DB_PATH: path.join(DATA_DIR, 'music_organizer.db'),
+        OURMEDIA_MUSIC_ROOT: path.join(DATA_DIR, 'music'),
       },
       stdio: 'ignore',
     });
     await waitForServer();
   }
 
-  const cfgPath = path.join(REPO, 'config.json');
+  const cfgPath = path.join(DATA_DIR, 'config.json');
   const cfgBackup = fs.existsSync(cfgPath) ? fs.readFileSync(cfgPath, 'utf8') : null;
   const browser = await chromium.launch();
 
@@ -72,7 +73,7 @@ async function main() {
   }
 
   // Setup required (no alexaRemote; hide seeded automations for empty state)
-  const autoPath = path.join(REPO, 'automations.json');
+  const autoPath = path.join(DATA_DIR, 'automations.json');
   const autoBackup = fs.existsSync(autoPath) ? fs.readFileSync(autoPath, 'utf8') : null;
   if (autoBackup) fs.unlinkSync(autoPath);
   if (cfgBackup) {

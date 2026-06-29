@@ -1,2 +1,11 @@
-<?xml version='1.0' encoding='utf-8'?>
-<WatchFolders />
+<?xml version="1.0" encoding="utf-8"?>
+<WatchFolders>
+ <WatchFolder>
+  <Guid>b620c6fe-5311-448e-b4bc-c4f56eaf5c2e</Guid>
+  <Path>fixtures/demo-data/music</Path>
+  <Label>Music Library</Label>
+  <Count>58</Count>
+  <Errors>0</Errors>
+  <Type>music</Type>
+ </WatchFolder>
+</WatchFolders>

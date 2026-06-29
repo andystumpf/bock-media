@@ -1,2 +1,22 @@
-<?xml version='1.0' encoding='utf-8'?>
-<Preferences><Label>Bock Media Demo</Label><DefaultPlaylist>Road Trip Demo</DefaultPlaylist><RequirePassword>false</RequirePassword><WebUsername>demo</WebUsername><WebPassword /></Preferences>
+<?xml version="1.0" encoding="utf-8"?>
+<Preferences>
+ <Label>Bock Media</Label>
+ <PairedUser>demo</PairedUser>
+ <DefaultPlaylist>Morning Coffee</DefaultPlaylist>
+ <DefaultPlaylistShuffle>true</DefaultPlaylistShuffle>
+ <WatchFolderPollHours>6</WatchFolderPollHours>
+ <TranscodeBitrate>320</TranscodeBitrate>
+ <FFmpegLocation>/usr/bin/ffmpeg</FFmpegLocation>
+ <FlacSupport>true</FlacSupport>
+ <ReplayGain>false</ReplayGain>
+ <RequirePassword>false</RequirePassword>
+ <AutoImportPlaylists>true</AutoImportPlaylists>
+ <SuppressAutoScan>false</SuppressAutoScan>
+ <SendAlbumArt>true</SendAlbumArt>
+ <SendMetadata>true</SendMetadata>
+ <VerboseLogging>false</VerboseLogging>
+ <ScanIgnoreFiles>false</ScanIgnoreFiles>
+ <BypassProxy>false</BypassProxy>
+ <AllowExternalAccess>true</AllowExternalAccess>
+ <WebPassword></WebPassword>
+</Preferences>

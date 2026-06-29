@@ -56,6 +56,7 @@ __pycache__/
 .pytest_cache/
 
 # Node / UI tests
+node_modules/
 tests/ui/node_modules/
 tests/ui/package-lock.json
 
@@ -71,6 +72,8 @@ android/build/
 android/.idea/
 android/*.iml
 
-# Editor
-.cursor/
+fixtures/demo-data/client_prefs.json
+fixtures/demo-data/daily_playlists.json
+fixtures/demo-data/playlist_cover_cache.json
+fixtures/demo-data/.ServerPlaylists.xml.lock
 *.swp

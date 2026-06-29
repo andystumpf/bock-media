@@ -51,25 +51,21 @@ It might take a min to spin up.  Give it time!
 > (`scripts/seed_demo_data.py` or `scripts/seed_demo_library.py`) — the library,
 > devices, and listening history are entirely fictional.
 
-### Home, mobile & family (latest)
+### Home feed & Now Playing
 
-| Web home feed | Now Playing | Android home |
+| Home | Now Playing | Your Library |
 |:---:|:---:|:---:|
-| ![Web home](docs/screenshots/web/01-home.png) | ![Now Playing](docs/screenshots/web/02-now-playing.png) | ![Android home](docs/screenshots/android/01-home.png) |
-
-| Family profiles | App download (`/app`) |
-|:---:|:---:|
-| ![Family](docs/screenshots/web/03-family.png) | ![App download](docs/screenshots/web/04-app-download.png) |
+| ![Home](img/screenshots/dashboard.png) | ![Now Playing](img/screenshots/nowplaying.png) | ![Library](img/screenshots/library.png) |
 
 ### Dashboard
-At-a-glance library counts, a copy-pasteable voice-command cheat sheet, and recent Alexa play requests. The **Home** tab adds Spotify-style mixes, genre radio, and mood rows (see gallery above).
+The **Home** tab shows Spotify-style mixes, genre radio, and mood rows (above). The classic dashboard counts and voice cheat sheet live under the same route when you scroll or use older nav links.
 
-![Dashboard](docs/screenshots/web/01-home.png)
+![Home feed](img/screenshots/dashboard.png)
 
 ### Now Playing
 Live per-device playback pulled from Alexa `AudioPlayer` events, with a paused badge, a sleep-timer control, and the full streaming history below.
 
-![Now Playing](docs/screenshots/web/02-now-playing.png)
+![Now Playing](img/screenshots/nowplaying.png)
 
 ### Analytics
 Chart.js dashboards over your listening history: activity over time, hour-of-day and day-of-week, a listening heatmap, top artists/albums/tracks/devices, genres, and decades.
@@ -84,12 +80,19 @@ Every playlist Bock Media has indexed (from `.m3u`/`.m3u8`/`.pls` files or synce
 ### Songs / Albums / Artists
 Fast, paginated, searchable browsers over the `songs_cache` index.
 
+![Your Library](img/screenshots/library.png)
+
 ![Songs](img/screenshots/songs.png)
 
 ### Alexa Devices
 Every Echo that has streamed via Bock Media. Rename them, merge duplicates left behind by Alexa device-id rotation, and build multi-room device groups.
 
 ![Alexa Devices](img/screenshots/devices.png)
+
+### Family profiles
+Household members, room ownership, and kid-safe approval — see [`docs/SETUP.md`](docs/SETUP.md).
+
+![Family](img/screenshots/family.png)
 
 ### Routines builder
 Amazon doesn't let apps create Routines, so this builds the exact wording for you to paste into the Alexa app — enabling hands-free, no-"ask" playback.
@@ -541,6 +544,8 @@ generate a phrase and paste it into an Alexa Routine.
 │   └── catalog_playlists.example.json
 ├── scripts/
 │   ├── seed_demo_data.py         # generate the demo library (for screenshots/trying it)
+│   ├── seed_demo_library.py      # lighter committed fixture seed
+│   ├── capture_readme_screenshots.mjs  # regenerate img/screenshots/*.png
 │   ├── capture_automation_screenshots.mjs  # regenerate Automation README images
 │   ├── sync_plex_playlists.py    # Plex → Bock Media playlist sync
 │   ├── sync_alexa_public_url.py  # resync skill endpoint via SMAPI
