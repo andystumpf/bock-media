@@ -24,7 +24,10 @@
     "redirectUriPrefixes": [
       "https://alexa.amazon.com/",
       "https://layla.amazon.com/",
-      "https://pitangui.amazon.com/"
+      "https://pitangui.amazon.com/",
+      "https://alexa.amazon.co.uk/",
+      "https://layla.amazon.co.uk/",
+      "https://pitangui.amazon.co.uk/"
     ]
   },
   "claude": {
@@ -42,7 +45,7 @@
     "provider": ""
   },
   "alexaRemote": {
-    "_comment": "Optional. Enables 'Play on device' in the web UI via the unofficial Alexa API (alexapy). Use Settings → Start browser login, or scripts/alexa_login.py --proxy. For remote login, forward TCP 3005 and set loginProxyHost to your public IP (e.g. 142.56.8.193).",
+    "_comment": "Optional. Enables 'Play on device' in the web UI via the unofficial Alexa API (alexapy). Use Settings → Start browser login, or scripts/alexa_login.py --proxy. For remote login, forward TCP 3005 and set loginProxyHost to your public IP (e.g. 142.56.8.193). Set url to the Amazon domain where your Echo account lives (amazon.com, amazon.co.uk, amazon.de, …). US and UK installs use the same code — different config only.",
     "url": "amazon.com",
     "email": "SET_LOCALLY",
     "password": "SET_LOCALLY",

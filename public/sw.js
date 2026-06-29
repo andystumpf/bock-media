@@ -1,6 +1,6 @@
 /* Bock Media shell cache — API responses are never cached here. */
-const CACHE = 'bockmedia-shell-v5';
-const SHELL = ['/', '/index.html', '/css/style.css', '/css/shell.css?v=21', '/js/app.js?v=65', '/manifest.json'];
+const CACHE = 'bockmedia-shell-v9';
+const SHELL = ['/', '/index.html', '/css/style.css', '/css/shell.css?v=24', '/js/app.js?v=70', '/js/boot.js?v=4', '/js/homeFeed.js?v=4', '/manifest.json'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(

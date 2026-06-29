@@ -122,6 +122,7 @@ fun NowPlayingScreen(
         PlaybackFocus.syncPendingFocus(np.items, alexaDevices)
         for (dev in np.items) {
             if (!canControlDevice(dev, alexaDevices, controlsAvailable, remoteOk)) continue
+            shuffleOn[dev.deviceId] = dev.shuffle
             if (volumes.containsKey(dev.deviceId)) continue
             val serial = resolveSerial(dev, alexaDevices) ?: continue
             runCatching { volumes[dev.deviceId] = repository.getVolume(serial).volume }

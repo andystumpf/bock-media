@@ -491,8 +491,14 @@ class BockMediaRepository(
         return resolveAlbumArtUrl(album.name, album.artist)
     }
 
-    suspend fun songs(page: Int, search: String, artist: String? = null, album: String? = null, limit: Int = 100) =
-        api().songs(page = page, search = search, artist = artist, album = album, limit = limit)
+    suspend fun songs(
+        page: Int,
+        search: String = "",
+        artist: String? = null,
+        album: String? = null,
+        genre: String? = null,
+        limit: Int = 100,
+    ) = api().songs(page = page, search = search, artist = artist, album = album, genre = genre, limit = limit)
 
     private val trackYearCache = java.util.concurrent.ConcurrentHashMap<String, Int>()
 

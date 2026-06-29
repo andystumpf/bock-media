@@ -69,6 +69,23 @@ class TestBrowse:
         if data['items']:
             assert 'year' in data['items'][0]
 
+    def test_artists_sort_tracks(self, client):
+        data = client.get('/api/artists?page=1&limit=3&sort=tracks&order=desc').get_json()
+        assert 'items' in data
+
+    def test_albums_sort_added(self, client):
+        data = client.get('/api/albums?page=1&limit=3&sort=added&order=desc').get_json()
+        assert 'items' in data
+
+    def test_songs_sort_title(self, client):
+        data = client.get('/api/songs?page=1&limit=3&sort=title&order=asc').get_json()
+        assert 'items' in data
+
+    def test_genres_sort_name(self, client):
+        data = client.get('/api/genres?limit=5&sort=name&order=asc').get_json()
+        assert 'items' in data
+        assert len(data['items']) <= 5
+
     def test_genres_list(self, client):
         data = client.get('/api/genres?limit=5').get_json()
         assert 'items' in data and 'total' in data

@@ -12,16 +12,16 @@
   <link rel="icon" type="image/png" sizes="32x32" href="img/icon-32.png">
   <link rel="apple-touch-icon" sizes="180x180" href="img/icon-180.png">
   <link rel="manifest" href="manifest.json">
-  <link rel="preload" href="css/shell.css?v=21" as="style">
+  <link rel="preload" href="css/shell.css?v=24" as="style">
   <link rel="preload" href="js/webCache.js?v=2" as="script">
   <link rel="preload" href="js/boot.js?v=1" as="script">
-  <link rel="stylesheet" href="css/shell.css?v=21">
+  <link rel="stylesheet" href="css/shell.css?v=24">
   <link rel="stylesheet" href="css/style.css" media="print" onload="this.media='all'">
   <link rel="stylesheet" href="css/dark-theme.css?v=2" media="print" onload="this.media='all'">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" media="print" onload="this.media='all'">
   <noscript><link rel="stylesheet" href="css/style.css"><link rel="stylesheet" href="css/dark-theme.css?v=2"><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css"></noscript>
 </head>
-<body>
+<body class="route-home">
 <div id="app-shell" class="spotify-app">
 
   <!-- Desktop left sidebar (Spotify Web) -->
@@ -63,7 +63,6 @@
       <a href="#analytics" class="drawer-link"><i class="fa fa-chart-bar"></i> Analytics</a>
       <a href="#watchfolders" class="drawer-link"><i class="fa fa-folder-open"></i> Watch Folders</a>
       <a href="#automation" class="drawer-link"><i class="fa fa-clock"></i> Automations</a>
-      <a href="#download" class="drawer-link"><i class="fa fa-mobile-screen"></i> Mobile app</a>
       <a href="#settings" class="drawer-link"><i class="fa fa-cog"></i> Settings</a>
     </nav>
   </aside>
@@ -75,6 +74,10 @@
         <img src="img/bock-logo-mark.png?v=2" alt="" class="spotify-logo-mark" width="28" height="28">
         <span>Bock Media</span>
       </a>
+      <div class="topbar-app-links" aria-label="Download mobile app">
+        <a id="mobile-dl-android" class="topbar-app-dl" href="#dashboard" title="Download Android app" aria-label="Download Android app"><i class="fa-brands fa-android" aria-hidden="true"></i></a>
+        <a id="mobile-dl-ios" class="topbar-app-dl" href="#dashboard" title="Install iOS app" aria-label="Install iOS app"><i class="fa-brands fa-apple" aria-hidden="true"></i></a>
+      </div>
     </div>
     <div id="global-banner"></div>
     <header id="spotify-topbar" class="spotify-topbar">
@@ -90,6 +93,10 @@
         </form>
       </div>
       <div class="topbar-actions">
+        <div class="topbar-app-links" aria-label="Download mobile app">
+          <a id="topbar-dl-android" class="topbar-app-dl" href="#dashboard" title="Download Android app" aria-label="Download Android app"><i class="fa-brands fa-android" aria-hidden="true"></i></a>
+          <a id="topbar-dl-ios" class="topbar-app-dl" href="#dashboard" title="Install iOS app" aria-label="Install iOS app"><i class="fa-brands fa-apple" aria-hidden="true"></i></a>
+        </div>
         <button type="button" class="topbar-action-btn" id="topbar-settings" aria-label="Settings"><i class="fa fa-gear"></i></button>
         <button type="button" class="topbar-profile-btn" id="topbar-profile" aria-label="Profile"><span class="topbar-profile-avatar">B</span></button>
       </div>
@@ -159,10 +166,10 @@
 </div>
 
 <script src="js/webCache.js?v=2"></script>
-<script src="js/boot.js?v=3"></script>
-<script src="js/homeFeed.js?v=3"></script>
-<script src="js/webPlayback.js?v=3"></script>
-<script src="js/app.js?v=65"></script>
-<script src="js/clientPrefsSync.js?v=3"></script>
+<script src="js/boot.js?v=4"></script>
+<script src="js/homeFeed.js?v=4"></script>
+<script src="js/webPlayback.js?v=4"></script>
+<script src="js/app.js?v=70"></script>
+<script src="js/clientPrefsSync.js?v=4"></script>
 </body>
 </html>

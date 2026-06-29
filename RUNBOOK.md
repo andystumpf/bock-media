@@ -144,7 +144,10 @@ Lives at repo root, **git-ignored**. Template: `config.example.json`.
     "redirectUriPrefixes": [
       "https://alexa.amazon.com/",
       "https://layla.amazon.com/",
-      "https://pitangui.amazon.com/"
+      "https://pitangui.amazon.com/",
+      "https://alexa.amazon.co.uk/",
+      "https://layla.amazon.co.uk/",
+      "https://pitangui.amazon.co.uk/"
     ]
   }
 }
@@ -165,9 +168,21 @@ Amazon has **no official API** to start playback on a chosen Echo from a skill/M
 - **`scripts/alexa_login.py`** — one-time auth, writes session to `<DATA_DIR>/.storage/alexa_media.<email>.pickle`. Modes: `--proxy` (used — browser login), `--cookies <file>` (insufficient — see below), bare (password form login).
 - **Endpoints (`server.py`):** `GET /api/alexa_remote/status` (`{available,configured}`), `GET /api/alexa_remote/devices`, `POST /api/playlists/play` (`{id|name, device, shuffle}`).
 - **Frontend:** per-row ▶ → device-picker modal (`openPlayMenu` in `public/js/app.js`); button shows only when `status.configured`.
-- **Config:** `config.json` → `alexaRemote {url:"amazon.com", email, password, otpSecret}`.
+- **Config:** `config.json` → `alexaRemote {url:"amazon.com", email, password, otpSecret}`. For UK accounts use `"url": "amazon.co.uk"` (same code, per-install config). See `docs/AMAZON_UK.md`.
+
+### Amazon UK (`amazon.co.uk`)
+
+Supported via config — does not affect US installs:
+
+1. Set `alexaRemote.url` to `"amazon.co.uk"`.
+2. Add UK entries to `mspOauth.redirectUriPrefixes` (keep US entries if needed).
+3. Run browser login: `scripts/alexa_login.py --proxy` while signed in on the UK Alexa site.
+4. Ensure the skill is available in **GB** in Developer Console if Echos are in the UK.
+
+Full steps: **`docs/AMAZON_UK.md`**.
 
 ### Exact working settings (2026-06-01)
+
 - **Dependency (pinned):** `pip3 install --user alexapy "aiohttp>=3.10,<3.11"`. The pin is **mandatory** — alexapy 1.26.9 (last py3.10 build) imports `ALLOWED_CLOSE_CODES`, removed in aiohttp ≥3.11; without it `import alexapy` fails in `alexawebsocket`. Installed: alexapy 1.26.9, aiohttp 3.10.11. Service runs as `plex`, so `--user` is on its path.
 - **Auth = browser proxy login** (account uses a **passkey**; the form-login script and cookie-import both fail — modern Amazon requires an OAuth token that's only minted during a real login/device-registration, which raw web cookies can't provide). A passkey was un-automatable, so a **password was added** to the Amazon account (passkey kept) and:
   ```bash

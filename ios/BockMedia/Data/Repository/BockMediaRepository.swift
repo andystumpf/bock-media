@@ -715,6 +715,10 @@ final class BockMediaRepository: ObservableObject {
             localTracks.append(LocalTrack(path: path, title: t.title ?? path, artist: t.artist, album: t.album, streamURL: url, localFileURL: nil))
         }
         guard !localTracks.isEmpty else { return }
+        LocalPlaybackController.shared.setPlayContext(
+            repository: self,
+            target: .radio(displayTitle: title, seedKind: .artist, name: title, path: nil)
+        )
         try? await LocalPlaybackController.shared.playTracks(localTracks, shuffle: shuffle)
     }
 

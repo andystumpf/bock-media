@@ -13,9 +13,7 @@ import androidx.compose.ui.unit.dp
 import com.bockmedia.console.data.api.dto.HouseholdMember
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.local.ActiveProfileStore
-import com.bockmedia.console.local.ClientIdStore
 import com.bockmedia.console.local.ClientPrefsSync
-import com.bockmedia.console.local.InstallIdentity
 import kotlinx.coroutines.launch
 
 /** Blocks until the user picks a household profile or explicitly continues unattributed. */
@@ -59,6 +57,14 @@ fun ProfilePickerGate(
                             style = MaterialTheme.typography.bodyMedium,
                         )
                         Spacer(Modifier.height(12.dp))
+                        if (loading) {
+                            Box(
+                                Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                CircularProgressIndicator()
+                            }
+                        }
                         LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             items(members!!, key = { it.id }) { member ->
                                 ListItem(
@@ -71,20 +77,15 @@ fun ProfilePickerGate(
                                         .clickable(enabled = !loading) {
                                             loading = true
                                             scope.launch {
-                                                val previous = ActiveProfileStore.activeMemberId(context)
-                                                runCatching {
-                                                    repository.bindClient(
-                                                        ClientIdStore.clientId(context),
+                                                try {
+                                                    ClientPrefsSync.onActiveMemberChanged(
+                                                        context,
                                                         member.id,
-                                                        InstallIdentity.phoneId(context),
+                                                        ActiveProfileStore.activeMemberId(context),
                                                     )
+                                                } finally {
+                                                    loading = false
                                                 }
-                                                ClientPrefsSync.onActiveMemberChanged(
-                                                    context,
-                                                    member.id,
-                                                    previous,
-                                                )
-                                                loading = false
                                             }
                                         },
                                 )
@@ -98,16 +99,15 @@ fun ProfilePickerGate(
                         onClick = {
                             loading = true
                             scope.launch {
-                                ActiveProfileStore.chooseUnattributed(context)
-                                runCatching {
-                                    repository.bindClient(
-                                        ClientIdStore.clientId(context),
+                                try {
+                                    ClientPrefsSync.onActiveMemberChanged(
+                                        context,
                                         null,
-                                        InstallIdentity.phoneId(context),
+                                        ActiveProfileStore.activeMemberId(context),
                                     )
+                                } finally {
+                                    loading = false
                                 }
-                                ClientPrefsSync.pullAndApply(context)
-                                loading = false
                             }
                         },
                     ) {

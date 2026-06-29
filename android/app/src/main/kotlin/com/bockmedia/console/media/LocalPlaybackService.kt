@@ -35,7 +35,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 
@@ -148,7 +147,10 @@ class LocalPlaybackService : MediaSessionService() {
                 releasePlayers()
                 val start = intent.getIntExtra(EXTRA_START_INDEX, 0).coerceAtLeast(0)
                 val shuffle = intent.getBooleanExtra(EXTRA_SHUFFLE, false)
-                startPlayback(urls, start, shuffle)
+                serviceScope.launch {
+                    withContext(Dispatchers.IO) { ensurePlaybackHttpClient() }
+                    startPlayback(urls, start, shuffle)
+                }
             }
             ACTION_TOGGLE -> {
                 if (player == null) {
@@ -428,12 +430,14 @@ class LocalPlaybackService : MediaSessionService() {
         return exo
     }
 
+    private suspend fun ensurePlaybackHttpClient() {
+        if (playbackHttpClient != null) return
+        playbackHttpClient = BockMediaApp.get(this).buildPlaybackHttpClient()
+    }
+
     private fun buildExoPlayer(): ExoPlayer {
-        val httpClient = playbackHttpClient ?: runBlocking(Dispatchers.IO) {
-            BockMediaApp.get(this@LocalPlaybackService).buildPlaybackHttpClient().also {
-                playbackHttpClient = it
-            }
-        }
+        val httpClient = playbackHttpClient
+            ?: error("Playback HTTP client not ready — call ensurePlaybackHttpClient() first")
         val dataSourceFactory = DefaultDataSource.Factory(this, OkHttpDataSource.Factory(httpClient))
         return ExoPlayer.Builder(this)
             .setMediaSourceFactory(

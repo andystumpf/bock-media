@@ -49,10 +49,64 @@
   }
 
   async function apiGet(url) {
-    const res = await fetch(url, { credentials: 'same-origin' });
+    const fetchFn = typeof root.authFetch === 'function' ? root.authFetch : fetch;
+    const res = await fetchFn(url, { credentials: 'same-origin' });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
     return data;
+  }
+
+  async function apiPost(url, body) {
+    const fetchFn = typeof root.authFetch === 'function' ? root.authFetch : fetch;
+    const res = await fetchFn(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      credentials: 'same-origin',
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+    return data;
+  }
+
+  async function tryContinueAfterQueue() {
+    if (typeof root.ClientPrefsSync === 'undefined') return false;
+    const mode = root.ClientPrefsSync.getContinueAfterQueue?.() || 'off';
+    if (!mode || mode === 'off') return false;
+    const idx = currentIndex();
+    const track = state.tracks[idx];
+    if (!track?.path) return false;
+    const body = { maxTracks: 30 };
+    if (mode === 'artist_radio') {
+      body.seedKind = 'artist';
+      body.artist = track.artist || '';
+      if (!body.artist) return false;
+    } else if (state.playlistId) {
+      body.seedKind = 'playlist';
+      body.playlistId = state.playlistId;
+    } else {
+      body.seedKind = 'song';
+      body.path = track.path;
+    }
+    try {
+      const data = await apiPost('/api/resonance/radio', body);
+      const rows = data.tracks || [];
+      if (!rows.length) return false;
+      const existing = new Set(state.tracks.map((t) => t.path));
+      const extra = rows.map(trackFromRow).filter((t) => t && !existing.has(t.path));
+      if (!extra.length) return false;
+      state.tracks = state.tracks.concat(extra);
+      if (state.shuffle) {
+        state.order = shuffleOrder(state.tracks.length, idx);
+        state.orderPos = 0;
+      } else {
+        state.orderPos = idx + 1;
+      }
+      await loadIndex(currentIndex());
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   function trackFromRow(row) {
@@ -128,6 +182,21 @@
       });
       if (!tracks.length) throw new Error('No tracks for album');
       return { tracks, sourceLabel: `Album · ${opts.name}` };
+    }
+    if (kind === 'genre') {
+      const genre = (opts.name || '').trim();
+      if (!genre) throw new Error('Genre required');
+      let tracks = await resolvePagedSongs({ genre });
+      if (!tracks.length) throw new Error(`No tracks for ${genre}`);
+      const seed = tracks[Math.floor(Math.random() * tracks.length)];
+      if (seed?.path) {
+        try {
+          const data = await apiPost('/api/resonance/radio', { seedKind: 'song', path: seed.path, maxTracks: 80 });
+          const mixed = (data.tracks || []).map(trackFromRow).filter(Boolean);
+          if (mixed.length) tracks = mixed;
+        } catch (_) { /* fall back to genre pool */ }
+      }
+      return { tracks, sourceLabel: `${genre} Radio`, shuffle: true };
     }
     const one = trackFromRow({ path: opts.path, title: opts.name, artist: opts.artist });
     if (!one) throw new Error('Track path required');
@@ -384,10 +453,12 @@
     if (!state.tracks.length) return;
     if (state.shuffle && state.order.length) {
       if (state.orderPos < state.order.length - 1) state.orderPos += 1;
-      else return pause();
+      else if (!(await tryContinueAfterQueue())) return pause();
     } else if (state.orderPos < state.tracks.length - 1) {
       state.orderPos += 1;
-    } else return pause();
+    } else if (!(await tryContinueAfterQueue())) {
+      return pause();
+    }
     await loadIndex(currentIndex());
   }
 

@@ -77,6 +77,31 @@ class TestLanApiAuth:
         )
         assert rv.status_code == 200
 
+    def test_lan_get_blocked_with_web_password(self, client, isolated_paths):
+        _write_config(
+            isolated_paths,
+            token='mobile-secret',
+            allowOpenLanApi=False,
+            allowOpenLanMedia=True,
+        )
+        _set_web_password(isolated_paths, 'secret')
+        rv = client.get('/api/summary', headers={'Host': '192.168.1.1:3001'})
+        assert rv.status_code == 401
+
+    def test_lan_get_with_mobile_token(self, client, isolated_paths):
+        _write_config(
+            isolated_paths,
+            token='mobile-secret',
+            allowOpenLanApi=False,
+            allowOpenLanMedia=True,
+        )
+        _set_web_password(isolated_paths, 'secret')
+        rv = client.get(
+            '/api/summary',
+            headers={'Host': '192.168.1.1:3001', 'Authorization': 'Bearer mobile-secret'},
+        )
+        assert rv.status_code == 200
+
     def test_lan_post_opt_in_open_api(self, client, isolated_paths):
         _write_config(
             isolated_paths,

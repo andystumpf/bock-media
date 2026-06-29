@@ -281,7 +281,7 @@
       const pinned = getPinnedDevices();
       if (pinned.length) prefs.pinnedDevices = pinned;
       const cont = getContinueAfterQueue();
-      if (cont) prefs.continueAfterQueue = cont;
+      prefs.continueAfterQueue = cont || 'off';
       const engagement = exportEngagementJson();
       if (engagement) prefs.homeTileEngagement = engagement;
       const tab = getLibraryTab();
@@ -321,8 +321,8 @@
       if (typeof root.setActiveMember === 'function') root.setActiveMember(merged.activeMemberId.trim());
       changed = true;
     }
-    if (typeof merged.continueAfterQueue === 'string' && merged.continueAfterQueue.trim()) {
-      setContinueAfterQueue(merged.continueAfterQueue.trim(), { push: false });
+    if (typeof merged.continueAfterQueue === 'string') {
+      setContinueAfterQueue(merged.continueAfterQueue.trim() || 'off', { push: false });
       changed = true;
     }
     if (typeof merged.homeTileEngagement === 'string' && merged.homeTileEngagement.trim()) {

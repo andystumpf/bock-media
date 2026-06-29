@@ -87,6 +87,12 @@ struct DrivingModeView: View {
                     } label: {
                         BockIcon(icon: .skipPrevious, size: 40)
                     }
+                    DrivingCircleButton(size: 56, enabled: track != nil) {
+                        local.toggleShuffle()
+                    } label: {
+                        BockIcon(icon: .shuffle, size: 28)
+                            .foregroundStyle(local.state.shuffle ? BockColors.green : .white)
+                    }
                     DrivingPlayButton(isPlaying: local.state.isPlaying, enabled: track != nil) {
                         local.togglePlayPause()
                     }

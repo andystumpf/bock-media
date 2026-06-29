@@ -24,7 +24,9 @@ object HomeCardBrowse {
             is PlayTarget.Album -> Destination.Album(target.name, target.artist)
             is PlayTarget.Radio -> when (target.seedKind) {
                 PlayTarget.RadioSeedKind.Artist -> Destination.Artist(target.name)
-                PlayTarget.RadioSeedKind.Genre -> Destination.Genre(target.name)
+                PlayTarget.RadioSeedKind.Genre -> Destination.Genre(
+                    target.genreLabel() ?: target.name,
+                )
                 PlayTarget.RadioSeedKind.Song -> Destination.Search
             }
             is PlayTarget.Song -> Destination.Search

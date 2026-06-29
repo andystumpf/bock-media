@@ -51,6 +51,11 @@ enum ClientPrefsSync {
 
     static func onActiveMemberChanged(repository: BockMediaRepository, memberId: String?) async {
         let clientId = ClientIdStore.clientId()
+        if let memberId, !memberId.isEmpty {
+            ActiveProfileStore.setActiveMember(memberId)
+        } else {
+            ActiveProfileStore.setActiveMember(nil)
+        }
         HomeFeedCache.invalidate()
         HomeLoadCoordinator.resetReloadWindow()
         try? await repository.bindClient(clientId: clientId, memberId: memberId, phoneId: InstallIdentity.phoneId())

@@ -72,6 +72,23 @@ class HomeCardBrowseTest {
             playTarget = PlayTarget.Radio("Jazz Radio", PlayTarget.RadioSeedKind.Genre, "Jazz"),
             kind = HomeSectionKind.Radio,
         )
-        assertTrue(HomeCardBrowse.destination(card) is HomeCardBrowse.Destination.Genre)
+        assertEquals(
+            HomeCardBrowse.Destination.Genre("Jazz"),
+            HomeCardBrowse.destination(card),
+        )
+    }
+
+    @Test
+    fun destination_radioGenreUsesTitleNotArtistSeed() {
+        val card = HomeCard(
+            id = "radio-rock",
+            title = "Rock Radio",
+            playTarget = PlayTarget.Radio("Rock Radio", PlayTarget.RadioSeedKind.Genre, "Led Zeppelin"),
+            kind = HomeSectionKind.Radio,
+        )
+        assertEquals(
+            HomeCardBrowse.Destination.Genre("Rock"),
+            HomeCardBrowse.destination(card),
+        )
     }
 }

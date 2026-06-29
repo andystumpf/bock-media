@@ -38,8 +38,26 @@ fun GenreDetailScreen(
     LaunchedEffect(genreName) {
         loading = true
         runCatching {
-            albums = repository.albums(page = 1, search = genreName, limit = 12).items
-            artists = repository.artists(page = 1, search = genreName, limit = 12).items
+            val songs = repository.songs(page = 1, genre = genreName, limit = 200).items
+            albums = songs
+                .filter { !it.album.isNullOrBlank() }
+                .groupBy { "${it.album}|${it.artist.orEmpty()}" }
+                .map { (_, tracks) ->
+                    val first = tracks.first()
+                    AlbumItem(
+                        name = first.album.orEmpty(),
+                        artist = first.artist,
+                        tracks = tracks.size,
+                    )
+                }
+                .sortedByDescending { it.tracks }
+                .take(12)
+            artists = songs
+                .filter { !it.artist.isNullOrBlank() }
+                .groupBy { it.artist!! }
+                .map { (name, tracks) -> ArtistItem(name = name, tracks = tracks.size) }
+                .sortedByDescending { it.tracks }
+                .take(12)
         }
         loading = false
     }
@@ -47,7 +65,7 @@ fun GenreDetailScreen(
     val radioTarget = PlayTarget.Radio(
         displayTitle = "$genreName Radio",
         seedKind = PlayTarget.RadioSeedKind.Genre,
-        name = artists.firstOrNull()?.name ?: genreName,
+        name = genreName,
     )
 
     Column(Modifier.fillMaxSize()) {

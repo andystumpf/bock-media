@@ -2,6 +2,30 @@
   "_comment": "Update this file whenever you upload a new APK/IPA to /app. Shown on GET /app.",
     "releases": [
     {
+      "version": "2.6.47",
+      "date": "2026-06-28",
+      "items": [
+        {"kind": "fix", "text": "Playlist playback — wait for authenticated stream client before play (fixes rapid skip through queue on phone)"},
+        {"kind": "fix", "text": "Genre mixes, radio, and Browse by genre — load tracks by genre + Resonance; genre pages and tile navigation fixed"}
+      ]
+    },
+    {
+      "version": "2.6.46",
+      "date": "2026-06-28",
+      "items": [
+        {"kind": "fix", "text": "Who's listening? — tapping your profile (e.g. Andy) now saves locally first and dismisses the picker even if server sync is slow"},
+        {"kind": "fix", "text": "Profile picker — removed duplicate bind call that could hang the dialog; loading spinner while syncing"}
+      ]
+    },
+    {
+      "version": "2.6.45",
+      "date": "2026-06-27",
+      "items": [
+        {"kind": "fix", "text": "Bug hunt fixes — shuffle state from server, continue-after-queue on browser, startup connection gate, NP poll stability"},
+        {"kind": "fix", "text": "Server — LAN GET auth when password set; MSP continue-after-queue; shuffle in now playing API"}
+      ]
+    },
+    {
       "version": "2.6.44",
       "date": "2026-06-27",
       "items": [

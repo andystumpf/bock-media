@@ -134,10 +134,7 @@ object ClientPrefsSync {
     ) {
         val app = BockMediaApp.get(context)
         val clientId = ClientIdStore.clientId(context)
-        // Save outgoing profile to the server before switching local state.
-        if (!previousMemberId.isNullOrBlank()) {
-            runCatching { push(context, previousMemberId) }
-        }
+        // Persist locally first so the picker dismisses even if sync is slow.
         if (memberId.isNullOrBlank()) {
             ActiveProfileStore.chooseUnattributed(context)
         } else {
@@ -150,9 +147,13 @@ object ClientPrefsSync {
         HomeLoadCoordinator.resetReloadWindow()
         LibrarySessionCache.invalidate()
         SearchBrowseSessionCache.invalidate()
+        bumpProfileRevision()
+        // Save outgoing profile to the server before binding the new one.
+        if (!previousMemberId.isNullOrBlank()) {
+            runCatching { push(context, previousMemberId) }
+        }
         runCatching { app.repository.bindClient(clientId, memberId, InstallIdentity.phoneId(context)) }
         runCatching { pullAndApply(context, profileSwitch = true) }
-        bumpProfileRevision()
     }
 
     private suspend fun collectMemberPrefs(

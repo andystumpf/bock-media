@@ -103,6 +103,36 @@ class TestVolumeClamp:
 # ─────────────────────────────── attribution ─────────────────────────────────
 
 class TestAttribution:
+    def test_room_name_inference(self):
+        members = [
+            {'id': 'p-emma', 'name': 'Emma', 'role': 'kid'},
+            {'id': 'p-ethan', 'name': 'Ethan', 'role': 'kid'},
+            {'id': 'p-noah', 'name': 'Noah', 'role': 'kid'},
+        ]
+        assert server._member_id_for_room_name("Emma's Room", members) == 'p-emma'
+        assert server._member_id_for_room_name("Ethan's Echo Dot", members) == 'p-ethan'
+        assert server._member_id_for_room_name("Noah's Bedroom", members) == 'p-noah'
+        assert server._member_id_for_room_name('Kitchen Show', members) is None
+
+    def test_sync_default_room_owners(self, isolated_paths):
+        h = {
+            'members': [
+                {'id': 'p-emma', 'name': 'Emma', 'role': 'kid'},
+                {'id': 'p-ethan', 'name': 'Ethan', 'role': 'kid'},
+            ],
+            'clientBindings': {},
+            'deviceOwners': {},
+        }
+        store = {
+            'echo-emma': {'name': "Emma's Room"},
+            'echo-ethan': {'name': "Ethan's Echo Dot"},
+            'echo-kitchen': {'name': 'Kitchen Show'},
+        }
+        assert server._sync_default_room_owners(h, store) is True
+        assert h['deviceOwners']['echo-emma'] == 'p-emma'
+        assert h['deviceOwners']['echo-ethan'] == 'p-ethan'
+        assert 'echo-kitchen' not in h['deviceOwners']
+
     def test_priority(self, isolated_paths):
         """explicit > phone install > room default"""
         server._save_household({

@@ -42,7 +42,8 @@ async def import_cookies(path):
         return
     await login.close()
     sys.exit('Imported cookies did not authenticate. Make sure you exported '
-             'amazon.com cookies while logged into the Alexa site, and that '
+             'cookies for your Alexa Amazon domain (e.g. amazon.com or amazon.co.uk) '
+             'while logged into the Alexa site, and that '
              'config.json -> alexaRemote.email matches that account.')
 
 

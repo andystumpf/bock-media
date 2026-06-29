@@ -116,6 +116,31 @@ final class LocalPlaybackController: ObservableObject {
         notifyWidgetSession()
     }
 
+    func setPlayContext(repository: BockMediaRepository, target: PlayTarget) {
+        analyticsRepository = repository
+        activePlayTarget = target
+    }
+
+    func setShuffle(_ on: Bool) {
+        guard state.active, !state.tracks.isEmpty else { return }
+        guard state.shuffle != on else { return }
+        let current = state.tracks[state.index]
+        if on {
+            var rest = state.tracks
+            rest.remove(at: state.index)
+            rest.shuffle()
+            state.tracks = [current] + rest
+            state.index = 0
+        }
+        state.shuffle = on
+        Task { try? await playCurrent() }
+        notifyWidgetSession()
+    }
+
+    func toggleShuffle() {
+        setShuffle(!state.shuffle)
+    }
+
     func togglePlayPause() {
         if crossfading {
             let playing = incomingPlayer?.rate ?? 0 > 0
@@ -146,7 +171,14 @@ final class LocalPlaybackController: ObservableObject {
     func skipNext() {
         guard !state.tracks.isEmpty else { return }
         cancelCrossfade()
-        state.index = (state.index + 1) % state.tracks.count
+        if state.index >= state.tracks.count - 1 {
+            Task {
+                if await tryContinuePlayback() { return }
+                stopPlayback()
+            }
+            return
+        }
+        state.index += 1
         Task { try? await playCurrent() }
     }
 
@@ -216,8 +248,12 @@ final class LocalPlaybackController: ObservableObject {
         }
     }
 
+    private var continueAfterQueueMode: String {
+        UserDefaults.standard.string(forKey: "continue_after_queue") ?? "off"
+    }
+
     private func tryContinuePlayback() async -> Bool {
-        let mode = UserDefaults.standard.string(forKey: "continue_after_queue") ?? "off"
+        let mode = continueAfterQueueMode
         if mode == "off" || mode.isEmpty { return false }
         guard let repository = analyticsRepository, let target = activePlayTarget else { return false }
         if case .radio = target { return false }

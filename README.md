@@ -265,7 +265,14 @@ its own):
     "clientSecret": "...",
     "accessToken": "...",
     "refreshToken": "...",
-    "redirectUriPrefixes": ["https://alexa.amazon.com/", "https://layla.amazon.com/", "https://pitangui.amazon.com/"]
+    "redirectUriPrefixes": [
+      "https://alexa.amazon.com/",
+      "https://layla.amazon.com/",
+      "https://pitangui.amazon.com/",
+      "https://alexa.amazon.co.uk/",
+      "https://layla.amazon.co.uk/",
+      "https://pitangui.amazon.co.uk/"
+    ]
   }
 }
 ```
@@ -276,6 +283,9 @@ its own):
   `"mix <name>"`.
 - When `false`, a `LaunchRequest` immediately plays the playlist named in
   the `DefaultPlaylist` preference.
+
+**Amazon UK:** set `alexaRemote.url` to `amazon.co.uk` and add UK OAuth redirect
+prefixes (see `docs/AMAZON_UK.md`). Coexists with US config on separate installs.
 
 Other relevant prefs surfaced under **Settings** in the UI:
 `DefaultPlaylist`, `FFmpegLocation`, `RequirePassword`, `WebPassword`,

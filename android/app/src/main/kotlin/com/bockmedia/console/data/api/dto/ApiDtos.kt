@@ -179,6 +179,7 @@ data class NowPlayingDeviceItem(
     val duration_ms: Long = 0,
     val offset_ms: Long = 0,
     val paused: Boolean = false,
+    val shuffle: Boolean = false,
     val playlist: String? = null,
     val playlistId: String? = null,
     val sourceLabel: String? = null,

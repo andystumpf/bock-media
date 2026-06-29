@@ -225,6 +225,7 @@ interface BockMediaApi {
         @Query("search") search: String = "",
         @Query("artist") artist: String? = null,
         @Query("album") album: String? = null,
+        @Query("genre") genre: String? = null,
     ): SongsResponse
 
     @GET("api/watchfolders")

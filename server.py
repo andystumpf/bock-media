@@ -166,7 +166,8 @@ def refresh_albums_agg():
                    COALESCE(NULLIF(album_artist, ''), artist) AS artist,
                    COUNT(*) AS track_count,
                    MAX(CAST(NULLIF(year, '') AS INTEGER)) AS year,
-                   MIN(CASE WHEN path IS NOT NULL AND path != '' THEN path END) AS art_path
+                   MIN(CASE WHEN path IS NOT NULL AND path != '' THEN path END) AS art_path,
+                   MIN(first_seen_at) AS first_seen_at
             FROM songs_cache
             WHERE album IS NOT NULL AND album != ''
             GROUP BY album, COALESCE(NULLIF(album_artist, ''), artist)
@@ -485,6 +486,16 @@ def _api_write_auth_ok():
     if _allow_open_lan_api():
         return True
     return _basic_auth_ok() or _mobile_api_token_ok()
+
+def _api_read_auth_ok():
+    if _allow_open_lan_api():
+        return True
+    return _basic_auth_ok() or _mobile_api_token_ok()
+
+_API_LAN_GET_PUBLIC = frozenset({
+    '/api/health',
+    '/api/auth/info',
+})
 
 def _api_auth_required():
     """True when the web UI should prompt for console login."""
@@ -907,6 +918,16 @@ def check_auth():
             return _forbidden(
                 'API writes require authentication — set credentials or mobileApi.allowOpenLanApi'
             )
+
+    # Read-only API on LAN — require auth when credentials are configured (C-01 partial).
+    if (request.path.startswith('/api/')
+            and request.method == 'GET'
+            and request.path not in _API_LAN_GET_PUBLIC
+            and _is_lan_request()
+            and not tunnel
+            and _credentials_configured()):
+        if not _api_read_auth_ok():
+            return _auth_required()
 
     if request.path.startswith('/api/') and _mobile_api_token_ok():
         return None
@@ -3537,6 +3558,9 @@ def artists():
     page = int(request.args.get('page', 1))
     limit = int(request.args.get('limit', 50))
     search = request.args.get('search', '')
+    sort = (request.args.get('sort') or 'name').strip().lower()
+    order = (request.args.get('order') or 'asc').strip().lower()
+    desc = order == 'desc'
     offset = (page - 1) * limit
 
     where = 'artist IS NOT NULL AND artist != ""'
@@ -3545,10 +3569,15 @@ def artists():
         where += ' AND artist LIKE ?'
         params.append(f'%{search}%')
 
+    if sort == 'tracks':
+        order_sql = f'track_count {"DESC" if desc else "ASC"}, artist COLLATE NOCASE ASC'
+    else:
+        order_sql = f'artist COLLATE NOCASE {"DESC" if desc else "ASC"}'
+
     rows = db_query(
         f'SELECT artist, COUNT(*) as track_count, COUNT(DISTINCT album) as album_count, '
         f'MIN(CASE WHEN path IS NOT NULL AND path != "" THEN path END) as art_path '
-        f'FROM songs_cache WHERE {where} GROUP BY artist ORDER BY artist LIMIT ? OFFSET ?',
+        f'FROM songs_cache WHERE {where} GROUP BY artist ORDER BY {order_sql} LIMIT ? OFFSET ?',
         params + [limit, offset]
     )
     total_row = db_one(
@@ -3593,6 +3622,9 @@ def albums():
     search = request.args.get('search', '')
     artist = request.args.get('artist', '')
     sort = (request.args.get('sort') or 'name').strip().lower()
+    order = (request.args.get('order') or 'asc').strip().lower()
+    unplayed_only = request.args.get('unplayed') == '1'
+    desc = order == 'desc'
     offset = (page - 1) * limit
 
     conditions = ['1=1']
@@ -3605,14 +3637,33 @@ def albums():
         params.append(artist)
 
     where = ' AND '.join(conditions)
-    order = 'year DESC, album' if sort == 'year' else 'album COLLATE NOCASE'
+    has_first_seen = bool(db_one(
+        "SELECT 1 FROM pragma_table_info('albums_agg') WHERE name='first_seen_at'"
+    ))
+    if sort == 'year':
+        order_sql = f'year {"DESC" if desc else "ASC"}, album COLLATE NOCASE ASC'
+    elif sort == 'tracks':
+        order_sql = f'track_count {"DESC" if desc else "ASC"}, album COLLATE NOCASE ASC'
+    elif sort == 'added' and has_first_seen:
+        order_sql = f'first_seen_at {"DESC" if desc else "ASC"}, album COLLATE NOCASE ASC'
+    else:
+        order_sql = f'album COLLATE NOCASE {"DESC" if desc else "ASC"}'
+
+    select_cols = 'album, artist, track_count, year, art_path'
+    if has_first_seen:
+        select_cols += ', first_seen_at'
 
     rows = db_query(
-        f'SELECT album, artist, track_count, year, art_path FROM albums_agg '
-        f'WHERE {where} ORDER BY {order} LIMIT ? OFFSET ?',
+        f'SELECT {select_cols} FROM albums_agg '
+        f'WHERE {where} ORDER BY {order_sql} LIMIT ? OFFSET ?',
         params + [limit, offset]
     )
     played = _albums_played_flags(rows)
+    if unplayed_only:
+        rows = [
+            r for r in rows
+            if not played.get((r.get('album'), r.get('artist') or ''), False)
+        ]
     member_id = _ratings_member_from_request()
     star_map = bock_library_health.album_star_averages(RATINGS_PATH, member_id, db_query)
     for row in rows:
@@ -3631,12 +3682,25 @@ def albums():
 
 @app.route('/api/genres')
 def genres_list():
-    limit = min(max(int(request.args.get('limit', 20) or 20), 1), 50)
+    limit = min(max(int(request.args.get('limit', 20) or 20), 1), 500)
+    sort = (request.args.get('sort') or 'tracks').strip().lower()
+    order = (request.args.get('order') or 'desc').strip().lower()
+    search = (request.args.get('search') or '').strip()
+    desc = order == 'desc'
+    params = []
+    where = 'genre IS NOT NULL AND genre != ""'
+    if search:
+        where += ' AND genre LIKE ?'
+        params.append(f'%{search}%')
+    if sort == 'name':
+        order_sql = f'genre COLLATE NOCASE {"DESC" if desc else "ASC"}'
+    else:
+        order_sql = f'track_count {"DESC" if desc else "ASC"}, genre COLLATE NOCASE ASC'
     rows = db_query(
-        'SELECT genre, COUNT(*) as track_count FROM songs_cache '
-        'WHERE genre IS NOT NULL AND genre != "" '
-        'GROUP BY genre ORDER BY track_count DESC LIMIT ?',
-        [limit],
+        f'SELECT genre, COUNT(*) as track_count FROM songs_cache '
+        f'WHERE {where} '
+        f'GROUP BY genre ORDER BY {order_sql} LIMIT ?',
+        params + [limit],
     ) or []
     items = []
     for row in rows:
@@ -4822,6 +4886,10 @@ def songs():
     search = request.args.get('search', '')
     artist = request.args.get('artist', '')
     album = request.args.get('album', '')
+    genre = (request.args.get('genre') or '').strip()
+    sort = (request.args.get('sort') or 'track').strip().lower()
+    order = (request.args.get('order') or 'asc').strip().lower()
+    desc = order == 'desc'
     offset = (page - 1) * limit
 
     conditions = ['1=1']
@@ -4835,13 +4903,29 @@ def songs():
     if album:
         conditions.append('album = ?')
         params.append(album)
+    if genre:
+        conditions.append('LOWER(COALESCE(genre,"")) LIKE ?')
+        params.append(f'%{genre.lower()}%')
 
     where = ' AND '.join(conditions)
+    if sort == 'added':
+        order_sql = f'first_seen_at {"DESC" if desc else "ASC"}, title COLLATE NOCASE ASC'
+    elif sort == 'artist':
+        order_sql = f'artist COLLATE NOCASE {"DESC" if desc else "ASC"}, title COLLATE NOCASE ASC'
+    elif sort == 'album':
+        order_sql = f'album COLLATE NOCASE {"DESC" if desc else "ASC"}, title COLLATE NOCASE ASC'
+    elif sort == 'title':
+        order_sql = f'title COLLATE NOCASE {"DESC" if desc else "ASC"}'
+    else:
+        order_sql = (
+            f'CAST(COALESCE(NULLIF(track_number, ""), "0") AS INTEGER) {"DESC" if desc else "ASC"}, '
+            f'title COLLATE NOCASE ASC'
+        )
 
     rows = db_query(
-        f'SELECT id, title, artist, album, genre, year, duration_seconds, bitrate, track_number, path '
+        f'SELECT id, title, artist, album, genre, year, duration_seconds, bitrate, track_number, path, first_seen_at '
         f'FROM songs_cache WHERE {where} '
-        f'ORDER BY CAST(COALESCE(NULLIF(track_number, ""), "0") AS INTEGER), title LIMIT ? OFFSET ?',
+        f'ORDER BY {order_sql} LIMIT ? OFFSET ?',
         params + [limit, offset]
     )
     total_row = db_one(
@@ -4974,7 +5058,7 @@ def clear_cache():
 
 # ── API: Devices ─────────────────────────────────────────────────────────────
 
-DEVICES_PATH = os.path.join(HERE, 'devices.json')
+DEVICES_PATH = os.path.join(DATA_DIR, 'devices.json')
 
 @contextlib.contextmanager
 def _cross_process_flock(lock_path, *, shared=False):
@@ -5327,6 +5411,10 @@ def _relabel_devices_from_roster():
             updated += 1
     if updated:
         _save_devices(store)
+        with _HOUSEHOLD_LOCK:
+            h = _load_household()
+            if _sync_default_room_owners(h, store):
+                _save_household(h)
     return updated
 
 
@@ -5678,6 +5766,69 @@ def _member_by_id(member_id, household=None):
     return None
 
 
+def _member_id_for_room_name(device_name, members):
+    """Map a room label like \"Emma's Room\" to household member p-emma."""
+    dn = (device_name or '').strip().lower()
+    if not dn or not members:
+        return None
+    for m in members:
+        name = (m.get('name') or '').strip()
+        if not name:
+            continue
+        first = name.split()[0].lower()
+        if len(first) < 2:
+            continue
+        markers = (
+            f"{first}'s",
+            f"{first}s room",
+            f"{first}s bedroom",
+            f"{first}s echo",
+            f"{first} room",
+            f"{first} bedroom",
+        )
+        if any(mk in dn for mk in markers):
+            return m.get('id')
+    return None
+
+
+def _sync_default_room_owners(household, store=None):
+    """Persist room → kid profile bindings inferred from Alexa device names."""
+    store = store if store is not None else _load_devices()
+    members = household.get('members') or []
+    if not members:
+        return False
+    owners = household.setdefault('deviceOwners', {})
+    changed = False
+    # Normalize legacy owner keys (alias ids) onto canonical primary device ids.
+    normalized = {}
+    for did, mid in list(owners.items()):
+        primary = _resolve_device_id(did, store)
+        if primary and mid:
+            normalized[primary] = mid
+    if normalized != owners:
+        owners.clear()
+        owners.update(normalized)
+        changed = True
+    seen = set()
+    for did, entry in store.items():
+        if not isinstance(entry, dict) or entry.get('aliasOf'):
+            continue
+        primary = _resolve_device_id(did, store)
+        if primary in seen:
+            continue
+        seen.add(primary)
+        label = (entry.get('name') or '').strip()
+        if not label:
+            label = _live_alexa_name(entry, primary, store) or ''
+        mid = _member_id_for_room_name(label, members)
+        if not mid or not _member_by_id(mid, household):
+            continue
+        if owners.get(primary) != mid:
+            owners[primary] = mid
+            changed = True
+    return changed
+
+
 def _member_label(member_id, household=None):
     m = _member_by_id(member_id, household)
     return (m or {}).get('name') or ''
@@ -5776,7 +5927,20 @@ def member_for_device(device_id, household=None):
     h = household or _load_household()
     owners = h.get('deviceOwners', {})
     primary = _resolve_device_id(device_id)
-    return owners.get(primary) or owners.get(device_id)
+    mid = owners.get(primary) or owners.get(device_id)
+    if not mid:
+        for oid, omid in owners.items():
+            if _resolve_device_id(oid) == primary:
+                mid = omid
+                break
+    if mid:
+        return mid
+    store = _load_devices()
+    entry = store.get(primary) or store.get(device_id) or {}
+    label = (entry.get('name') or '').strip()
+    if not label:
+        label = _live_alexa_name(entry, primary, store) or ''
+    return _member_id_for_room_name(label, h.get('members', []))
 
 
 def resolve_play_member(*, device_id=None, client_id=None, explicit_member=None,
@@ -5824,31 +5988,34 @@ def _ratings_member_from_request():
 @app.route('/api/household')
 def household_get():
     """Members (public), client/device bindings with friendly labels."""
-    h = _load_household()
-    device_store = _load_devices()
-    owners = []
-    for did, mid in h.get('deviceOwners', {}).items():
-        owners.append({
-            'deviceId': did,
-            'deviceName': _device_label(did),
-            'memberId': mid,
-            'memberName': _member_label(mid, h),
+    with _HOUSEHOLD_LOCK:
+        h = _load_household()
+        device_store = _load_devices()
+        if _sync_default_room_owners(h, device_store):
+            _save_household(h)
+        owners = []
+        for did, mid in h.get('deviceOwners', {}).items():
+            owners.append({
+                'deviceId': did,
+                'deviceName': _device_label(did),
+                'memberId': mid,
+                'memberName': _member_label(mid, h),
+            })
+        clients = []
+        for did, mid in h.get('clientBindings', {}).items():
+            entry = device_store.get(did) or {}
+            clients.append({
+                'clientDeviceId': did,
+                'deviceName': entry.get('name') or did,
+                'platform': entry.get('platform'),
+                'memberId': mid,
+                'memberName': _member_label(mid, h),
+            })
+        return jsonify({
+            'members': [_public_member(m) for m in h.get('members', [])],
+            'deviceOwners': owners,
+            'clientBindings': clients,
         })
-    clients = []
-    for did, mid in h.get('clientBindings', {}).items():
-        entry = device_store.get(did) or {}
-        clients.append({
-            'clientDeviceId': did,
-            'deviceName': entry.get('name') or did,
-            'platform': entry.get('platform'),
-            'memberId': mid,
-            'memberName': _member_label(mid, h),
-        })
-    return jsonify({
-        'members': [_public_member(m) for m in h.get('members', [])],
-        'deviceOwners': owners,
-        'clientBindings': clients,
-    })
 
 
 @app.route('/api/household/members', methods=['POST'])
@@ -10448,6 +10615,7 @@ def nowplaying_devices():
         if not duration_ms and st.get('filepath'):
             duration_ms = _duration_ms_for_path(st.get('filepath'))
         token = st.get('token') or ''
+        token_data = decode_token(token) or {}
         src = _np_source_fields(token, did)
         if not src.get('sourceLabel'):
             src = {
@@ -10471,6 +10639,7 @@ def nowplaying_devices():
             'offset_ms':   st.get('offset_ms') or 0,
             'paused':     paused,
             'stopped':    not playing and not paused,
+            'shuffle':    bool(token_data.get('shuffle')),
             'sleep':      _sleep_info_for_token(token),
             'upcoming':   _upcoming_tracks_for_token(token, limit=5),
             'playlist': src.get('playlist'),
@@ -11313,6 +11482,27 @@ def _msp_handle(namespace, name, payload, header):
                                   {'isQueueFinished': False,
                                    'item': _msp_build_item(queue_id, insert_at, tracks, content_id)})
         nxt = idx + 1 if name == 'GetNextItem' else idx - 1
+        if name == 'GetNextItem' and nxt >= len(tracks) and not loop:
+            token_data = {
+                'qid': queue_id,
+                'tracks': tracks,
+                'idx': idx,
+                'loop': loop,
+                'shuffle': q.get('shuffle', False),
+                'playlist_id': content_id,
+                'playlist': q.get('playlist'),
+                'context': q.get('context'),
+            }
+            continued = _try_continue_queue(token_data, tracks, idx)
+            if continued:
+                _next_path, next_token = continued
+                new_data = decode_token(next_token) or {}
+                new_tracks = new_data.get('tracks') or tracks
+                new_idx = int(new_data.get('idx', idx + 1))
+                _update_queue_flags(queue_id, tracks=new_tracks)
+                return _msp_event('Alexa.Audio.PlayQueue', f'{name}.Response', header,
+                                    {'isQueueFinished': False,
+                                     'item': _msp_build_item(queue_id, new_idx, new_tracks, content_id)})
         if nxt >= len(tracks):
             nxt = 0 if (loop and tracks) else None
         elif nxt < 0:

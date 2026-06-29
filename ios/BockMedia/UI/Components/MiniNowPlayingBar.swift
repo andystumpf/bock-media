@@ -16,8 +16,11 @@ final class MiniNowPlayingModel: ObservableObject {
     private var artworkPath: String?
     private var subscribed = false
 
+    private var remoteOk = false
+
     func start(repository: BockMediaRepository, remoteOk: Bool) {
         self.repository = repository
+        self.remoteOk = remoteOk
         service.configure(repository: repository)
         if !subscribed {
             service.addSubscriber()
@@ -39,6 +42,7 @@ final class MiniNowPlayingModel: ObservableObject {
     }
 
     func refreshOnFocus(repository: BockMediaRepository, remoteOk: Bool) async {
+        self.remoteOk = remoteOk
         await service.refreshNow()
         scheduleRecompute()
     }
@@ -95,7 +99,7 @@ final class MiniNowPlayingModel: ObservableObject {
     var canControl: Bool {
         if isLocal { return true }
         guard let dev = device else { return false }
-        return canControlDevice(dev, alexaDevices: alexaDevices, controlsAvailable: controlsAvailable, remoteOk: true)
+        return canControlDevice(dev, alexaDevices: alexaDevices, controlsAvailable: controlsAvailable, remoteOk: remoteOk)
     }
 }
 

@@ -130,13 +130,19 @@ class MainActivity : ComponentActivity() {
                     val wasConnected = app.preferences.hasConnectedBefore()
                     if (remember || wasConnected) {
                         if (wasConnected && app.hasServerUrl()) {
-                            hasServer = true
                             launch(Dispatchers.IO) {
-                                if (retryTestConnection(app)) {
-                                    app.preferences.setHasConnected(true)
-                                    com.bockmedia.console.data.analytics.DeviceAnalyticsReporter
-                                        .reportConnect(this@MainActivity)
-                                    com.bockmedia.console.local.ClientPrefsSync.pullAndApply(this@MainActivity)
+                                val ok = retryTestConnection(app)
+                                withContext(Dispatchers.Main) {
+                                    if (ok) {
+                                        app.preferences.setHasConnected(true)
+                                        hasServer = true
+                                        com.bockmedia.console.data.analytics.DeviceAnalyticsReporter
+                                            .reportConnect(this@MainActivity)
+                                        com.bockmedia.console.local.ClientPrefsSync.pullAndApply(this@MainActivity)
+                                    } else {
+                                        hasServer = false
+                                        autoLoginError = "Can't reach server — check network or server URL"
+                                    }
                                 }
                             }
                             return@LaunchedEffect
@@ -147,11 +153,6 @@ class MainActivity : ComponentActivity() {
                             com.bockmedia.console.data.analytics.DeviceAnalyticsReporter
                                 .reportConnect(this@MainActivity)
                             com.bockmedia.console.local.ClientPrefsSync.pullAndApply(this@MainActivity)
-                            return@LaunchedEffect
-                        }
-                        // Server slow/down — don't force re-login if user already connected once.
-                        if (wasConnected && app.hasServerUrl()) {
-                            hasServer = true
                             return@LaunchedEffect
                         }
                         runCatching { app.repository.testConnection() }

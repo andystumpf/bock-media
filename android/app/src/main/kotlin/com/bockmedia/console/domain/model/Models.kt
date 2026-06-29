@@ -26,6 +26,14 @@ sealed class PlayTarget {
     ) : PlayTarget() {
         override val label: String = displayTitle
         override val shuffleDefault: Boolean = true
+
+        /** Genre behind a mix/radio tile (display title), not the artist seed in [name]. */
+        fun genreLabel(): String? {
+            if (seedKind != RadioSeedKind.Genre) return null
+            return HomeFeedRules.mixGenreLabel(displayTitle)
+                ?: HomeFeedRules.genreRadioLabel(displayTitle)
+                ?: name.takeIf { it.isNotBlank() }
+        }
     }
 }
 

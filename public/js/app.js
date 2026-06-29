@@ -485,6 +485,7 @@ function updateShellForRoute(route) {
     a.classList.toggle('active', active);
   });
   updateTopbarNavButtons();
+  if (root === 'dashboard') refreshAppDownloadLinks();
   if (root !== 'search') syncTopbarSearch('');
   closeAppDrawer();
 }
@@ -538,7 +539,6 @@ function openOfflineDownloadHint(encoded) {
   try { target = JSON.parse(decodeURIComponent(encoded)); } catch (_) { /* ignore */ }
   const name = (target && target.name) || 'this collection';
   showToast(`Save “${name}” offline in the Android or iOS app.`);
-  if (window.location.hash !== '#download') window.location.hash = 'download';
 }
 window.openOfflineDownloadHint = openOfflineDownloadHint;
 
@@ -701,7 +701,8 @@ function closeAppDrawer() {
 
 function libraryFiltersHtml(active) {
   const tabs = [
-    ['library', '#library', 'Playlists'],
+    ['library', '#library', 'All'],
+    ['playlists', '#playlists', 'Playlists'],
     ['artists', '#artists', 'Artists'],
     ['albums', '#albums', 'Albums'],
     ['songs', '#songs', 'Songs'],
@@ -711,6 +712,227 @@ function libraryFiltersHtml(active) {
   return `<div class="library-filters">${tabs.map(([id, href, label]) =>
     `<a href="${href}" class="library-filter${active === id ? ' active' : ''}">${escHtml(label)}</a>`).join('')}</div>`;
 }
+
+const LIB_SORT_STORE = 'bock_lib_browse_sort_v1';
+let _gnSearch = '';
+let _libSearch = '';
+let _wfSearch = '';
+
+function defaultLibSort(section) {
+  switch (section) {
+    case 'genres': return { by: 'tracks', order: 'desc' };
+    case 'songs': return { by: 'track', order: 'asc' };
+    case 'playlists': return { by: 'name', order: 'asc' };
+    default: return { by: 'name', order: 'asc' };
+  }
+}
+
+function getLibSort(section) {
+  try {
+    const all = JSON.parse(localStorage.getItem(LIB_SORT_STORE) || '{}');
+    const s = all[section];
+    if (s && s.by) return { by: String(s.by), order: s.order === 'desc' ? 'desc' : 'asc' };
+  } catch { /* ignore */ }
+  if (section === 'playlists' && window._plListSort) {
+    return { by: window._plListSort.by, order: window._plListSort.order };
+  }
+  return defaultLibSort(section);
+}
+
+function setLibSort(section, patch, { reload = true } = {}) {
+  const next = { ...getLibSort(section), ...patch };
+  try {
+    const all = JSON.parse(localStorage.getItem(LIB_SORT_STORE) || '{}');
+    all[section] = next;
+    localStorage.setItem(LIB_SORT_STORE, JSON.stringify(all));
+  } catch { /* quota */ }
+  if (section === 'playlists') {
+    if (next.by !== 'recents') {
+      window._plListSort = { by: next.by === 'tracks' ? 'trackCount' : 'name', order: next.order };
+      if (typeof ClientPrefsSync !== 'undefined') ClientPrefsSync.persistLibraryListSort();
+    }
+  }
+  if (reload) libReloadSection(section);
+}
+
+function libSortOptions(section) {
+  const opts = {
+    library: [
+      { id: 'name', label: 'Alphabetical' },
+      { id: 'recents', label: 'Recently played' },
+    ],
+    playlists: [
+      { id: 'name', label: 'Alphabetical' },
+      { id: 'tracks', label: 'Track count' },
+      { id: 'recents', label: 'Recently played' },
+    ],
+    artists: [
+      { id: 'name', label: 'Alphabetical' },
+      { id: 'tracks', label: 'Most tracks' },
+      { id: 'recents', label: 'Recently played' },
+    ],
+    albums: [
+      { id: 'name', label: 'Alphabetical' },
+      { id: 'added', label: 'Recently added' },
+      { id: 'year', label: 'Release year' },
+      { id: 'tracks', label: 'Most tracks' },
+      { id: 'recents', label: 'Recently played' },
+    ],
+    songs: [
+      { id: 'track', label: 'Album order' },
+      { id: 'title', label: 'Title' },
+      { id: 'artist', label: 'Artist' },
+      { id: 'album', label: 'Album' },
+      { id: 'added', label: 'Recently added' },
+      { id: 'recents', label: 'Recently played' },
+    ],
+    genres: [
+      { id: 'tracks', label: 'Most tracks' },
+      { id: 'name', label: 'Alphabetical' },
+    ],
+    watchfolders: [
+      { id: 'name', label: 'Alphabetical' },
+      { id: 'tracks', label: 'Most tracks' },
+    ],
+  };
+  return opts[section] || opts.artists;
+}
+
+function libSortQuery(section) {
+  const { by, order } = getLibSort(section);
+  if (by === 'recents') return '';
+  const sortMap = {
+    playlists: { tracks: 'trackCount' },
+    songs: { track: 'track' },
+  };
+  const sort = (sortMap[section] && sortMap[section][by]) || by;
+  return `&sort=${encodeURIComponent(sort)}&order=${encodeURIComponent(order)}`;
+}
+
+function libraryBrowseToolbar(section, {
+  search = '',
+  searchPlaceholder = 'Search…',
+  onSearchFn = 'libSearchInput',
+  total = null,
+  extraHtml = '',
+} = {}) {
+  const sort = getLibSort(section);
+  const options = libSortOptions(section);
+  const opts = options.map((o) =>
+    `<option value="${escHtml(o.id)}"${sort.by === o.id ? ' selected' : ''}>${escHtml(o.label)}</option>`).join('');
+  const orderLabel = sort.order === 'desc' ? 'Descending' : 'Ascending';
+  return `<div class="library-browse-bar">
+    <input type="search" class="spotify-browse-search library-browse-search" placeholder="${escHtml(searchPlaceholder)}"
+      value="${escHtml(search)}"
+      oninput="clearTimeout(window._libSd);window._libSd=setTimeout(()=>${onSearchFn}(this.value),350)">
+    <label class="library-sort-wrap">
+      <span class="library-sort-label">Sort</span>
+      <select class="library-sort-select" aria-label="Sort by"
+        onchange="setLibSort('${section}', { by: this.value }, { reload: true })">${opts}</select>
+    </label>
+    <button type="button" class="library-sort-order" title="${orderLabel}"
+      aria-label="Toggle sort direction"
+      onclick="setLibSort('${section}', { order: getLibSort('${section}').order === 'asc' ? 'desc' : 'asc' }, { reload: true })">${sort.order === 'desc' ? '↓' : '↑'}</button>
+    ${extraHtml || ''}
+    ${total != null ? `<span class="hint library-browse-meta">${fmtNum(total)} items</span>` : ''}
+  </div>`;
+}
+
+async function ensureLibAnalytics() {
+  if (window._libAnalytics && (window._libAnalyticsTs || 0) > Date.now() - 120000) {
+    return window._libAnalytics;
+  }
+  window._libAnalytics = await API('/api/analytics').catch(() => ({})) || {};
+  window._libAnalyticsTs = Date.now();
+  return window._libAnalytics;
+}
+
+function libRecentsRank(section, item) {
+  const a = window._libAnalytics || {};
+  let list = [];
+  let key = '';
+  if (section === 'artists') {
+    list = a.topArtists || [];
+    key = item.artist || item.name || '';
+  } else if (section === 'albums') {
+    list = a.topAlbums || [];
+    key = item.album || item.name || '';
+  } else if (section === 'songs') {
+    list = a.topTracks || [];
+    key = item.title || item.track || '';
+  } else if (section === 'playlists') {
+    list = a.topPlaylists || [];
+    key = item.name || '';
+  }
+  const norm = (s) => String(s || '').trim().toLowerCase();
+  const target = norm(key);
+  const idx = list.findIndex((row) => norm(row.name || row.label) === target);
+  if (idx >= 0) return idx;
+  try {
+    const map = JSON.parse(localStorage.getItem('bock_home_tile_engagement') || '{}');
+    const id = item.id || item.playlistId || (item.artist ? `ar-${item.artist}` : '') || (item.album ? `al-${item.album}` : '');
+    const ms = (map[id] && (map[id].lastSelectedMs || map[id].firstSeenMs)) || 0;
+    if (ms) return 1000 - ms / 1e15;
+  } catch { /* ignore */ }
+  return 99999;
+}
+
+function libSortItemsClient(section, items) {
+  const { by, order } = getLibSort(section);
+  const desc = order === 'desc';
+  const out = (items || []).slice();
+  if (by === 'recents') {
+    out.sort((a, b) => {
+      const d = libRecentsRank(section, a) - libRecentsRank(section, b);
+      return desc ? -d : d;
+    });
+    return out;
+  }
+  if (section === 'watchfolders') {
+    out.sort((a, b) => {
+      let d;
+      if (by === 'tracks') d = (a.identifiedFiles || 0) - (b.identifiedFiles || 0);
+      else d = (a.label || a.path || '').localeCompare(b.label || b.path || '', undefined, { sensitivity: 'base' });
+      return desc ? -d : d;
+    });
+    return out;
+  }
+  return out;
+}
+
+function libReloadSection(section) {
+  switch (section) {
+    case 'playlists': return loadPlaylists();
+    case 'artists': return loadArtists();
+    case 'albums': return loadAlbums();
+    case 'songs': return loadSongs();
+    case 'genres': return loadGenresPage();
+    case 'watchfolders': return loadWatchfolders();
+    default:
+      if (window._libPlaylists && section === 'library') {
+        if (getLibSort('library').by === 'recents') {
+          return ensureLibAnalytics().then(() => renderLibraryPage());
+        }
+        return renderLibraryPage();
+      }
+      return loadLibrary();
+  }
+}
+
+function libSearchInput(val) {
+  const route = (window.location.hash || '#library').slice(1).split('/')[0];
+  switch (route) {
+    case 'artists': _arSearch = val; _arPage = 1; loadArtists(); break;
+    case 'albums': _alSearch = val; _alPage = 1; loadAlbums(); break;
+    case 'songs': _soSearch = val; _soPage = 1; loadSongs(); break;
+    case 'genres': _gnSearch = val; loadGenresPage(); break;
+    case 'playlists': _plSearch = val; _plPage = 1; _plAllCache = null; loadPlaylists(); break;
+    case 'library': _libSearch = val; renderLibraryPage(); break;
+  }
+}
+window.libSearchInput = libSearchInput;
+window.setLibSort = setLibSort;
+window.getLibSort = getLibSort;
 
 function folderCardHtml(f) {
   const statusClass = (f.status || '').toLowerCase() === 'scanning' ? 'scanning'
@@ -761,28 +983,43 @@ async function loadLibrary(opts = {}) {
     });
     WebCache.markLibraryLoaded();
   }
+  if (getLibSort('library').by === 'recents') await ensureLibAnalytics();
   renderLibraryPage();
 }
 
 function renderLibraryPage() {
-  const playlists = window._libPlaylists || [];
+  const playlists = (window._libPlaylists || []).slice();
   const smart = window._libSmart || [];
-  const folders = window._libFolders || [];
-  const genres = window._libGenres || [];
+  let folders = (window._libFolders || []).slice();
+  let genres = (window._libGenres || []).slice();
   const remote = window._libRemote || {};
   const covers = window._libCovers || {};
   const canPlay = true;
+  const libSort = getLibSort('library');
+  let sortedPl = playlists;
+  if (libSort.by === 'recents') {
+    sortedPl = libSortItemsClient('playlists', sortedPl);
+  } else {
+    sortedPl = plSortPlaylistsInMemory(sortedPl, 'name', libSort.order);
+  }
+  if (_libSearch.trim()) {
+    const q = _libSearch.trim().toLowerCase();
+    sortedPl = sortedPl.filter((p) => (p.name || '').toLowerCase().includes(q));
+  }
 
-  const cards = playlists.map((p, i) => spotifyMediaCard(
+  const cards = sortedPl.map((p, i) => {
+    const idx = playlists.indexOf(p);
+    return spotifyMediaCard(
     p.name,
     `${fmtNum(p.trackCount || 0)} tracks`,
     `#playlists/detail/${encodeURIComponent(p.id)}`,
     'fa-list',
     p.name,
-    canPlay ? `libPlayPlaylist(${i})` : null,
+    canPlay ? `libPlayPlaylist(${idx >= 0 ? idx : i})` : null,
     p.artPath || covers[p.id],
     { downloadOnclick: tileDownloadOnclick({ kind: 'playlist', id: p.id, name: p.name }) },
-  )).join('');
+  );
+  }).join('');
 
   const smartCards = smart.map((s) => {
     const href = s.linkedPlaylistId
@@ -813,10 +1050,10 @@ function renderLibraryPage() {
   const folderCards = folders.map((f) => folderCardHtml(f)).join('');
 
   const sections = [];
-  if (playlists.length) {
+  if (sortedPl.length) {
     sections.push(`<section class="spotify-section">
       <div class="spotify-section-header">
-        <h2 class="spotify-section-title home-greeting">Playlists (${fmtNum(playlists.length)})</h2>
+        <h2 class="spotify-section-title home-greeting">Playlists (${fmtNum(sortedPl.length)})</h2>
         <a href="#playlists" class="spotify-section-link">Manage</a>
       </div>
       <div class="spotify-carousel library-playlist-grid">${cards}</div>
@@ -853,7 +1090,10 @@ function renderLibraryPage() {
     sections.push(`<div class="empty-state"><i class="fa fa-book"></i><p>Your library is empty — add watch folders or import playlists.</p></div>`);
   }
 
-  renderPage('Your Library', spotifyBrowsePage('Your Library', libraryFiltersHtml('library'), sections.join('')), { header: false });
+  renderPage('Your Library', spotifyBrowsePage('Your Library', libraryFiltersHtml('library'), `
+    ${libraryBrowseToolbar('library', { search: _libSearch, total: sortedPl.length, searchPlaceholder: 'Search playlists…', onSearchFn: 'libSearchInput' })}
+    ${sections.join('')}
+  `), { header: false });
 }
 
 async function libPlayPlaylist(i) {
@@ -868,8 +1108,8 @@ async function libPlayPlaylist(i) {
 window.libPlayPlaylist = libPlayPlaylist;
 
 async function loadGenresPage() {
-  loading();
-  const data = await API('/api/genres?limit=200');
+  await ensureLibAnalytics();
+  const data = await API(`/api/genres?limit=500&search=${encodeURIComponent(_gnSearch)}${libSortQuery('genres')}`);
   const genres = (data && data.items) || [];
   const tiles = genres.length
     ? genres.map((g) =>
@@ -882,8 +1122,17 @@ async function loadGenresPage() {
         null,
       ).replace('class="spotify-card"', `class="spotify-card genre-tile" data-genre="${escHtml(g.name)}"`)).join('')
     : '<div class="empty-state"><i class="fa fa-tag"></i><p>No genres indexed yet.</p></div>';
-  renderPage('Genres', `${libraryFiltersHtml('genres')}<div class="library-playlist-grid">${tiles}</div>`);
+  renderPage('Genres', spotifyBrowsePage('Genres', libraryFiltersHtml('genres'), `
+    ${libraryBrowseToolbar('genres', { search: _gnSearch, searchPlaceholder: 'Search genres…', onSearchFn: 'libSearchInput', total: genres.length })}
+    <div class="library-playlist-grid">${tiles}</div>
+  `), { header: false });
 }
+
+register('genres', async () => {
+  _gnSearch = '';
+  loading();
+  await loadGenresPage();
+});
 
 function navigate(hash) {
   const [route, ...rest] = (hash || 'dashboard').split('/');
@@ -2098,6 +2347,7 @@ function renderPlayerBar() {
   const shuffleBtn = document.getElementById('np-bar-shuffle');
   if (shuffleBtn) {
     window._npShuffle = window._npShuffle || {};
+    if (typeof d.shuffle === 'boolean') window._npShuffle[d.deviceId] = d.shuffle;
     shuffleBtn.classList.toggle('active', !!window._npShuffle[d.deviceId]);
   }
 
@@ -2132,7 +2382,15 @@ async function refreshCurrentTrack() {
       API('/api/nowplaying_devices'),
       ensureAlexaRemoteStatus().catch(() => ({})),
     ]);
-    window._npItems = (data && data.items) || [];
+    if (data && Array.isArray(data.items)) {
+      window._npItems = data.items;
+      window._npShuffle = window._npShuffle || {};
+      for (const it of data.items) {
+        if (it.deviceId && typeof it.shuffle === 'boolean') {
+          window._npShuffle[it.deviceId] = it.shuffle;
+        }
+      }
+    }
     window._npControlsAvailable = !!(data && data.controlsAvailable) && !!(remote && remote.configured);
     if (window._npControlsAvailable && window._npItems.length) {
       await ensureAlexaDevices().catch(() => []);
@@ -2556,10 +2814,6 @@ register('library', async () => {
   }
   if (!painted) loading();
   await loadLibrary({ hadCache: painted });
-});
-
-register('genres', async () => {
-  await loadGenresPage();
 });
 
 // ── Playlists ────────────────────────────────────────────────────────────────
@@ -3448,6 +3702,15 @@ function buildAlexaRemoteSettingsSection(remote, localIp) {
 
 async function loadPlaylists(showSpinner) {
   if (typeof ClientPrefsSync !== 'undefined') ClientPrefsSync.applyLibraryListSortFromPrefs();
+  const libSort = getLibSort('playlists');
+  if (libSort.by === 'recents') {
+    await ensureLibAnalytics();
+  } else {
+    _plListSort = {
+      by: libSort.by === 'tracks' ? 'trackCount' : 'name',
+      order: libSort.order,
+    };
+  }
   if (showSpinner && document.querySelector('.playlists-table')) {
     document.querySelector('.playlists-table').style.opacity = '0.55';
   }
@@ -3483,7 +3746,15 @@ async function loadPlaylists(showSpinner) {
 function renderPlaylistsPage() {
   const remote = window._plRemote || {};
   const canPlay = true;
-  const sorted = plSortPlaylistsInMemory(_plAllCache || [], _plListSort.by, _plListSort.order)
+  let sorted = _plAllCache || [];
+  const libSort = getLibSort('playlists');
+  if (libSort.by === 'recents') {
+    sorted = libSortItemsClient('playlists', sorted);
+  } else {
+    const by = libSort.by === 'tracks' ? 'trackCount' : 'name';
+    sorted = plSortPlaylistsInMemory(sorted, by, libSort.order);
+  }
+  sorted = sorted
     .filter(p => {
       if (!_plFolderFilter) return true;
       const assignments = window._plFolderAssignments || {};
@@ -3532,8 +3803,14 @@ function renderPlaylistsPage() {
     </tr>`;
   }).join('');
 
-  const sortLabel = _plListSort.by === 'trackCount' ? 'Tracks' : 'Name';
-  const sortArrow = _plListSort.order === 'desc' ? '↓' : '↑';
+  const sortLabel = libSort.by === 'tracks' ? 'Tracks' : (libSort.by === 'recents' ? 'Recently played' : 'Name');
+  const sortArrow = libSort.order === 'desc' ? '↓' : '↑';
+  const plActions = `<div class="library-pl-actions">
+      <button class="btn-sm btn-primary" onclick="openNewPlaylistModal()"><i class="fa fa-plus"></i> Create</button>
+      <button class="btn-sm btn-default" onclick="openMergePlaylistsModal()">Merge</button>
+      <button class="btn-sm btn-default" onclick="openAiPlaylistModal()">Mix Muse</button>
+      <button class="btn-sm btn-default" onclick="openSmartPlaylistModal()">Smart playlist</button>
+    </div>`;
   const smart = window._smartPlaylists || [];
   const smartRows = smart.map(s => `
     <tr>
@@ -3588,15 +3865,8 @@ function renderPlaylistsPage() {
     );
   }).join('');
 
-  renderPage('Playlists', spotifyBrowsePage('Playlists', libraryFiltersHtml('library'), `
-    <div class="spotify-browse-toolbar">
-      <input type="search" class="spotify-browse-search" placeholder="Search playlists…" value="${escHtml(_plSearch)}"
-        oninput="clearTimeout(window._sd);window._sd=setTimeout(()=>{_plSearch=this.value;_plPage=1;_plAllCache=null;loadPlaylists()},350)">
-      <button class="btn-sm btn-primary" onclick="openNewPlaylistModal()"><i class="fa fa-plus"></i> Create</button>
-      <button class="btn-sm btn-default" onclick="openMergePlaylistsModal()">Merge</button>
-      <button class="btn-sm btn-default" onclick="openAiPlaylistModal()">Mix Muse</button>
-      <button class="btn-sm btn-default" onclick="openSmartPlaylistModal()">Smart playlist</button>
-    </div>
+  renderPage('Playlists', spotifyBrowsePage('Playlists', libraryFiltersHtml('playlists'), `
+    ${libraryBrowseToolbar('playlists', { search: _plSearch, searchPlaceholder: 'Search playlists…', onSearchFn: 'libSearchInput', total, extraHtml: plActions })}
     ${folderChips ? `<div class="home-filters" style="margin-bottom:16px">${folderChips}
       <button type="button" class="home-filter${_plFolderFilter ? '' : ' active'}" onclick="_plFolderFilter='';renderPlaylistsPage()">All</button></div>` : ''}
     ${smartCards ? spotifySection('Smart playlists', '#playlists', smartCards) : ''}
@@ -3958,11 +4228,22 @@ register('artists', async () => {
 });
 
 async function loadArtists() {
+  await ensureLibAnalytics();
+  const recents = getLibSort('artists').by === 'recents';
+  const pageSize = 50;
+  const limit = recents ? 500 : pageSize;
+  const page = recents ? 1 : _arPage;
   const [data, remote] = await Promise.all([
-    API(`/api/artists?page=${_arPage}&limit=50&search=${encodeURIComponent(_arSearch)}`),
+    API(`/api/artists?page=${page}&limit=${limit}&search=${encodeURIComponent(_arSearch)}${libSortQuery('artists')}`),
     ensureAlexaRemoteStatus(),
   ]);
-  const { items = [], total = 0 } = data || {};
+  let { items = [], total = 0 } = data || {};
+  if (recents) {
+    items = libSortItemsClient('artists', items);
+    total = items.length;
+    const start = (_arPage - 1) * pageSize;
+    items = items.slice(start, start + pageSize);
+  }
   window._artists = items;
   const canPlay = true;
 
@@ -3982,11 +4263,7 @@ async function loadArtists() {
   }).join('');
 
   renderPage('Artists', spotifyBrowsePage('Artists', libraryFiltersHtml('artists'), `
-    <div class="spotify-browse-toolbar">
-      <input type="search" class="spotify-browse-search" placeholder="Search artists…" value="${escHtml(_arSearch)}"
-        oninput="clearTimeout(window._sd);window._sd=setTimeout(()=>{_arSearch=this.value;_arPage=1;loadArtists()},350)">
-      <span class="hint">${fmtNum(total)} artists</span>
-    </div>
+    ${libraryBrowseToolbar('artists', { search: _arSearch, searchPlaceholder: 'Search artists…', onSearchFn: 'libSearchInput', total })}
     ${cards ? `<div class="spotify-browse-grid artists">${cards}</div>` : '<div class="empty-state"><i class="fa fa-microphone"></i><p>No artists found.</p></div>'}
     ${buildPagination(total, _arPage, 50, (p) => { _arPage = p; loadArtists(); })}
   `), { header: false });
@@ -3994,7 +4271,7 @@ async function loadArtists() {
 }
 
 // ── Albums ───────────────────────────────────────────────────────────────────
-let _alPage = 1, _alSearch = '', _alArtist = '';
+let _alPage = 1, _alSearch = '', _alArtist = '', _alUnplayedOnly = false;
 register('albums', async (params) => {
   _alPage = 1;
   _alArtist = params ? decodeURIComponent(params) : '';
@@ -4004,7 +4281,13 @@ register('albums', async (params) => {
 });
 
 async function loadAlbums() {
-  const url = `/api/albums?page=${_alPage}&limit=50&search=${encodeURIComponent(_alSearch)}&artist=${encodeURIComponent(_alArtist)}`;
+  await ensureLibAnalytics();
+  const recents = getLibSort('albums').by === 'recents';
+  const pageSize = 50;
+  const limit = recents ? 500 : pageSize;
+  const page = recents ? 1 : _alPage;
+  const unplayedQ = _alUnplayedOnly ? '&unplayed=1' : '';
+  const url = `/api/albums?page=${page}&limit=${limit}&search=${encodeURIComponent(_alSearch)}&artist=${encodeURIComponent(_alArtist)}${libSortQuery('albums')}${unplayedQ}`;
   let res;
   try {
     res = await authFetch(url);
@@ -4031,7 +4314,13 @@ async function loadAlbums() {
     return;
   }
   const remote = await ensureAlexaRemoteStatus().catch(() => ({}));
-  const { items = [], total = 0 } = data;
+  let { items = [], total = 0 } = data;
+  if (recents) {
+    items = libSortItemsClient('albums', items);
+    total = items.length;
+    const start = (_alPage - 1) * pageSize;
+    items = items.slice(start, start + pageSize);
+  }
   window._albums = items;
   const canPlay = true;
 
@@ -4052,13 +4341,10 @@ async function loadAlbums() {
 
   const backLink = _alArtist ? `<a href="#artists" class="spotify-section-link" style="display:inline-block;margin-bottom:12px"><i class="fa fa-arrow-left"></i> Back to Artists</a>` : '';
   const pageTitle = _alArtist ? `Albums · ${_alArtist}` : 'Albums';
+  const albumFilters = `<label class="library-filter-check"><input type="checkbox"${_alUnplayedOnly ? ' checked' : ''} onchange="_alUnplayedOnly=this.checked;_alPage=1;loadAlbums()"> Unplayed only</label>`;
   renderPage(pageTitle, spotifyBrowsePage(pageTitle, libraryFiltersHtml('albums'), `
     ${backLink}
-    <div class="spotify-browse-toolbar">
-      <input type="search" class="spotify-browse-search" placeholder="Search albums…" value="${escHtml(_alSearch)}"
-        oninput="clearTimeout(window._sd);window._sd=setTimeout(()=>{_alSearch=this.value;_alPage=1;loadAlbums()},350)">
-      <span class="hint">${fmtNum(total)} albums</span>
-    </div>
+    ${libraryBrowseToolbar('albums', { search: _alSearch, searchPlaceholder: 'Search albums…', onSearchFn: 'libSearchInput', total, extraHtml: albumFilters })}
     ${cards ? `<div class="spotify-browse-grid">${cards}</div>` : '<div class="empty-state"><i class="fa fa-compact-disc"></i><p>No albums found.</p></div>'}
     ${buildPagination(total, _alPage, 50, (p) => { _alPage = p; loadAlbums(); })}
   `), { header: false });
@@ -4081,11 +4367,22 @@ register('songs', async (params) => {
 });
 
 async function loadSongs() {
+  await ensureLibAnalytics();
+  const recents = getLibSort('songs').by === 'recents';
+  const pageSize = 100;
+  const limit = recents ? 500 : pageSize;
+  const page = recents ? 1 : _soPage;
   const [data, remote] = await Promise.all([
-    API(`/api/songs?page=${_soPage}&limit=100&search=${encodeURIComponent(_soSearch)}&artist=${encodeURIComponent(_soArtist)}&album=${encodeURIComponent(_soAlbum)}`),
+    API(`/api/songs?page=${page}&limit=${limit}&search=${encodeURIComponent(_soSearch)}&artist=${encodeURIComponent(_soArtist)}&album=${encodeURIComponent(_soAlbum)}${libSortQuery('songs')}`),
     ensureAlexaRemoteStatus(),
   ]);
-  const { items = [], total = 0 } = data || {};
+  let { items = [], total = 0 } = data || {};
+  if (recents) {
+    items = libSortItemsClient('songs', items);
+    total = items.length;
+    const start = (_soPage - 1) * pageSize;
+    items = items.slice(start, start + pageSize);
+  }
   window._songs = items;
   const canPlay = true;
 
@@ -4115,11 +4412,7 @@ async function loadSongs() {
 
   renderPage(pageTitle, spotifyBrowsePage(pageTitle, libraryFiltersHtml('songs'), `
     ${backLink}
-    <div class="spotify-browse-toolbar">
-      <input type="search" class="spotify-browse-search" placeholder="Search in list…" value="${escHtml(_soSearch)}"
-        oninput="clearTimeout(window._sd);window._sd=setTimeout(()=>{_soSearch=this.value;_soPage=1;loadSongs()},350)">
-      <span class="hint">${fmtNum(total)} tracks · ${escHtml(_soArtist || _soAlbum || 'All songs')}</span>
-    </div>
+    ${libraryBrowseToolbar('songs', { search: _soSearch, searchPlaceholder: 'Search songs…', onSearchFn: 'libSearchInput', total, extraHtml: `<span class="hint library-browse-sub">${escHtml(_soArtist || _soAlbum || 'All songs')}</span>` })}
     ${rows ? `<div class="spotify-track-list">
       <div class="spotify-track-row-head"><span>#</span><span>Title</span><span>Album</span><span></span></div>
       ${rows}
@@ -4135,13 +4428,24 @@ function path2name(p) {
 
 // ── Watch Folders ────────────────────────────────────────────────────────────
 register('watchfolders', async () => {
+  _wfSearch = '';
   loading();
-  const folders = await API('/api/watchfolders') || [];
+  await loadWatchfolders();
+});
 
-  const cards = folders.map(f => folderCardHtml(f)).join('');
+async function loadWatchfolders() {
+  let folders = await API('/api/watchfolders') || [];
+  if (_wfSearch.trim()) {
+    const q = _wfSearch.trim().toLowerCase();
+    folders = folders.filter((f) =>
+      (f.label || '').toLowerCase().includes(q) || (f.path || '').toLowerCase().includes(q));
+  }
+  folders = libSortItemsClient('watchfolders', folders);
+  const cards = folders.map((f) => folderCardHtml(f)).join('');
 
   renderPage('Watch Folders', `
     ${libraryFiltersHtml('watchfolders')}
+    ${libraryBrowseToolbar('watchfolders', { search: _wfSearch, searchPlaceholder: 'Search sources…', onSearchFn: 'libWatchfolderSearch', total: folders.length })}
     <div class="card">
       <div class="card-header">
         <h3><i class="fa fa-folder-open"></i> Watch Folders (${fmtNum(folders.length)})</h3>
@@ -4150,7 +4454,13 @@ register('watchfolders', async () => {
         ${cards || '<div class="empty-state"><i class="fa fa-folder"></i><p>No watch folders configured.</p></div>'}
       </div>
     </div>`);
-});
+}
+
+function libWatchfolderSearch(val) {
+  _wfSearch = val;
+  loadWatchfolders();
+}
+window.libWatchfolderSearch = libWatchfolderSearch;
 
 // ── Devices ──────────────────────────────────────────────────────────────────
 register('devices', async () => {
@@ -5079,82 +5389,52 @@ async function runAutomationNow(id) {
 }
 
 // ── Settings ─────────────────────────────────────────────────────────────────
-function releaseKindLabel(kind) {
-  return { feat: 'New', fix: 'Fixed', improve: 'Improved', chore: 'Update' }[kind] || 'Update';
-}
-
-function renderReleaseNotesHtml(releases) {
-  if (!releases || !releases.length) return '<p class="hint">No release notes yet.</p>';
-  return releases.map((rel, i) => {
-    const items = (rel.items || []).filter(it => it.text).map(it =>
-      `<li><span class="release-tag release-tag-${escHtml(it.kind || 'improve')}">${escHtml(releaseKindLabel(it.kind))}</span> ${escHtml(it.text)}</li>`
-    ).join('');
-    if (!items) return '';
-    const date = rel.date ? ` · ${escHtml(rel.date)}` : '';
-    const cls = i === 0 ? 'release-block release-latest' : 'release-block release-older';
-    return `<div class="${cls}"><h4>Version ${escHtml(rel.version)}${date}</h4><ul class="release-list">${items}</ul></div>`;
-  }).join('');
-}
-
-register('download', async () => {
-  const info = await API('/api/app/info') || {};
+async function refreshAppDownloadLinks() {
+  const androidEls = [
+    document.getElementById('topbar-dl-android'),
+    document.getElementById('mobile-dl-android'),
+  ].filter(Boolean);
+  const iosEls = [
+    document.getElementById('topbar-dl-ios'),
+    document.getElementById('mobile-dl-ios'),
+  ].filter(Boolean);
+  if (!androidEls.length && !iosEls.length) return;
+  const info = await API('/api/app/info').catch(() => ({})) || {};
   const android = info.android || {};
   const ios = info.ios || {};
-  const releases = info.releases || [];
-  const latest = releases[0];
-  const highlightItems = (latest?.items || []).slice(0, 6).filter(it => it.text);
-  const androidMeta = android.available
-    ? `Build ${escHtml(android.version)}${android.sizeMb != null ? ` · ${android.sizeMb} MB` : ''}`
-    : 'APK not on server yet';
-  const iosMeta = ios.available
-    ? `Build ${escHtml(ios.version)}${ios.sizeMb != null ? ` · ${ios.sizeMb} MB` : ''}`
-    : 'IPA not on server yet';
-  setPage(`
-    <div class="card">
-      <div class="card-header"><h3><i class="fa fa-mobile-screen"></i> Mobile app</h3></div>
-      <div class="card-body app-download-page">
-        <p class="hint">Install Bock Media on your phone. Use your server URL and Mobile API token from Settings.</p>
-        ${highlightItems.length ? `
-        <div class="release-highlights">
-          <h4>Latest${latest?.version ? ` (v${escHtml(latest.version)})` : ''}</h4>
-          <ul>${highlightItems.map(it => `<li>${escHtml(it.text)}</li>`).join('')}</ul>
-        </div>` : ''}
-        <div class="app-download-grid">
-          <section class="app-download-platform">
-            <h4><i class="fa fa-android"></i> Android</h4>
-            <p class="hint">${androidMeta}</p>
-            ${android.available && android.downloadHref
-              ? `<a class="btn-sm btn-primary" href="${escHtml(android.downloadHref)}"><i class="fa fa-download"></i> Download APK</a>`
-              : '<p class="hint">Build with <code>./gradlew assembleRelease</code> and copy to <code>.bockmedia/bockmedia-console.apk</code>.</p>'}
-            <ol class="hint app-install-steps">
-              <li>Download and install the APK</li>
-              <li>Allow installs from browser if prompted</li>
-              <li>Open app → enter server URL + Mobile API token</li>
-            </ol>
-          </section>
-          <section class="app-download-platform">
-            <h4><i class="fa fa-apple"></i> iPhone</h4>
-            <p class="hint">${iosMeta}</p>
-            ${ios.available && ios.otaHref
-              ? `<a class="btn-sm btn-primary" href="${escHtml(ios.otaHref)}"><i class="fa fa-download"></i> Install on iPhone</a>`
-              : ''}
-            ${ios.available && ios.downloadHref
-              ? `<a class="btn-sm btn-default" href="${escHtml(ios.downloadHref)}" style="margin-left:8px"><i class="fa fa-download"></i> Download IPA</a>`
-              : '<p class="hint">Archive in Xcode and copy IPA to <code>.bockmedia/bockmedia-console.ipa</code>.</p>'}
-            <ol class="hint app-install-steps">
-              <li>Use Safari for over-the-air install, or sideload the IPA</li>
-              <li>Trust the developer in Settings if prompted</li>
-              <li>Open app → enter server URL + Mobile API token</li>
-            </ol>
-          </section>
-        </div>
-        <div class="release-notes-panel">
-          <h4>Release notes</h4>
-          ${renderReleaseNotesHtml(releases)}
-        </div>
-        <p class="hint" style="margin-top:16px">Standalone download page: <a href="/app" target="_blank" rel="noopener">/app</a> (may require app-download password).</p>
-      </div>
-    </div>`);
+  for (const el of androidEls) {
+    if (android.available && android.downloadHref) {
+      el.href = android.downloadHref;
+      el.title = `Download Android${android.version ? ` v${android.version}` : ''}`;
+      el.classList.remove('is-unavailable');
+      el.onclick = null;
+    } else {
+      el.href = '#dashboard';
+      el.title = 'Android app not available yet';
+      el.classList.add('is-unavailable');
+      el.onclick = (e) => { e.preventDefault(); showToast('Android APK not on server yet', true); };
+    }
+  }
+  for (const el of iosEls) {
+    const href = ios.otaHref || ios.downloadHref;
+    if (ios.available && href) {
+      el.href = href;
+      el.title = ios.otaHref
+        ? `Install on iPhone${ios.version ? ` v${ios.version}` : ''}`
+        : `Download iOS${ios.version ? ` v${ios.version}` : ''}`;
+      el.classList.remove('is-unavailable');
+      el.onclick = null;
+    } else {
+      el.href = '#dashboard';
+      el.title = 'iPhone app not available yet';
+      el.classList.add('is-unavailable');
+      el.onclick = (e) => { e.preventDefault(); showToast('iOS app not on server yet', true); };
+    }
+  }
+}
+
+register('download', () => {
+  window.location.replace('#dashboard');
 });
 
 register('settings', async () => {
@@ -7407,6 +7687,7 @@ async function init() {
   setupSearchDelegation();
   setupHomeFilterDelegation();
   setupShellListeners();
+  refreshAppDownloadLinks();
 
   if (typeof WebPlayback !== 'undefined') {
     WebPlayback.onChange((st) => {

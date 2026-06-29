@@ -96,10 +96,13 @@ final class NowPlayingViewModel: ObservableObject {
 
     private func refreshRemoteOkIfStale(repository: BockMediaRepository) async {
         if let at = remoteOkCheckedAt, Date().timeIntervalSince(at) < Self.remoteStatusTTL { return }
-        if let status = try? await repository.alexaRemoteStatus() {
+        do {
+            let status = try await repository.alexaRemoteStatus()
             remoteOk = alexaControlsAvailable(status)
-            remoteOkCheckedAt = Date()
+        } catch {
+            remoteOk = false
         }
+        remoteOkCheckedAt = Date()
     }
 
     func control(repository: BockMediaRepository, action: String, device dev: NowPlayingDeviceItem) async {
@@ -109,6 +112,8 @@ final class NowPlayingViewModel: ObservableObject {
             case "next": LocalPlaybackController.shared.skipNext()
             case "previous": LocalPlaybackController.shared.skipPrevious()
             case "stop": LocalPlaybackController.shared.stopPlayback()
+            case "shuffle_on": LocalPlaybackController.shared.setShuffle(true)
+            case "shuffle_off": LocalPlaybackController.shared.setShuffle(false)
             default: break
             }
             await refresh(repository: repository)
@@ -299,8 +304,10 @@ struct NowPlayingView: View {
                     onPlayAtIndex: { idx in
                         if dev.deviceId == LocalPlaybackIds.localPhoneDeviceId {
                             LocalPlaybackController.shared.playAtIndex(localPlayback.state.index + 1 + idx)
+                            showUpNext = false
+                        } else {
+                            viewModel.error = "Skip from Up Next is not supported on Alexa yet."
                         }
-                        showUpNext = false
                     },
                     onDismiss: { showUpNext = false }
                 )
@@ -459,6 +466,8 @@ private struct NowPlayingDevicePage: View {
         let progress = viewModel.progress(for: dev)
         let canControl = viewModel.canControl(dev)
         let hasTrack = dev.filepath?.isEmpty == false
+        let isLocalPhone = dev.deviceId == LocalPlaybackIds.localPhoneDeviceId
+        let shuffleActive = isLocalPhone ? localPlayback.state.shuffle : dev.shuffle
 
         ZStack {
             NowPlayingArtBackdrop(url: artURL)
@@ -598,6 +607,18 @@ private struct NowPlayingDevicePage: View {
                         }
 
                         if canControl {
+                            Button {
+                                Task {
+                                    let action = shuffleActive ? "shuffle_off" : "shuffle_on"
+                                    await viewModel.control(repository: repository, action: action, device: dev)
+                                }
+                            } label: {
+                                BockIcon(icon: .shuffle, size: 24)
+                                    .foregroundStyle(shuffleActive ? BockColors.green : .white.opacity(0.65))
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.bottom, 8)
+
                             HStack(spacing: 40) {
                                 Button {
                                     Task { await viewModel.control(repository: repository, action: "previous", device: dev) }

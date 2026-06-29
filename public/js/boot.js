@@ -139,6 +139,7 @@
   }
 
   const route = (location.hash || '#dashboard').replace('#', '').split('/')[0] || 'dashboard';
+  if (route === 'dashboard') document.body.classList.add('route-home');
   if (route !== 'dashboard') return;
   const snap = loadHomeSnap();
   if (snap && paintHome(snap)) window.__BOOT_HOME_PAINTED__ = true;

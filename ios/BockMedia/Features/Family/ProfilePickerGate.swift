@@ -7,23 +7,19 @@ struct ProfilePickerGate<Content: View>: View {
 
     @State private var members: [HouseholdMember]?
     @State private var loading = false
-
-    private var activeId: String? { ActiveProfileStore.activeMemberId() }
+    @State private var profileReady = ActiveProfileStore.activeMemberId() != nil
 
     var body: some View {
         Group {
-            if activeId != nil || members?.isEmpty != false {
+            if profileReady || members?.isEmpty == true {
                 content()
+            } else if members == nil {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if members?.count == 1, let only = members?.first?.id {
                 content()
                     .task(id: only) {
-                        ActiveProfileStore.setActiveMember(only)
-                        try? await appState.repository.bindClient(
-                            clientId: ClientIdStore.clientId(),
-                            memberId: only,
-                            phoneId: InstallIdentity.phoneId()
-                        )
-                        await ClientPrefsSync.pullAndApply(repository: appState.repository)
+                        await pickMemberId(only)
                     }
             } else {
                 content()
@@ -33,7 +29,7 @@ struct ProfilePickerGate<Content: View>: View {
             }
         }
         .task {
-            guard activeId == nil else { return }
+            guard !profileReady else { return }
             members = try? await appState.repository.household().members
         }
     }
@@ -79,15 +75,16 @@ struct ProfilePickerGate<Content: View>: View {
         }
     }
 
+    private func pickMemberId(_ memberId: String) async {
+        guard !profileReady else { return }
+        profileReady = true
+        await ClientPrefsSync.onActiveMemberChanged(repository: appState.repository, memberId: memberId)
+    }
+
     private func pick(_ member: HouseholdMember) async {
         loading = true
+        profileReady = true
         defer { loading = false }
-        ActiveProfileStore.setActiveMember(member.id)
-        try? await appState.repository.bindClient(
-            clientId: ClientIdStore.clientId(),
-            memberId: member.id,
-            phoneId: InstallIdentity.phoneId()
-        )
-        await ClientPrefsSync.pullAndApply(repository: appState.repository)
+        await ClientPrefsSync.onActiveMemberChanged(repository: appState.repository, memberId: member.id)
     }
 }

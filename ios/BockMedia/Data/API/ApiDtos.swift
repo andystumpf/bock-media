@@ -170,6 +170,7 @@ struct NowPlayingDeviceItem: Codable, Identifiable {
     var duration_ms: Int64 = 0
     var offset_ms: Int64 = 0
     var paused: Bool = false
+    var shuffle: Bool = false
     var playlist: String?
     var playlistId: String?
     var sourceLabel: String?

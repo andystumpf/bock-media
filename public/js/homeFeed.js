@@ -1180,7 +1180,8 @@
     if (t.kind === 'radio') {
       if (t.seedKind === 'artist') return { kind: 'artist', name: t.seed };
       if (t.seedKind === 'song') return { kind: 'song', name: t.seed, path: t.artPath || '', artist: '' };
-      return { kind: 'artist', name: t.seed };
+      const genre = Rules.mixGenreLabel(card.title) || Rules.genreRadioLabel(t.title) || t.seed;
+      return { kind: 'genre', name: genre };
     }
     return null;
   }
@@ -1193,10 +1194,13 @@
     if (t.kind === 'artist') return `#songs/artist/${encodeURIComponent(t.name)}`;
     if (t.kind === 'radio') {
       if (t.seedKind === 'artist') return `#songs/artist/${encodeURIComponent(t.seed)}`;
-      if (t.seedKind === 'genre') return `#genres/${encodeURIComponent(t.seed)}`;
+      if (t.seedKind === 'genre') {
+        const label = Rules.mixGenreLabel(card.title) || Rules.genreRadioLabel(t.title) || t.seed;
+        return `#genres/${encodeURIComponent(label)}`;
+      }
     }
     if (card.kind === 'BrowseGenres') return `#genres/${encodeURIComponent(card.title)}`;
-    if (card.kind === 'Offline') return '#download';
+    if (card.kind === 'Offline') return '#library';
     return '#search';
   }
 
