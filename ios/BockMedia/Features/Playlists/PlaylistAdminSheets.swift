@@ -145,9 +145,12 @@ struct AiPlaylistSheet: View {
         saving = true
         defer { saving = false }
         do {
-            _ = try await appState.repository.aiPlaylist(
+            let resp = try await appState.repository.aiPlaylist(
                 prompt: prompt, name: name, maxTracks: 30, save: true
             )
+            if let id = resp.playlistId ?? resp.id, !id.isEmpty {
+                appState.suggestHomePinPlaylistId = id
+            }
             onSaved()
         } catch {
             appState.toast = error.localizedDescription

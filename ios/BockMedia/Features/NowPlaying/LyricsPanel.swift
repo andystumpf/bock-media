@@ -28,7 +28,7 @@ struct LyricsPanel: View {
     var body: some View {
         Group {
             if loading {
-                ProgressView()
+                BockProgressIndicator(size: 32)
                     .tint(.white)
             } else if let error {
                 Text(error)

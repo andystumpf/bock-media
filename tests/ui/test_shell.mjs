@@ -20,10 +20,10 @@ test('shell has Spotify layout regions', () => {
   assert.ok(document.getElementById('app-drawer'));
 });
 
-test('bottom nav exposes four primary tabs matching Android', () => {
+test('bottom nav exposes four primary tabs matching shell', () => {
   const { document } = bootstrap();
   const tabs = [...document.querySelectorAll('.bottom-nav-link')].map((a) => a.dataset.tab);
-  assert.deepEqual(tabs, ['home', 'search', 'library', 'automations']);
+  assert.deepEqual(tabs, ['home', 'nowplaying', 'search', 'library']);
 });
 
 test('drawer links include secondary routes', () => {
@@ -58,14 +58,14 @@ test('mini player shows track and artist when playing', async () => {
   assert.equal(document.getElementById('np-artist-text').textContent, 'Pixies');
 });
 
-test('account menu button opens drawer', () => {
-  const { window, document } = bootstrap();
-  const drawer = document.getElementById('app-drawer');
-  assert.ok(drawer.classList.contains('app-drawer'));
-  window.openAppDrawer();
-  assert.equal(drawer.classList.contains('open'), true);
-  window.closeAppDrawer();
-  assert.equal(drawer.classList.contains('open'), false);
+test('account menu opens profile dropdown', () => {
+  const { document } = bootstrap();
+  const menu = document.getElementById('profile-dropdown');
+  assert.ok(menu.classList.contains('hidden'));
+  document.getElementById('account-menu-btn').click();
+  assert.equal(menu.classList.contains('hidden'), false);
+  document.getElementById('topbar-profile').click();
+  assert.equal(menu.classList.contains('hidden'), true);
 });
 
 test('bottomTabForRoute maps routes like Android tabs', () => {

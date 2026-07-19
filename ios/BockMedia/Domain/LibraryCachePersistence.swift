@@ -111,6 +111,7 @@ enum LibraryCachePersistence {
         case .playlist: return "playlist"
         case .artist: return "artist"
         case .album: return "album"
+        case .track: return "track"
         case .downloaded: return "downloaded"
         }
     }
@@ -120,6 +121,7 @@ enum LibraryCachePersistence {
         case "playlist": return .playlist
         case "artist": return .artist
         case "album": return .album
+        case "track": return .track
         case "downloaded": return .downloaded
         default: return nil
         }

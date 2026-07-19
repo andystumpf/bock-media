@@ -11,6 +11,8 @@
     lastDevice: 'bock_pref_last_device',
     pinnedDevices: 'bock_pref_pinned_devices',
     continueAfterQueue: 'bock_pref_continue_after_queue',
+    crossfadeSeconds: 'bock_pref_crossfade_seconds',
+    nowPlayingVideo: 'bock_pref_now_playing_video',
     libraryViewMode: 'bock_pref_library_view_mode',
     librarySortBy: 'bock_pref_library_sort_by',
     librarySortOrder: 'bock_pref_library_sort_order',
@@ -129,6 +131,27 @@
   function setContinueAfterQueue(value, { push = true } = {}) {
     const v = (value || 'off').trim() || 'off';
     localStorage.setItem(PREF.continueAfterQueue, v);
+    if (push) schedulePush();
+  }
+
+  function getCrossfadeSeconds() {
+    const raw = parseInt(localStorage.getItem(PREF.crossfadeSeconds) || '0', 10);
+    if (!Number.isFinite(raw)) return 0;
+    return Math.min(20, Math.max(0, raw));
+  }
+
+  function setCrossfadeSeconds(seconds, { push = true } = {}) {
+    const v = Math.min(20, Math.max(0, parseInt(seconds, 10) || 0));
+    localStorage.setItem(PREF.crossfadeSeconds, String(v));
+    if (push) schedulePush();
+  }
+
+  function getNowPlayingVideo() {
+    return localStorage.getItem(PREF.nowPlayingVideo) === '1';
+  }
+
+  function setNowPlayingVideo(on, { push = true } = {}) {
+    localStorage.setItem(PREF.nowPlayingVideo, on ? '1' : '0');
     if (push) schedulePush();
   }
 
@@ -282,6 +305,8 @@
       if (pinned.length) prefs.pinnedDevices = pinned;
       const cont = getContinueAfterQueue();
       prefs.continueAfterQueue = cont || 'off';
+      prefs.crossfadeSeconds = getCrossfadeSeconds();
+      prefs.nowPlayingVideo = getNowPlayingVideo();
       const engagement = exportEngagementJson();
       if (engagement) prefs.homeTileEngagement = engagement;
       const tab = getLibraryTab();
@@ -325,6 +350,16 @@
       setContinueAfterQueue(merged.continueAfterQueue.trim() || 'off', { push: false });
       changed = true;
     }
+    if ('crossfadeSeconds' in merged) {
+      const raw = merged.crossfadeSeconds;
+      const n = typeof raw === 'number' ? raw : parseInt(String(raw || '0'), 10);
+      setCrossfadeSeconds(Number.isFinite(n) ? n : 0, { push: false });
+      changed = true;
+    }
+    if ('nowPlayingVideo' in merged) {
+      setNowPlayingVideo(merged.nowPlayingVideo === true, { push: false });
+      changed = true;
+    }
     if (typeof merged.homeTileEngagement === 'string' && merged.homeTileEngagement.trim()) {
       importEngagementJson(merged.homeTileEngagement);
       changed = true;
@@ -351,23 +386,49 @@
     return changed;
   }
 
-  async function bindClient(mid) {
-    if (!mid || typeof root.POST !== 'function') return;
-    await root.POST('/api/clients/bind', {
-      clientId: clientId(),
-      memberId: mid,
-      platform: 'web',
-    });
+  function memberExists(id, hh) {
+    if (!id) return false;
+    return (hh?.members || []).some((m) => m.id === id);
   }
 
-  async function restoreActiveMember() {
+  function clearActiveMember() {
+    if (typeof root.setActiveMember === 'function') root.setActiveMember('');
+    else localStorage.removeItem('bock_active_member');
+  }
+
+  function reconcileActiveMember(hh) {
+    const mid = memberId();
+    if (mid && !memberExists(mid, hh)) {
+      clearActiveMember();
+      return true;
+    }
+    return false;
+  }
+
+  async function bindClient(mid) {
+    if (!mid || typeof root.authFetch !== 'function') return;
+    const res = await root.authFetch('/api/clients/bind', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        clientId: clientId(),
+        memberId: mid,
+        platform: 'web',
+      }),
+    });
+    if (res.status !== 400) return;
+    const data = await res.json().catch(() => ({}));
+    if ((data.error || '') === 'unknown memberId') clearActiveMember();
+  }
+
+  async function restoreActiveMember(hh) {
     if (memberId() || typeof root.API !== 'function') return false;
-    const hh = await root.API('/api/household');
+    hh = hh || await root.API('/api/household');
     if (!hh) return false;
     const did = clientDeviceId();
     const bindings = hh.clientBindings || [];
     const fromBinding = bindings.find((b) => b.clientDeviceId === did)?.memberId;
-    if (fromBinding && typeof root.setActiveMember === 'function') {
+    if (fromBinding && memberExists(fromBinding, hh) && typeof root.setActiveMember === 'function') {
       root.setActiveMember(fromBinding);
       return true;
     }
@@ -383,7 +444,11 @@
     if (pulling || typeof root.API !== 'function') return;
     pulling = true;
     try {
-      const restored = await restoreActiveMember();
+      const hh = await root.API('/api/household');
+      root._household = hh;
+      if (typeof root.renderProfileDropdown === 'function') root.renderProfileDropdown();
+      reconcileActiveMember(hh);
+      const restored = await restoreActiveMember(hh);
       const mid = memberId();
       const q = new URLSearchParams({ clientId: clientId() });
       if (mid) q.set('memberId', mid);
@@ -433,17 +498,7 @@
   }
 
   function searchScopeBarHtml() {
-    const all = getSearchAllLibraries();
-    const path = getSearchSourcePath();
-    const pathHint = path ? ` · ${path.split('/').filter(Boolean).slice(-1)[0] || path}` : '';
-    return `<div class="search-scope-bar hint" style="padding:8px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-      <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;margin:0">
-        <input type="checkbox" id="search-all-libraries" ${all ? 'checked' : ''}
-          onchange="ClientPrefsSync.setSearchAllLibraries(this.checked); if(window._lastSearchRunKey) window._lastSearchRunKey=''; if(typeof loadSearchBrowse==='function') loadSearchBrowse();">
-        All libraries
-      </label>
-      ${path && !all ? `<span class="text-muted" style="font-size:12px">Folder${pathHint}</span>` : ''}
-    </div>`;
+    return '';
   }
 
   root.ClientPrefsSync = {
@@ -465,6 +520,10 @@
     togglePinned,
     getContinueAfterQueue,
     setContinueAfterQueue,
+    getCrossfadeSeconds,
+    setCrossfadeSeconds,
+    getNowPlayingVideo,
+    setNowPlayingVideo,
     noteCardsPresent,
     recordTileSelection,
     getLibraryViewMode,

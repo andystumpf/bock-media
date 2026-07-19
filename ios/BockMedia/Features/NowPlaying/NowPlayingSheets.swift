@@ -72,9 +72,8 @@ struct UpNextSheet: View {
                         Button {
                             onPlayAtIndex(idx)
                         } label: {
-                            UpNextTrackRow(repository: repository, track: track, showPlay: isLocal)
+                            UpNextTrackRow(repository: repository, track: track, showPlay: true)
                         }
-                        .disabled(!isLocal)
                     }
                 }
             }
@@ -139,7 +138,7 @@ struct StreamHistorySheet: View {
         NavigationStack {
             Group {
                 if loading && items.isEmpty {
-                    ProgressView().tint(BockColors.green)
+                    BockProgressIndicator(size: 24).tint(BockColors.green)
                 } else if items.isEmpty {
                     ContentUnavailableView {
                         Label("No history", icon: .history, size: 40)
@@ -155,7 +154,7 @@ struct StreamHistorySheet: View {
                             }
                         }
                         if loadingMore {
-                            HStack { Spacer(); ProgressView(); Spacer() }
+                            HStack { Spacer(); BockProgressIndicator(size: 32); Spacer() }
                         } else if items.count < total {
                             Color.clear.frame(height: 1)
                                 .onAppear { Task { await loadMore() } }
@@ -220,7 +219,7 @@ struct AddToRoomSheet: View {
                         .foregroundStyle(BockColors.muted)
                         .padding()
                 } else if loading {
-                    ProgressView().padding()
+                    BockProgressIndicator(size: 32).padding()
                 } else if options.isEmpty {
                     Text("No speakers found.").foregroundStyle(BockColors.muted).padding()
                 } else {

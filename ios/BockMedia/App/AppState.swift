@@ -13,53 +13,83 @@ final class AppState: ObservableObject {
     @Published var pendingDeepLink: DeepLink?
     @Published var pendingControl: (deviceId: String, action: String)?
     @Published var showNowPlayingSheet = false
+    @Published var suggestHomePinPlaylistId: String?
+    @Published var uitestSelectedTab: Int?
+    @Published var uitestSearchQuery: String?
+    /// Bumped on each `bockmedia://uitest/search` so SearchView re-runs even for the same query.
+    @Published var uitestSearchNonce = 0
+    @Published var uitestResetGeneration = 0
+    @Published private(set) var profileChangeRevision = 0
+    @Published private(set) var activeMemberId: String? = ActiveProfileStore.activeMemberId()
+    /// False until bootstrap/connect finishes initial server + prefs sync — gates main shell.
+    @Published private(set) var shellReady = false
 
     let preferences = AppPreferences()
     let repository: BockMediaRepository
 
     init() {
         repository = BockMediaRepository(preferences: preferences)
+        ArtworkImageCache.configure(preferences: preferences)
         ClientPrefsSync.configure(repository: repository)
         OfflineDownloadManager.shared.configure(repository: repository, preferences: preferences)
         NowPlayingPollService.shared.configure(repository: repository)
     }
 
     func bootstrap() async {
+        shellReady = false
         _ = ClientIdStore.clientId()
         preferences.applyBuildServerURLs()
         preferences.clearCredentialsIfNotRemembered()
-
         preferences.applyBuildDefaultsIfEmpty()
-        bootstrapMessage = "Checking server…"
 
         let remember = preferences.rememberMe
         let wasConnected = preferences.hasConnectedBefore
         guard remember || wasConnected else {
             isConnected = false
+            shellReady = true
             return
         }
 
-        let result = await withTimeout(seconds: 12) {
-            await self.repository.testConnection()
-        }
+        SessionDiskHydrator.hydrate()
+        await repository.primeConfiguredEndpoint()
 
-        switch result {
-        case .success(.success):
-            preferences.setHasConnected(true)
+        let hasUrls = preferences.localServerURL != nil || preferences.externalServerURL != nil
+        if wasConnected && hasUrls {
             isConnected = true
-            DeviceAnalyticsReporter.reportConnect(repository: repository)
-            await refreshRemoteStatus()
-            await ClientPrefsSync.pullAndApply(repository: repository)
-        case .success(.failure), .timedOut:
-            if wasConnected && (preferences.localServerURL != nil || preferences.externalServerURL != nil) {
+        }
+        shellReady = true
+
+        Task {
+            bootstrapMessage = "Checking server…"
+            repository.invalidateEndpoint()
+            let result = await withAsyncTimeout(seconds: 12) {
+                await self.repository.testConnection()
+            }
+
+            switch result {
+            case .success(.success):
+                preferences.setHasConnected(true)
                 isConnected = true
-            } else {
-                isConnected = false
+                DeviceAnalyticsReporter.reportConnect(repository: repository)
+                await refreshRemoteStatus()
+                await ClientPrefsSync.pullAndApply(repository: repository)
+            ClientPrefsSync.markBootPullCompleted()
+            case .success(.failure), .timedOut:
+                if wasConnected && hasUrls {
+                    isConnected = true
+                    repository.invalidateEndpoint()
+                    await ClientPrefsSync.pullAndApply(repository: repository)
+            ClientPrefsSync.markBootPullCompleted()
+                } else {
+                    isConnected = false
+                }
             }
         }
     }
 
     func connect(user: String, pass: String, token: String, rememberMe: Bool) async throws {
+        shellReady = false
+        defer { shellReady = true }
         preferences.rememberMe = rememberMe
         preferences.setCredentials(user: user, pass: pass, token: token)
         repository.invalidateAPI()
@@ -70,6 +100,7 @@ final class AppState: ObservableObject {
             DeviceAnalyticsReporter.reportConnect(repository: repository)
             await refreshRemoteStatus()
             await ClientPrefsSync.pullAndApply(repository: repository)
+            ClientPrefsSync.markBootPullCompleted()
         case .failure(let error):
             throw error
         }
@@ -129,28 +160,18 @@ final class AppState: ObservableObject {
         pendingPlayTarget = card.playTarget
     }
 
+    func noteProfileChanged() {
+        activeMemberId = ActiveProfileStore.activeMemberId()
+        profileChangeRevision += 1
+    }
+
+    func noteHouseholdChanged() {
+        profileChangeRevision += 1
+    }
+
     func refreshRemoteStatus() async {
         if let status = try? await repository.alexaRemoteStatus() {
             remoteOk = alexaControlsAvailable(status)
         }
-    }
-}
-
-private enum BootstrapTimeoutResult<T> {
-    case success(T)
-    case timedOut
-}
-
-@MainActor
-private func withTimeout<T>(seconds: TimeInterval, operation: @escaping @Sendable () async -> T) async -> BootstrapTimeoutResult<T> {
-    await withTaskGroup(of: BootstrapTimeoutResult<T>.self) { group in
-        group.addTask { .success(await operation()) }
-        group.addTask {
-            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-            return .timedOut
-        }
-        let first = await group.next()
-        group.cancelAll()
-        return first ?? .timedOut
     }
 }

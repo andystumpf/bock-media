@@ -206,6 +206,16 @@ class AppPreferences(private val context: Context) {
         }
     }
 
+    /** Sideload builds embed server creds — re-apply after a server-side password rotation. */
+    suspend fun applyBuildCredentialsIfPresent() {
+        applyBuildServerUrls()
+        val user = com.bockmedia.console.BuildConfig.DEFAULT_ADMIN_USER.takeIf { it.isNotBlank() }
+        val pass = com.bockmedia.console.BuildConfig.DEFAULT_ADMIN_PASSWORD.takeIf { it.isNotBlank() }
+        val token = com.bockmedia.console.BuildConfig.DEFAULT_MOBILE_API_TOKEN.takeIf { it.isNotBlank() }
+        if (user != null || pass != null) setAdminCredentials(user, pass)
+        if (token != null) setMobileToken(token)
+    }
+
     suspend fun hasAnyServerUrl(): Boolean =
         !getLocalServerUrlSync().isNullOrBlank() || !getExternalServerUrlSync().isNullOrBlank()
 
@@ -225,6 +235,59 @@ class AppPreferences(private val context: Context) {
             return url.trimEnd('/')
         }
 
+        /** Origin only — media URLs must not inherit a path suffix like /app from the web UI URL. */
+        fun serverOrigin(base: String): String {
+            return try {
+                val uri = java.net.URI(normalizeUrl(base))
+                val port = uri.port
+                val portSuffix = when {
+                    port <= 0 -> ""
+                    (uri.scheme == "http" && port == 80) || (uri.scheme == "https" && port == 443) -> ""
+                    else -> ":$port"
+                }
+                "${uri.scheme}://${uri.host}$portSuffix"
+            } catch (_: Exception) {
+                normalizeUrl(base)
+            }
+        }
+
+        /**
+         * Normalize a library path for /stream/ URLs. Rejects bare titles (no slash/extension)
+         * which always 404 on the server.
+         */
+        fun libraryPathForStream(filepath: String?): String? {
+            val raw = filepath?.trim().orEmpty()
+            if (raw.isBlank()) return null
+            val extracted = when {
+                raw.contains("://") ->
+                    com.bockmedia.console.domain.model.ArtworkPaths.extractMediaPath(raw)
+                else -> {
+                    var rel = raw.trimStart('/')
+                    when {
+                        rel.startsWith("stream/") -> rel.removePrefix("stream/")
+                        rel.startsWith("artwork/") -> rel.removePrefix("artwork/")
+                        else -> rel
+                    }
+                }
+            }?.trim().orEmpty().ifBlank { return null }
+            val decoded = java.net.URLDecoder.decode(extracted, "UTF-8")
+            if (!isValidLibraryPath(decoded)) return null
+            return if (decoded.startsWith("/")) decoded else "/$decoded"
+        }
+
+        fun isValidLibraryPath(path: String): Boolean {
+            val p = path.trim()
+            if (p.isBlank() || !p.contains("/")) return false
+            val base = p.substringAfterLast('/')
+            if (base.isBlank() || !base.contains('.')) return false
+            val ext = base.substringAfterLast('.').lowercase()
+            return ext in STREAMABLE_EXTENSIONS
+        }
+
+        private val STREAMABLE_EXTENSIONS = setOf(
+            "mp3", "flac", "m4a", "aac", "ogg", "wma", "wav", "opus", "aiff", "aif",
+        )
+
         fun isValidUrl(raw: String): Boolean {
             if (raw.isBlank()) return false
             return try {
@@ -243,8 +306,8 @@ class AppPreferences(private val context: Context) {
         }
 
         fun artworkUrl(base: String, filepath: String?, sizePx: Int? = null): String? {
-            if (filepath.isNullOrBlank()) return null
-            val url = "${normalizeUrl(base)}/artwork/${encodeMediaPath(filepath)}"
+            val libraryPath = libraryPathForStream(filepath) ?: return null
+            val url = "${serverOrigin(base)}/artwork/${encodeMediaPath(libraryPath)}"
             return if (sizePx != null && sizePx > 0) "$url?size=$sizePx" else url
         }
 
@@ -256,18 +319,26 @@ class AppPreferences(private val context: Context) {
             title: String? = null,
             artist: String? = null,
             lowBandwidth: Boolean = false,
+            bitrateKbps: Int? = null,
+            mediaSignSecret: String? = null,
         ): String? {
-            if (filepath.isNullOrBlank()) return null
-            val params = mutableListOf<String>()
-            title?.trim()?.takeIf { it.isNotEmpty() }?.let {
-                params += "title=${java.net.URLEncoder.encode(it, "UTF-8").replace("+", "%20")}"
+            val libraryPath = libraryPathForStream(filepath) ?: return null
+            val params = linkedMapOf<String, String>()
+            title?.trim()?.takeIf { it.isNotEmpty() }?.let { params["title"] = it }
+            artist?.trim()?.takeIf { it.isNotEmpty() }?.let { params["artist"] = it }
+            val br = bitrateKbps ?: if (lowBandwidth) CELLULAR_STREAM_BITRATE_KBPS else null
+            br?.let { params["br"] = it.toString() }
+            val streamPath = "/stream/${encodeMediaPath(libraryPath)}"
+            val signedPath = mediaSignSecret?.trim()?.takeIf { it.isNotEmpty() }?.let { secret ->
+                MediaUrlSigner.appendMediaSig(streamPath, params, secret)
+            } ?: run {
+                val qs = if (params.isEmpty()) "" else "?${params.entries.joinToString("&") { (k, v) ->
+                    "${java.net.URLEncoder.encode(k, "UTF-8").replace("+", "%20")}=" +
+                        java.net.URLEncoder.encode(v, "UTF-8").replace("+", "%20")
+                }}"
+                "$streamPath$qs"
             }
-            artist?.trim()?.takeIf { it.isNotEmpty() }?.let {
-                params += "artist=${java.net.URLEncoder.encode(it, "UTF-8").replace("+", "%20")}"
-            }
-            if (lowBandwidth) params += "br=$CELLULAR_STREAM_BITRATE_KBPS"
-            val qs = if (params.isEmpty()) "" else "?${params.joinToString("&")}"
-            return "${normalizeUrl(base)}/stream/${encodeMediaPath(filepath)}$qs"
+            return "${serverOrigin(base)}$signedPath"
         }
 
         fun hostOf(raw: String?): String? {

@@ -2,6 +2,7 @@ import UIKit
 
 enum ArtworkImageCache {
     private static let memory = NSCache<NSString, UIImage>()
+    private static weak var preferences: AppPreferences?
     private static let session: URLSession = {
         let config = URLSessionConfiguration.default
         config.urlCache = URLCache(
@@ -12,6 +13,10 @@ enum ArtworkImageCache {
         config.requestCachePolicy = .returnCacheDataElseLoad
         return URLSession(configuration: config)
     }()
+
+    static func configure(preferences: AppPreferences) {
+        self.preferences = preferences
+    }
 
     static func configureSharedURLCache() {
         URLCache.shared = URLCache(
@@ -29,7 +34,18 @@ enum ArtworkImageCache {
         let key = url.absoluteString as NSString
         if let hit = memory.object(forKey: key) { return hit }
         do {
-            let (data, _) = try await session.data(from: url)
+            var request = URLRequest(url: url)
+            if let preferences {
+                AuthHeaders.apply(
+                    to: &request,
+                    localHosts: preferences.localHosts(),
+                    username: preferences.adminUser,
+                    password: preferences.adminPass,
+                    token: preferences.mobileToken
+                )
+            }
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else { return nil }
             guard let image = UIImage(data: data) else { return nil }
             memory.setObject(image, forKey: key)
             return image

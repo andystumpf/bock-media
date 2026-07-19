@@ -1,8 +1,8 @@
 import SwiftUI
 
 enum AboutLinks {
-    static let githubPublic = "https://github.com/andystumpf/ourMedia"
-    static let githubPrivate = "https://github.com/andystumpf/ourMedia"
+    static let githubPublic = "https://github.com/andystumpf/bock-media"
+    static let githubPrivate = "https://github.com/andystumpf/bock-media"
 }
 
 struct AboutView: View {
@@ -60,6 +60,7 @@ struct AboutView: View {
         }
         .scrollContentBackground(.hidden)
         .bockBackground()
+        .accessibilityIdentifier(BockTestTags.aboutBody)
         .navigationTitle("About")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

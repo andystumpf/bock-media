@@ -66,6 +66,10 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        completionHandler([])
+        if notification.request.identifier == "followed-artists-new" {
+            completionHandler([.banner, .sound])
+        } else {
+            completionHandler([])
+        }
     }
 }

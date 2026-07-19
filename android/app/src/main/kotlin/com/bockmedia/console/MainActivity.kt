@@ -15,6 +15,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.bockmedia.console.media.NowPlayingNotificationManager
+import com.bockmedia.console.local.ClientPrefsSync
 import com.bockmedia.console.local.OfflineNetworkMonitor
 import com.bockmedia.console.local.OfflineDownloadManager
 import com.bockmedia.console.data.network.NetworkReachability
@@ -23,21 +24,20 @@ import com.bockmedia.console.domain.model.HomeCachePersistence
 import com.bockmedia.console.domain.model.HomeFeedCache
 import com.bockmedia.console.domain.model.LibraryCachePersistence
 import com.bockmedia.console.domain.model.LibrarySessionCache
+import com.bockmedia.console.domain.model.SessionDiskHydrator
 import com.bockmedia.console.ui.navigation.BockApp
 import com.bockmedia.console.ui.setup.SetupScreen
 import com.bockmedia.console.ui.components.SplashScreen
 import com.bockmedia.console.ui.components.BockImageLoader
 import com.bockmedia.console.ui.theme.BockMediaTheme
+import com.bockmedia.console.ui.testing.UITestSupport
 import androidx.lifecycle.lifecycleScope
 import com.bockmedia.console.widget.NowPlayingWidget
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
-import com.bockmedia.console.domain.model.SessionDiskHydrator
-import retrofit2.HttpException
-
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import retrofit2.HttpException
 
 private suspend fun retryTestConnection(app: BockMediaApp, attempts: Int = 3): Boolean {
     repeat(attempts) { attempt ->
@@ -50,28 +50,36 @@ private suspend fun retryTestConnection(app: BockMediaApp, attempts: Int = 3): B
     return false
 }
 
-private data class ColdBootState(val showApp: Boolean)
-
-private suspend fun coldBootFast(context: android.content.Context): ColdBootState {
-    val app = BockMediaApp.get(context)
-    app.preferences.applyBuildServerUrls()
-    app.preferences.clearCredentialsIfNotRemembered()
-    app.preferences.applyBuildDefaultsIfEmpty()
-    NetworkReachability.update(context)
-    app.configuredEndpointUrl()?.let { app.repository.primeBaseUrl(it) }
-    val remember = app.preferences.isRememberMeSync()
-    val wasConnected = app.preferences.hasConnectedBefore()
-    val showApp = (remember || wasConnected) && wasConnected && app.hasServerUrl()
-    // Link household profile before hydrating home cache — ratings are per-profile.
-    if (showApp) {
-        runCatching {
-            if (app.repository.testConnection().isSuccess) {
-                com.bockmedia.console.local.ClientPrefsSync.pullAndApply(context)
-            }
-        }
+private fun authFailureMessage(e: Throwable): String = when (e) {
+    is HttpException -> when (e.code()) {
+        401 -> "Authentication failed — check username, password, and mobile API token"
+        403 -> "Server blocked this connection — check server URL and access settings"
+        else -> "HTTP ${e.code()}"
     }
-    SessionDiskHydrator.hydrate(context)
-    return ColdBootState(showApp = showApp)
+    else -> e.message ?: "Can't reach server"
+}
+
+/** After server-side credential rotation, sideload builds can recover using embedded defaults. */
+private suspend fun recoverAuthFromBuild(app: BockMediaApp): Boolean {
+    if (com.bockmedia.console.BuildConfig.DEFAULT_ADMIN_PASSWORD.isBlank()
+        && com.bockmedia.console.BuildConfig.DEFAULT_MOBILE_API_TOKEN.isBlank()
+    ) {
+        return false
+    }
+    app.preferences.applyBuildCredentialsIfPresent()
+    app.invalidateEndpoint()
+    return retryTestConnection(app, 2)
+}
+
+private suspend fun syncServerAfterBoot(context: android.content.Context): Result<Unit> {
+    val app = BockMediaApp.get(context)
+    return runCatching {
+        if (app.repository.testConnection().isFailure) error("connection failed")
+        app.preferences.setHasConnected(true)
+        com.bockmedia.console.data.analytics.DeviceAnalyticsReporter.reportConnect(context)
+        ClientPrefsSync.pullAndApply(context)
+        ClientPrefsSync.markBootPullCompleted()
+    }
 }
 
 class MainActivity : ComponentActivity() {
@@ -91,81 +99,110 @@ class MainActivity : ComponentActivity() {
             ),
         )
         super.onCreate(savedInstanceState)
+        AppForegroundState.install()
         val app = BockMediaApp.get(applicationContext)
         NetworkReachability.update(applicationContext)
-        val coldBoot = runBlocking(Dispatchers.IO) { coldBootFast(applicationContext) }
-        BockImageLoader.install(applicationContext, app)
-        lifecycleScope.launch(Dispatchers.IO) {
-            SessionDiskHydrator.warmHomeArtwork(applicationContext, app)
-        }
         val deepRoute = intent.getStringExtra(EXTRA_ROUTE)
+        val uitestUri = intent.data?.takeIf { it.scheme == "bockmedia" && it.host == "uitest" }
 
         setContent {
             BockMediaTheme {
                 val app = remember { BockMediaApp.get(this) }
-                var hasServer by remember { mutableStateOf<Boolean?>(if (coldBoot.showApp) true else null) }
+                var hasServer by remember { mutableStateOf<Boolean?>(null) }
                 val notificationPermission = rememberLauncherForActivityResult(
                     ActivityResultContracts.RequestPermission(),
                 ) { }
 
                 var autoLoginError by remember { mutableStateOf<String?>(null) }
+
                 LaunchedEffect(Unit) {
                     NowPlayingNotificationManager.ensureChannel(this@MainActivity)
-                    if (coldBoot.showApp) {
-                        launch(Dispatchers.IO) {
-                            if (retryTestConnection(app)) {
-                                app.preferences.setHasConnected(true)
-                                com.bockmedia.console.data.analytics.DeviceAnalyticsReporter
-                                    .reportConnect(this@MainActivity)
-                                com.bockmedia.console.local.ClientPrefsSync.pullAndApply(this@MainActivity)
+                    uitestUri?.let { uri ->
+                        if (UITestSupport.isEnabled(intent)) {
+                            UITestSupport.handleUri(applicationContext, uri)
+                        }
+                    }
+                    val app = BockMediaApp.get(applicationContext)
+                    withContext(Dispatchers.IO) {
+                        app.preferences.applyBuildServerUrls()
+                        app.preferences.clearCredentialsIfNotRemembered()
+                        app.preferences.applyBuildDefaultsIfEmpty()
+                        NetworkReachability.update(applicationContext)
+                        if (!NetworkReachability.onWifi) {
+                            app.onCellularNetwork()
+                        }
+                        app.configuredEndpointUrl()?.let { app.repository.primeBaseUrl(it) }
+                        SessionDiskHydrator.hydrate(applicationContext)
+                    }
+
+                    val remember = app.preferences.isRememberMeSync()
+                    val wasConnected = app.preferences.hasConnectedBefore()
+                    if ((remember || wasConnected) && wasConnected && app.hasServerUrl()) {
+                        var ok = withContext(Dispatchers.IO) { retryTestConnection(app) }
+                        if (!ok) {
+                            ok = withContext(Dispatchers.IO) { recoverAuthFromBuild(app) }
+                        }
+                        if (ok) {
+                            hasServer = true
+                            val sync = withContext(Dispatchers.IO) { syncServerAfterBoot(applicationContext) }
+                            if (sync.isFailure) {
+                                val recovered = withContext(Dispatchers.IO) { recoverAuthFromBuild(app) }
+                                    && withContext(Dispatchers.IO) { syncServerAfterBoot(applicationContext).isSuccess }
+                                if (!recovered) {
+                                    hasServer = false
+                                    autoLoginError = authFailureMessage(sync.exceptionOrNull() ?: Exception("Sync failed"))
+                                }
                             }
+                        } else {
+                            hasServer = false
+                            autoLoginError = "Authentication failed — check username, password, and mobile API token"
                         }
                         return@LaunchedEffect
                     }
+
                     app.preferences.applyBuildServerUrls()
                     app.preferences.clearCredentialsIfNotRemembered()
                     app.preferences.applyBuildDefaultsIfEmpty()
 
-                    val remember = app.preferences.isRememberMeSync()
-                    val wasConnected = app.preferences.hasConnectedBefore()
                     if (remember || wasConnected) {
                         if (wasConnected && app.hasServerUrl()) {
                             launch(Dispatchers.IO) {
-                                val ok = retryTestConnection(app)
+                                var ok = retryTestConnection(app)
+                                if (!ok) ok = recoverAuthFromBuild(app)
                                 withContext(Dispatchers.Main) {
                                     if (ok) {
                                         app.preferences.setHasConnected(true)
                                         hasServer = true
                                         com.bockmedia.console.data.analytics.DeviceAnalyticsReporter
                                             .reportConnect(this@MainActivity)
-                                        com.bockmedia.console.local.ClientPrefsSync.pullAndApply(this@MainActivity)
                                     } else {
                                         hasServer = false
                                         autoLoginError = "Can't reach server — check network or server URL"
                                     }
                                 }
+                                if (ok) {
+                                    syncServerAfterBoot(this@MainActivity)
+                                }
                             }
                             return@LaunchedEffect
                         }
-                        if (retryTestConnection(app)) {
+                        var ok = withContext(Dispatchers.IO) { retryTestConnection(app) }
+                        if (!ok) ok = withContext(Dispatchers.IO) { recoverAuthFromBuild(app) }
+                        if (ok) {
                             app.preferences.setHasConnected(true)
                             hasServer = true
                             com.bockmedia.console.data.analytics.DeviceAnalyticsReporter
                                 .reportConnect(this@MainActivity)
-                            com.bockmedia.console.local.ClientPrefsSync.pullAndApply(this@MainActivity)
+                            withContext(Dispatchers.IO) {
+                                syncServerAfterBoot(applicationContext)
+                            }
                             return@LaunchedEffect
                         }
-                        runCatching { app.repository.testConnection() }
-                            .onFailure { e ->
-                                autoLoginError = when (e) {
-                                    is HttpException -> when (e.code()) {
-                                        401 -> "Authentication failed — check username, password, and mobile API token"
-                                        403 -> "External API blocked — set mobileApi.allowExternalAccess in config.json"
-                                        else -> "HTTP ${e.code()}"
-                                    }
-                                    else -> e.message ?: "Saved login failed — sign in again"
-                                }
-                            }
+                        withContext(Dispatchers.IO) {
+                            runCatching { app.repository.testConnection() }
+                        }.onFailure { e ->
+                            autoLoginError = authFailureMessage(e)
+                        }
                     }
                     hasServer = false
                 }
@@ -173,7 +210,7 @@ class MainActivity : ComponentActivity() {
                 LaunchedEffect(hasServer) {
                     if (hasServer == true) {
                         OfflineNetworkMonitor.start(this@MainActivity)
-                        OfflineDownloadManager.refresh(this@MainActivity)
+                        launch(Dispatchers.IO) { OfflineDownloadManager.refresh(this@MainActivity) }
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
                         }
@@ -186,6 +223,9 @@ class MainActivity : ComponentActivity() {
                         if (event == Lifecycle.Event.ON_RESUME && hasServer == true) {
                             lifecycleOwner.lifecycleScope.launch {
                                 withContext(Dispatchers.IO) {
+                                    if (!ClientPrefsSync.shouldSkipResumePull()) {
+                                        ClientPrefsSync.pullAndApply(this@MainActivity)
+                                    }
                                     NowPlayingWidget.refreshSession(applicationContext)
                                 }
                             }
@@ -239,21 +279,35 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+
+        lifecycleScope.launch(Dispatchers.IO) {
+            BockImageLoader.install(applicationContext, app)
+            SessionDiskHydrator.warmHomeArtwork(applicationContext, app)
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        val uri = intent.data?.takeIf { it.scheme == "bockmedia" && it.host == "uitest" }
+        if (uri != null && UITestSupport.isEnabled(intent)) {
+            lifecycleScope.launch { UITestSupport.handleUri(applicationContext, uri) }
+            return
+        }
         intent.getStringExtra(EXTRA_ROUTE)?.let { recreate() }
     }
 
     companion object {
         const val EXTRA_ROUTE = "route"
 
-        fun launchIntent(context: android.content.Context, route: String? = null): Intent =
+        fun launchIntent(context: android.content.Context, route: String? = null, uitestUri: String? = null): Intent =
             Intent(context, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
                 route?.let { putExtra(EXTRA_ROUTE, it) }
+                uitestUri?.let {
+                    data = android.net.Uri.parse(it)
+                    putExtra("UITesting", true)
+                }
             }
     }
 }

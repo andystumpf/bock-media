@@ -22,7 +22,7 @@ final class BockMediaUITests: XCTestCase {
     }
 
     private func reachedMainTabs(_ app: XCUIApplication) -> Bool {
-        app.tabBars.firstMatch.exists
+        BockSmokeHarness.bottomNavVisible(app)
     }
 
     /// The app launches and settles into a known stable surface (Setup or main tabs)

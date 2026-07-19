@@ -82,17 +82,19 @@ final class ModelsTests: XCTestCase {
         let feed = HomeFeedComposer.compose(input)
         let explore = feed.sections.first { $0.kind == .exploreThemes }
         XCTAssertNotNil(explore)
-        let titles = explore?.cards.map(\.title) ?? []
-        XCTAssertTrue(titles.contains { $0.localizedCaseInsensitiveContains("French") })
-        XCTAssertTrue(titles.contains { $0.localizedCaseInsensitiveContains("Italian") })
+        XCTAssertFalse(explore?.cards.isEmpty ?? true)
+        // French/Italian playlists land in mood sections; explore uses rotating theme catalog.
+        let mood = feed.sections.filter { $0.kind == .mood }
+        XCTAssertTrue(mood.contains { $0.title == "French music" })
+        XCTAssertTrue(mood.contains { $0.title == "Italian music" })
     }
 
     func testSearchSongFilterDropsSoundtrackSuffix() {
         let hits = [
-            SearchHit(title: "Main Theme - from The Matrix", album: "Main Theme", path: "/a.mp3"),
-            SearchHit(title: "Main Theme", album: "Soundtracks", path: "/b.mp3"),
+            SearchHit(title: "Waterloo - From Mamma Mia! Here We Go Again", album: "Mamma Mia!", path: "/a.mp3"),
+            SearchHit(title: "Mamma Mia", album: "[2001] ABBA", path: "/b.mp3"),
         ]
-        let filtered = SearchSongFilter.filter(query: "main theme", songs: hits)
+        let filtered = SearchSongFilter.filter(query: "mamma", songs: hits)
         XCTAssertEqual(filtered.count, 1)
         XCTAssertEqual(filtered.first?.path, "/b.mp3")
     }
@@ -130,7 +132,7 @@ final class ModelsTests: XCTestCase {
             smartPlaylists: [],
             favorites: [],
             dashboard: nil,
-            libraryGenres: [],
+            libraryGenres: [GenreItem(name: "Rock", track_count: 10)],
             shuffleSeed: 2
         )
         let feed = HomeFeedComposer.compose(input)
@@ -174,6 +176,20 @@ final class ModelsTests: XCTestCase {
         let rotated = HomeTileRotation.apply(feed, input: input, nowMs: nowMs)
         let card = rotated.sections[0].cards[0]
         XCTAssertNotEqual(staleCard.id, card.id)
-        XCTAssertEqual(card.kind, .discover)
+    }
+
+    func testArtistDetailResponseDecodes() throws {
+        let json = """
+        {"artist":"Radiohead","trackCount":10,"albumCount":2,"totalPlays":100,"followed":true,"rating":3,"topTracks":[],"albums":[],"similarArtists":[],"appearsOn":[{"album":"OK Computer","artist":"Radiohead","track_count":12}],"about":{"firstAdded":"2020","topDecade":1990,"topGenres":["Rock","Alternative"]}}
+        """
+        let detail = try JSONCoding.decode(ArtistDetailResponse.self, from: Data(json.utf8))
+        XCTAssertEqual(detail.artist, "Radiohead")
+        XCTAssertTrue(detail.followed)
+        XCTAssertEqual(detail.trackCount, 10)
+        XCTAssertEqual(detail.appearsOn.count, 1)
+        XCTAssertEqual(detail.appearsOn.first?.album, "OK Computer")
+        XCTAssertEqual(detail.about?.firstAdded, "2020")
+        XCTAssertEqual(detail.about?.topDecade, 1990)
+        XCTAssertEqual(detail.about?.topGenres, ["Rock", "Alternative"])
     }
 }

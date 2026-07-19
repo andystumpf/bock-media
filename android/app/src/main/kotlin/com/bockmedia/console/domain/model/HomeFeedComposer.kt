@@ -21,6 +21,7 @@ object HomeFeedLimits {
     const val EXPLORE_THEMES = 24
     const val LIBRARY_GENRE_EXTRAS = 10
     const val DAILY_MIXES = 20
+    const val RECENTLY_CREATED = 10
     const val RECENT_PLAYLISTS = 36
     const val RADIO = 24
     const val DISCOVER = 36
@@ -41,7 +42,9 @@ data class HomeFeedInput(
     val continueResume: ResumeEntry? = null,
     val releaseRadarLabel: String? = null,
     val releaseRadarArtPath: String? = null,
+    val followedReleaseCards: List<HomeCard> = emptyList(),
     val discoverWeeklyCards: List<HomeCard> = emptyList(),
+    val recentlyCreatedPlaylists: List<PlaylistSummary> = emptyList(),
 )
 
 private class HomeFeedRegistry {
@@ -149,6 +152,13 @@ object HomeFeedComposer {
             return cards
         }
 
+        val recentlyCreated = fillPlaylists(
+            (if (input.recentlyCreatedPlaylists.isNotEmpty()) input.recentlyCreatedPlaylists
+             else input.allPlaylists.sortedByDescending { parseSortDate(it.createDate) }),
+            HomeFeedLimits.RECENTLY_CREATED,
+            HomeSectionKind.RecentlyCreated,
+        ) { "${it.tracks} tracks · Recently created" }
+
         fun resolveMixArt(genre: String, artist: String?, index: Int): String? {
             HomeFeedRules.matchingLibraryGenreForLabel(genre, input.libraryGenres)
                 ?.artPath?.takeIf { it.isNotBlank() }
@@ -177,6 +187,17 @@ object HomeFeedComposer {
             section("mood-${mood.id}", mood.title, HomeSectionKind.Mood, cards)
         }
         registry.reserveMoodPlaylists(moodSections.flatMap { it.cards })
+
+        val decadeSections = HomeDecadeSections.all().mapNotNull { decade ->
+            val cards = buildDecadeSectionCards(
+                decade = decade,
+                input = input,
+                registry = registry,
+                playlistById = playlistById,
+            )
+            section("decade-${decade.id}", decade.title, HomeSectionKind.Decade, cards)
+        }
+        registry.reserveMoodPlaylists(decadeSections.flatMap { it.cards })
 
         val jumpBackIn = buildList {
             input.continueResume?.filepath?.let { path ->
@@ -227,13 +248,6 @@ object HomeFeedComposer {
                     add(card)
                 }
             }
-            addAll(
-                fillPlaylists(
-                    input.allPlaylists.sortedByDescending { parseSortDate(it.createDate) },
-                    HomeFeedLimits.JUMP_BACK_IN - size,
-                    HomeSectionKind.JumpBackIn,
-                ) { "Recently added" },
-            )
             addAll(
                 fillPlaylists(
                     shuffledGeneric,
@@ -401,12 +415,18 @@ object HomeFeedComposer {
             }
         }
 
+        val followedReleases = input.followedReleaseCards.filter { !registry.hasCard(it.id) }.onEach {
+            registry.registerCard(it)
+        }
+
         val sections = listOfNotNull(
             section("jump-back-in", "Jump back in", HomeSectionKind.JumpBackIn, jumpBackIn),
+            section("recently-created", "Recently Created", HomeSectionKind.RecentlyCreated, recentlyCreated),
             section("rated-songs", "Rated Songs", HomeSectionKind.RatedSongs, ratedSongCards),
             section("browse-genres", "Browse by genre", HomeSectionKind.BrowseGenres, browseGenres),
             section("top-mixes", "Your top mixes", HomeSectionKind.TopMixes, genreMixes),
-        ) + moodSections + listOfNotNull(
+        ) + moodSections + decadeSections + listOfNotNull(
+            section("followed-releases", "New from artists you follow", HomeSectionKind.Discover, followedReleases),
             section("release-radar", "Release Radar", HomeSectionKind.Discover, releaseRadar),
             section("discover-weekly", "Discover Weekly", HomeSectionKind.Discover, input.discoverWeeklyCards),
             section("explore-themes", "Explore genres & worlds", HomeSectionKind.ExploreThemes, exploreThemes),
@@ -798,5 +818,50 @@ object HomeFeedComposer {
         }
 
         return cards.distinctBy { it.id }.take(limit)
+    }
+
+    private fun buildDecadeSectionCards(
+        decade: HomeDecadeSection,
+        input: HomeFeedInput,
+        registry: HomeFeedRegistry,
+        playlistById: Map<String, PlaylistSummary>,
+    ): List<HomeCard> {
+        val kind = HomeSectionKind.Decade
+        val cards = mutableListOf<HomeCard>()
+
+        fun addCard(card: HomeCard?) {
+            if (card == null || registry.hasCard(card.id)) return
+            if (cards.any { it.id == card.id }) return
+            registry.registerMoodCard(card)
+            cards.add(card)
+        }
+
+        fun decadePlaylistCard(pl: PlaylistSummary): HomeCard? {
+            if (pl.tracks <= 0) return null
+            val cardId = "decade-${decade.id}-pl-${pl.id}"
+            if (registry.hasCard(cardId)) return null
+            return HomeCard(
+                id = cardId,
+                title = pl.name,
+                subtitle = "${pl.tracks} tracks · ${decade.title}",
+                artPath = pl.artPath,
+                playlistId = pl.id,
+                playTarget = PlayTarget.Playlist(pl.id, pl.name),
+                kind = kind,
+            )
+        }
+
+        for (pl in HomeFeedRules.playlistsForDecadeSection(input.allPlaylists, decade.id)) {
+            addCard(decadePlaylistCard(pl))
+        }
+
+        for (sp in input.smartPlaylists.filter {
+            it.enabled && HomeFeedRules.playlistMatchesDecade(it.name, decade.id)
+        }) {
+            val pl = sp.playlistId?.let { playlistById[it] } ?: continue
+            addCard(decadePlaylistCard(pl))
+        }
+
+        return cards.distinctBy { it.id }
     }
 }

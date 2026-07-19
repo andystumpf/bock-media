@@ -12,6 +12,7 @@ final class OfflineDownloadManager: ObservableObject {
     private let session = OfflineBackgroundSession.shared
     private var prepareTasks: [String: Task<Void, Never>] = [:]
     private var cancelFlags: Set<String> = []
+    private var downloadSlotId: String?
     private var cancellables: Set<AnyCancellable> = []
     private var reconcileCancellable: AnyCancellable?
 
@@ -61,7 +62,17 @@ final class OfflineDownloadManager: ObservableObject {
             )
         }
         let downloading = statuses.filter { $0.value.state == .downloading }
-        statuses = persisted.merging(downloading) { _, new in new }
+        let queued = statuses.filter { $0.value.state == .idle }
+        statuses = persisted.merging(downloading.merging(queued) { _, new in new }) { _, new in new }
+    }
+
+    func onActiveProfileChanged(previousMemberId: String?) {
+        if let previousMemberId, !previousMemberId.isEmpty {
+            for id in OfflineDownloadSync.collectionIdsForMember(previousMemberId) where prepareTasks[id] != nil {
+                cancelCollection(id)
+            }
+        }
+        refresh()
     }
 
     func isDownloaded(_ target: PlayTarget) -> Bool {
@@ -77,7 +88,9 @@ final class OfflineDownloadManager: ObservableObject {
         OfflineDownloadSync.register(target: target)
         ClientPrefsSync.schedulePush(repository: repository)
         let id = target.downloadId()
-        if statuses[id]?.state == .downloading { return }
+        let state = statuses[id]?.state
+        if state == .downloading { return }
+        if state == .idle, prepareTasks[id] != nil { return }
         if let reason = OfflineDownloadNetwork.shared.blockedReason(preferences: preferences) {
             let existing = store.readManifest(id)
             statuses[id] = OfflineCollectionStatus(
@@ -88,10 +101,20 @@ final class OfflineDownloadManager: ObservableObject {
             )
             return
         }
+        if isDownloadSlotBusy(excludingId: id) {
+            let existing = store.readManifest(id)
+            statuses[id] = OfflineCollectionStatus(
+                manifest: existing ?? manifestShell(id: id, target: target, tracks: []),
+                state: .idle,
+                progress: existing.map { store.completionProgress($0) } ?? 0
+            )
+        }
         cancelFlags.remove(id)
         prepareTasks[id]?.cancel()
         prepareTasks[id] = Task {
+            await acquireDownloadSlot(id: id)
             await prepareAndEnqueue(repository: repository, target: target, resyncOnly: false)
+            releaseDownloadSlot(id: id)
             prepareTasks[id] = nil
         }
     }
@@ -101,7 +124,7 @@ final class OfflineDownloadManager: ObservableObject {
         prepareTasks[id]?.cancel()
         prepareTasks[id] = nil
         session.cancel(collectionId: id)
-        if var status = statuses[id], status.state == .downloading {
+        if var status = statuses[id], status.state == .downloading || status.state == .idle {
             status.state = .failed
             status.error = "Cancelled"
             statuses[id] = status
@@ -283,5 +306,23 @@ final class OfflineDownloadManager: ObservableObject {
             coverArtPath: tracks.first?.path,
             tracks: tracks
         )
+    }
+
+    private func isDownloadSlotBusy(excludingId: String) -> Bool {
+        if let slot = downloadSlotId, slot != excludingId { return true }
+        return prepareTasks.keys.contains(where: { $0 != excludingId })
+            || statuses.contains { $0.key != excludingId && $0.value.state == .downloading }
+    }
+
+    private func acquireDownloadSlot(id: String) async {
+        while downloadSlotId != nil && downloadSlotId != id {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            if Task.isCancelled { return }
+        }
+        downloadSlotId = id
+    }
+
+    private func releaseDownloadSlot(id: String) {
+        if downloadSlotId == id { downloadSlotId = nil }
     }
 }

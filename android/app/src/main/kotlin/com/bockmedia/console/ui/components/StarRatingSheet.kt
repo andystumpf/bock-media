@@ -26,6 +26,7 @@ enum class RatingKind(val apiValue: String) {
     Song("song"),
     Album("album"),
     Playlist("playlist"),
+    Artist("artist"),
 }
 
 data class RatingTarget(

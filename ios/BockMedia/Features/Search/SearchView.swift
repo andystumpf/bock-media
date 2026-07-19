@@ -4,23 +4,26 @@ struct SearchView: View {
     @ObservedObject var appState: AppState
     @FocusState private var searchFocused: Bool
 
-    @State private var query = ""
-    @State private var results: SearchResponse?
-    @State private var suggestions: [SearchSuggestion] = []
-    @State private var browseFeed: SearchBrowseFeed?
+    @State private var query = SearchResultsSessionCache.query
+    @State private var results: SearchResponse? = SearchResultsSessionCache.results
+    @State private var suggestions: [SearchSuggestion] = SearchResultsSessionCache.suggestions
+    @State private var browseFeed: SearchBrowseFeed? = SearchBrowseSessionCache.getIfFresh()
     @State private var browseLoading = true
     @State private var loading = false
     @State private var recentSelections: [SearchRecentSelection] = []
     @State private var showNewReleases = false
     @State private var browseArtworkEpoch = 0
-    @State private var addToPlaylist: AddToPlaylistContext?
-    @State private var addToRoom: AddToRoomContext?
     @State private var searchTask: Task<Void, Never>?
-    @State private var favoritePaths: Set<String> = []
+    @State private var searchError: String?
     @State private var searchPins: [SearchPin] = []
     @State private var rankingKind: SearchRankingKind?
     @State private var expandedSections: Set<String> = []
     @State private var expandedResults: [String: SearchResponse] = [:]
+    @State private var resultFilter: SearchResultFilter = .all
+    @State private var showMixMuse = false
+    @State private var showPinEditor = false
+    @State private var navigateSonicAdventure = false
+    @State private var navigateCreatedPlaylist: String?
 
     private enum SearchRankingKind: String, CaseIterable {
         case artists = "Top Artists"
@@ -30,8 +33,8 @@ struct SearchView: View {
     }
 
     private var trimmedQuery: String { query.trimmingCharacters(in: .whitespaces) }
-    private var showResults: Bool { trimmedQuery.count >= 2 }
-    private var showSuggestions: Bool { !showResults && !trimmedQuery.isEmpty }
+    private var showResults: Bool { !trimmedQuery.isEmpty }
+    private var showSuggestions: Bool { false }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -40,12 +43,30 @@ struct SearchView: View {
                 .padding(.horizontal, 16)
 
             if loading && showResults && results == nil {
-                LoadingBox(logoSize: 40)
+                LoadingBox(size: 40)
                     .padding()
+                    .accessibilityIdentifier(BockTestTags.screenLoading)
+            } else if let searchError, showResults {
+                Text(searchError)
+                    .foregroundStyle(.red)
+                    .padding()
+                    .accessibilityIdentifier(BockTestTags.searchError)
             } else if showResults, let results {
-                searchResultsList(results)
+                if results.hasAnyMatches {
+                    SearchResultFilterChips(selected: $resultFilter)
+                    SearchResultsView(
+                        appState: appState,
+                        results: results,
+                        query: query,
+                        resultFilter: $resultFilter,
+                        expandedSections: $expandedSections,
+                        expandedResults: $expandedResults
+                    )
+                } else {
+                    searchEmptyState
+                }
             } else if showResults {
-                LoadingBox(logoSize: 40).padding()
+                searchEmptyState
             } else if showSuggestions {
                 suggestionsList
             } else if rankingKind != nil {
@@ -61,41 +82,70 @@ struct SearchView: View {
         }
         .task {
             recentSelections = SearchHistoryStore.selections()
-            if let favs = try? await appState.repository.favorites() {
-                favoritePaths = Set(favs.map(\.path))
-            }
             searchPins = (try? await appState.repository.searchPins()) ?? []
+            if SearchBrowseSessionCache.getIfFresh() == nil {
+                TabWarmCoordinator.warmSearchBrowse(repository: appState.repository)
+            }
             await loadBrowseFeed()
         }
         .onAppear {
+            applyUITestSearchIfNeeded()
+            applyUITestLaunchSearchIfNeeded()
+        }
+        .onChange(of: appState.uitestSearchNonce) { _, _ in
+            applyUITestSearchIfNeeded()
+        }
+        .onChange(of: appState.uitestSearchQuery) { _, q in
+            guard let q, !q.isEmpty else { return }
+            applyUITestSearchIfNeeded()
+        }
+        .onChange(of: appState.profileChangeRevision) { _, _ in
+            recentSelections = SearchHistoryStore.selections()
+            query = ""
+            results = nil
+            suggestions = []
+            SearchQueryCache.invalidate()
+            SearchResultsSessionCache.clear()
+            browseFeed = SearchBrowseSessionCache.getIfFresh()
             Task {
                 searchPins = (try? await appState.repository.searchPins()) ?? []
+                if browseFeed == nil { await loadBrowseFeed() }
             }
         }
-        .sheet(item: $addToPlaylist) { ctx in
-            AddToPlaylistSheet(
-                appState: appState,
-                trackPath: ctx.path,
-                trackTitle: ctx.title,
-                onDismiss: { addToPlaylist = nil },
-                onAdded: { msg in
-                    appState.toast = msg
-                    addToPlaylist = nil
+        .background {
+            NavigationLink(isActive: $navigateSonicAdventure) {
+                SearchSonicAdventureView(appState: appState)
+            } label: {
+                EmptyView()
+            }
+            .hidden()
+            NavigationLink(isActive: Binding(
+                get: { navigateCreatedPlaylist != nil },
+                set: { if !$0 { navigateCreatedPlaylist = nil } }
+            )) {
+                if let id = navigateCreatedPlaylist {
+                    PlaylistDetailView(
+                        appState: appState,
+                        playlistId: id,
+                        suggestHomePin: true
+                    )
                 }
-            )
+            } label: {
+                EmptyView()
+            }
+            .hidden()
         }
-        .sheet(item: $addToRoom) { ctx in
-            AddToRoomSheet(
-                repository: appState.repository,
-                path: ctx.path,
-                track: ctx.title,
-                artist: ctx.artist,
-                remoteOk: appState.remoteOk,
-                onDismiss: { addToRoom = nil },
-                onDone: { msg in
-                    appState.toast = msg
-                    addToRoom = nil
-                }
+        .sheet(isPresented: $showMixMuse) {
+            MixMusePromptSheet(appState: appState, seed: nil, defaultName: "Sonic Sage") { playlistId in
+                navigateCreatedPlaylist = playlistId
+            }
+        }
+        .sheet(isPresented: $showPinEditor) {
+            SearchPinsEditorSheet(
+                appState: appState,
+                pins: searchPins,
+                onDismiss: { showPinEditor = false },
+                onSaved: { searchPins = $0 }
             )
         }
     }
@@ -107,12 +157,15 @@ struct SearchView: View {
             TextField("What do you want to listen to?", text: $query)
                 .focused($searchFocused)
                 .submitLabel(.search)
+                .accessibilityIdentifier(BockTestTags.searchField)
                 .onSubmit { Task { await runSearch() } }
             if !query.isEmpty {
                 Button {
                     query = ""
                     results = nil
                     suggestions = []
+                    SearchQueryCache.invalidate()
+                    SearchResultsSessionCache.clear()
                 } label: {
                     BockIcon(icon: .clear, size: 18)
                         .foregroundStyle(BockColors.muted)
@@ -128,6 +181,21 @@ struct SearchView: View {
             searchTask?.cancel()
             searchTask = Task { await handleQueryChange() }
         }
+    }
+
+    private var searchEmptyState: some View {
+        VStack(spacing: 8) {
+            Text("No results")
+                .font(.headline)
+                .foregroundStyle(BockColors.onSurface)
+                .accessibilityIdentifier(BockTestTags.searchEmpty)
+            Text("Try another query or pull to refresh your connection.")
+                .font(.subheadline)
+                .foregroundStyle(BockColors.muted)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(32)
     }
 
     private var browseScroll: some View {
@@ -147,6 +215,21 @@ struct SearchView: View {
                 ForEach(searchPins, id: \.displayId) { pin in
                     plexampLink(pin.title ?? pin.name ?? "Shortcut") { openSearchPin(pin) }
                 }
+                Button {
+                    showPinEditor = true
+                } label: {
+                    HStack {
+                        Text("Edit shortcuts")
+                            .foregroundStyle(BockColors.muted)
+                        Spacer()
+                        Image(systemName: "pencil")
+                            .font(.caption)
+                            .foregroundStyle(BockColors.muted)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 6)
+                }
+                .buttonStyle(.plain)
 
                 Text("Sonic explorations")
                     .font(.title3.bold())
@@ -247,12 +330,11 @@ struct SearchView: View {
     }
 
     private func openAcquireIdeas() {
-        // Uses existing discovery modal flow on web; on iOS open search with explore hint.
-        showNewReleases = true
+        navigateSonicAdventure = true
     }
 
     private func openMixMuse() {
-        rankingKind = .bestOf
+        showMixMuse = true
     }
 
     private func browseAllSection(_ feed: SearchBrowseFeed) -> some View {
@@ -423,156 +505,6 @@ struct SearchView: View {
         .scrollContentBackground(.hidden)
     }
 
-    @ViewBuilder
-    private func searchResultsList(_ results: SearchResponse) -> some View {
-        List {
-            searchSection("Tracks", key: "songs", hits: songHits(from: results), results: results)
-            searchSection("Artists", key: "artists", hits: artistHits(from: results), results: results)
-            searchSection("Albums", key: "albums", hits: albumHits(from: results), results: results)
-            searchSection("Radio", key: "radios", hits: radioHits(from: results), results: results)
-            searchSection("Sonically similar", key: "similar", hits: similarHits(from: results), results: results)
-            searchSection("Playlists", key: "playlists", hits: playlistHits(from: results), results: results)
-            searchSection("Smart playlists", key: "smartPlaylists", hits: smartHits(from: results), results: results)
-            searchSection("Genres", key: "genres", hits: genreHits(from: results), results: results)
-            searchSection("Messages", key: "messages", hits: messageHits(from: results), results: results)
-            searchSection("Rooms", key: "rooms", hits: roomHits(from: results), results: results)
-        }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
-    }
-
-    @ViewBuilder
-    private func searchSection(_ title: String, key: String, hits: [SearchHit], results: SearchResponse) -> some View {
-        if !hits.isEmpty {
-            Section(title) {
-                ForEach(hits, id: \.displayId) { hit in
-                    searchHitRow(hit, sectionKey: key)
-                }
-                if let total = results.counts[key], total > hits.count, !expandedSections.contains(key) {
-                    Button("Show all \(total)") {
-                        expandedSections.insert(key)
-                        Task { await expandSection(key) }
-                    }
-                    .foregroundStyle(BockColors.green)
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func searchHitRow(_ hit: SearchHit, sectionKey: String) -> some View {
-        switch sectionKey {
-        case "radios":
-            let title = hit.name ?? hit.title ?? "Radio"
-            Button { playRadioHit(hit) } label: {
-                HStack {
-                    VStack(alignment: .leading) {
-                        Text(title).foregroundStyle(BockColors.onSurface)
-                        Text("Radio").font(.caption).foregroundStyle(BockColors.muted)
-                    }
-                    Spacer()
-                    BockIcon(icon: .playArrow, size: 22).foregroundStyle(BockColors.green)
-                }
-            }
-        case "similar", "songs", "messages":
-            songRow(hit)
-        case "artists":
-            if let name = hit.name {
-                NavigationLink(value: SearchRoute.artist(name)) {
-                    searchLabel(name)
-                }
-                .simultaneousGesture(TapGesture().onEnded {
-                    recordSelection(.fromHit(kind: "artist", hit: hit))
-                })
-            }
-        case "albums":
-            if let name = hit.name {
-                NavigationLink(value: SearchRoute.album(name: name, artist: hit.artist)) {
-                    VStack(alignment: .leading) {
-                        searchLabel(name)
-                        if let artist = hit.artist {
-                            Text(artist).font(.caption).foregroundStyle(BockColors.muted)
-                        }
-                    }
-                }
-                .simultaneousGesture(TapGesture().onEnded {
-                    recordSelection(.fromHit(kind: "album", hit: hit))
-                })
-            }
-        case "genres":
-            if let name = hit.name {
-                NavigationLink(value: SearchRoute.genre(name)) { searchLabel(name) }
-            }
-        case "playlists", "smartPlaylists":
-            searchRow(hit.name ?? "Playlist") {
-                if let id = hit.id, let name = hit.name {
-                    appState.play(.playlist(id: id, name: name))
-                }
-            }
-        default:
-            searchLabel(hit.name ?? hit.title ?? "")
-        }
-    }
-
-    private func radioHits(from results: SearchResponse) -> [SearchHit] {
-        let src = expandedSections.contains("radios") ? (expandedResults["radios"] ?? results) : results
-        return src.radios.map {
-            SearchHit(name: $0.displayTitle ?? $0.name, artist: $0.artist, path: $0.path, title: $0.displayTitle)
-        }
-    }
-
-    private func similarHits(from results: SearchResponse) -> [SearchHit] {
-        expandedSections.contains("similar") ? (expandedResults["similar"]?.similar ?? results.similar) : results.similar
-    }
-
-    private func playlistHits(from results: SearchResponse) -> [SearchHit] {
-        expandedSections.contains("playlists") ? (expandedResults["playlists"]?.playlists ?? results.playlists) : results.playlists
-    }
-
-    private func smartHits(from results: SearchResponse) -> [SearchHit] {
-        expandedSections.contains("smartPlaylists") ? (expandedResults["smartPlaylists"]?.smartPlaylists ?? results.smartPlaylists) : results.smartPlaylists
-    }
-
-    private func artistHits(from results: SearchResponse) -> [SearchHit] {
-        expandedSections.contains("artists") ? (expandedResults["artists"]?.artists ?? results.artists) : results.artists
-    }
-
-    private func albumHits(from results: SearchResponse) -> [SearchHit] {
-        expandedSections.contains("albums") ? (expandedResults["albums"]?.albums ?? results.albums) : results.albums
-    }
-
-    private func genreHits(from results: SearchResponse) -> [SearchHit] {
-        expandedSections.contains("genres") ? (expandedResults["genres"]?.genres ?? results.genres) : results.genres
-    }
-
-    private func songHits(from results: SearchResponse) -> [SearchHit] {
-        expandedSections.contains("songs") ? (expandedResults["songs"]?.songs ?? results.songs) : results.songs
-    }
-
-    private func messageHits(from results: SearchResponse) -> [SearchHit] {
-        expandedSections.contains("messages") ? (expandedResults["messages"]?.messages ?? results.messages) : results.messages
-    }
-
-    private func roomHits(from results: SearchResponse) -> [SearchHit] {
-        expandedSections.contains("rooms") ? (expandedResults["rooms"]?.rooms ?? results.rooms) : results.rooms
-    }
-
-    private func playRadioHit(_ hit: SearchHit) {
-        let title = hit.title ?? hit.name ?? "Radio"
-        appState.play(.radio(displayTitle: title, seedKind: .artist, name: hit.name ?? title, path: hit.path))
-    }
-
-    private func expandSection(_ key: String) async {
-        guard let response = try? await appState.repository.search(
-            q: trimmedQuery,
-            limit: 50,
-            preview: 50,
-            section: key,
-            source: nil
-        ) else { return }
-        expandedResults[key] = response
-    }
-
     private var searchPinsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Aural fixations")
@@ -622,120 +554,98 @@ struct SearchView: View {
         }
     }
 
-    private func songRow(_ hit: SearchHit) -> some View {
-        let path = hit.path ?? ""
-        let starred = favoritePaths.contains(path)
-        return HStack {
-            Button {
-                if let path = hit.path {
-                    appState.play(.song(path: path, title: hit.title ?? hit.name ?? path))
-                }
-            } label: {
-                VStack(alignment: .leading) {
-                    Text(hit.title ?? hit.name ?? "Song").foregroundStyle(BockColors.onSurface)
-                    if let artist = hit.artist {
-                        Text(artist).font(.caption).foregroundStyle(BockColors.muted)
-                    }
-                }
-            }
-            .buttonStyle(.plain)
-            Spacer()
-            if let path = hit.path {
-                if appState.remoteOk {
-                    Button {
-                        addToRoom = AddToRoomContext(path: path, title: hit.title ?? hit.name ?? path, artist: hit.artist)
-                    } label: {
-                        BockIcon(icon: .add, size: 22).foregroundStyle(BockColors.muted)
-                    }
-                    .buttonStyle(.plain)
-                }
-                Button {
-                    addToPlaylist = AddToPlaylistContext(path: path, title: hit.title ?? hit.name ?? path)
-                } label: {
-                    BockIcon(icon: .playlistAdd, size: 22).foregroundStyle(BockColors.muted)
-                }
-                .buttonStyle(.plain)
-                Button {
-                    Task { await toggleFavorite(path: path, hit: hit, starred: starred) }
-                } label: {
-                    BockIcon(icon: .star, size: 22)
-                        .foregroundStyle(starred ? BockColors.green : BockColors.muted)
-                }
-                .buttonStyle(.plain)
-                Button {
-                    appState.play(.song(path: path, title: hit.title ?? hit.name ?? path))
-                } label: {
-                    BockIcon(icon: .playArrow, size: 22).foregroundStyle(BockColors.green)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-    }
-
-    private func toggleFavorite(path: String, hit: SearchHit, starred: Bool) async {
-        if starred {
-            try? await appState.repository.removeFavorite(path: path)
-        } else {
-            try? await appState.repository.addFavorite(
-                path: path,
-                title: hit.title ?? hit.name,
-                artist: hit.artist,
-                album: hit.album
-            )
-        }
-        if let favs = try? await appState.repository.favorites() {
-            favoritePaths = Set(favs.map(\.path))
-        }
-    }
-
-    private func searchRow(_ title: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack {
-                searchLabel(title)
-                Spacer()
-                BockIcon(icon: .playArrow, size: 22).foregroundStyle(BockColors.green)
-            }
-        }
-    }
-
-    private func searchLabel(_ title: String) -> some View {
-        Text(title).foregroundStyle(BockColors.onSurface)
-    }
-
     private func handleQueryChange() async {
-        try? await Task.sleep(nanoseconds: 250_000_000)
+        try? await Task.sleep(nanoseconds: UnifiedSearchCoordinator.debounceMs)
         guard !Task.isCancelled else { return }
         let q = trimmedQuery
+        searchError = nil
         if q.isEmpty {
             results = nil
             suggestions = []
+            loading = false
+            resultFilter = .all
+            expandedSections = []
+            expandedResults = [:]
+            SearchResultsSessionCache.clear()
+            SearchQueryCache.invalidate()
             return
         }
-        if q.count < 2 {
-            results = nil
-            suggestions = await SearchBrowseLoader.suggestOneChar(repository: appState.repository, query: q)
+        if UITestSupport.isEnabled {
+            SearchQueryCache.invalidate()
+            SearchResultsSessionCache.clear()
+        } else if let cached = UnifiedSearchCoordinator.resolveCached(q), cached.fromCache {
+            results = cached.response
+            suggestions = SearchBrowseLoader.suggestionsFromResponse(cached.response)
+            loading = false
+            SearchResultsSessionCache.saveSnapshot(query: q, results: cached.response, suggestions: suggestions)
             return
         }
-        await runSearch()
+        if !UITestSupport.isEnabled, SearchResultsSessionCache.hasFreshResults(q) {
+            results = SearchResultsSessionCache.results
+            suggestions = SearchResultsSessionCache.suggestions
+            loading = false
+            return
+        }
+        if !UITestSupport.isEnabled, let cached = UnifiedSearchCoordinator.resolveCached(q), let prefix = cached.prefixExtension {
+            results = prefix
+            suggestions = SearchBrowseLoader.suggestionsFromResponse(prefix)
+        }
+        await runSearch(for: q)
     }
 
-    private func runSearch() async {
-        let q = trimmedQuery
-        guard q.count >= 2 else { return }
-        loading = true
-        defer { loading = false }
-        if let response = try? await appState.repository.search(
-            q: q,
-            limit: 30,
-            preview: 5,
-            source: nil
-        ) {
-            results = response
-            suggestions = SearchBrowseLoader.suggestionsFromResponse(response)
-        } else {
-            results = nil
-            suggestions = []
+    private func runSearch(for searchFor: String? = nil) async {
+        let q = searchFor ?? trimmedQuery
+        guard !q.isEmpty else { return }
+        if results == nil || searchFor != nil {
+            loading = true
         }
+        defer { loading = false }
+        let source: String? = {
+            if UITestSupport.isEnabled { return nil }
+            return appState.preferences.effectiveSearchSource()
+        }()
+        do {
+            let full = try await UnifiedSearchCoordinator.fetch(
+                repository: appState.repository,
+                query: q,
+                source: source
+            )
+            guard trimmedQuery == q else { return }
+            results = full
+            suggestions = SearchBrowseLoader.suggestionsFromResponse(full)
+            SearchQueryCache.put(q, full)
+            SearchResultsSessionCache.saveSnapshot(query: q, results: full, suggestions: suggestions)
+        } catch {
+            guard trimmedQuery == q else { return }
+            searchError = UnifiedSearchCoordinator.userErrorMessage(error, remoteOk: appState.remoteOk)
+            if results == nil {
+                results = SearchResponse()
+            }
+        }
+    }
+
+    private func applyUITestLaunchSearchIfNeeded() {
+        guard UITestSupport.isEnabled else { return }
+        let args = ProcessInfo.processInfo.arguments
+        let q: String? = {
+            if let idx = args.firstIndex(of: "-UITestSearchQuery"), idx + 1 < args.count {
+                return args[idx + 1].trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            return ProcessInfo.processInfo.environment["UITEST_SEARCH_QUERY"]?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }()
+        guard let q, !q.isEmpty else { return }
+        query = q
+        SearchQueryCache.invalidate()
+        SearchResultsSessionCache.clear()
+        Task { await runSearch() }
+    }
+
+    private func applyUITestSearchIfNeeded() {
+        guard let q = appState.uitestSearchQuery, !q.isEmpty else { return }
+        query = q
+        appState.uitestSearchQuery = nil
+        Task { await runSearch() }
     }
 
     private func handleSuggestionTap(_ suggestion: SearchSuggestion) {
@@ -786,10 +696,7 @@ struct SearchView: View {
                 if let rows = rankingRows(for: kind), !rows.isEmpty {
                     List {
                         ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
-                            Button { openRankingRow(row, kind: kind) } label: {
-                                rankingRowLabel(index: index + 1, row: row, kind: kind)
-                            }
-                            .buttonStyle(.plain)
+                            rankingRowLink(index: index + 1, row: row, kind: kind)
                         }
                     }
                     .listStyle(.plain)
@@ -968,14 +875,33 @@ struct SearchView: View {
         rankingRowsCache[key] = rows
     }
 
-    private func openRankingRow(_ row: RankingRow, kind: SearchRankingKind) {
+    @ViewBuilder
+    private func rankingRowLink(index: Int, row: RankingRow, kind: SearchRankingKind) -> some View {
         switch kind {
         case .artists:
-            recordSelection(.fromArtist(row.headline))
-            rankingKind = nil
+            NavigationLink(value: SearchRoute.artist(row.headline)) {
+                rankingRowLabel(index: index, row: row, kind: kind)
+            }
+            .simultaneousGesture(TapGesture().onEnded { recordSelection(.fromArtist(row.headline)) })
         case .albums:
-            recordSelection(.fromAlbum(row.subtitle ?? row.headline, artist: row.artist))
-            rankingKind = nil
+            NavigationLink(value: SearchRoute.album(name: row.headline, artist: row.artist ?? row.subtitle)) {
+                rankingRowLabel(index: index, row: row, kind: kind)
+            }
+            .simultaneousGesture(TapGesture().onEnded {
+                recordSelection(.fromAlbum(row.headline, artist: row.artist ?? row.subtitle))
+            })
+        default:
+            Button { openRankingRow(row, kind: kind) } label: {
+                rankingRowLabel(index: index, row: row, kind: kind)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func openRankingRow(_ row: RankingRow, kind: SearchRankingKind) {
+        switch kind {
+        case .artists, .albums:
+            break
         case .tracks, .bestOf:
             Task {
                 if let songs = try? await appState.repository.songs(page: 1, limit: 5, search: row.headline, artist: row.artist),
@@ -989,22 +915,16 @@ struct SearchView: View {
     }
 
     private func loadBrowseFeed() async {
-        browseLoading = true
+        if let cached = SearchBrowseSessionCache.getIfFresh() {
+            browseFeed = cached
+            browseLoading = false
+            return
+        }
+        browseLoading = browseFeed == nil
         defer { browseLoading = false }
         let feed = await SearchBrowseLoader.load(repository: appState.repository)
+        SearchBrowseSessionCache.put(feed)
         browseFeed = feed
-        warmBrowseArtwork(feed.pickedForYou)
-    }
-
-    private func warmBrowseArtwork(_ cards: [HomeCard]) {
-        browseArtworkEpoch += 1
-        Task {
-            await HomeArtworkResolver.warmPlaylistCovers(
-                repository: appState.repository,
-                cards: cards
-            )
-            browseArtworkEpoch += 1
-        }
     }
 
     private func playGenreRadio(_ genre: GenreItem) async {
@@ -1046,4 +966,52 @@ private struct AddToRoomContext: Identifiable {
     let title: String
     let artist: String?
     var id: String { path }
+}
+
+private struct SearchResultArtwork: View {
+    let repository: BockMediaRepository
+    let title: String
+    let artPath: String?
+    var artistName: String?
+    var albumName: String?
+    var albumArtist: String?
+    var circular: Bool = false
+
+    @State private var url: URL?
+
+    var body: some View {
+        BockArtwork(
+            url: url,
+            size: 48,
+            cornerRadius: circular ? 24 : 6
+        )
+        .task(id: taskKey) {
+            url = await resolveURL()
+        }
+    }
+
+    private var taskKey: String {
+        [title, artPath ?? "", artistName ?? "", albumName ?? ""].joined(separator: "|")
+    }
+
+    private func resolveURL() async -> URL? {
+        if let artPath, let str = await repository.artworkURL(for: artPath), let u = URL(string: str) {
+            return u
+        }
+        if let artistName,
+           let path = await repository.artistPortraitPath(for: artistName),
+           let str = await repository.artworkURL(for: path),
+           let u = URL(string: str) {
+            return u
+        }
+        if let albumName {
+            let albums = try? await repository.albums(page: 1, limit: 8, search: albumName, artist: albumArtist)
+            if let path = albums?.items.first?.artPath,
+               let str = await repository.artworkURL(for: path),
+               let u = URL(string: str) {
+                return u
+            }
+        }
+        return nil
+    }
 }

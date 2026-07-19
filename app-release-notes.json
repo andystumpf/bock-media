@@ -1,6 +1,1013 @@
 {
   "_comment": "Update this file whenever you upload a new APK/IPA to /app. Shown on GET /app.",
     "releases": [
+
+      {
+      "version": "2.6.190",
+      "date": "2026-07-17",
+      "items": [
+        {"kind": "fix", "text": "Recently Created: server picks top 10 from full catalog; Plex sync uses real playlist added dates"}
+      ]
+    },
+      {
+      "version": "2.6.189",
+      "date": "2026-07-17",
+      "items": [
+        {"kind": "fix", "text": "Home: remove download icons on Radio, Browse by genre, and New from artists you follow (long-press still works)"}
+      ]
+    },
+      {
+      "version": "2.6.188",
+      "date": "2026-07-17",
+      "items": [
+        {"kind": "fix", "text": "Home: hide play/download overlays on playlist tiles; no green play on Radio, Browse by genre, or New from artists you follow (long-press still works)"}
+      ]
+    },
+      {
+      "version": "2.6.188",
+      "date": "2026-07-17",
+      "items": [
+        {"kind": "fix", "text": "Home: invalidate stale cache so Recently Created section appears after update"}
+      ]
+    },
+      {
+      "version": "2.6.187",
+      "date": "2026-07-17",
+      "items": [
+        {"kind": "feat", "text": "Home: Recently Created row shows the 10 newest playlists by create date"}
+      ]
+    },
+      {
+      "version": "2.6.186",
+      "date": "2026-07-13",
+      "items": [
+        {"kind": "fix", "text": "Settings: Alexa remote card at top with Start browser login always visible when status can't be loaded"}
+      ]
+    },
+      {
+      "version": "2.6.185",
+      "date": "2026-07-13",
+      "items": [
+        {"kind": "fix", "text": "Fix startup crash after server password rotation — recover embedded credentials and show Setup instead of crashing on 401"}
+      ]
+    },
+      {
+      "version": "2.6.184",
+      "date": "2026-07-12",
+      "items": [
+        {"kind": "fix", "text": "Tap the green download checkmark on home or playlist pages to remove an offline download"}
+      ]
+    },
+      {
+      "version": "2.6.183",
+      "date": "2026-07-12",
+      "items": [
+        {"kind": "fix", "text": "Offline downloads: show queued indicator on home tiles when a second playlist is waiting behind an active download"}
+      ]
+    },
+      {
+      "version": "2.6.182",
+      "date": "2026-07-12",
+      "items": [
+        {"kind": "fix", "text": "Offline downloads on Wi‑Fi: stop using stale cellular/public IP cache; always probe LAN for /stream/ requests"}
+      ]
+    },
+      {
+      "version": "2.6.181",
+      "date": "2026-07-12",
+      "items": [
+        {"kind": "fix", "text": "Offline downloads: fix stream URLs when server base had /app suffix, reject corrupted title-only paths, match playback endpoint selection"}
+      ]
+    },
+      {
+      "version": "2.6.180",
+      "date": "2026-07-12",
+      "items": [
+        {"kind": "fix", "text": "Offline downloads: sign transcode bitrate in stream URL, 5 min read timeout for ffmpeg, finish other tracks when one fails, show which tracks failed"}
+      ]
+    },
+      {
+      "version": "2.6.179",
+      "date": "2026-07-12",
+      "items": [
+        {"kind": "fix", "text": "Failed offline downloads stop immediately — no auto-retry on reconnect; tap Retry to resume"}
+      ]
+    },
+      {
+      "version": "2.6.178",
+      "date": "2026-07-12",
+      "items": [
+        {"kind": "fix", "text": "Playlist download works without a household profile — progress, notification, and Downloads tab show again; download button on playlist hero"},
+        {"kind": "fix", "text": "Downloads started before picking a profile migrate when you choose Acting as"}
+      ]
+    },
+      {
+      "version": "2.6.177",
+      "date": "2026-07-12",
+      "items": [
+        {"kind": "fix", "text": "Playlist offline downloads sync the full playlist (no 150-track cap)"}
+      ]
+    },
+      {
+      "version": "2.6.176",
+      "date": "2026-07-12",
+      "items": [
+        {"kind": "fix", "text": "Playlist downloads: transcode FLAC/WMA tracks on Wi-Fi (fixes HTTP 415), save as .mp3, sign stream URLs, and stop notification spam during progress"}
+      ]
+    },
+      {
+      "version": "2.6.175",
+      "date": "2026-07-11",
+      "items": [
+        {"kind": "feature", "text": "Now Playing shows full track and album titles; tap either to open the album"}
+      ]
+    },
+      {
+      "version": "2.6.174",
+      "date": "2026-07-11",
+      "items": [
+        {"kind": "fix", "text": "Fix scroll jank after home paints — background reload no longer replaces the visible feed"},
+        {"kind": "fix", "text": "Cap artwork prefetch to visible tiles; stop mount-time home reload on profile effect"}
+      ]
+    },
+      {
+      "version": "2.6.173",
+      "date": "2026-07-11",
+      "items": [
+        {"kind": "fix", "text": "Eliminate 1–2s launch hitch — show shell after disk hydrate, defer prefs sync and startup API polls"},
+        {"kind": "fix", "text": "Offline manifest scan and now-playing poll moved off main thread at launch"}
+      ]
+    },
+      {
+      "version": "2.6.172",
+      "date": "2026-07-11",
+      "items": [
+        {"kind": "fix", "text": "Fix 7–10s post-launch freeze — profile-linked home cache no longer rejected when rated section is empty"},
+        {"kind": "fix", "text": "Home reload runs in background when disk snapshot exists; startup network deduped"},
+        {"kind": "fix", "text": "iOS parity — SessionDiskHydrator, shell before network, tab warm deferred to tab open"}
+      ]
+    },
+      {
+      "version": "2.6.171",
+      "date": "2026-07-11",
+      "items": [
+        {"kind": "fix", "text": "Faster cold start — home paints from disk before profile sync"},
+        {"kind": "fix", "text": "Faster playlists, devices, and library — stale-while-revalidate caches on iOS + Android"},
+        {"kind": "fix", "text": "Large playlist play starts immediately without loading every track first"},
+        {"kind": "fix", "text": "Server: lighter playlist list API, ratings cache, home cache survives play events"}
+      ]
+    },
+      {
+      "version": "2.6.170",
+      "date": "2026-07-11",
+      "items": [
+        {"kind": "fix", "text": "Android search keeps genre-tagged songs (e.g. French) — no longer dropped by client filter"},
+        {"kind": "fix", "text": "Faster search browse — reuse home listening summary; phased fast-then-full warm"},
+        {"kind": "fix", "text": "Home cover prefetch capped to ~48 visible tiles; skip playlists with art already"}
+      ]
+    },
+      {
+      "version": "2.6.169",
+      "date": "2026-07-11",
+      "items": [
+        {"kind": "fix", "text": "Search finds French/genre-tagged music; iOS All Libraries scope fixed"},
+        {"kind": "fix", "text": "Faster search — FTS off request path, parallel buckets, playlist SQL sort/search"},
+        {"kind": "fix", "text": "Faster home + search browse — single fetch, lazy browse sections, capped cover refresh"}
+      ]
+    },
+      {
+      "version": "2.6.168",
+      "date": "2026-07-09",
+      "items": [
+        {"kind": "fix", "text": "Faster home load — one /api/home call for playlists, ratings, and listening summary (Android + iOS)"},
+        {"kind": "fix", "text": "Playlist tracks load from SQL for Plex and Bock playlists — faster open and paginated detail"}
+      ]
+    },
+      {
+      "version": "2.6.167",
+      "date": "2026-07-08",
+      "items": [
+        {"kind": "fix", "text": "Recent playlists on Home reflect what each profile played on phone — playlist name is saved to history per member"}
+      ]
+    },
+      {
+      "version": "2.6.166",
+      "date": "2026-07-07",
+      "items": [
+        {"kind": "fix", "text": "Playlist tracks open in original file order; deselect Title/Artist/Album sort to restore .m3u order"}
+      ]
+    },
+      {
+      "version": "2.6.165",
+      "date": "2026-07-07",
+      "items": [
+        {"kind": "fix", "text": "Android playback: fix crossfade blaming the wrong track on prefetch errors; HMAC-sign stream URLs; live auth on ExoPlayer client"}
+      ]
+    },
+      {
+      "version": "2.6.164",
+      "date": "2026-07-07",
+      "items": [
+        {"kind": "fix", "text": "Android Now Playing: show album release year from playlist metadata; fix tracks skipping early (FLAC transcode + bogus stream duration)"}
+      ]
+    },
+      {
+      "version": "2.6.163",
+      "date": "2026-07-07",
+      "items": [
+        {"kind": "fix", "text": "Android Now Playing: show playlist/source only in the top bar; release year stays beside artist"}
+      ]
+    },
+      {
+      "version": "2.6.162",
+      "date": "2026-07-07",
+      "items": [
+        {"kind": "fix", "text": "iOS Automations: fix JSON decode (missing label field from server) and refresh list on profile switch / foreground"}
+      ]
+    },
+      {
+      "version": "2.6.161",
+      "date": "2026-07-07",
+      "items": [
+        {"kind": "fix", "text": "iOS Family: fix server URLs truncated to http:/https: in build config (xcconfig // comment bug)"}
+      ]
+    },
+      {
+      "version": "2.6.160",
+      "date": "2026-07-07",
+      "items": [
+        {"kind": "fix", "text": "iOS Family: stop using localhost on device — purge loopback URL, retry household on external server, Wi‑Fi/cellular endpoint pick"}
+      ]
+    },
+      {
+      "version": "2.6.159",
+      "date": "2026-07-07",
+      "items": [
+        {"kind": "fix", "text": "iOS Family: force server household fetch, prefer external URL when LAN unreachable, fix stale local state"}
+      ]
+    },
+      {
+      "version": "2.6.158",
+      "date": "2026-07-07",
+      "items": [
+        {"kind": "fix", "text": "iOS Family screen reliably pulls household members from the server (bootstrap race + silent fetch failures)"}
+      ]
+    },
+      {
+      "version": "2.6.157",
+      "date": "2026-07-07",
+      "items": [
+        {"kind": "fix", "text": "Family members sync from the server across iOS, Android, and web — CRUD on any device updates all others"}
+      ]
+    },
+      {
+      "version": "2.6.156",
+      "date": "2026-07-07",
+      "items": [
+        {"kind": "fix", "text": "Playlists show in catalog order instead of alphabetical A–Z"}
+      ]
+    },
+      {
+      "version": "2.6.155",
+      "date": "2026-07-06",
+      "items": [
+        {"kind": "feature", "text": "Follow artists — home feed row and notifications when new music is added by artists you follow"},
+        {"kind": "fix", "text": "Artist page mic opens voice input instead of auto-playing the suggested prompt"}
+      ]
+    },
+      {
+      "version": "2.6.154",
+      "date": "2026-07-06",
+      "items": [
+        {"kind": "fix", "text": "Artist page mic — open Listen Agent with microphone listening instead of auto-playing the suggested prompt"}
+      ]
+    },
+      {
+      "version": "2.6.153",
+      "date": "2026-07-06",
+      "items": [
+        {"kind": "fix", "text": "Artist Videos row — only show music videos that match the artist (not wrong cached lookups like Zach Bryan on Pumpkins page)"}
+      ]
+    },
+      {
+      "version": "2.6.152",
+      "date": "2026-07-06",
+      "items": [
+        {"kind": "fix", "text": "Artist page JSON parse error — accept float duration_seconds from library index (10cc and others)"}
+      ]
+    },
+      {
+      "version": "2.6.151",
+      "date": "2026-07-06",
+      "items": [
+        {"kind": "fix", "text": "Cellular / away-from-home — stop using unreachable LAN IP (192.168.x); auto-switch to external URL on connection failure"}
+      ]
+    },
+      {
+      "version": "2.6.150",
+      "date": "2026-07-06",
+      "items": [
+        {"kind": "fix", "text": "Artist page — restore albums and popular sections when API is slow or fails (no blank wipe; Music tab default; faster top-tracks lookup)"}
+      ]
+    },
+      {
+      "version": "2.6.149",
+      "date": "2026-07-06",
+      "items": [
+        {"kind": "fix", "text": "Albums and playlists — per-track timestamps and total length (playlist duration field fix + server probes missing lengths)"}
+      ]
+    },
+      {
+      "version": "2.6.148",
+      "date": "2026-07-06",
+      "items": [
+        {"kind": "fix", "text": "Album track durations — read from audio files when missing in library index (no more 0:00 on every track)"}
+      ]
+    },
+      {
+      "version": "2.6.147",
+      "date": "2026-07-05",
+      "items": [
+        {"kind": "improvement", "text": "Artist Popular tracks — global chart order from Spotify API (or Deezer when Spotify is not configured), matched to your library instead of local play counts"}
+      ]
+    },
+      {
+      "version": "2.6.146",
+      "date": "2026-07-05",
+      "items": [
+        {"kind": "feat", "text": "Artist page — play button on Popular section queues all top tracks in rank order"}
+      ]
+    },
+      {
+      "version": "2.6.145",
+      "date": "2026-07-05",
+      "items": [
+        {"kind": "fix", "text": "Artist page — fix scroll crash (replace nested lazy rows, reset state on navigation) and Highly rated now starts playback + opens Now Playing"}
+      ]
+    },
+      {
+      "version": "2.6.144",
+      "date": "2026-07-05",
+      "items": [
+        {"kind": "fix", "text": "Artist page — fix crash when switching Music/About tabs or collapsing sections (invalid scroll index)"}
+      ]
+    },
+      {
+      "version": "2.6.143",
+      "date": "2026-07-05",
+      "items": [
+        {"kind": "feature", "text": "Artist & album pages — dynamic hero colors, inline likes, full discography, About tab, appears-on row, album download/sticky header/play disc, share sheet, iOS album parity"}
+      ]
+    },
+      {
+      "version": "2.6.142",
+      "date": "2026-07-05",
+      "items": [
+        {"kind": "feature", "text": "Artist page complete — Follow, genre chips, Listen Agent, videos row, session cache, sticky header, album sort; iOS parity"}
+      ]
+    },
+      {
+      "version": "2.6.141",
+      "date": "2026-07-05",
+      "items": [
+        {"kind": "fix", "text": "Artist page — fix broken loads for multi-word names (The Smashing Pumpkins) and resolve The/name variants"}
+      ]
+    },
+      {
+      "version": "2.6.140",
+      "date": "2026-07-05",
+      "items": [
+        {"kind": "improvement", "text": "Now Playing — tap the artist name to open their artist page"}
+      ]
+    },
+      {
+      "version": "2.6.139",
+      "date": "2026-07-05",
+      "items": [
+        {"kind": "improvement", "text": "Artist page — circular portrait hero, unified API load, horizontal album grid, popular See all, track/album menus, download actions, and Highly rated plays your rated tracks only"}
+      ]
+    },
+      {
+      "version": "2.6.138",
+      "date": "2026-07-05",
+      "items": [
+        {"kind": "fix", "text": "Home scroll — smooth again: section rows are lazy (only visible tiles build), the downloads registry is no longer re-parsed on every progress tick, and all tile artwork warms in the background"}
+      ]
+    },
+      {
+      "version": "2.6.137",
+      "date": "2026-07-05",
+      "items": [
+        {"kind": "improvement", "text": "Music video — the next track's video is resolved on the server while the current one plays, so skipping starts the new video almost instantly"}
+      ]
+    },
+      {
+      "version": "2.6.136",
+      "date": "2026-07-05",
+      "items": [
+        {"kind": "fix", "text": "Music video — skipping a song stops the previous video immediately and shows the album art until the next video is ready (no more stale video playing over the new track)"}
+      ]
+    },
+      {
+      "version": "2.6.135",
+      "date": "2026-07-05",
+      "items": [
+        {"kind": "fix", "text": "Music video — plays for real now: server falls back to YouTube's android_vr client when the web client is bot-checked (stale cookies), and the app waits out the slower first byte instead of timing out to a still frame"}
+      ]
+    },
+      {
+      "version": "2.6.134",
+      "date": "2026-07-05",
+      "items": [
+        {"kind": "fix", "text": "Music video — no more frozen still image on first play: server holds the stream request while yt-dlp resolves (was 503ing), and the player retries automatically instead of giving up"}
+      ]
+    },
+      {
+      "version": "2.6.133",
+      "date": "2026-07-05",
+      "items": [
+        {"kind": "fix", "text": "Music video — no more YouTube WebView bot-check; always plays via NAS proxy/ExoPlayer with Piped fallback when yt-dlp cookies are stale"}
+      ]
+    },
+      {
+      "version": "2.6.132",
+      "date": "2026-07-05",
+      "items": [
+        {"kind": "fix", "text": "Music video — full-screen cover again (edge-to-edge zoom crop at 16:9), matching the previous immersive layout"}
+      ]
+    },
+      {
+      "version": "2.6.131",
+      "date": "2026-07-05",
+      "items": [
+        {"kind": "fix", "text": "Music video — fills the screen top-to-bottom at 16:9 (sides crop on portrait) instead of zooming unpredictably"}
+      ]
+    },
+      {
+      "version": "2.6.130",
+      "date": "2026-07-05",
+      "items": [
+        {"kind": "fix", "text": "Home scroll — stops freezing: one shared download-status subscription instead of per-tile collectors, horizontal rows no longer use nested LazyRow, artwork reads cache before hitting the network"}
+      ]
+    },
+      {
+      "version": "2.6.129",
+      "date": "2026-07-04",
+      "items": [
+        {"kind": "fix", "text": "Music video embed — fixes YouTube error 152-4 by sending the Referer header and origin YouTube now requires in Android WebViews"}
+      ]
+    },
+      {
+      "version": "2.6.128",
+      "date": "2026-07-04",
+      "items": [
+        {"kind": "fix", "text": "Music video — embed fallback now actually shows: fixed loading state that blocked the YouTube player when the server had a video id but no stream URL; ExoPlayer errors fall back to embed"}
+      ]
+    },
+      {
+      "version": "2.6.127",
+      "date": "2026-07-04",
+      "items": [
+        {"kind": "fix", "text": "Music video — plays again: muted YouTube embed fallback when the server can't extract a stream (YouTube bot-check); video search now strongly prefers the artist's official channel over fan uploads"}
+      ]
+    },
+      {
+      "version": "2.6.126",
+      "date": "2026-07-04",
+      "items": [
+        {"kind": "fix", "text": "Listen agent — fixed 'coroutine scope left the composition' error: voice result no longer cancels its own play request mid-flight"}
+      ]
+    },
+      {
+      "version": "2.6.125",
+      "date": "2026-07-04",
+      "items": [
+        {"kind": "feature", "text": "Listen agent — custom in-app voice screen replaces the Google dialog: pulsing mic orb reacts to your voice, live transcript as you speak, tap to stop, keyboard fallback"}
+      ]
+    },
+      {
+      "version": "2.6.124",
+      "date": "2026-07-04",
+      "items": [
+        {"kind": "fix", "text": "Listen agent — accurate matching: 'Steely Dan' no longer resolves to collaboration credits, albums pick the canonical release, top songs ranked by plays/popularity; screen now confirms what matched before playing"}
+      ]
+    },
+      {
+      "version": "2.6.123",
+      "date": "2026-07-04",
+      "items": [
+        {"kind": "fix", "text": "Listen agent — mic opens and starts listening immediately; plays automatically when you finish speaking"}
+      ]
+    },
+      {
+      "version": "2.6.122",
+      "date": "2026-07-04",
+      "items": [
+        {"kind": "feature", "text": "Listen agent — mic button next to profile opens an AI assistant; say or type what to play (e.g. top songs from an artist or a full album); powered by Claude"}
+      ]
+    },
+      {
+      "version": "2.6.121",
+      "date": "2026-07-04",
+      "items": [
+        {"kind": "fix", "text": "Home — tapping a rotated playlist tile in Browse by genre now opens the playlist (was an empty genre page with only a Play radio button); genre tiles no longer rotate into unrelated playlists"}
+      ]
+    },
+    {
+      "version": "2.6.120",
+      "date": "2026-07-03",
+      "items": [
+        {"kind": "fix", "text": "Music video — cookie export now requires logged-in YouTube cookies (partial exports caused bot-check failures); Android retries video as soon as fresh cookies land"}
+      ]
+    },
+    {
+      "version": "2.6.119",
+      "date": "2026-07-03",
+      "items": [
+        {"kind": "fix", "text": "Music video — web re-binds reveal/play on each track; Android shows player at STATE_READY and uses live isPlaying for local playback"}
+      ]
+    },
+    {
+      "version": "2.6.118",
+      "date": "2026-07-02",
+      "items": [
+        {"kind": "fix", "text": "P0 music video — browser/profile cookie export fallbacks; clients keep album art when cookiesStale"},
+        {"kind": "fix", "text": "P0 security — rate limit auth failures; block external access without credentials at startup; alexa_remote in deploy bundle"},
+        {"kind": "feat", "text": "P0 playlists — SQL CRUD + migrate script + tracks/add API; Plex sync SQL mirror (phase 2)"},
+        {"kind": "fix", "text": "P0 Android — crossfade policy unit test; LocalPlaybackService uses shared policy"},
+        {"kind": "feat", "text": "P1 — security warnings in Settings (web/Android/iOS); profile/visibility regression tests"},
+        {"kind": "feat", "text": "P2 — web Now Playing lyrics; automation timezone via config.timezone; Alexa debug gated behind OURMEDIA_DEBUG"},
+        {"kind": "feat", "text": "P3 — CarPlay NP template hook; API contract check script; client telemetry already wired on mobile"},
+        {"kind": "note", "text": "P4 deferred — local phone repeat mode; playlist XML deprecation after phases 0–3 stable"}
+      ]
+    },
+    {
+      "version": "2.6.117",
+      "date": "2026-07-02",
+      "items": [
+        {"kind": "fix", "text": "P0 security — open-LAN flags ignored when tunnel is configured without credentials; /api/health exposes securityWarnings"},
+        {"kind": "fix", "text": "P0 music video — nightly YouTube cookie probe; stale cookies flagged in health and play API"},
+        {"kind": "fix", "text": "P0 playback — skip crossfade when app is backgrounded (prevents MediaSession/FGS kill on Android 12+)"}
+      ]
+    },
+    {
+      "version": "2.6.116",
+      "date": "2026-07-02",
+      "items": [
+        {"kind": "fix", "text": "Music video mode keeps album art until stream plays — no error or Open in YouTube overlay"}
+      ]
+    },
+    {
+      "version": "2.6.115",
+      "date": "2026-07-02",
+      "items": [
+        {"kind": "fix", "text": "Alexa volume slider — remove white thumb dot"}
+      ]
+    },
+    {
+      "version": "2.6.114",
+      "date": "2026-07-02",
+      "items": [
+        {"kind": "fix", "text": "Alexa volume slider — full-height track border with uniform narrow inset around green fill"}
+      ]
+    },
+    {
+      "version": "2.6.113",
+      "date": "2026-07-02",
+      "items": [
+        {"kind": "fix", "text": "Alexa volume slider — no dark border; green track only"}
+      ]
+    },
+    {
+      "version": "2.6.112",
+      "date": "2026-07-02",
+      "items": [
+        {"kind": "fix", "text": "Alexa volume slider — narrower track (14dp)"}
+      ]
+    },
+    {
+      "version": "2.6.111",
+      "date": "2026-07-02",
+      "items": [
+        {"kind": "fix", "text": "Now Playing metadata — soft light grey glow behind text instead of dark scrim"}
+      ]
+    },
+    {
+      "version": "2.6.110",
+      "date": "2026-07-02",
+      "items": [
+        {"kind": "fix", "text": "Now Playing title, artist, and playlist easier to read — dark scrim and stronger text shadow"}
+      ]
+    },
+    {
+      "version": "2.6.109",
+      "date": "2026-07-02",
+      "items": [
+        {"kind": "fix", "text": "Alexa volume slider — narrower track (24dp) and smaller thumb"}
+      ]
+    },
+    {
+      "version": "2.6.108",
+      "date": "2026-07-02",
+      "items": [
+        {"kind": "fix", "text": "Alexa volume slider renders full height above the button (Popup), not clipped at top of screen"}
+      ]
+    },
+    {
+      "version": "2.6.107",
+      "date": "2026-07-02",
+      "items": [
+        {"kind": "fix", "text": "Alexa volume slider — much taller press-and-hold control (~half screen height)"}
+      ]
+    },
+    {
+      "version": "2.6.106",
+      "date": "2026-07-02",
+      "items": [
+        {"kind": "feature", "text": "Alexa Now Playing volume — press-and-hold button next to sleep timer for vertical green slider"}
+      ]
+    },
+    {
+      "version": "2.6.105",
+      "date": "2026-07-02",
+      "items": [
+        {"kind": "fix", "text": "Search keyboard no longer leaves a large black gap — removed double IME inset"}
+      ]
+    },
+    {
+      "version": "2.6.104",
+      "date": "2026-07-02",
+      "items": [
+        {"kind": "feature", "text": "Spotify-style fuzzy search — typos, diacritics, &/and, substring; same results in Search and Library"},
+        {"kind": "feature", "text": "Search result filter chips (All / Songs / Artists / Albums / Playlists)"}
+      ]
+    },
+    {
+      "version": "2.6.103",
+      "date": "2026-07-01",
+      "items": [
+        {"kind": "fix", "text": "Music video prefetch only runs when video mode is enabled — no spinner on track change when off"}
+      ]
+    },
+    {
+      "version": "2.6.102",
+      "date": "2026-07-01",
+      "items": [
+        {"kind": "feature", "text": "Artist page — Spotify-style hero, green play button, Popular tracks with album art"}
+      ]
+    },
+    {
+      "version": "2.6.101",
+      "date": "2026-07-01",
+      "items": [
+        {"kind": "feature", "text": "Home greeting shows your profile name (e.g. Good morning Andy)"}
+      ]
+    },
+    {
+      "version": "2.6.100",
+      "date": "2026-07-01",
+      "items": [
+        {"kind": "fix", "text": "Background crossfade restored — MediaSession.setPlayer() swaps players without dropping foreground service"}
+      ]
+    },
+    {
+      "version": "2.6.99",
+      "date": "2026-07-01",
+      "items": [
+        {"kind": "fix", "text": "Background playback — skip crossfade/session swap when screen off (keeps FGS alive); sync session when app returns"}
+      ]
+    },
+    {
+      "version": "2.6.98",
+      "date": "2026-07-01",
+      "items": [
+        {"kind": "fix", "text": "Fix crossfade crash — release old MediaSession before creating new one (duplicate session ID)"}
+      ]
+    },
+    {
+      "version": "2.6.97",
+      "date": "2026-07-01",
+      "items": [
+        {"kind": "fix", "text": "Background playback survives crossfade — MediaSession add/remove keeps foreground service alive (no idle kill ~60s later)"}
+      ]
+    },
+    {
+      "version": "2.6.96",
+      "date": "2026-07-01",
+      "items": [
+        {"kind": "fix", "text": "Background crossfade no longer stops playback — rebind MediaSession before releasing outgoing player"}
+      ]
+    },
+    {
+      "version": "2.6.95",
+      "date": "2026-07-01",
+      "items": [
+        {"kind": "fix", "text": "Background playback no longer stops at crossfade — notification updates use notify() instead of re-calling startForeground"}
+      ]
+    },
+    {
+      "version": "2.6.94",
+      "date": "2026-07-01",
+      "items": [
+        {"kind": "chore", "text": "Diagnostic logging for unexpected playback pauses (audio focus, service commands)"}
+      ]
+    },
+    {
+      "version": "2.6.93",
+      "date": "2026-07-01",
+      "items": [
+        {"kind": "fix", "text": "Fix crash during crossfade — foreground playback notification uses mediaPlayback FGS type with safe fallback when Android rejects startForeground"}
+      ]
+    },
+    {
+      "version": "2.6.92",
+      "date": "2026-07-01",
+      "items": [
+        {"kind": "fix", "text": "Music video now plays on mobile data — Cronet streaming (fixes cellular stall), stable player (no re-buffer churn), no audio-sync seeking, itag 18 proxy"}
+      ]
+    },
+    {
+      "version": "2.6.91",
+      "date": "2026-07-01",
+      "items": [
+        {"kind": "fix", "text": "Cellular music video — force external server URL + mobile=1 (no LAN proxy); ExoPlayer no longer blocked waiting for auth client on CDN URLs"}
+      ]
+    },
+    {
+      "version": "2.6.90",
+      "date": "2026-07-01",
+      "items": [
+        {"kind": "fix", "text": "Cellular music video — ExoPlayer uses plain CDN client (no auth headers), larger buffers, YouTube Referer; skip dead Piped on server"}
+      ]
+    },
+    {
+      "version": "2.6.89",
+      "date": "2026-07-01",
+      "items": [
+        {"kind": "fix", "text": "Cellular music video — yt-dlp direct googlevideo URL (android client broke cookie auth; no NAS proxy fallback)"}
+      ]
+    },
+    {
+      "version": "2.6.88",
+      "date": "2026-07-01",
+      "items": [
+        {"kind": "fix", "text": "Cellular music video streams direct from YouTube CDN (Piped) — no home-server proxy hop"}
+      ]
+    },
+    {
+      "version": "2.6.83",
+      "date": "2026-07-01",
+      "items": [
+        {"kind": "feat", "text": "Home playlist categories saved as server defaults — restored automatically on every refresh"}
+      ]
+    },
+    {
+      "version": "2.6.82",
+      "date": "2026-07-01",
+      "items": [
+        {"kind": "fix", "text": "Home shows full household playlist library and browse-by-genre categories again (not profile-filtered)"}
+      ]
+    },
+    {
+      "version": "2.6.81",
+      "date": "2026-07-01",
+      "items": [
+        {"kind": "fix", "text": "Library search updates as you type (prefix cache no longer blocks new queries)"}
+      ]
+    },
+    {
+      "version": "2.6.80",
+      "date": "2026-07-01",
+      "items": [
+        {"kind": "fix", "text": "Now Playing video pauses and resumes with the music track (Android + iOS)"}
+      ]
+    },
+    {
+      "version": "2.6.77",
+      "date": "2026-07-01",
+      "items": [
+        {"kind": "feat", "text": "Home — 60s, 70s, 80s, and 90s rows with every matching playlist; multi-decade names appear in each decade"}
+      ]
+    },
+    {
+      "version": "2.6.76",
+      "date": "2026-07-01",
+      "items": [
+        {"kind": "fix", "text": "Now Playing music video works on cellular and Wi‑Fi when video mode is on — no Wi‑Fi-only gate"}
+      ]
+    },
+    {
+      "version": "2.6.75",
+      "date": "2026-07-01",
+      "items": [
+        {"kind": "fix", "text": "Now Playing music video works over remote server URL (cellular / away from home), not only home Wi‑Fi"},
+        {"kind": "fix", "text": "Video stream uses resolved server URL so proxy matches API when on tunnel/external host"}
+      ]
+    },
+    {
+      "version": "2.6.74",
+      "date": "2026-07-01",
+      "items": [
+        {"kind": "feat", "text": "Spotify-style search — unified coordinator (suggest @1 char, fast search @2+), sectioned results with Top result"},
+        {"kind": "feat", "text": "Library All search — cross-type results (songs, artists, albums, playlists) instead of playlists-only"},
+        {"kind": "improve", "text": "Server — genres_agg, albums search cache, faster artist search without COUNT on filter"}
+      ]
+    },
+    {
+      "version": "2.6.73",
+      "date": "2026-07-01",
+      "items": [
+        {"kind": "fix", "text": "Search — one fast request instead of slow suggest + full; server suggest uses FTS/albums_agg (~7s → ~1s)"},
+        {"kind": "fix", "text": "Library track search — FTS-first on /api/songs; artist search via albums_agg"}
+      ]
+    },
+    {
+      "version": "2.6.72",
+      "date": "2026-07-01",
+      "items": [
+        {"kind": "improve", "text": "Search & library much faster — DB indexes, no per-track file reads, SQL-only filtering, 45s result cache"},
+        {"kind": "improve", "text": "Search — suggest + full run in parallel (lower latency); incremental FTS keeps index fresh without restart"}
+      ]
+    },
+    {
+      "version": "2.6.71",
+      "date": "2026-07-01",
+      "items": [
+        {"kind": "feat", "text": "Library — Tracks filter in Your Library search (iOS + Android)"},
+        {"kind": "fix", "text": "Track search uses prefix matching on /api/songs"}
+      ]
+    },
+    {
+      "version": "2.6.70",
+      "date": "2026-06-30",
+      "items": [
+        {"kind": "fix", "text": "Search — keep results while typing past 3 chars (prefix tolerance + no empty full-search wipe)"},
+        {"kind": "fix", "text": "Library search — prefix/word-start matching instead of brittle substring SQL"}
+      ]
+    },
+    {
+      "version": "2.6.69",
+      "date": "2026-06-30",
+      "items": [
+        {"kind": "fix", "text": "Search tab — fixed stuck/empty results: 15s timeout, suggest-then-full without extra delay, IME padding, mini-player clearance"},
+        {"kind": "fix", "text": "Search suggest API — multi-word artist/album matching on server"}
+      ]
+    },
+    {
+      "version": "2.6.68",
+      "date": "2026-06-30",
+      "items": [
+        {"kind": "fix", "text": "Search — cancelable debounced fetch, suggest-then-full pipeline, no stale results flash"},
+        {"kind": "fix", "text": "Search — prefix cache while typing, error snackbar, smart playlist rows, browse cache on empty tab"},
+        {"kind": "fix", "text": "Search — batch artwork prefetch for result rows"}
+      ]
+    },
+    {
+      "version": "2.6.67",
+      "date": "2026-06-30",
+      "items": [
+        {"kind": "fix", "text": "Search — keyboard stays open when typing first letter (unified search field)"}
+      ]
+    },
+    {
+      "version": "2.6.66",
+      "date": "2026-06-30",
+      "items": [
+        {"kind": "fix", "text": "Search — multi-word queries (e.g. learn to) match titles again; single fast API call per query"},
+        {"kind": "fix", "text": "Search API — compact-prefix SQL fallback, FTS auto-rebuild when stale, cached playlist names for suggest"}
+      ]
+    },
+    {
+      "version": "2.6.65",
+      "date": "2026-06-30",
+      "items": [
+        {"kind": "fix", "text": "Search — fast suggest + cached results on iOS and Android; fixed stale results, ranking navigation, and expanded-section bugs"},
+        {"kind": "fix", "text": "Search browse feed prefetched from Home and cached for instant Search tab open"}
+      ]
+    },
+    {
+      "version": "2.6.64",
+      "date": "2026-06-30",
+      "items": [
+        {"kind": "fix", "text": "Now Playing — Up next list no longer has a solid black gradient panel (Android)"},
+        {"kind": "fix", "text": "iOS Now Playing — layout parity with Android (Spotify top bar, art sizing, overlay controls, Up next list)"}
+      ]
+    },
+    {
+      "version": "2.6.63",
+      "date": "2026-06-30",
+      "items": [
+        {"kind": "fix", "text": "Android search — instant suggest preview, parallel full fetch, 45s query cache, skip ratings until results show"},
+        {"kind": "fix", "text": "Search API — fast path skips album-played flags, resonance, and Alexa room probe on suggest"}
+      ]
+    },
+    {
+      "version": "2.6.62",
+      "date": "2026-06-30",
+      "items": [
+        {"kind": "fix", "text": "Now Playing video — full-screen Spotify-style overlay; no solid black panel behind controls (iOS + Android)"},
+        {"kind": "fix", "text": "Music video fills screen edge-to-edge with soft bottom gradient for text readability"}
+      ]
+    },
+    {
+      "version": "2.6.61",
+      "date": "2026-06-30",
+      "items": [
+        {"kind": "fix", "text": "Android car/Bluetooth — audio focus on main thread; duck instead of pause for GPS; faster stream start on cellular"},
+        {"kind": "fix", "text": "Music video — only loads when enabled; stays on across tracks until you turn it off (iOS + Android)"},
+        {"kind": "feat", "text": "Now Playing — matching lyrics + video toggles bottom-right on iOS and Android"}
+      ]
+    },
+    {
+      "version": "2.6.60",
+      "date": "2026-06-30",
+      "items": [
+        {"kind": "fix", "text": "iOS genre pages — Rock and other genres list top tracks from the library, not just Play Radio"},
+        {"kind": "fix", "text": "iOS playlists — Plexamp-style cover art on playlist header and each track row"},
+        {"kind": "fix", "text": "iOS Release Radar — compact new-in-library browse instead of oversized genre page"},
+        {"kind": "fix", "text": "iOS playlist detail — fix track rows shifted off-screen (ArtBackdrop layout)"}
+      ]
+    },
+    {
+      "version": "2.6.58",
+      "date": "2026-06-30",
+      "items": [
+        {"kind": "feat", "text": "Sonic Sage — pick how many songs (10–40) before creating a playlist"},
+        {"kind": "fix", "text": "Mix Muse local mode — calm prompts exclude Christmas/holiday tracks and prefer ambient/acoustic genres"},
+        {"kind": "feat", "text": "Sonic Sage shows active provider (Claude vs local) in the dialog"},
+        {"kind": "fix", "text": "iOS rated-songs playlists — decode virtual playlist detail and pass profile member scope"}
+      ]
+    },
+    {
+      "version": "2.6.57",
+      "date": "2026-06-30",
+      "items": [
+        {"kind": "feat", "text": "Sonic Sage — after creating a playlist, opens it with option to pin to the front of a Home row"},
+        {"kind": "feat", "text": "Playlist detail — Add to Home row pins playlist to beginning of a home category"}
+      ]
+    },
+    {
+      "version": "2.6.57",
+      "date": "2026-06-30",
+      "items": [
+        {"kind": "fix", "text": "iOS home tiles — mixes and radios open the correct genre/playlist detail, not a random artist seed"}
+      ]
+    },
+    {
+      "version": "2.6.56",
+      "date": "2026-06-30",
+      "items": [
+        {"kind": "fix", "text": "iOS bottom nav — compact tab bar no longer expands to half the screen"}
+      ]
+    },
+    {
+      "version": "2.6.53",
+      "date": "2026-06-30",
+      "items": [
+        {"kind": "fix", "text": "Android automations — scrollable playlist picker shows all playlists (no 8-result cap)"},
+        {"kind": "feat", "text": "Android routines and add-to-playlist — searchable scrollable playlist dropdown"}
+      ]
+    },
+    {
+      "version": "2.6.52",
+      "date": "2026-06-29",
+      "items": [
+        {"kind": "fix", "text": "iOS bottom nav — tab bar icons visible again (Material icons with template rendering)"},
+        {"kind": "fix", "text": "Profile crossfade — per-member sync no longer races on profile switch; Settings refresh after pull"},
+        {"kind": "feat", "text": "iOS Plexamp-style artist, album, genre detail screens and Android-matching home mix tiles"},
+        {"kind": "fix", "text": "iOS artwork loads with auth headers everywhere (home, search, library tiles)"}
+      ]
+    },
+    {
+      "version": "2.6.51",
+      "date": "2026-06-29",
+      "items": [
+        {"kind": "fix", "text": "Analytics — scope listen history and metrics to the active household profile instead of always showing household-wide totals"}
+      ]
+    },
+    {
+      "version": "2.6.50",
+      "date": "2026-06-29",
+      "items": [
+        {"kind": "fix", "text": "Genre detail — hero art banner, real album/artist artwork, section headers matching search/library pages"}
+      ]
+    },
+    {
+      "version": "2.6.49",
+      "date": "2026-06-28",
+      "items": [
+        {"kind": "fix", "text": "Launch — show splash immediately; move image loader init off main thread (fixes white screen on cold start)"}
+      ]
+    },
+    {
+      "version": "2.6.48",
+      "date": "2026-06-28",
+      "items": [
+        {"kind": "feat", "text": "Echo engine — per-member continue-after-queue, lazy shuffle seed, Up Next queue jump, loop control"},
+        {"kind": "feat", "text": "Parity — Android/iOS loop + mini-bar shuffle, shared NP poller, handoff UI, LAN security default-deny"},
+        {"kind": "fix", "text": "Automations — surface run errors in app/web; document OURMEDIA_SKILL_ID in systemd"}
+      ]
+    },
     {
       "version": "2.6.47",
       "date": "2026-06-28",

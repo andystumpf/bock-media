@@ -40,4 +40,30 @@ class SearchSongFilterTest {
         )
         assertTrue(filtered.single().title == "Mamma Mia")
     }
+
+    @Test
+    fun keepsGenreTaggedSongsWhenTitleDoesNotMatchQuery() {
+        assertTrue(
+            matchesSearchSongTitle(
+                "french",
+                "Ne me quitte pas",
+                "La Valse à Mille Temps",
+                artist = "Jacques Brel",
+                genre = "French",
+            ),
+        )
+        val filtered = filterSearchSongHits(
+            "french",
+            listOf(
+                com.bockmedia.console.data.api.dto.SearchHit(
+                    title = "Ne me quitte pas",
+                    artist = "Jacques Brel",
+                    album = "La Valse à Mille Temps",
+                    genre = "French",
+                    path = "/music/french/brel.mp3",
+                ),
+            ),
+        )
+        assertTrue(filtered.single().title == "Ne me quitte pas")
+    }
 }

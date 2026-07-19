@@ -8,6 +8,7 @@ import com.bockmedia.console.data.api.dto.StreamHistoryItem
 import com.bockmedia.console.domain.model.PlayTarget
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -115,6 +116,33 @@ class HomeFeedComposerTest {
             setOf("y1", "y2", "y3", "n1"),
             yacht.cards.mapNotNull { it.playlistId }.toSet(),
         )
+    }
+
+    @Test
+    fun compose_decadeSectionsIncludeAllMatchingPlaylists() {
+        val playlists = listOf(
+            PlaylistSummary(id = "60", name = "60s Rock Classics", tracks = 20),
+            PlaylistSummary(id = "6070", name = "60s-70s Party Hits", tracks = 30),
+            PlaylistSummary(id = "80", name = "Best of the 1980s", tracks = 25),
+            PlaylistSummary(id = "rock", name = "Modern Rock", tracks = 15),
+        )
+        val input = HomeFeedInput(
+            history = emptyList(),
+            analytics = null,
+            allPlaylists = playlists,
+            smartPlaylists = emptyList(),
+            favorites = emptyList(),
+            dashboard = null,
+            shuffleSeed = 3,
+        )
+        val feed = HomeFeedComposer.compose(input)
+        val sixties = feed.sections.first { it.id == "decade-60s" }
+        val seventies = feed.sections.first { it.id == "decade-70s" }
+        val eighties = feed.sections.first { it.id == "decade-80s" }
+        assertEquals(setOf("60", "6070"), sixties.cards.mapNotNull { it.playlistId }.toSet())
+        assertEquals(setOf("6070"), seventies.cards.mapNotNull { it.playlistId }.toSet())
+        assertEquals(setOf("80"), eighties.cards.mapNotNull { it.playlistId }.toSet())
+        assertNull(feed.sections.firstOrNull { it.id == "decade-90s" })
     }
 
     @Test
@@ -232,6 +260,30 @@ class HomeFeedComposerTest {
         )
         assertEquals("Classical Era", HomeFeedRules.matchingLibraryGenreForLabel("Classical Era", genres)?.name)
         assertEquals("Rock", HomeFeedRules.matchingLibraryGenreForLabel("Rock", genres)?.name)
+    }
+
+    @Test
+    fun compose_recentlyCreated_showsTenNewestByCreateDate() {
+        val playlists = listOf(
+            PlaylistSummary(id = "old", name = "Old Mix", tracks = 5, createDate = "2024-01-01T00:00:00Z"),
+            PlaylistSummary(id = "new", name = "Fresh Mix", tracks = 8, createDate = "2026-07-01T00:00:00Z"),
+            PlaylistSummary(id = "mid", name = "Mid Mix", tracks = 6, createDate = "2025-06-01T00:00:00Z"),
+        )
+        val feed = HomeFeedComposer.compose(
+            HomeFeedInput(
+                history = emptyList(),
+                analytics = null,
+                allPlaylists = playlists,
+                smartPlaylists = emptyList(),
+                favorites = emptyList(),
+                dashboard = null,
+                shuffleSeed = 1,
+            ),
+        )
+        val section = feed.sections.firstOrNull { it.id == "recently-created" }
+        assertNotNull(section)
+        assertEquals("Recently Created", section!!.title)
+        assertEquals(listOf("Fresh Mix", "Mid Mix", "Old Mix"), section.cards.map { it.title })
     }
 
     @Test

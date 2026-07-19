@@ -13,8 +13,11 @@ object HomeCardBrowse {
 
     fun destination(card: HomeCard): Destination? {
         if (card.kind == HomeSectionKind.Offline) return Destination.Downloads
-        if (card.kind == HomeSectionKind.BrowseGenres) return Destination.Genre(card.title)
+        // Playlist id first: tile rotation swaps stale genre tiles for playlist
+        // cards that keep kind=BrowseGenres — those must open playlist detail,
+        // not a genre page named after the playlist (which lists nothing).
         card.linkedPlaylistId()?.let { return Destination.Playlist(it) }
+        if (card.kind == HomeSectionKind.BrowseGenres) return Destination.Genre(card.title)
         // Synthetic "<genre> Mix" tiles seed playback from an artist, but tapping should
         // open the genre — not the artist page (whose header would be the artist name).
         mixGenre(card)?.let { return Destination.Genre(it) }

@@ -58,12 +58,14 @@ object HomeCachePersistence {
         val cardUrls: Map<String, String> = emptyMap(),
         val cardMediaPaths: Map<String, String> = emptyMap(),
         val playlistPaths: Map<String, String> = emptyMap(),
+        val hasRatedSongs: Boolean? = null,
     )
 
     data class Snapshot(
         val feed: HomeFeed,
         val cardMediaPaths: Map<String, String>,
         val playlistPaths: Map<String, String>,
+        val hasRatedSongs: Boolean? = null,
     )
 
     /** Serializes off the main thread and writes atomically (temp + rename). */
@@ -82,6 +84,7 @@ object HomeCachePersistence {
                     sections = feed.sections.map { it.toDto() },
                     cardMediaPaths = cardMediaPaths,
                     playlistPaths = playlistPaths,
+                    hasRatedSongs = HomeFeedCache.peekHasRatedSongs(),
                 )
                 val json = bockJson.encodeToString(dto)
                 val target = file(context)
@@ -111,7 +114,7 @@ object HomeCachePersistence {
                     ArtworkPaths.extractMediaPath(url)?.let { id to it }
                 }.toMap()
             }
-            Snapshot(feed, cardPaths, dto.playlistPaths)
+            Snapshot(feed, cardPaths, dto.playlistPaths, dto.hasRatedSongs)
         }.getOrNull()
     }
 

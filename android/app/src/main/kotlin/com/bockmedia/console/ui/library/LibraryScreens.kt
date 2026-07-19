@@ -9,8 +9,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.bockmedia.console.data.repository.BockMediaRepository
+import com.bockmedia.console.ui.testing.BockTestTags
+import com.bockmedia.console.domain.model.ArtistDetailSessionCache
 import com.bockmedia.console.domain.model.PlayTarget
 import com.bockmedia.console.ui.components.LibraryArtListItem
 import com.bockmedia.console.ui.components.LoadingBox
@@ -37,6 +40,7 @@ fun ArtistsScreen(
 ) = LibraryListScreen(
     repository = repository,
     title = "Artists",
+    bodyTestTag = BockTestTags.ARTISTS_LIST_BODY,
     loadPage = { page, search -> repository.artists(page, search).let { it.items to it.total } },
     label = { it.name },
     sub = { "${it.tracks} tracks · ${it.albums} albums" },
@@ -58,6 +62,7 @@ fun AlbumsScreen(
     LibraryListScreen(
         repository = repository,
         title = if (artistFilter == null) "Albums" else "Albums — $artistFilter",
+        bodyTestTag = BockTestTags.ALBUMS_LIST_BODY,
         showSearch = artistFilter == null,
         loadPage = { page, search ->
             repository.albums(page, search, artistFilter).let { it.items to it.total }
@@ -93,6 +98,7 @@ fun SongsScreen(
     LibraryListScreen(
         repository = repository,
         title = "Songs",
+        bodyTestTag = BockTestTags.SONGS_LIST_BODY,
         showSearch = artistFilter == null && albumFilter == null,
         loadPage = { page, search ->
             repository.songs(page, search, artistFilter, albumFilter).let { it.items to it.total }
@@ -122,6 +128,7 @@ fun SongsScreen(
 private fun <T> LibraryListScreen(
     repository: BockMediaRepository,
     title: String,
+    bodyTestTag: String? = null,
     showSearch: Boolean = true,
     loadPage: suspend (Int, String) -> Pair<List<T>, Int>,
     label: (T) -> String,
@@ -191,7 +198,12 @@ private fun <T> LibraryListScreen(
         )
     }
 
-    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .then(if (bodyTestTag != null) Modifier.testTag(bodyTestTag) else Modifier)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+    ) {
         if (showSearch) {
             SearchField(search, { search = it; page = 1 }, "Search")
             Spacer(Modifier.height(8.dp))
@@ -199,6 +211,15 @@ private fun <T> LibraryListScreen(
         if (loading) LoadingBox(Modifier.weight(1f)) else {
             BockLazyColumn(Modifier.weight(1f)) {
                 items(items) { item ->
+                    if (title == "Artists") {
+                        artistName?.invoke(item)?.let { name ->
+                            if (ArtistDetailSessionCache.prefetch(name) != null) {
+                                LaunchedEffect(name) {
+                                    runCatching { repository.artistDetail(name) }
+                                }
+                            }
+                        }
+                    }
                     val seed = discoverySeed?.invoke(item)
                     val rowModifier = when {
                         seed != null -> Modifier.combinedClickable(

@@ -31,7 +31,7 @@ import androidx.compose.ui.unit.dp
 import com.bockmedia.console.domain.model.PlayTarget
 import com.bockmedia.console.local.DownloadState
 import com.bockmedia.console.local.OfflineDownloadManager
-import com.bockmedia.console.ui.downloads.rememberVisibleDownloadStatuses
+import com.bockmedia.console.ui.downloads.LocalVisibleDownloadStatuses
 import com.bockmedia.console.local.downloadId
 import com.bockmedia.console.ui.theme.BockGreen
 
@@ -44,6 +44,7 @@ fun PlayDownloadActions(
     onPlay: () -> Unit,
     modifier: Modifier = Modifier,
     showDownload: Boolean = true,
+    showPlay: Boolean = true,
     leading: @Composable (() -> Unit)? = null,
 ) {
     Row(
@@ -53,7 +54,7 @@ fun PlayDownloadActions(
     ) {
         leading?.invoke()
         if (showDownload) DownloadStatusControl(playTarget)
-        CircularPlayButton(onClick = onPlay)
+        if (showPlay) CircularPlayButton(onClick = onPlay)
     }
 }
 
@@ -63,6 +64,7 @@ fun BoxScope.ArtworkTileOverlayActions(
     playTarget: PlayTarget,
     onPlay: () -> Unit,
     showDownload: Boolean = true,
+    showPlay: Boolean = true,
 ) {
     if (showDownload) {
         DownloadStatusControl(
@@ -74,21 +76,24 @@ fun BoxScope.ArtworkTileOverlayActions(
                 .padding(4.dp),
         )
     }
-    CircularPlayButton(
-        onClick = onPlay,
-        size = 48.dp,
-        elevated = true,
-        modifier = Modifier
-            .zIndex(2f)
-            .align(Alignment.BottomEnd)
-            .padding(8.dp),
-    )
+    if (showPlay) {
+        CircularPlayButton(
+            onClick = onPlay,
+            size = 48.dp,
+            elevated = true,
+            modifier = Modifier
+                .zIndex(2f)
+                .align(Alignment.BottomEnd)
+                .padding(8.dp),
+        )
+    }
 }
 
 /**
  * Offline state for [playTarget]: tap to download, a live progress ring while the
- * collection is syncing, or a green check once it's available offline. Set
- * [onArtwork] when overlaying on cover art so it stays legible on a busy image.
+ * collection is syncing, tap the green check to remove offline, or a download icon
+ * when not downloaded. Set [onArtwork] when overlaying on cover art so it stays
+ * legible on a busy image.
  */
 @Composable
 fun DownloadStatusControl(
@@ -97,8 +102,7 @@ fun DownloadStatusControl(
     onArtwork: Boolean = false,
 ) {
     val context = LocalContext.current
-    val statuses = rememberVisibleDownloadStatuses()
-    val status = statuses[playTarget.downloadId()]
+    val status = LocalVisibleDownloadStatuses.current[playTarget.downloadId()]
     val box = modifier.size(40.dp)
     val inner = if (onArtwork) {
         Modifier.size(32.dp).clip(CircleShape).background(Color.Black.copy(alpha = 0.5f))
@@ -119,14 +123,34 @@ fun DownloadStatusControl(
                 )
             }
         }
-        DownloadState.Complete -> Box(box, contentAlignment = Alignment.Center) {
+        DownloadState.Idle -> Box(box, contentAlignment = Alignment.Center) {
             Box(inner, contentAlignment = Alignment.Center) {
-                Icon(
-                    Icons.Default.DownloadDone,
-                    contentDescription = "Downloaded",
-                    tint = BockGreen,
-                    modifier = Modifier.size(22.dp),
+                CircularProgressIndicator(
+                    progress = { 0f },
+                    modifier = Modifier.size(20.dp),
+                    strokeWidth = 2.dp,
+                    color = (if (onArtwork) Color.White else BockGreen).copy(alpha = 0.55f),
+                    trackColor = (if (onArtwork) Color.White else BockGreen).copy(alpha = 0.25f),
                 )
+            }
+        }
+        DownloadState.Complete -> {
+            Box(
+                box
+                    .clip(CircleShape)
+                    .clickable {
+                        OfflineDownloadManager.deleteCollection(context, playTarget.downloadId())
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Box(inner, contentAlignment = Alignment.Center) {
+                    Icon(
+                        Icons.Default.DownloadDone,
+                        contentDescription = "Remove offline download",
+                        tint = BockGreen,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
             }
         }
         else -> Box(

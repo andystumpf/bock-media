@@ -18,6 +18,7 @@ struct RoutinesView: View {
             }
         }
         .scrollContentBackground(.hidden)
+        .accessibilityIdentifier(BockTestTags.routinesBody)
         .navigationTitle("Routines")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

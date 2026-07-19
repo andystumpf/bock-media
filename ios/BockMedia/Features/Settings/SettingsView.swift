@@ -3,7 +3,13 @@ import AuthenticationServices
 
 struct SettingsView: View {
     @ObservedObject var appState: AppState
+    @ObservedObject private var preferences: AppPreferences
     @Environment(\.dismiss) private var dismiss
+
+    init(appState: AppState) {
+        self.appState = appState
+        _preferences = ObservedObject(wrappedValue: appState.preferences)
+    }
 
     @State private var health: HealthResponse?
     @State private var summary: SummaryResponse?
@@ -22,13 +28,29 @@ struct SettingsView: View {
     @State private var transcodeBitrate = ""
 
     var body: some View {
-        List {
+        ZStack {
+            List {
             if let health {
                 Section("Server health") {
                     healthRow("Backend", health.backend == true)
                     healthRow("Alexa auth", health.alexaAuth == true)
                     if let uptime = health.uptimeSeconds {
                         LabeledContent("Uptime", value: formatUptime(uptime))
+                    }
+                }
+                if let warnings = health.securityWarnings, !warnings.isEmpty {
+                    Section("Security") {
+                        ForEach(Array(warnings.enumerated()), id: \.offset) { _, w in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(w.message ?? "")
+                                    .font(.subheadline)
+                                if let action = w.action {
+                                    Text(action)
+                                        .font(.caption)
+                                        .foregroundStyle(BockColors.muted)
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -41,15 +63,16 @@ struct SettingsView: View {
             }
             Section("Downloads") {
                 Toggle("Wi‑Fi only", isOn: Binding(
-                    get: { appState.preferences.downloadWifiOnly },
+                    get: { preferences.downloadWifiOnly },
                     set: {
-                        appState.preferences.downloadWifiOnly = $0
+                        preferences.downloadWifiOnly = $0
                         ClientPrefsSync.schedulePush()
                     }
                 ))
+                .accessibilityIdentifier(BockTestTags.settingsWifiOnly)
             }
             Section("This Phone playback") {
-                let seconds = appState.preferences.crossfadeSeconds
+                let seconds = preferences.crossfadeSeconds
                 VStack(alignment: .leading, spacing: 8) {
                     LabeledContent("Crossfade", value: seconds == 0 ? "Off" : "\(seconds) s")
                     Text(seconds == 0 ? "Hard cut between songs" : "Overlap before each track ends")
@@ -57,9 +80,9 @@ struct SettingsView: View {
                         .foregroundStyle(BockColors.muted)
                     Slider(
                         value: Binding(
-                            get: { Double(appState.preferences.crossfadeSeconds) },
+                            get: { Double(preferences.crossfadeSeconds) },
                             set: {
-                                appState.preferences.crossfadeSeconds = Int($0.rounded())
+                                preferences.crossfadeSeconds = Int($0.rounded())
                                 ClientPrefsSync.schedulePush()
                             }
                         ),
@@ -68,9 +91,9 @@ struct SettingsView: View {
                     )
                 }
                 Picker("When queue ends", selection: Binding(
-                    get: { appState.preferences.continueAfterQueue },
+                    get: { preferences.continueAfterQueue },
                     set: {
-                        appState.preferences.continueAfterQueue = $0
+                        preferences.continueAfterQueue = $0
                         ClientPrefsSync.schedulePush()
                     }
                 )) {
@@ -78,6 +101,8 @@ struct SettingsView: View {
                     Text("Similar songs").tag("similar")
                     Text("Artist radio").tag("artist_radio")
                 }
+                .pickerStyle(.menu)
+                .accessibilityIdentifier(BockTestTags.settingsContinue("picker"))
             }
             Section("Watch folders") {
                 if watchFolders.isEmpty {
@@ -129,7 +154,7 @@ struct SettingsView: View {
                             .foregroundStyle(BockColors.muted)
                         Button("Load server settings") { configConfirmed = true }
                     } else if configLoading {
-                        BockLoadingLogo(size: 32)
+                        BockProgressIndicator(size: 32)
                     } else {
                         TextField("Default playlist name", text: $defaultPlaylist)
                         TextField("Public URL", text: $publicUrl)
@@ -156,9 +181,14 @@ struct SettingsView: View {
             Section {
                 LabeledContent("Client ID", value: String(ClientIdStore.clientId().prefix(8)) + "…")
             }
+            }
+            if loading && health == nil && summary == nil {
+                LoadingBox()
+            }
         }
         .scrollContentBackground(.hidden)
         .bockBackground()
+        .accessibilityIdentifier(BockTestTags.settingsBody)
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -168,6 +198,12 @@ struct SettingsView: View {
         }
         .task { await load() }
         .refreshable { await load() }
+        .onChange(of: appState.profileChangeRevision) { _, _ in
+            preferences.notifyProfilePrefsApplied()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: ClientPrefsSyncNotifications.prefsApplied)) { _ in
+            preferences.notifyProfilePrefsApplied()
+        }
         .onChange(of: configExpanded) { _, expanded in
             if !expanded { configConfirmed = false }
         }

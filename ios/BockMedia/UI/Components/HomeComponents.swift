@@ -1,27 +1,40 @@
 import SwiftUI
 
 enum HomeGreeting {
-    static var text: String {
+    static func text(profileFirstName: String? = nil) -> String {
         let hour = Calendar.current.component(.hour, from: Date())
+        let period: String
         switch hour {
-        case 0...11: return "Good morning"
-        case 12...16: return "Good afternoon"
-        default: return "Good evening"
+        case 0...11: period = "Good morning"
+        case 12...16: period = "Good afternoon"
+        default: period = "Good evening"
         }
+        let first = profileFirstName?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+            .first
+            .map(String.init)
+            .flatMap { $0.isEmpty ? nil : $0 }
+        if let first { return "\(period) \(first)" }
+        return period
     }
 }
 
 struct HomeHeaderView: View {
     @Binding var filter: HomeFilter
     @Binding var accountRoute: AccountRoute?
+    var profileFirstName: String? = nil
+    var onOpenListenAgent: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .center) {
-                Text(HomeGreeting.text)
+                Text(HomeGreeting.text(profileFirstName: profileFirstName))
                     .font(.title2.bold())
                     .foregroundStyle(BockColors.onSurface)
+                    .accessibilityIdentifier(BockTestTags.homeGreeting)
                 Spacer()
+                ListenAgentMicButton(onTap: onOpenListenAgent)
                 AccountMenuButton(route: $accountRoute)
             }
             HomeFilterPills(filter: $filter)
@@ -195,21 +208,13 @@ struct HomeSectionView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 16) {
                     ForEach(section.cards) { card in
-                        if section.kind == .topMixes || section.kind == .exploreThemes || section.kind == .mood || section.kind == .dailyMixes {
-                            HomeGenreMixTile(
-                                appState: appState,
-                                card: card,
-                                artworkEpoch: artworkEpoch,
-                                onLongPress: { onLongPress?(card) }
-                            )
-                        } else {
-                            HomePlaylistTile(
-                                appState: appState,
-                                card: card,
-                                artworkEpoch: artworkEpoch,
-                                onLongPress: { onLongPress?(card) }
-                            )
-                        }
+                        HomeCollectionTile(
+                            appState: appState,
+                            card: card,
+                            section: section,
+                            artworkEpoch: artworkEpoch,
+                            onLongPress: { onLongPress?(card) }
+                        )
                     }
                 }
                 .padding(.horizontal, 16)
@@ -219,126 +224,99 @@ struct HomeSectionView: View {
     }
 }
 
-struct HomePlaylistTile: View {
+struct HomeCollectionTile: View {
     @ObservedObject var appState: AppState
     let card: HomeCard
+    let section: HomeSection
     var artworkEpoch: Int
     var onLongPress: (() -> Void)?
     private let size: CGFloat = 148
 
     var body: some View {
-        homeTileLink {
-            VStack(alignment: .leading, spacing: 8) {
-                HomeCardArtwork(
-                    appState: appState,
-                    card: card,
-                    artworkEpoch: artworkEpoch,
-                    size: size,
-                    cornerRadius: 4
-                )
-                Text(card.title)
-                    .font(.subheadline.weight(.bold))
-                    .foregroundStyle(BockColors.onSurface)
-                    .lineLimit(2)
-                    .frame(width: size, alignment: .leading)
-                if let sub = card.subtitle {
-                    Text(sub)
-                        .font(.caption)
-                        .foregroundStyle(BockColors.muted)
-                        .lineLimit(1)
-                        .frame(width: size, alignment: .leading)
+        VStack(alignment: .leading, spacing: 8) {
+            ZStack {
+                tileArtworkLink
+                if card.showsHomeDownloadOverlay(sectionKind: section.kind, sectionId: section.id) {
+                    HomeTileDownloadStatus(appState: appState, target: card.playTarget)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                        .padding(4)
                 }
-            }
-        }
-        .fixedSize(horizontal: true, vertical: false)
-        .simultaneousGesture(LongPressGesture().onEnded { _ in onLongPress?() })
-    }
-
-    @ViewBuilder
-    private func homeTileLink<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        if let route = card.browseLibraryRoute {
-            NavigationLink(value: route) { content() }
-                .buttonStyle(.plain)
-        } else if let route = card.browseSearchRoute {
-            NavigationLink(value: route) { content() }
-                .buttonStyle(.plain)
-        } else {
-            Button { appState.playHomeCard(card) } label: {
-                content()
-            }
-            .buttonStyle(.plain)
-        }
-    }
-}
-
-struct HomeGenreMixTile: View {
-    @ObservedObject var appState: AppState
-    let card: HomeCard
-    var artworkEpoch: Int
-    var onLongPress: (() -> Void)?
-    private let size: CGFloat = 148
-
-    var body: some View {
-        homeTileLink {
-            ZStack(alignment: .bottomLeading) {
-                HomeCardArtwork(
-                    appState: appState,
-                    card: card,
-                    artworkEpoch: artworkEpoch,
-                    size: size,
-                    cornerRadius: 4
-                )
-                LinearGradient(
-                    colors: [
-                        .clear,
-                        BockColors.mixAccent(for: card.id).opacity(0.25),
-                        .black.opacity(0.72),
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(card.title)
-                        .font(.headline.weight(.bold))
-                        .foregroundStyle(.white)
-                        .lineLimit(2)
-                    if let sub = card.subtitle {
-                        Text(sub)
-                            .font(.caption)
-                            .foregroundStyle(.white.opacity(0.85))
-                            .lineLimit(1)
+                if card.showsHomePlayOverlay(sectionKind: section.kind, sectionId: section.id) {
+                    HomeTileOverlayPlay {
+                        appState.playHomeCard(card)
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                 }
-                .padding(12)
             }
             .frame(width: size, height: size)
-            .clipShape(RoundedRectangle(cornerRadius: 4))
+            tileLabelLink
         }
         .fixedSize(horizontal: true, vertical: false)
         .simultaneousGesture(LongPressGesture().onEnded { _ in onLongPress?() })
     }
 
     @ViewBuilder
-    private func homeTileLink<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        if let route = card.browseLibraryRoute {
-            NavigationLink(value: route) { content() }
-                .buttonStyle(.plain)
-        } else if let route = card.browseSearchRoute {
-            NavigationLink(value: route) { content() }
-                .buttonStyle(.plain)
+    private var tileArtworkLink: some View {
+        browseNavigationLink { tileArtwork }
+    }
+
+    @ViewBuilder
+    private var tileLabelLink: some View {
+        if card.browseDestination?.libraryRoute != nil || card.browseDestination?.searchRoute != nil {
+            browseNavigationLink { tileLabels }
         } else {
-            Button { appState.playHomeCard(card) } label: {
-                content()
+            Button { appState.playHomeCard(card) } label: { tileLabels }.buttonStyle(.plain)
+        }
+    }
+
+    @ViewBuilder
+    private func browseNavigationLink<Label: View>(@ViewBuilder label: () -> Label) -> some View {
+        if let dest = card.browseDestination, let route = dest.libraryRoute {
+            NavigationLink(value: route, label: label).buttonStyle(.plain)
+        } else if let dest = card.browseDestination, let route = dest.searchRoute {
+            NavigationLink(value: route, label: label).buttonStyle(.plain)
+        } else {
+            label()
+        }
+    }
+
+    private var tileArtwork: some View {
+        HomeCardArtwork(
+            appState: appState,
+            card: card,
+            artworkEpoch: artworkEpoch,
+            size: size,
+            cornerRadius: 8
+        )
+    }
+
+    private var tileLabels: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(card.title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(BockColors.onSurface)
+                .lineLimit(2)
+                .frame(width: size, alignment: .leading)
+            if let sub = card.subtitle {
+                Text(sub)
+                    .font(.caption)
+                    .foregroundStyle(BockColors.muted)
+                    .lineLimit(1)
+                    .frame(width: size, alignment: .leading)
             }
-            .buttonStyle(.plain)
         }
     }
 }
 
 struct HomeCardActionSheet: View {
     @ObservedObject var appState: AppState
+    @ObservedObject private var manager = OfflineDownloadManager.shared
     let card: HomeCard
     var onDismiss: () -> Void
+
+    private var downloadState: DownloadState? {
+        manager.status(for: card.playTarget)?.state
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -386,9 +364,89 @@ struct HomeCardActionSheet: View {
                 .clipShape(RoundedRectangle(cornerRadius: 4))
             }
             .buttonStyle(.plain)
+            .disabled(downloadState == .downloading || downloadState == .idle)
+            .opacity(downloadState == .downloading || downloadState == .idle ? 0.45 : 1)
+            if downloadState == .downloading {
+                Text("Download in progress…")
+                    .font(.subheadline)
+                    .foregroundStyle(BockColors.muted)
+            } else if downloadState == .idle {
+                Text("Queued for download…")
+                    .font(.subheadline)
+                    .foregroundStyle(BockColors.muted)
+            }
         }
         .padding(20)
         .presentationBackground(BockColors.sheetBg)
+    }
+}
+
+/// Offline download state overlay for home collection tiles — mirrors Android `DownloadStatusControl`.
+struct HomeTileDownloadStatus: View {
+    @ObservedObject var appState: AppState
+    @ObservedObject private var manager = OfflineDownloadManager.shared
+    let target: PlayTarget
+
+    @Environment(\.visibleDownloadStatuses) private var visibleDownloadStatuses
+
+    private var status: OfflineCollectionStatus? {
+        let id = target.downloadId()
+        if !visibleDownloadStatuses.isEmpty {
+            return visibleDownloadStatuses[id]
+        }
+        return manager.status(for: target)
+    }
+
+    var body: some View {
+        Group {
+            switch status?.state {
+            case .downloading:
+                ZStack {
+                    Circle().fill(Color.black.opacity(0.5))
+                    ProgressView(value: Double(status?.progress ?? 0))
+                        .progressViewStyle(.circular)
+                        .tint(BockColors.green)
+                        .scaleEffect(0.65)
+                }
+                .frame(width: 32, height: 32)
+            case .idle:
+                ZStack {
+                    Circle().fill(Color.black.opacity(0.5))
+                    Circle()
+                        .stroke(BockColors.green.opacity(0.55), lineWidth: 2)
+                        .frame(width: 18, height: 18)
+                }
+                .frame(width: 32, height: 32)
+            case .complete:
+                Button {
+                    manager.deleteCollection(target.downloadId())
+                } label: {
+                    ZStack {
+                        Circle().fill(Color.black.opacity(0.5))
+                        BockIcon(icon: .downloadDone, size: 20)
+                            .foregroundStyle(BockColors.green)
+                    }
+                    .frame(width: 32, height: 32)
+                }
+                .buttonStyle(.plain)
+            default:
+                Button {
+                    manager.download(
+                        repository: appState.repository,
+                        preferences: appState.preferences,
+                        target: target
+                    )
+                } label: {
+                    ZStack {
+                        Circle().fill(Color.black.opacity(0.5))
+                        BockIcon(icon: .download, size: 20)
+                            .foregroundStyle(.white)
+                    }
+                    .frame(width: 32, height: 32)
+                }
+                .buttonStyle(.plain)
+            }
+        }
     }
 }
 
@@ -400,11 +458,11 @@ struct HomeSectionShowAllSheet: View {
     var body: some View {
         NavigationStack {
             List(section.cards) { card in
-                if let route = card.browseLibraryRoute {
+                if let dest = card.browseDestination, let route = dest.libraryRoute {
                     NavigationLink(value: route) {
                         showAllRow(card)
                     }
-                } else if let route = card.browseSearchRoute {
+                } else if let dest = card.browseDestination, let route = dest.searchRoute {
                     NavigationLink(value: route) {
                         showAllRow(card)
                     }
@@ -448,6 +506,10 @@ struct HomeSectionShowAllSheet: View {
                     ArtistDetailView(appState: appState, artistName: name)
                 case .album(let name, let artist):
                     AlbumDetailView(appState: appState, albumName: name, artist: artist)
+                case .releaseRadar:
+                    ReleaseRadarView(appState: appState)
+                case .sonicAdventure:
+                    SearchSonicAdventureView(appState: appState)
                 }
             }
         }

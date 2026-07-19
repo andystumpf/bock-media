@@ -61,14 +61,18 @@ sealed class BockRoute(val route: String, val title: String, val icon: ImageVect
     }
 }
 
-const val ROUTE_PLAYLIST_DETAIL = "playlists/detail/{id}"
+const val ROUTE_PLAYLIST_DETAIL = "playlists/detail/{id}?suggestHomePin={suggestHomePin}"
 const val ROUTE_ALBUMS_ARTIST = "albums/{artist}"
+const val ROUTE_ALBUMS_DISCOGRAPHY = "albums/{artist}/discography"
 const val ROUTE_SONGS_ARTIST = "songs/artist/{artist}"
 const val ROUTE_SONGS_ALBUM = "songs/album/{album}?artist={artist}"
 const val ROUTE_GENRE = "genre/{name}"
 
-fun playlistDetailRoute(id: String) = "playlists/detail/$id"
+fun playlistDetailRoute(id: String, suggestHomePin: Boolean = false) =
+    "playlists/detail/$id?suggestHomePin=$suggestHomePin"
 fun albumsArtistRoute(artist: String) = "albums/${java.net.URLEncoder.encode(artist, "UTF-8")}"
+fun artistDiscographyRoute(artist: String) =
+    "albums/${java.net.URLEncoder.encode(artist, "UTF-8")}/discography"
 fun songsArtistRoute(artist: String) = "songs/artist/${java.net.URLEncoder.encode(artist, "UTF-8")}"
 fun songsAlbumRoute(album: String, artist: String? = null): String {
     val encoded = java.net.URLEncoder.encode(album, "UTF-8")

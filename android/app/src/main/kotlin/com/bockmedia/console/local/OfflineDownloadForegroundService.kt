@@ -21,6 +21,8 @@ import kotlinx.coroutines.launch
 class OfflineDownloadForegroundService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var observing = false
+    private var inForeground = false
+    private val notificationManager by lazy { getSystemService(NotificationManager::class.java) }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -45,6 +47,7 @@ class OfflineDownloadForegroundService : Service() {
 
     override fun onDestroy() {
         observing = false
+        inForeground = false
         scope.cancel()
         super.onDestroy()
     }
@@ -60,9 +63,11 @@ class OfflineDownloadForegroundService : Service() {
      */
     private fun promoteToForeground(): Boolean = try {
         startForeground(NOTIFICATION_ID, buildNotification("Preparing download…", 0f))
+        inForeground = true
         foregroundUnavailable = false
         true
     } catch (_: Exception) {
+        inForeground = false
         foregroundUnavailable = true
         false
     }
@@ -77,7 +82,10 @@ class OfflineDownloadForegroundService : Service() {
                     it.manifest.id in visibleIds && it.state == DownloadState.Downloading
                 }
                 if (active.isEmpty()) {
-                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    if (inForeground) {
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                        inForeground = false
+                    }
                     stopSelf()
                     return@collectLatest
                 }
@@ -88,8 +96,16 @@ class OfflineDownloadForegroundService : Service() {
                     "Downloading ${active.size} collections"
                 }
                 val cancelId = active.singleOrNull()?.manifest?.id
-                runCatching {
-                    startForeground(NOTIFICATION_ID, buildNotification(title, aggregate, cancelId))
+                val notification = buildNotification(title, aggregate, cancelId)
+                if (inForeground) {
+                    // Progress ticks fire often during parallel downloads — update via
+                    // notify() so Samsung/Android don't shed the notification for rate spam.
+                    runCatching { notificationManager.notify(NOTIFICATION_ID, notification) }
+                } else {
+                    runCatching {
+                        startForeground(NOTIFICATION_ID, notification)
+                        inForeground = true
+                    }
                 }
             }
         }

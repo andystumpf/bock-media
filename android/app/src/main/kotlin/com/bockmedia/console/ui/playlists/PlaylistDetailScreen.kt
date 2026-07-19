@@ -25,11 +25,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import com.bockmedia.console.data.api.dto.PlaylistTrack
+import com.bockmedia.console.BockMediaApp
 import com.bockmedia.console.data.api.httpErrorMessage
+import com.bockmedia.console.data.api.isServerConnectionError
+import com.bockmedia.console.data.network.NetworkReachability
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.LocalTrack
 import com.bockmedia.console.domain.model.PlaybackFocus
 import com.bockmedia.console.domain.model.PlayTarget
+import com.bockmedia.console.domain.model.SessionDataStore
 import com.bockmedia.console.local.ActiveProfileStore
 import com.bockmedia.console.local.DownloadState
 import com.bockmedia.console.local.OfflineDownloadManager
@@ -38,6 +42,8 @@ import com.bockmedia.console.local.downloadId
 import com.bockmedia.console.media.LOCAL_PHONE_DEVICE_ID
 import com.bockmedia.console.media.LocalPlaybackController
 import com.bockmedia.console.ui.components.*
+import androidx.compose.ui.platform.testTag
+import com.bockmedia.console.ui.testing.BockTestTags
 import com.bockmedia.console.ui.discovery.AcquireIdeasDialog
 import com.bockmedia.console.ui.discovery.DiscoveryActionsDialog
 import com.bockmedia.console.ui.discovery.DiscoverySeed
@@ -45,6 +51,8 @@ import com.bockmedia.console.ui.discovery.DiscoverySeedKind
 import com.bockmedia.console.ui.discovery.MixMuseDialog
 import com.bockmedia.console.ui.discovery.runResonanceMix
 import com.bockmedia.console.ui.discovery.runResonanceRadio
+import com.bockmedia.console.domain.model.HomePinTargets
+import com.bockmedia.console.ui.home.HomeSectionPinSheet
 import com.bockmedia.console.ui.theme.BockGreen
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -57,6 +65,7 @@ fun PlaylistDetailScreen(
     onPlay: (PlayTarget) -> Unit,
     onBack: () -> Unit,
     onLocalPlayStarted: () -> Unit = {},
+    suggestHomePin: Boolean = false,
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -64,8 +73,9 @@ fun PlaylistDetailScreen(
     var editName by remember { mutableStateOf("") }
     var tracks by remember { mutableStateOf<List<PlaylistTrack>>(emptyList()) }
     var total by remember { mutableIntStateOf(0) }
+    var totalDurationSec by remember { mutableIntStateOf(0) }
     var filter by remember { mutableStateOf("") }
-    var sortBy by remember { mutableStateOf("title") }
+    var sortBy by remember { mutableStateOf("original") }
     var sortOrder by remember { mutableStateOf("asc") }
     var loading by remember { mutableStateOf(true) }
     var loadingMore by remember { mutableStateOf(false) }
@@ -91,7 +101,9 @@ fun PlaylistDetailScreen(
     var reorderError by remember { mutableStateOf<String?>(null) }
     var trackMenu by remember { mutableStateOf<PlaylistTrack?>(null) }
     var showPlaylistMenu by remember { mutableStateOf(false) }
-    val canReorder = filter.isBlank() && sortBy == "title" && sortOrder == "asc" &&
+    var showHomePin by remember { mutableStateOf(false) }
+    var homePinPrompted by remember { mutableStateOf(false) }
+    val canReorder = filter.isBlank() && sortBy == "original" &&
         isPlaylistEditable(playlistSource, playlistSourceName)
     val listState = rememberLazyListState()
     val pageSize = 100
@@ -100,13 +112,19 @@ fun PlaylistDetailScreen(
     val collectionStatus = downloadStatus[playTarget.downloadId()]
     val downloaded = collectionStatus?.state == DownloadState.Complete
     val downloading = collectionStatus?.state == DownloadState.Downloading
+    val downloadQueued = collectionStatus?.state == DownloadState.Idle
     val downloadFailed = collectionStatus?.state == DownloadState.Failed
     val downloadProgress = collectionStatus?.progress ?: 0f
 
     val artUrl by produceState<String?>(null, playlistId) {
         value = repository.artworkUrlForPlaylist(playlistId)
     }
-    val totalDurationSec = tracks.sumOf { it.duration ?: 0 }
+    val loadedDurationSec = tracks.sumOf { it.duration ?: 0 }
+    val summaryDurationSec = when {
+        totalDurationSec > 0 -> totalDurationSec
+        loadedDurationSec > 0 -> loadedDurationSec
+        else -> 0
+    }
 
     ImmersiveDarkStatusBar()
 
@@ -119,7 +137,7 @@ fun PlaylistDetailScreen(
             loadError = null
         }
         runCatching {
-            val d = repository.playlistDetail(
+            repository.playlistDetail(
                 playlistId,
                 page = page,
                 limit = pageSize,
@@ -127,6 +145,22 @@ fun PlaylistDetailScreen(
                 sortBy = sortBy,
                 order = sortOrder,
             )
+        }.recoverCatching { e ->
+            if (!append && isServerConnectionError(e)) {
+                NetworkReachability.update(context)
+                BockMediaApp.get(context).recoverFromConnectionFailure()
+                repository.playlistDetail(
+                    playlistId,
+                    page = page,
+                    limit = pageSize,
+                    q = filter.ifBlank { null },
+                    sortBy = sortBy,
+                    order = sortOrder,
+                )
+            } else {
+                throw e
+            }
+        }.onSuccess { d ->
             name = d.name
             editName = d.name
             playlistSource = d.source
@@ -137,6 +171,9 @@ fun PlaylistDetailScreen(
             visibility = d.visibility
             sharedWith = d.sharedWith
             total = d.total.takeIf { it > 0 } ?: d.tracks.size
+            if (d.totalDurationSeconds > 0) {
+                totalDurationSec = d.totalDurationSeconds
+            }
             tracks = if (append) {
                 val seen = tracks.mapNotNull { it.path }.toMutableSet()
                 tracks + d.tracks.filter { track ->
@@ -154,19 +191,61 @@ fun PlaylistDetailScreen(
         refreshing = false
     }
 
+    fun seedFromSessionCache() {
+        val memberKey = ActiveProfileStore.activeMemberId(context).orEmpty()
+        SessionDataStore.peekPlaylists(memberKey)?.items
+            ?.firstOrNull { it.id == playlistId }
+            ?.let { pl ->
+                if (name.isBlank()) {
+                    name = pl.name
+                    editName = pl.name
+                }
+                if (total == 0) total = pl.tracks
+                loading = false
+            }
+    }
+
     val reloadKey = remember(playlistId, sortBy, sortOrder, filter) {
         listOf(playlistId, sortBy, sortOrder, filter)
     }
     LaunchedEffect(reloadKey) {
+        if (filter.isEmpty()) seedFromSessionCache()
         if (filter.isNotEmpty()) delay(400)
         loadPage(page = 1, append = false)
     }
 
+    LaunchedEffect(suggestHomePin, name, loading) {
+        if (suggestHomePin && !homePinPrompted && !loading && name.isNotBlank()) {
+            homePinPrompted = true
+            showHomePin = true
+        }
+    }
+
+    if (showHomePin && name.isNotBlank()) {
+        HomeSectionPinSheet(
+            playlistId = playlistId,
+            playlistName = name,
+            suggestedSectionId = HomePinTargets.suggestSectionId(name),
+            onDismiss = { showHomePin = false },
+            onPinned = { sectionTitle ->
+                android.widget.Toast.makeText(
+                    context,
+                    "Pinned to $sectionTitle on Home",
+                    android.widget.Toast.LENGTH_SHORT,
+                ).show()
+            },
+        )
+    }
+
     suspend fun applySort(newSortBy: String? = null, newOrder: String? = null) {
-        newSortBy?.let { sortBy = it }
-        newOrder?.let { sortOrder = it }
+        newSortBy?.let { field ->
+            sortBy = if (field == sortBy) "original" else field
+        }
+        if (newOrder != null && sortBy != "original") {
+            sortOrder = newOrder
+        }
         reorderMode = false
-        if (filter.isBlank()) {
+        if (filter.isBlank() && sortBy in setOf("title", "artist", "album", "path")) {
             runCatching { repository.sortPlaylist(playlistId, sortBy, sortOrder) }
         }
     }
@@ -328,14 +407,20 @@ fun PlaylistDetailScreen(
         )
     }
 
-    Box(Modifier.fillMaxSize()) {
+    Box(Modifier.fillMaxSize().testTag(BockTestTags.PLAYLIST_DETAIL_BODY)) {
         ArtBackdrop(artUrl = artUrl)
         Column(Modifier.fillMaxSize()) {
             PlaylistInlineTopBar(title = name.ifBlank { "Playlist" }, onBack = onBack)
             when {
                 loading && tracks.isEmpty() -> LoadingBox(Modifier.weight(1f))
                 loadError != null && tracks.isEmpty() -> ErrorText(loadError!!) {
-                    scope.launch { loadPage(1, append = false) }
+                    scope.launch {
+                        NetworkReachability.update(context)
+                        if (isServerConnectionError(loadError)) {
+                            runCatching { BockMediaApp.get(context).recoverFromConnectionFailure() }
+                        }
+                        loadPage(1, append = false)
+                    }
                 }
                 else -> {
                     BockPullRefresh(
@@ -354,8 +439,11 @@ fun PlaylistDetailScreen(
                                     onPlay = { onPlay(playTarget) },
                                     onShuffle = { onPlay(PlayTarget.Playlist(playlistId, name, shuffle = true)) },
                                     onDownload = {
-                                        if (downloaded) OfflineDownloadManager.resync(context, playTarget)
-                                        else OfflineDownloadManager.downloadPlaylist(context, playlistId, name)
+                                        if (downloaded) {
+                                            OfflineDownloadManager.deleteCollection(context, playTarget.downloadId())
+                                        } else {
+                                            OfflineDownloadManager.downloadPlaylist(context, playlistId, name)
+                                        }
                                     },
                                     onRename = { showRename = true },
                                     onDelete = {
@@ -402,6 +490,7 @@ fun PlaylistDetailScreen(
                                     },
                                     downloaded = downloaded,
                                     downloading = downloading,
+                                    downloadQueued = downloadQueued,
                                     onToggleFilters = { showFilters = !showFilters },
                                     canReorder = canReorder,
                                     reorderMode = reorderMode,
@@ -416,7 +505,7 @@ fun PlaylistDetailScreen(
                             item(key = "summary") {
                                 PlaylistTrackSummaryBar(
                                     trackCount = total,
-                                    totalSeconds = totalDurationSec,
+                                    totalSeconds = summaryDurationSec,
                                 )
                             }
                             if (showFilters) {
@@ -442,6 +531,25 @@ fun PlaylistDetailScreen(
                                         color = BockGreen,
                                     )
                                 }
+                            } else if (downloadQueued) {
+                                item(key = "download-queued") {
+                                    Text(
+                                        "Queued for download",
+                                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = BockGreen.copy(alpha = 0.85f),
+                                    )
+                                }
+                            }
+                            if (downloadFailed) {
+                                item(key = "download-error") {
+                                    Text(
+                                        collectionStatus?.error ?: "Download failed — open Downloads to retry",
+                                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.error,
+                                    )
+                                }
                             }
                             items(tracks.size, key = { idx -> "${tracks[idx].path ?: "row"}-$idx" }) { idx ->
                                 val t = tracks[idx]
@@ -455,7 +563,6 @@ fun PlaylistDetailScreen(
                                     onMoveDown = { scope.launch { moveTrack(idx, idx + 1) } },
                                     onClick = {
                                         scope.launch {
-                                            if (tracks.size < total) loadAllTracksIfNeeded()
                                             val queue = tracks.mapNotNull { pt ->
                                                 pt.path?.let { path ->
                                                     LocalTrack(
@@ -592,7 +699,7 @@ fun PlaylistDetailScreen(
                     PlexampSheetAction(
                         label = if (downloaded) "Sync offline" else "Download for offline",
                         icon = Icons.Default.Download,
-                        enabled = !downloading,
+                        enabled = !downloading && !downloadQueued,
                         onClick = {
                             if (downloaded) OfflineDownloadManager.resync(context, playTarget)
                             else OfflineDownloadManager.downloadPlaylist(context, playlistId, name)
@@ -600,6 +707,11 @@ fun PlaylistDetailScreen(
                     ),
                 )
                 add(PlexampSheetAction("Search & sort", Icons.Default.Tune, onClick = { showFilters = !showFilters }))
+                add(
+                    PlexampSheetAction("Add to Home row…", Icons.Default.Home, onClick = {
+                        showHomePin = true
+                    }),
+                )
                 if (canReorder) {
                     add(
                         PlexampSheetAction(
@@ -670,6 +782,7 @@ private fun PlexampPlaylistHero(
     onSaveDaily: () -> Unit,
     downloaded: Boolean,
     downloading: Boolean,
+    downloadQueued: Boolean,
     onToggleFilters: () -> Unit,
     canReorder: Boolean,
     reorderMode: Boolean,
@@ -709,6 +822,35 @@ private fun PlexampPlaylistHero(
                 IconButton(onClick = onShuffle) {
                     Icon(Icons.Default.Shuffle, contentDescription = "Shuffle", tint = Color.White)
                 }
+                IconButton(
+                    onClick = onDownload,
+                    enabled = !downloading && !downloadQueued,
+                ) {
+                    when {
+                        downloading -> CircularProgressIndicator(
+                            modifier = Modifier.size(22.dp),
+                            strokeWidth = 2.dp,
+                            color = BockGreen,
+                        )
+                        downloadQueued -> CircularProgressIndicator(
+                            progress = { 0f },
+                            modifier = Modifier.size(22.dp),
+                            strokeWidth = 2.dp,
+                            color = BockGreen.copy(alpha = 0.55f),
+                            trackColor = BockGreen.copy(alpha = 0.25f),
+                        )
+                        downloaded -> Icon(
+                            Icons.Default.DownloadDone,
+                            contentDescription = "Remove offline download",
+                            tint = BockGreen,
+                        )
+                        else -> Icon(
+                            Icons.Default.Download,
+                            contentDescription = "Download for offline",
+                            tint = Color.White,
+                        )
+                    }
+                }
                 IconButton(onClick = onOpenMenu) {
                     Icon(Icons.Default.MoreVert, contentDescription = "More", tint = Color.White)
                 }
@@ -719,32 +861,18 @@ private fun PlexampPlaylistHero(
 
 @Composable
 private fun PlaylistTrackSummaryBar(trackCount: Int, totalSeconds: Int) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
+    Column(Modifier.fillMaxWidth()) {
         Text(
-            if (trackCount == 1) "1 TRACK" else "$trackCount TRACKS",
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 0.5.sp,
-            color = Color.White,
+            formatAlbumSummary(trackCount, totalSeconds),
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+            style = MaterialTheme.typography.bodySmall,
+            color = Color.White.copy(alpha = 0.55f),
         )
-        Spacer(Modifier.weight(1f))
-        if (totalSeconds > 0) {
-            Text(
-                formatAlbumDuration(totalSeconds),
-                style = MaterialTheme.typography.bodySmall,
-                color = Color.White.copy(alpha = 0.55f),
-            )
-        }
+        HorizontalDivider(
+            modifier = Modifier.padding(horizontal = 16.dp),
+            color = Color.White.copy(alpha = 0.12f),
+        )
     }
-    HorizontalDivider(
-        modifier = Modifier.padding(horizontal = 16.dp),
-        color = Color.White.copy(alpha = 0.12f),
-    )
 }
 
 @Composable
@@ -763,8 +891,18 @@ private fun PlaylistFilterBar(
             FilterChip(selected = sortBy == "title", onClick = { onSort("title", null) }, label = { Text("Title") })
             FilterChip(selected = sortBy == "artist", onClick = { onSort("artist", null) }, label = { Text("Artist") })
             FilterChip(selected = sortBy == "album", onClick = { onSort("album", null) }, label = { Text("Album") })
-            FilterChip(selected = sortOrder == "asc", onClick = { onSort(null, "asc") }, label = { Text("↑") })
-            FilterChip(selected = sortOrder == "desc", onClick = { onSort(null, "desc") }, label = { Text("↓") })
+            FilterChip(
+                selected = sortOrder == "asc" && sortBy != "original",
+                enabled = sortBy != "original",
+                onClick = { onSort(null, "asc") },
+                label = { Text("↑") },
+            )
+            FilterChip(
+                selected = sortOrder == "desc" && sortBy != "original",
+                enabled = sortBy != "original",
+                onClick = { onSort(null, "desc") },
+                label = { Text("↓") },
+            )
         }
         reorderError?.let {
             Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
@@ -834,6 +972,15 @@ private fun PlexampPlaylistTrackRow(
             }
             IconButton(onClick = onMoveDown, enabled = canMoveDown, modifier = Modifier.size(32.dp)) {
                 Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Move down", tint = Color.White)
+            }
+        } else {
+            track.duration?.takeIf { it > 0 }?.let { dur ->
+                Text(
+                    formatTrackDuration(dur),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White.copy(alpha = 0.45f),
+                    modifier = Modifier.padding(end = 4.dp),
+                )
             }
         }
         IconButton(onClick = onMenu) {

@@ -44,7 +44,7 @@ struct AddToPlaylistSheet: View {
                 }
                 Section("Playlists") {
                     if loading {
-                        ProgressView()
+                        BockProgressIndicator(size: 32)
                     } else if playlists.isEmpty {
                         Text("No playlists").foregroundStyle(BockColors.muted)
                     } else {

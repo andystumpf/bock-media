@@ -21,6 +21,20 @@ object SearchPrefixMatch {
     }
 
     fun fieldMatchesQuery(q: String, text: String?): Boolean {
+        if (fieldMatchesQueryStrict(q, text)) return true
+        val trimmed = q.trim()
+        if (compact(trimmed).length < 3) return false
+        for (back in 1..2) {
+            if (trimmed.length > back) {
+                val shorter = trimmed.dropLast(back).trimEnd()
+                if (shorter.isNotEmpty() && fieldMatchesQueryStrict(shorter, text)) return true
+            }
+        }
+        return false
+    }
+
+    /** Word-start / acronym prefix only — no typing-tolerance backtrack. */
+    fun fieldMatchesQueryStrict(q: String, text: String?): Boolean {
         val qc = compact(q)
         if (qc.isEmpty() || text.isNullOrBlank()) return false
         val tc = compact(text)

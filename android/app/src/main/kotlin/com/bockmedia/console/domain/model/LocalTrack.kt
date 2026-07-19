@@ -7,6 +7,7 @@ data class LocalTrack(
     val title: String,
     val artist: String? = null,
     val album: String? = null,
+    val year: Int? = null,
     val localFile: File? = null,
     /** Library duration when ExoPlayer cannot read it from a transcoded stream. */
     val durationMs: Long = 0,

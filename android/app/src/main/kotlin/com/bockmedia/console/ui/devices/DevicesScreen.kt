@@ -24,8 +24,12 @@ import androidx.compose.ui.unit.dp
 import com.bockmedia.console.data.api.dto.*
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.ui.components.*
+import androidx.compose.ui.platform.testTag
+import com.bockmedia.console.ui.testing.BockTestTags
 import com.bockmedia.console.ui.theme.HomePillActive
 import com.bockmedia.console.ui.theme.HomePillInactive
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -50,12 +54,26 @@ fun DevicesScreen(repository: BockMediaRepository) {
     var refreshing by remember { mutableStateOf(false) }
 
     suspend fun load() {
+        DeviceCatalog.peek()?.let { snap ->
+            alexaDevices = snap.devices
+            groups = snap.groups
+            loading = false
+        }
         runCatching {
-            devices = repository.devices()
-            candidates = repository.mergeCandidates().candidates
-            groups = repository.deviceGroups().items
-            runCatching { alexaDevices = repository.alexaRemoteDevices().devices }
-            identify = repository.identifyStatus()
+            coroutineScope {
+                val devicesDef = async { repository.devices() }
+                val candidatesDef = async { repository.mergeCandidates().candidates }
+                val groupsDef = async { repository.deviceGroups().items }
+                val alexaDef = async {
+                    runCatching { repository.alexaRemoteDevices().devices }.getOrDefault(emptyList())
+                }
+                val identifyDef = async { repository.identifyStatus() }
+                devices = devicesDef.await()
+                candidates = candidatesDef.await()
+                groups = groupsDef.await()
+                alexaDevices = alexaDef.await()
+                identify = identifyDef.await()
+            }
         }.onFailure { error = it.message }
         loading = false
         refreshing = false
@@ -122,7 +140,7 @@ fun DevicesScreen(repository: BockMediaRepository) {
         else -> BockPullRefresh(
             isRefreshing = refreshing,
             onRefresh = { refreshing = true; scope.launch { load() } },
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().testTag(BockTestTags.DEVICES_BODY),
         ) {
             BockLazyColumn(
                 Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp),

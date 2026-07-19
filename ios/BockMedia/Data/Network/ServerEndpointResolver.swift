@@ -8,31 +8,25 @@ actor ServerEndpointResolver {
     private var cachedAt: Date?
     private let cacheTTL: TimeInterval = 60
 
-    private let lanTimeout: TimeInterval = 8
-    private let externalTimeout: TimeInterval = 10
+    private let lanTimeout: TimeInterval = 3
+    private let externalTimeout: TimeInterval = 8
 
-    /// Mirrors Android: on cellular we skip the (doomed) LAN probe and go
-    /// straight to the external URL instead of wasting the LAN timeout.
-    private var onCellular = false
+    private var wifiAvailable = true
     private let pathMonitor = NWPathMonitor()
     private let pathQueue = DispatchQueue(label: "com.bockmedia.endpoint.path")
 
     init() {
         pathMonitor.pathUpdateHandler = { [weak self] path in
-            let cellular = path.status == .satisfied
-                && path.usesInterfaceType(.cellular)
-                && !path.usesInterfaceType(.wifi)
-                && !path.usesInterfaceType(.wiredEthernet)
-            Task { await self?.updateCellular(cellular) }
+            let wifi = path.status == .satisfied
+                && (path.usesInterfaceType(.wifi) || path.usesInterfaceType(.wiredEthernet))
+            Task { await self?.updateWifiAvailable(wifi) }
         }
         pathMonitor.start(queue: pathQueue)
     }
 
-    private func updateCellular(_ cellular: Bool) {
-        if cellular != onCellular {
-            onCellular = cellular
-            // Network class changed; the previously chosen endpoint may no longer
-            // be reachable, so drop the cache and re-resolve on next request.
+    private func updateWifiAvailable(_ wifi: Bool) {
+        if wifi != wifiAvailable {
+            wifiAvailable = wifi
             invalidate()
         }
     }
@@ -42,23 +36,42 @@ actor ServerEndpointResolver {
         cachedAt = nil
     }
 
+    func prime(_ url: String?) {
+        guard let url, !url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        if cachedURL == nil {
+            cachedURL = ServerURL.normalize(url)
+            cachedAt = Date()
+        }
+    }
+
+    static func effectiveLocalURL(_ local: String?) -> String? {
+        guard let local, !local.isEmpty, !ServerURL.isLoopbackHost(local) else { return nil }
+        return local
+    }
+
     static func pickEndpoint(
         local: String?,
         external: String?,
         localReachable: Bool,
-        externalReachable: Bool
+        externalReachable: Bool,
+        wifiAvailable: Bool = true
     ) -> String? {
-        if let local, !local.isEmpty, localReachable {
+        let local = effectiveLocalURL(local)
+        if !wifiAvailable {
+            return external?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+                .map { ServerURL.normalize($0) }
+        }
+        if let local, localReachable {
             return ServerURL.normalize(local)
         }
         if let external, !external.isEmpty, externalReachable {
             return ServerURL.normalize(external)
         }
-        if let local, !local.isEmpty {
-            return ServerURL.normalize(local)
-        }
         if let external, !external.isEmpty {
             return ServerURL.normalize(external)
+        }
+        if let local {
+            return ServerURL.normalize(local)
         }
         return nil
     }
@@ -74,13 +87,13 @@ actor ServerEndpointResolver {
             return cachedURL
         }
 
-        let local = preferences.localServerURL
-        let external = preferences.externalServerURL
+        let local = Self.effectiveLocalURL(preferences.localServerURL)
+        let external = preferences.externalServerURL?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         let localHosts = preferences.localHosts()
 
-        let skipLan = onCellular
+        let skipLan = !wifiAvailable
         async let localOk: Bool = {
-            guard !skipLan, let local, !local.isEmpty else { return false }
+            guard !skipLan, let local else { return false }
             return await probe(
                 base: local,
                 timeout: lanTimeout,
@@ -91,7 +104,7 @@ actor ServerEndpointResolver {
             )
         }()
         async let externalOk: Bool = {
-            guard let external, !external.isEmpty else { return false }
+            guard let external else { return false }
             return await probe(
                 base: external,
                 timeout: externalTimeout,
@@ -109,7 +122,8 @@ actor ServerEndpointResolver {
             local: local,
             external: external,
             localReachable: localReachable,
-            externalReachable: externalReachable
+            externalReachable: externalReachable,
+            wifiAvailable: wifiAvailable
         )
         guard let chosen else { throw BockAPIError.noServerConfigured }
         if localReachable || externalReachable {
@@ -144,5 +158,11 @@ actor ServerEndpointResolver {
         } catch {
             return false
         }
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
     }
 }

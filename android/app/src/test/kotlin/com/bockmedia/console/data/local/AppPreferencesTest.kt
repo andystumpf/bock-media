@@ -1,6 +1,8 @@
 package com.bockmedia.console.data.local
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -25,14 +27,40 @@ class AppPreferencesTest {
     }
 
     @Test
-    fun streamUrl_includesTitleAndArtistQuery() {
+    fun streamUrl_includesBitrateBeforeSigning() {
         val url = AppPreferences.streamUrl(
             "http://host:3001",
-            "/mnt/music/a/track.mp3",
-            title = "Already Gone",
-            artist = "Eagles",
+            "/mnt/music/a/track.flac",
+            title = "Song",
+            bitrateKbps = 192,
+            mediaSignSecret = "test-token",
         )
-        assertTrue(url!!.contains("title=Already%20Gone"))
-        assertTrue(url.contains("artist=Eagles"))
+        assertTrue(url!!.contains("br=192"))
+        assertTrue(url.contains("sig="))
+    }
+
+    @Test
+    fun serverOrigin_stripsAppPathSuffix() {
+        assertEquals(
+            "http://your-server.local:3001",
+            AppPreferences.serverOrigin("http://your-server.local:3001/app"),
+        )
+    }
+
+    @Test
+    fun libraryPathForStream_rejectsBareTitle() {
+        assertFalse(AppPreferences.isValidLibraryPath("Home"))
+        assertFalse(AppPreferences.isValidLibraryPath("Magic"))
+        assertNull(AppPreferences.libraryPathForStream("Losing My Religion"))
+    }
+
+    @Test
+    fun libraryPathForStream_acceptsNasPath() {
+        val path = AppPreferences.libraryPathForStream(
+            "/mnt/bock/Music/plexDB/Aktive/Home/Home.mp3",
+        )
+        assertEquals("/mnt/bock/Music/plexDB/Aktive/Home/Home.mp3", path)
+        val url = AppPreferences.streamUrl("http://host:3001/app", path)
+        assertTrue(url!!.startsWith("http://host:3001/stream/mnt/bock/Music/"))
     }
 }

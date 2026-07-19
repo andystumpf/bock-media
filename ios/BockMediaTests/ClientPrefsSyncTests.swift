@@ -1,6 +1,7 @@
 import XCTest
 @testable import BockMedia
 
+@MainActor
 final class ClientPrefsSyncTests: XCTestCase {
     func testApplyMergedRestoresSettings() {
         let prefs = AppPreferences()
@@ -25,6 +26,19 @@ final class ClientPrefsSyncTests: XCTestCase {
         XCTAssertEqual(prefs.continueAfterQueue, "similar")
         XCTAssertEqual(prefs.lastDevice, "Kitchen Echo")
         XCTAssertEqual(PinnedDevicesStore.pinned(), ["Kitchen Echo", "Office Echo"])
+    }
+
+    func testApplyMergedCrossfadeFromDouble() {
+        let prefs = AppPreferences()
+        prefs.crossfadeSeconds = 0
+        ClientPrefsSync.applyMerged(prefs: prefs, merged: ["crossfadeSeconds": 8.0])
+        XCTAssertEqual(prefs.crossfadeSeconds, 8)
+    }
+
+    func testApplyMergedCrossfadeFromString() {
+        let prefs = AppPreferences()
+        ClientPrefsSync.applyMerged(prefs: prefs, merged: ["crossfadeSeconds": "12"])
+        XCTAssertEqual(prefs.crossfadeSeconds, 12)
     }
 
     func testApplyMergedLibraryPrefs() {

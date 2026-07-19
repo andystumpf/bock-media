@@ -102,8 +102,9 @@ See [docs/IOS_BUILD_PLAN.md](../docs/IOS_BUILD_PLAN.md) for the full roadmap.
 
 ```bash
 cd ios && xcodegen generate
+UDID="$(xcrun simctl list devices available -j | python3 -c "import json,sys;d=json.load(sys.stdin)['devices'];print(next(d[r][i]['udid'] for r in sorted(d,reverse=True) for i in range(len(d[r])) if d[r][i]['isAvailable'] and d[r][i]['name'].startswith('iPhone')))")"
 xcodebuild test -project BockMedia.xcodeproj -scheme BockMedia \
-  -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest'
+  -destination "platform=iOS Simulator,id=$UDID"
 ```
 
 ## Personal deployment (free Apple ID)

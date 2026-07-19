@@ -403,7 +403,7 @@ cloudflared tunnel route dns <tunnel-name> your-domain.example.com
 ### 4. Run as a systemd stack
 
 ```bash
-cp ourmedia.service.example ourmedia.service     # edit paths/user
+cp ourmedia.service.example ourmedia.service     # edit paths/user + OURMEDIA_SKILL_ID
 sudo cp ourmedia.service       /etc/systemd/system/
 sudo cp ourmedia-stack.target  /etc/systemd/system/
 sudo cp ourmedia-health.service ourmedia-health.timer /etc/systemd/system/
@@ -419,8 +419,9 @@ Create a `ourmedia-tunnel-named.service` that runs `cloudflared tunnel run
 1. Create a custom skill in the [Alexa Developer Console](https://developer.amazon.com/alexa/console/ask),
    enable the **AudioPlayer** interface, and set the endpoint to
    `https://your-domain.example.com/alexa`.
-2. Put your real skill id in `server.py` (`EXPECTED_SKILL_APP_ID`) and in
-   `skill/manifest.development.json`.
+2. Set `OURMEDIA_SKILL_ID` in `ourmedia.service` (and in
+   `skill/manifest.development.json`). Without it, automations utterances reach
+   Echo but the server rejects the skill callback (`applicationId mismatch`).
 3. Upload the interaction model with [`ask-cli`](https://developer.amazon.com/en-US/docs/alexa/smapi/quick-start-alexa-skills-kit-command-line-interface.html):
 
 ```bash

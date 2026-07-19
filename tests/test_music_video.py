@@ -13,12 +13,12 @@ def test_music_video_requires_title(client):
 def test_music_video_cached(client, tmp_path, monkeypatch):
     cache = tmp_path / 'music_video_cache.json'
     cache.write_text(
-        json.dumps({'v4|staind|outside': {'videoId': 'abc12345678', 'title': 'Staind - Outside'}}),
+        json.dumps({'v5|staind|outside': {'videoId': 'abc12345678', 'title': 'Staind - Outside'}}),
         encoding='utf-8',
     )
     monkeypatch.setattr(server, 'MUSIC_VIDEO_CACHE_PATH', str(cache))
     warmed = []
-    monkeypatch.setattr(server, '_music_video_warm_stream', lambda vid: warmed.append(vid))
+    monkeypatch.setattr(server, '_music_video_warm_both', lambda vid: warmed.append(vid))
     rv = client.get('/api/music-video', query_string={'title': 'Outside', 'artist': 'Staind'})
     assert rv.status_code == 200
     assert rv.get_json()['videoId'] == 'abc12345678'
@@ -110,6 +110,31 @@ def test_music_video_pick_best_same_artist_wrong_song():
     assert vid == 'aaaa1111111'
 
 
+def test_music_video_official_channel_beats_alternate_video():
+    """Real Cherub Rock search results — the artist's own channel upload must beat
+    a random uploader whose title has '(Alternate Music Video)' bait."""
+    candidates = [
+        ('q-KE9lvU810', 'The Smashing Pumpkins - Cherub Rock', 300, 'Smashing Pumpkins'),
+        ('Mxa9oivRlTQ', 'Smashing Pumpkins - Cherub Rock (Alternate Music Video)', 303, 'Даниел Малинков'),
+        ('nB18rVoDJak', 'Smashing Pumpkins - Cherub Rock', 299, 'Emmet'),
+        ('0djxNZaqOjA', 'The Smashing Pumpkins - Cherub Rock (Live MTV 1993) [HQ]', 278, 'Fuzzy Legends Archives'),
+    ]
+    vid, _ = server._music_video_pick_best(
+        'Smashing Pumpkins', 'Cherub Rock', candidates, track_duration_sec=299,
+    )
+    assert vid == 'q-KE9lvU810'
+
+
+def test_music_video_channel_is_artist():
+    f = server._music_video_channel_is_artist
+    assert f('Smashing Pumpkins', 'Smashing Pumpkins')
+    assert f('The Smashing Pumpkins', 'Smashing Pumpkins')
+    assert f('Smashing Pumpkins', 'SmashingPumpkinsVEVO')
+    assert f('Matchbox Twenty', 'Matchbox Twenty Official')
+    assert not f('Smashing Pumpkins', 'Emmet')
+    assert not f('Smashing Pumpkins', 'Fuzzy Legends Archives')
+
+
 def test_music_video_duration_prefers_closer_match():
     candidates = [
         ('aaaa1111111', 'Artist - Song (Official Music Video)', 180, 'ArtistVEVO'),
@@ -127,22 +152,155 @@ def test_music_video_rejects_live_without_title_match():
     assert vid is None
 
 
-def test_music_video_play_requires_cookies(client, monkeypatch):
+def test_music_video_play_without_cookies_returns_proxy(client, monkeypatch):
     monkeypatch.setattr(server, '_music_video_cookies_path', lambda: None)
     rv = client.get('/api/music-video/4aeETEoNfOg/play')
-    assert rv.status_code == 503
+    assert rv.status_code == 200
     body = rv.get_json()
-    assert body['ready'] is False
-    assert 'cookies' in (body.get('reason') or '').lower()
+    assert body['ready'] is True
+    assert body['playUrl'].endswith('/proxy')
+
+
+def test_music_video_direct_stream_piped_without_cookies(monkeypatch):
+    monkeypatch.setattr(server, '_music_video_cookies_path', lambda: None)
+    monkeypatch.setattr(server.shutil, 'which', lambda x: None)
+    monkeypatch.setattr(
+        server, '_music_video_from_piped_streams',
+        lambda vid, max_height=360: 'https://piped.example/stream.mp4',
+    )
+    url = server._music_video_direct_stream_url('abc12345678', mobile=False)
+    assert url == 'https://piped.example/stream.mp4'
 
 
 def test_music_video_play_direct(client, monkeypatch):
     monkeypatch.setattr(server, '_music_video_cookies_path', lambda: '/tmp/cookies.txt')
     monkeypatch.setattr(server.shutil, 'which', lambda x: '/usr/bin/yt-dlp' if x == 'yt-dlp' else None)
-    monkeypatch.setattr(server, '_music_video_can_stream', lambda vid: True)
     rv = client.get('/api/music-video/4aeETEoNfOg/play')
     assert rv.status_code == 200
     body = rv.get_json()
     assert body['ready'] is True
     assert body['proxied'] is True
+    assert body['playUrl'].endswith('/proxy')
+
+
+def test_music_video_play_mobile(client, monkeypatch):
+    monkeypatch.setattr(server, '_music_video_cookies_path', lambda: '/tmp/cookies.txt')
+    monkeypatch.setattr(server.shutil, 'which', lambda x: '/usr/bin/yt-dlp' if x == 'yt-dlp' else None)
+    rv = client.get('/api/music-video/4aeETEoNfOg/play?mobile=1')
+    assert rv.status_code == 200
+    body = rv.get_json()
+    assert body['ready'] is True
+    assert body['playUrl'].endswith('/proxy?mobile=1')
+
+
+def test_music_video_ytdlp_cmd_mobile_skips_android_with_cookies(monkeypatch):
+    monkeypatch.setattr(server, '_music_video_cookies_path', lambda: '/tmp/cookies.txt')
+    cmd = server._music_video_ytdlp_cmd('abc123xyz01', '-f', '18/b', '-g', mobile=True)
+    assert '--extractor-args' not in cmd
+    assert '--cookies' in cmd
+    assert '--socket-timeout' in cmd
+
+
+def test_music_video_ytdlp_cmd_mobile_uses_android_without_cookies(monkeypatch):
+    monkeypatch.setattr(server, '_music_video_cookies_path', lambda: None)
+    cmd = server._music_video_ytdlp_cmd('abc123xyz01', '-f', '18/b', '-g', mobile=True)
+    assert 'youtube:player_client=android' in ' '.join(cmd)
+
+
+def test_music_video_play_wait_ready(client, monkeypatch):
+    monkeypatch.setattr(server, '_music_video_cookies_path', lambda: '/tmp/cookies.txt')
+    monkeypatch.setattr(server.shutil, 'which', lambda x: '/usr/bin/yt-dlp' if x == 'yt-dlp' else None)
+    monkeypatch.setattr(
+        server, '_music_video_wait_stream',
+        lambda vid, mobile, max_wait: 'https://googlevideo.example/stream',
+    )
+    rv = client.get('/api/music-video/4aeETEoNfOg/play?wait=10&mobile=1')
+    assert rv.status_code == 200
+    body = rv.get_json()
+    assert body['ready'] is True
+    assert body['playUrl'] == '/api/music-video/4aeETEoNfOg/proxy?mobile=1'
+    assert body['direct'] is False
+    assert body['proxied'] is True
+
+
+def test_music_video_play_wait_timeout(client, monkeypatch):
+    monkeypatch.setattr(server, '_music_video_cookies_path', lambda: '/tmp/cookies.txt')
+    monkeypatch.setattr(server.shutil, 'which', lambda x: '/usr/bin/yt-dlp' if x == 'yt-dlp' else None)
+    monkeypatch.setattr(server, '_music_video_wait_stream', lambda *args, **kwargs: None)
+    rv = client.get('/api/music-video/4aeETEoNfOg/play?wait=5')
+    assert rv.status_code == 503
+    body = rv.get_json()
+    assert body['ready'] is False
+    assert 'too long' in (body.get('reason') or '').lower()
+
+
+def test_music_video_prepare_wait_ready(client, tmp_path, monkeypatch):
+    cache = tmp_path / 'music_video_cache.json'
+    cache.write_text(
+        json.dumps({'v5|staind|outside': {'videoId': 'abc12345678', 'title': 'Staind - Outside'}}),
+        encoding='utf-8',
+    )
+    monkeypatch.setattr(server, 'MUSIC_VIDEO_CACHE_PATH', str(cache))
+    monkeypatch.setattr(server, '_music_video_cookies_path', lambda: '/tmp/cookies.txt')
+    monkeypatch.setattr(server.shutil, 'which', lambda x: '/usr/bin/yt-dlp' if x == 'yt-dlp' else None)
+    monkeypatch.setattr(server, '_music_video_warm_both', lambda vid: None)
+    monkeypatch.setattr(
+        server, '_music_video_wait_stream',
+        lambda vid, mobile, max_wait: 'https://googlevideo.example/stream',
+    )
+    rv = client.get(
+        '/api/music-video',
+        query_string={'title': 'Outside', 'artist': 'Staind', 'mobile': '1', 'wait': '10'},
+    )
+    assert rv.status_code == 200
+    body = rv.get_json()
+    assert body['videoId'] == 'abc12345678'
+    assert body['streamReady'] is True
+    assert body['playUrl'] == '/api/music-video/abc12345678/proxy?mobile=1'
+    assert body['direct'] is False
+
+
+def test_music_video_prepare_mobile_proxy(client, tmp_path, monkeypatch):
+    cache = tmp_path / 'music_video_cache.json'
+    cache.write_text(
+        json.dumps({'v5|staind|outside': {'videoId': 'abc12345678', 'title': 'Staind - Outside'}}),
+        encoding='utf-8',
+    )
+    monkeypatch.setattr(server, 'MUSIC_VIDEO_CACHE_PATH', str(cache))
+    monkeypatch.setattr(server, '_music_video_warm_stream', lambda vid, mobile=False: None)
+    monkeypatch.setattr(
+        server, '_music_video_wait_stream',
+        lambda vid, mobile, max_wait: 'https://cdn.example/video.mp4',
+    )
+    rv = client.get(
+        '/api/music-video',
+        query_string={'title': 'Outside', 'artist': 'Staind', 'mobile': '1', 'wait': '5'},
+    )
+    assert rv.status_code == 200
+    body = rv.get_json()
+    assert body['videoId'] == 'abc12345678'
+    assert body['streamReady'] is True
+    assert body['playUrl'] == '/api/music-video/abc12345678/proxy?mobile=1'
+    assert body['direct'] is False
+
+
+def test_music_video_prepare_wait_timeout(client, tmp_path, monkeypatch):
+    cache = tmp_path / 'music_video_cache.json'
+    cache.write_text(
+        json.dumps({'v5|staind|outside': {'videoId': 'abc12345678', 'title': 'Staind - Outside'}}),
+        encoding='utf-8',
+    )
+    monkeypatch.setattr(server, 'MUSIC_VIDEO_CACHE_PATH', str(cache))
+    monkeypatch.setattr(server, '_music_video_cookies_path', lambda: '/tmp/cookies.txt')
+    monkeypatch.setattr(server.shutil, 'which', lambda x: '/usr/bin/yt-dlp' if x == 'yt-dlp' else None)
+    monkeypatch.setattr(server, '_music_video_warm_stream', lambda vid, mobile=False: None)
+    monkeypatch.setattr(server, '_music_video_wait_stream', lambda *args, **kwargs: None)
+    rv = client.get(
+        '/api/music-video',
+        query_string={'title': 'Outside', 'artist': 'Staind', 'wait': '5'},
+    )
+    assert rv.status_code == 200
+    body = rv.get_json()
+    assert body['videoId'] == 'abc12345678'
+    assert body['streamReady'] is True
     assert body['playUrl'].endswith('/proxy')

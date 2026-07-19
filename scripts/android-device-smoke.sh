@@ -1,11 +1,27 @@
 #!/usr/bin/env bash
-# Automated smoke test for Bock Media Android on a physical device (adb + uiautomator).
+# DEPRECATED: use instrumented smoke instead:
+#   TIER=1 ./scripts/run_mobile_ui_suite.sh
+#   ./scripts/run_android_smoke_tests.sh
+#
+# Legacy uiautomator smoke test for Bock Media Android on a physical device (adb + uiautomator).
 # Usage: ANDROID_SERIAL=RFCT30VF9AE ./scripts/android-device-smoke.sh
+#
+# Manual QA checklist (artist page — run when changing artist flows):
+#  1. Open artist from Library → Artists (multi-word name e.g. The Smashing Pumpkins)
+#  2. Open artist from Now Playing artist tap
+#  3. Follow → Following toggle persists after leaving and returning
+#  4. Tap genre chip → genre detail → back → artist page still populated (cache)
+#  5. Listen Agent mic → pre-filled "play top songs from …" prompt
+#  6. Videos row visible when cache has related videos; tap opens Now Playing video
+#  7. Sticky mini-header appears when scrolling past hero
+#  8. Highly rated play uses rated subset only (not all top tracks)
+#  9. Track/album context menu → download / add to playlist
+# 10. Album sort toggle (Newest / Oldest / A–Z) reorders discography
 
 set -eo pipefail
 
 SERIAL="${ANDROID_SERIAL:-}"
-PKG="com.bockmedia.console.debug"
+PKG="${Bock_PACKAGE:-com.bockmedia.console}"
 ACTIVITY="com.bockmedia.console.MainActivity"
 UI="/sdcard/bock_ui.xml"
 LOCAL_UI="/tmp/bock_ui.xml"
@@ -200,6 +216,93 @@ if ui_has "Now playing"; then
   pass "Mini/full NP content visible"
 else
   manual "No active playback — mini bar test needs music playing"
+fi
+
+# --- 3b Artist page ---
+log ""
+log "[3b] Artist page"
+do_tap_text "Library" && wait_ui 2
+if do_tap_text "Artists" 2>/dev/null; then
+  wait_ui 3
+  if dump_ui && coords=$(python3 - <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+root = ET.parse("/tmp/bock_ui.xml").getroot()
+for node in root.iter("node"):
+    t = (node.get("text") or "") + (node.get("content-desc") or "")
+    if node.get("clickable") == "true" and t.strip() and "Search" not in t and "Artists" not in t:
+        b = node.get("bounds")
+        m = re.match(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", b or "")
+        if m:
+            x1,y1,x2,y2 = map(int, m.groups())
+            print((x1+x2)//2, (y1+y2)//2, t.strip()[:40])
+            break
+PY
+); then
+    read -r ax ay aname <<< "$coords"
+    if [[ -n "$ax" ]]; then
+      "${ADB[@]}" shell input tap "$ax" "$ay"
+      wait_ui 4
+      assert_no_crash "Artist detail open"
+      ui_has "Albums" && pass "Artist page Albums section" || manual "Albums section not visible"
+      if ui_has "Follow"; then
+        pass "Follow button visible"
+        do_tap_text "Follow" && wait_ui 2
+        if ui_has "Following"; then
+          pass "Follow toggled to Following"
+          do_tap_text "Following" && wait_ui 2
+          ui_has "Follow" && pass "Following toggled back to Follow" || manual "Follow toggle back not visible"
+        else
+          manual "Following label not shown after Follow tap"
+        fi
+      elif ui_has "Following"; then
+        pass "Following button visible (already followed)"
+      else
+        manual "Follow/Following not visible"
+      fi
+      if dump_ui && genre_coords=$(python3 - <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+root = ET.parse("/tmp/bock_ui.xml").getroot()
+for node in root.iter("node"):
+    cls = node.get("class") or ""
+    t = (node.get("text") or "") + (node.get("content-desc") or "")
+    if node.get("clickable") == "true" and t.strip() and "Genres" in t:
+        continue
+    if node.get("clickable") == "true" and t.strip() and len(t.strip()) < 24:
+        skip = {"Follow", "Following", "Shuffle", "Play", "Albums", "Popular", "Back", "Library", "Search", "Now Playing", "Rooms", "Menu"}
+        if t.strip() in skip or t.strip().startswith("See "):
+            continue
+        if "Demo" in t or "Rock" in t or "Pop" in t or "Alternative" in t:
+            b = node.get("bounds")
+            m = re.match(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", b or "")
+            if m:
+                x1,y1,x2,y2 = map(int, m.groups())
+                print((x1+x2)//2, (y1+y2)//2, t.strip()[:30])
+                break
+PY
+); then
+        read -r gx gy gname <<< "$genre_coords"
+        if [[ -n "$gx" ]]; then
+          "${ADB[@]}" shell input tap "$gx" "$gy"
+          wait_ui 3
+          assert_no_crash "Genre detail from artist chip"
+          ui_has "$gname" && pass "Genre screen opened ($gname)" || manual "Genre screen title not visible"
+          do_tap_text "Back" 2>/dev/null || "${ADB[@]}" shell input keyevent 4
+          wait_ui 2
+          ui_has "Albums" && pass "Artist page still populated after back (cache)" || manual "Artist page blank after back"
+        fi
+      else
+        manual "No genre chip found to tap"
+      fi
+      do_tap_text "Back" 2>/dev/null || "${ADB[@]}" shell input keyevent 4
+      wait_ui 2
+    else
+      skip "No artist row to tap"
+    fi
+  else
+    skip "Artists list empty"
+  fi
+else
+  skip "Artists tab not found"
 fi
 
 # --- 4 Now Playing ---

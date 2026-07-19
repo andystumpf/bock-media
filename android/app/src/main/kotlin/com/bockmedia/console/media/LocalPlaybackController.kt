@@ -13,6 +13,7 @@ import com.bockmedia.console.domain.model.toLocalPlayContext
 import com.bockmedia.console.local.OfflineDownloadStore
 import com.bockmedia.console.local.OfflineCollectionManifest
 import com.bockmedia.console.local.downloadId
+import com.bockmedia.console.data.network.NetworkReachability
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -120,14 +121,28 @@ object LocalPlaybackController {
         // shuffle toggle can be turned off again without losing the original ordering.
         val ordered = tracks
         val resolvedStart = if (shuffle && startIndex == 0) tracks.indices.random() else startIndex
-        val base = BockMediaApp.get(context).resolveBaseUrl()
+        val app = BockMediaApp.get(context)
+        NetworkReachability.update(context)
+        // Prefer cached / configured endpoint so playback starts without a health-probe round trip
+        // (critical on cellular + Bluetooth in the car).
+        val base = app.repository.peekBaseUrl()
+            ?: app.configuredEndpointUrl()?.also { app.repository.primeBaseUrl(it) }
+            ?: app.resolveBaseUrl()
         // Stream the original file even on cellular: forcing a ?br=128 transcode makes
         // the server re-encode every track in realtime, which this CPU can't keep up with
         // (≈7s to first byte vs ≈5ms for the original) and stalls playback. Data-saving
         // transcode stays opt-in for explicit offline downloads only.
+        val signSecret = app.preferences.mobileTokenNow()
         val urls = ordered.map { track ->
             track.localFile?.let { Uri.fromFile(it).toString() }
-                ?: AppPreferences.streamUrl(base, track.path, track.title, track.artist)
+                ?: AppPreferences.streamUrl(
+                    base,
+                    track.path,
+                    track.title,
+                    track.artist,
+                    lowBandwidth = LocalPlaybackDuration.needsStreamTranscode(track.path),
+                    mediaSignSecret = signSecret,
+                )
                 ?: error("Missing stream URL for ${track.title}")
         }
         update {

@@ -37,9 +37,9 @@ object SessionDiskHydrator {
         if (HomeFeedCache.peek() != null) return
         val linked = !ActiveProfileStore.activeMemberId(context).isNullOrBlank()
         HomeCachePersistence.load(context)?.let { snap ->
-            if (!snap.feed.isUsableHomeCache(linked)) return@let
+            if (!snap.feed.isUsableHomeCache(linked, snap.hasRatedSongs)) return@let
             HomeArtworkCache.restore(snap.cardMediaPaths, snap.playlistPaths)
-            HomeFeedCache.put(snap.feed)
+            HomeFeedCache.put(snap.feed, hasRatedSongs = snap.hasRatedSongs)
             HomeLoadCoordinator.markLoaded()
         }
     }

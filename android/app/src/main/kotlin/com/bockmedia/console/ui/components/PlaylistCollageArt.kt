@@ -13,6 +13,7 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.bockmedia.console.data.repository.BockMediaRepository
+import com.bockmedia.console.domain.model.HomeArtworkCache
 
 @Composable
 fun PlaylistTileArt(
@@ -25,8 +26,29 @@ fun PlaylistTileArt(
     fallbackFontSize: TextUnit = 18.sp,
     sizePx: Int = TILE_ART_SIZE_PX,
 ) {
-    val collagePaths by produceState<List<String>>(emptyList(), playlistId) {
+    val cachedCollage = remember(playlistId) { HomeArtworkCache.playlistCollagePaths(playlistId).orEmpty() }
+    val collagePaths by produceState(initialValue = cachedCollage, playlistId) {
+        if (value.isNotEmpty()) return@produceState
         value = repository.playlistCollageMediaPaths(playlistId)
+    }
+    val peekUrl = remember(playlistId, artPath, collagePaths) {
+        val path = artPath?.takeIf { it.isNotBlank() } ?: collagePaths.firstOrNull()
+        repository.peekBaseUrl()?.let { base ->
+            path?.let { com.bockmedia.console.data.local.AppPreferences.artworkUrl(base, it, sizePx) }
+        }
+    }
+    if (peekUrl != null) {
+        PlaylistCollageArt(
+            repository = repository,
+            title = title,
+            artPaths = collagePaths,
+            fallbackArtUrl = peekUrl,
+            modifier = modifier,
+            shape = shape,
+            fallbackFontSize = fallbackFontSize,
+            sizePx = sizePx,
+        )
+        return
     }
     val fallbackUrl = rememberArtworkUrl(
         repository = repository,

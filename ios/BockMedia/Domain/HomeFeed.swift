@@ -7,14 +7,14 @@ enum HomeFilter: String, CaseIterable, Identifiable {
     case mixes = "Mixes"
     case radio = "Radio"
     case discover = "Discover"
-    case offline = "Offline"
+    case offline = "Downloads"
 
     var id: String { rawValue }
     var label: String { rawValue }
 }
 
 enum HomeSectionKind {
-    case jumpBackIn, favorites, topMixes, exploreThemes, mood, dailyMixes, recentPlaylists, radio, discover, offline
+    case jumpBackIn, favorites, ratedSongs, topMixes, browseGenres, exploreThemes, mood, decade, dailyMixes, recentlyCreated, recentPlaylists, radio, discover, offline
 }
 
 struct HomeCard: Identifiable {
@@ -50,39 +50,8 @@ extension HomeCard {
         return nil
     }
 
-    /// Genre behind a synthetic "<genre> Mix" tile (artist-seeded, no real playlist).
-    var mixGenre: String? {
-        guard kind == .topMixes, case .artist = playTarget, title.hasSuffix(" Mix") else { return nil }
-        let genre = String(title.dropLast(" Mix".count))
-        return genre.isEmpty ? nil : genre
-    }
-
-    var browseLibraryRoute: LibraryRoute? {
-        if kind == .offline { return nil }
-        if let id = linkedPlaylistId { return .playlistDetail(id) }
-        if mixGenre != nil { return nil }  // handled by browseSearchRoute (genre page)
-        switch playTarget {
-        case .playlist(let id, _):
-            return .playlistDetail(id)
-        case .artist(let name):
-            return .albums(artist: name)
-        case .album(let name, _):
-            return .songs(artist: nil, album: name)
-        case .radio(_, .artist, let seed, _):
-            return .albums(artist: seed)
-        default:
-            return nil
-        }
-    }
-
-    var browseSearchRoute: SearchRoute? {
-        if let genre = mixGenre { return .genre(genre) }
-        switch playTarget {
-        case .radio(_, .genre, let seed, _):
-            return .genre(seed)
-        default:
-            return nil
-        }
+    var browseDestination: HomeCardBrowse.Destination? {
+        HomeCardBrowse.destination(for: self)
     }
 
     /// Quick-access tiles: playlists and mixes only — never albums or individual tracks.
@@ -95,6 +64,24 @@ extension HomeCard {
         case .artist, .radio:
             return homeShortcutMixKinds.contains(kind)
         }
+    }
+
+    /// Playlist tiles use long-press to play; section rules hide play on browse/radio rows.
+    func showsHomePlayOverlay(sectionKind: HomeSectionKind, sectionId: String) -> Bool {
+        if sectionKind == .radio { return false }
+        if sectionKind == .browseGenres { return false }
+        if sectionId == "followed-releases" { return false }
+        if case .playlist = playTarget { return false }
+        return true
+    }
+
+    /// Hide download badge on browse/radio rows and followed-artist releases; playlists use long-press.
+    func showsHomeDownloadOverlay(sectionKind: HomeSectionKind, sectionId: String) -> Bool {
+        if sectionKind == .radio { return false }
+        if sectionKind == .browseGenres { return false }
+        if sectionId == "followed-releases" { return false }
+        if case .playlist = playTarget { return false }
+        return true
     }
 }
 
@@ -117,42 +104,81 @@ extension HomeFeed {
         }
         return result
     }
+
+    func hasCurrentHomeLayout() -> Bool {
+        sections.contains { $0.id == "recently-created" }
+            && sections.contains { $0.id == "more-playlists" || $0.id == "browse-genres" || $0.id == "recent-playlists" }
+    }
+
+    /// Empty rated-songs section is omitted by the composer; usability must use `hasRatedSongs`,
+    /// not section presence alone.
+    func isUsableHomeCache(activeProfileLinked: Bool, hasRatedSongs: Bool? = nil) -> Bool {
+        guard hasCurrentHomeLayout() else { return false }
+        guard activeProfileLinked else { return true }
+        if sections.contains(where: { $0.kind == .ratedSongs }) { return true }
+        return hasRatedSongs != true
+    }
+}
+
+func shouldRefreshHomeForProfile(activeProfileLinked: Bool, feed: HomeFeed?, hasRatedSongs: Bool?) -> Bool {
+    guard activeProfileLinked, let feed else { return false }
+    if feed.sections.contains(where: { $0.kind == .ratedSongs }) { return false }
+    return hasRatedSongs == true
 }
 
 @MainActor
 enum HomeFeedLoader {
-    private static let historyLimit = 150
     private static let playlistLimit = 500
+    private static let genreLimit = 80
 
     static func load(repository: BockMediaRepository) async -> HomeFeed {
-        async let historyTask = try? await repository.streamHistory(limit: historyLimit)
-        async let analyticsTask = analyticsWithTimeout(repository: repository)
-        async let playlistsTask = try? await repository.playlists(limit: playlistLimit, memberScoped: true)
-        async let smartTask = try? await repository.smartPlaylists()
-        async let favoritesTask = try? await repository.favorites()
-        async let dashboardTask = try? await repository.dashboardQuick()
-        async let genresTask = try? await repository.genres(limit: 40)
-        async let continueTask = try? await repository.continueListening()
-        async let newTask = try? await repository.libraryNew()
-        async let discoverTask = try? await repository.discoverWeekly()
+        let home = try? await repository.home(
+            deferred: true,
+            includeRatings: true,
+            playlistLimit: playlistLimit,
+            genreLimit: genreLimit
+        )
+        let analytics = home?.listeningSummary ?? home?.analytics
+        let ratedItems = home?.ratings?.items ?? []
 
-        let history = await historyTask?.items ?? []
-        let analytics = await analyticsTask
-        let allPlaylists = await playlistsTask?.items ?? []
-        let smartPlaylists = await smartTask ?? []
-        let dashboard = await dashboardTask
-        let favoritesFallback = await favoritesTask ?? []
-        let favorites = dashboard?.favorites.nilIfEmpty ?? favoritesFallback
-        let libraryGenres = await genresTask ?? []
-        let continueData = await continueTask
-        let libraryNew = await newTask
-        let discoverData = await discoverTask
+        if let h = home?.history { SessionDataStore.putHistory(h) }
+        if let d = home?.dashboard { SessionDataStore.putDashboard(d) }
+        if let a = analytics { SessionDataStore.putAnalytics(a) }
+        let memberKey = ActiveProfileStore.activeMemberId() ?? ""
+        if let pl = home?.playlists { SessionDataStore.putPlaylists(memberKey: memberKey, response: pl) }
+
+        let history = home?.history?.items ?? []
+        let allPlaylists = home?.playlists?.items ?? []
+        let smartPlaylists = home?.smartPlaylists?.items ?? []
+        let dashboard = home?.dashboard
+        let favorites: [FavoriteItem] = dashboard?.favorites.nilIfEmpty ?? ratedItems.map {
+            FavoriteItem(path: $0.id, title: $0.title, artist: $0.artist, album: $0.album)
+        }
+        let libraryGenres = home?.genres?.items ?? []
+        let continueData = home?.continue
+        let libraryNew = home?.libraryNew
+        let followedLibraryNew = home?.followedLibraryNew
+        let discoverData = home?.discoverWeekly
 
         let releaseLabel: String? = {
             let n = libraryNew?.albums.count ?? 0
             guard n > 0 else { return nil }
             return "Added this week · \(n) album\(n == 1 ? "" : "s")"
         }()
+        let followedReleaseCards: [HomeCard] = (followedLibraryNew?.albums ?? []).prefix(12).compactMap { album in
+            guard let name = album.album?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else { return nil }
+            let artist = album.artist?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let subtitle = artist.isEmpty ? "New in library" : "\(artist) · New in library"
+            return HomeCard(
+                id: "followed-\(artist)-\(name)",
+                title: name,
+                subtitle: subtitle,
+                artPath: album.path,
+                playlistId: nil,
+                playTarget: .album(name: name, artist: artist.isEmpty ? nil : artist),
+                kind: .discover
+            )
+        }
         let discoverCards: [HomeCard] = (discoverData?.sections.first?.tracks ?? []).prefix(12).compactMap { t in
             guard let path = t.path else { return nil }
             return HomeCard(
@@ -179,10 +205,25 @@ enum HomeFeedLoader {
             continueResume: continueData?.resume,
             releaseRadarLabel: releaseLabel,
             releaseRadarArtPath: libraryNew?.albums.first?.path,
-            discoverWeeklyCards: discoverCards
+            followedReleaseCards: followedReleaseCards,
+            discoverWeeklyCards: discoverCards,
+            ratedSongItems: ratedItems,
+            recentlyCreatedPlaylists: home?.recentlyCreatedPlaylists?.items ?? []
         )
         let composed = HomeFeedComposer.compose(input)
-        return HomeTileRotation.apply(composed, input: input)
+        let rotated = HomeTileRotation.apply(composed, input: input)
+        let serverPins = (home?.homeDefaults?.sectionPins ?? []).map {
+            HomeSectionPin(
+                sectionId: $0.sectionId,
+                playlistId: $0.playlistId,
+                playlistName: $0.playlistName,
+                pinnedAtMs: $0.pinnedAtMs
+            )
+        }
+        let mergedPins = HomeSectionPinsApplier.mergePins(server: serverPins, local: HomeSectionPinsStore.load())
+        let result = HomeSectionPinsApplier.apply(rotated, pins: mergedPins, playlists: allPlaylists)
+        HomeFeedCache.setHasRatedSongs(!ratedItems.isEmpty)
+        return result
     }
 
     static func offlineSection(store: OfflineDownloadStore) -> HomeSection? {
@@ -202,19 +243,6 @@ enum HomeFeedLoader {
             }
         guard !cards.isEmpty else { return nil }
         return HomeSection(id: "offline-library", title: "Your downloads", kind: .offline, cards: cards)
-    }
-
-    private static func analyticsWithTimeout(repository: BockMediaRepository) async -> AnalyticsResponse? {
-        await withTaskGroup(of: AnalyticsResponse?.self) { group in
-            group.addTask { try? await repository.analytics() }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: 4_000_000_000)
-                return nil
-            }
-            let first = await group.next()
-            group.cancelAll()
-            return first ?? nil
-        }
     }
 }
 

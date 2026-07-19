@@ -8,20 +8,34 @@ enum AuthHeaders {
         password: String?,
         token: String?
     ) {
-        guard let host = request.url?.host?.lowercased(), !localHosts.contains(host) else { return }
+        for (field, value) in headerFields(username: username, password: password, token: token) {
+            request.setValue(value, forHTTPHeaderField: field)
+        }
+    }
 
+    /// Same auth scheme as Android `BockAuthInterceptor` — always send credentials when configured.
+    static func headerFields(
+        username: String?,
+        password: String?,
+        token: String?
+    ) -> [String: String] {
         let token = token?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank
         let user = username?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank
         let pass = password?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank
 
         if let token, let user, let pass {
-            request.setValue(basicAuth(user: user, pass: pass), forHTTPHeaderField: "Authorization")
-            request.setValue(token, forHTTPHeaderField: "X-BockMedia-Token")
-        } else if let token {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        } else if let user, let pass {
-            request.setValue(basicAuth(user: user, pass: pass), forHTTPHeaderField: "Authorization")
+            return [
+                "Authorization": basicAuth(user: user, pass: pass),
+                "X-BockMedia-Token": token,
+            ]
         }
+        if let token {
+            return ["Authorization": "Bearer \(token)"]
+        }
+        if let user, let pass {
+            return ["Authorization": basicAuth(user: user, pass: pass)]
+        }
+        return [:]
     }
 
     private static func basicAuth(user: String, pass: String) -> String {

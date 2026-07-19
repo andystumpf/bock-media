@@ -18,6 +18,7 @@ struct RoomsView: View {
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
+        .accessibilityIdentifier(BockTestTags.roomsBody)
         .navigationTitle("Rooms")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

@@ -30,8 +30,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.bockmedia.console
         CODE_SIGN_ENTITLEMENTS: BockMedia/BockMedia.entitlements
-        MARKETING_VERSION: "2.4.0"
-        CURRENT_PROJECT_VERSION: "8"
+        MARKETING_VERSION: "2.6.79"
+        CURRENT_PROJECT_VERSION: "10"
         INFOPLIST_KEY_CFBundleDisplayName: Bock Media
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UIRequiresFullScreen: true
@@ -63,6 +63,8 @@ targets:
           - processing
         BGTaskSchedulerPermittedIdentifiers:
           - com.bockmedia.console.offline-refresh
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
           NSAllowsArbitraryLoadsForMedia: true
@@ -81,14 +83,16 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.bockmedia.console.widget
         CODE_SIGN_ENTITLEMENTS: BockMediaWidget/BockMediaWidget.entitlements
-        MARKETING_VERSION: "2.4.0"
-        CURRENT_PROJECT_VERSION: "8"
+        MARKETING_VERSION: "2.6.79"
+        CURRENT_PROJECT_VERSION: "10"
         INFOPLIST_KEY_CFBundleDisplayName: Bock Media
         SKIP_INSTALL: YES
     info:
       path: BockMediaWidget/Info.plist
       properties:
         CFBundleDisplayName: Bock Media
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
           NSAllowsArbitraryLoadsForMedia: true

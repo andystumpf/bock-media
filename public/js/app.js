@@ -21,6 +21,7 @@ async function signMediaPath(relativePath) {
   const data = await r.json().catch(() => ({}));
   if (data.url) {
     _mediaSignCache.set(relativePath, { url: data.url, expires: data.expires || 0 });
+    if (typeof ArtCache !== 'undefined') ArtCache.applyNetworkUrl(relativePath, data.url);
     return data.url;
   }
   return relativePath;
@@ -80,6 +81,55 @@ const POST = (path, body) => authFetch(path, {
   return r.json();
 }).catch(() => null);
 
+let _routeGen = 0;
+
+function bumpRouteGen() {
+  _routeGen += 1;
+  return _routeGen;
+}
+
+function routeAlive(gen) {
+  return gen === _routeGen;
+}
+
+function isApiError(data) {
+  return data === null || data === undefined;
+}
+
+function clearRouteTimers() {
+  if (window._roomsPoll) {
+    clearInterval(window._roomsPoll);
+    window._roomsPoll = null;
+  }
+  if (typeof _healthTimer !== 'undefined' && _healthTimer) {
+    clearTimeout(_healthTimer);
+    _healthTimer = null;
+  }
+  if (typeof _alexaLoginPoll !== 'undefined' && _alexaLoginPoll) {
+    clearInterval(_alexaLoginPoll);
+    _alexaLoginPoll = null;
+  }
+  if (typeof _searchTimer !== 'undefined' && _searchTimer) {
+    clearTimeout(_searchTimer);
+    _searchTimer = null;
+  }
+  if (typeof _autoPlTimer !== 'undefined' && _autoPlTimer) {
+    clearTimeout(_autoPlTimer);
+    _autoPlTimer = null;
+  }
+  if (typeof _npVolumeTimers !== 'undefined' && _npVolumeTimers) {
+    Object.keys(_npVolumeTimers).forEach((k) => clearTimeout(_npVolumeTimers[k]));
+    _npVolumeTimers = {};
+  }
+  clearTimeout(window._searchDebounce);
+  clearTimeout(window._pldq);
+  clearTimeout(window._soSd);
+  clearTimeout(window._plSd);
+  clearTimeout(window._libSd);
+  clearTimeout(window._roomPlTimer);
+  clearTimeout(window._rtPlTimer);
+}
+
 function showLoginModal() {
   if (document.getElementById('login-overlay')) return;
   const overlay = document.createElement('div');
@@ -99,7 +149,7 @@ function showLoginModal() {
           <input type="checkbox" id="login-remember" checked> Remember me
         </label>
       </div>
-      <p id="login-error" class="hint" style="color:#c0392b;display:none;margin:8px 0 0"></p>
+      <p id="login-error" class="hint" style="color:#f06a5e;display:none;margin:8px 0 0"></p>
       <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">
         <button class="btn-sm btn-primary" id="login-submit"><i class="fa fa-right-to-bracket"></i> Sign in</button>
       </div>
@@ -175,12 +225,49 @@ function artworkUrl(filepath, sizePx) {
   const encoded = rel.split('/').map(seg => encodeURIComponent(seg)).join('/');
   const q = sizePx ? `?size=${sizePx}` : '';
   const path = `/artwork/${encoded}${q}`;
+  const cacheKey = (typeof ArtCache !== 'undefined') ? ArtCache.pathKey(filepath, sizePx) : path;
   if (_mediaAuthRequired) {
     const hit = _mediaSignCache.get(path);
-    if (hit) return hit.url;
+    if (hit && hit.expires > Date.now() / 1000 + 30) return hit.url;
     signMediaPath(path).catch(() => {});
+    return null;
   }
+  if (typeof ArtCache !== 'undefined') ArtCache.prefetch(cacheKey, path).catch(() => {});
   return path;
+}
+
+async function ensureArtworkSigned(filepaths, sizes = [undefined, 96, 384]) {
+  if (!_mediaAuthRequired) return;
+  const paths = new Set();
+  for (const fp of (filepaths || []).filter(Boolean)) {
+    for (const sz of sizes) {
+      const key = (typeof ArtCache !== 'undefined')
+        ? ArtCache.pathKey(fp, sz)
+        : `/artwork/${String(fp).replace(/^\/+/, '').split('/').map((s) => encodeURIComponent(s)).join('/')}${sz ? `?size=${sz}` : ''}`;
+      paths.add(key);
+    }
+  }
+  const need = [...paths].filter((p) => {
+    const hit = _mediaSignCache.get(p);
+    return !hit || hit.expires <= Date.now() / 1000 + 30;
+  });
+  if (!need.length) return;
+  await Promise.all(need.map((p) => signMediaPath(p).catch(() => null)));
+}
+
+function artKeyAttr(filepath, sizePx) {
+  if (!filepath || typeof ArtCache === 'undefined') return '';
+  const key = ArtCache.pathKey(filepath, sizePx);
+  return key ? ` data-art-key="${escHtml(key)}"` : '';
+}
+
+function prefetchArtworkPaths(paths, sizes = [96, 384]) {
+  if (typeof ArtCache === 'undefined') return;
+  if (_mediaAuthRequired) {
+    ensureArtworkSigned(paths, sizes).catch(() => {});
+    return;
+  }
+  ArtCache.warmPaths(paths, sizes).catch(() => {});
 }
 
 const _artistPortraitCache = new Map();
@@ -207,8 +294,9 @@ async function resolveArtistPortraitPath(name) {
 function upgradeArtistPortraitImages(items) {
   (items || []).slice(0, 24).forEach((a) => {
     if ((a.art_path || '').includes('artist-portrait-')) return;
-    resolveArtistPortraitPath(a.artist).then((path) => {
+    resolveArtistPortraitPath(a.artist).then(async (path) => {
       if (!path) return;
+      await ensureArtworkSigned([path], [256]);
       const url = artworkUrl(path, 256);
       if (!url) return;
       document.querySelectorAll('.spotify-artist-card').forEach((card) => {
@@ -232,7 +320,7 @@ function spotifyCardArtHtml(artPath, seed, icon, sizePx = 384, opts) {
     return `<div class="spotify-card-art" style="background:${grad}"><i class="fa ${ic}"></i>${badge}</div>`;
   }
   return `<div class="spotify-card-art spotify-card-art-img" style="background:${grad}">
-    <img src="${escHtml(url)}" alt="" loading="lazy"
+    <img src="${url ? escHtml(url) : ''}" alt="" loading="lazy"${artKeyAttr(artPath, sizePx)}
       onerror="this.closest('.spotify-card-art').classList.add('spotify-card-art-fallback');this.remove();">
     ${badge}
   </div>`;
@@ -246,7 +334,7 @@ function spotifyShortcutArtHtml(artPath, seed, icon) {
     return `<span class="spotify-shortcut-art" style="background:${grad}"><i class="fa ${ic}"></i></span>`;
   }
   return `<span class="spotify-shortcut-art spotify-shortcut-art-img" style="background:${grad}">
-    <img src="${escHtml(url)}" alt="" loading="lazy"
+    <img src="${url ? escHtml(url) : ''}" alt="" loading="lazy"${artKeyAttr(artPath, 128)}
       onerror="this.closest('.spotify-shortcut-art').classList.add('spotify-shortcut-art-fallback');this.remove();">
   </span>`;
 }
@@ -259,7 +347,7 @@ function playlistRowArtHtml(playlistId, coverPath, seed, isAudiobook) {
     return `<div class="pl-row-art" style="background:${grad}"><i class="fa ${icon}"></i></div>`;
   }
   return `<div class="pl-row-art pl-row-art-img" style="background:${grad}">
-    <img src="${escHtml(url)}" alt="" loading="lazy"
+    <img src="${url ? escHtml(url) : ''}" alt="" loading="lazy"${artKeyAttr(coverPath, 96)}
       onerror="this.closest('.pl-row-art').classList.add('pl-row-art-fallback');this.remove();">
   </div>`;
 }
@@ -286,23 +374,30 @@ async function fetchPlaylistCovers(ids) {
 
 async function fetchPlaylistsCached(search = '', { memberScoped = false } = {}) {
   const q = (search || '').trim().toLowerCase();
-  if (!q && !memberScoped && typeof WebCache !== 'undefined') {
-    const cached = WebCache.getPlaylistsIfFresh();
-    if (cached) return cached;
+  const memberKey = memberScoped ? (profileMemberQuery().replace(/.*member=/, '') || 'member') : '';
+  if (!q && typeof WebCache !== 'undefined') {
+    const session = WebCache.peekSessionPlaylists(memberKey);
+    if (session) return session;
+    if (!memberScoped) {
+      const cached = WebCache.getPlaylistsIfFresh();
+      if (cached) return cached;
+    }
   }
   const memberQ = memberScoped ? profileMemberQuery() : '';
-  const data = await API(`/api/playlists?page=1&limit=2000&search=${encodeURIComponent(search)}${memberQ ? memberQ.replace('?', '&') : ''}`).catch(() => ({ items: [] }));
+  const fields = '&fields=summary&inlineCovers=0';
+  const data = await API(`/api/playlists?page=1&limit=2000&search=${encodeURIComponent(search)}${fields}${memberQ ? memberQ.replace('?', '&') : ''}`).catch(() => ({ items: [] }));
   const items = (data && data.items) || [];
-  if (!q && !memberScoped && typeof WebCache !== 'undefined' && items.length) WebCache.setPlaylists(items);
+  if (!q && typeof WebCache !== 'undefined' && items.length) {
+    WebCache.putSessionPlaylists(memberKey, items);
+  }
   return items;
 }
 
 async function refreshHomeCovers(feed, existingCovers = {}) {
-  // Every playlist tile in the feed needs its cover — home cards no longer carry a
-  // history-seeded artPath, so a tile without a fetched cover renders as a placeholder.
-  // fetchPlaylistCovers chunks the request, so requesting the full set is cheap.
+  // Cap to the first visible home rows — full-library cover fan-out was ~400 ids.
   const ids = [...new Set((feed.sections || [])
-    .flatMap((s) => (s.cards || []).map((c) => c.playlistId).filter(Boolean)))].slice(0, 400);
+    .slice(0, 4)
+    .flatMap((s) => (s.cards || []).slice(0, 12).map((c) => c.playlistId).filter(Boolean)))].slice(0, 48);
   const missing = ids.filter((id) => !existingCovers[id]);
   if (!missing.length) return existingCovers;
   const fetched = await fetchPlaylistCovers(missing);
@@ -313,7 +408,6 @@ function prefetchCriticalApis() {
   if (authRequired() && !getStoredAuth()) return;
   setTimeout(() => {
     API('/api/dashboard/quick').catch(() => {});
-    fetchPlaylistsCached('').catch(() => {});
     ensureAlexaRemoteStatus().catch(() => {});
   }, 50);
 }
@@ -333,18 +427,40 @@ function ensureChartJs() {
   return _chartJsPromise;
 }
 
-function warmBackgroundCaches() {
+function warmBackgroundCaches(force) {
   if (typeof WebCache === 'undefined' || WebCache.peekSearchBrowse()) return;
+  if (!force && currentRoute !== 'search') return;
   setTimeout(() => {
+    if (!force && currentRoute !== 'search') return;
+    const dash = WebCache.peekSessionDashboard();
+    const pl = WebCache.peekSessionPlaylists('') || WebCache.getPlaylistsIfFresh();
     Promise.all([
-      API('/api/dashboard/quick').catch(() => ({ recent: [], favorites: [] })),
+      dash ? Promise.resolve(dash) : API('/api/dashboard/quick').catch(() => ({ recent: [], favorites: [] })),
       API('/api/genres?limit=16').catch(() => ({ items: [] })),
-      fetchPlaylistsCached('').catch(() => []),
+      pl ? Promise.resolve(pl) : fetchPlaylistsCached('').catch(() => []),
       API('/api/library/new?since=30d&limit=12').catch(() => ({ albums: [] })),
     ]).then(([quick, genres, playlists, newAlbums]) => {
+      if (quick) WebCache.putSessionDashboard(quick);
       WebCache.putSearchBrowse({ quick, genres, playlists, newAlbums });
     }).catch(() => {});
-  }, 1500);
+  }, force ? 50 : 5000);
+}
+
+function npFormatYear(year) {
+  const y = parseInt(year, 10);
+  return Number.isFinite(y) && y >= 1900 && y <= 2100 ? ` (${y})` : '';
+}
+
+function npAlbumWithYear(album, year) {
+  const a = (album || '').trim();
+  if (!a) return npFormatYear(year).trim();
+  return a + npFormatYear(year);
+}
+
+function npPlayerSubline(artist, album, year, suffix) {
+  const meta = [artist, npAlbumWithYear(album, year)].filter(Boolean).join(' · ');
+  if (!suffix) return meta;
+  return meta ? `${meta}${suffix}` : suffix.replace(/^ · /, '');
 }
 
 function npArtworkHtml(filepath) {
@@ -353,7 +469,7 @@ function npArtworkHtml(filepath) {
     return '<div class="np-artwork np-artwork-fallback" aria-hidden="true"><i class="fa fa-compact-disc"></i></div>';
   }
   return `<div class="np-artwork" aria-hidden="true">
-    <img src="${escHtml(url)}" alt="" loading="lazy" class="np-artwork-img"
+    <img src="${escHtml(url)}" alt="" loading="eager" fetchpriority="high" class="np-artwork-img"${artKeyAttr(filepath)} 
       onerror="this.closest('.np-artwork').classList.add('np-artwork-fallback');this.remove();">
   </div>`;
 }
@@ -446,7 +562,7 @@ const BOTTOM_TAB_ROUTES = {
   home: ['dashboard', 'rooms', 'analytics'],
   nowplaying: ['nowplaying'],
   search: ['search'],
-  library: ['library', 'playlists', 'artists', 'albums', 'songs', 'watchfolders', 'genres'],
+  library: ['library', 'playlists', 'artists', 'albums', 'songs', 'watchfolders', 'genres', 'liked', 'artist', 'album'],
   automations: ['automation'],
 };
 
@@ -478,7 +594,7 @@ function updateShellForRoute(route) {
   });
   document.querySelectorAll('.sidebar-nav-item').forEach((a) => {
     const href = (a.getAttribute('href') || '').replace('#', '').split('/')[0];
-    const libRoutes = ['library', 'playlists', 'artists', 'albums', 'songs', 'genres', 'watchfolders'];
+    const libRoutes = ['library', 'playlists', 'artists', 'albums', 'songs', 'genres', 'watchfolders', 'liked', 'artist', 'album'];
     const active = href === root
       || (a.dataset.tab === tab && tab !== null)
       || (a.dataset.tab === 'library' && libRoutes.includes(root));
@@ -487,6 +603,13 @@ function updateShellForRoute(route) {
   updateTopbarNavButtons();
   if (root === 'dashboard') refreshAppDownloadLinks();
   if (root !== 'search') syncTopbarSearch('');
+  if (typeof ShellLayout !== 'undefined') ShellLayout.closeProfileDropdown();
+  if (typeof ShellLayout !== 'undefined') {
+    ShellLayout.syncSidebarFilterFromRoute(root);
+    if (['library', 'playlists', 'artists', 'albums', 'songs', 'genres', 'watchfolders', 'liked', 'artist', 'album'].includes(root)) {
+      ShellLayout.refreshSidebarContent?.();
+    }
+  }
   closeAppDrawer();
 }
 
@@ -522,7 +645,8 @@ function homeCardIndex(feed, cardId) {
 function homeSectionFilterGroups(kind) {
   if (kind === 'Radio') return 'all radio';
   if (kind === 'DailyMixes' || kind === 'TopMixes') return 'all radio music';
-  if (kind === 'RecentPlaylists' || kind === 'MorePlaylists' || kind === 'ExploreThemes') return 'all playlists';
+  if (kind === 'RecentPlaylists' || kind === 'MorePlaylists' || kind === 'ExploreThemes' || kind === 'RecentlyCreated') return 'all playlists';
+  if (kind === 'BrowseGenres' || kind === 'Decade') return 'all playlists music';
   if (kind === 'JumpBackIn' || kind === 'Favorites' || kind === 'Discover') return 'all music';
   if (kind === 'Mood') return 'all music playlists';
   return 'all';
@@ -542,6 +666,18 @@ function openOfflineDownloadHint(encoded) {
 }
 window.openOfflineDownloadHint = openOfflineDownloadHint;
 
+function homeGreeting() {
+  const h = new Date().getHours();
+  if (h < 12) return 'Good morning';
+  if (h < 17) return 'Good afternoon';
+  return 'Good evening';
+}
+
+function homeTileClickAttr(playOnclick) {
+  if (!playOnclick) return '';
+  return ` onclick="if(!(event.metaKey||event.ctrlKey||event.shiftKey||event.button===1)){event.preventDefault();${playOnclick}}"`;
+}
+
 function spotifyHomeQuickCard(card, artPath, playOnclick) {
   const attrs = playOnclick
     ? `href="#" role="button" onclick="event.preventDefault();${playOnclick}"`
@@ -556,23 +692,14 @@ function spotifyHomeRadioCard(card, si, ci, artPath) {
   const grad = spotifyGradient(card.title);
   const url = artPath ? artworkUrl(artPath, 256) : null;
   const play = HomeFeed.cardPlayOpts(card) ? `homeFeedPlay(${si}, ${ci})` : null;
-  const download = tileDownloadOnclick(card.playTarget);
-  const playFab = play
-    ? `<button type="button" class="spotify-play-fab" onclick="event.preventDefault();event.stopPropagation();${play}" aria-label="Play"><i class="fa fa-play"></i></button>`
-    : '';
-  const downloadFab = download
-    ? `<button type="button" class="spotify-download-fab" onclick="event.preventDefault();event.stopPropagation();${download}" aria-label="Download for offline"><i class="fa fa-download"></i></button>`
-    : '';
   const discInner = url
     ? `<img src="${escHtml(url)}" alt="" loading="lazy" onerror="this.parentElement.classList.add('home-radio-disc-fallback');this.remove();">`
     : `<i class="fa ${HomeFeed.cardIcon(card)}"></i>`;
-  return `<a href="${HomeFeed.cardHref(card)}" class="spotify-card home-radio-card">
+  return `<a href="${HomeFeed.cardHref(card)}" class="spotify-card home-radio-card home-tile-card"${homeTileClickAttr(play)}>
     <div class="spotify-card-media">
       <div class="home-radio-stage" style="background:${grad}">
         <span class="home-radio-badge">RADIO</span>
         <div class="home-radio-disc">${discInner}</div>
-        ${downloadFab}
-        ${playFab}
       </div>
     </div>
     <div class="spotify-card-title">${escHtml(card.title)}</div>
@@ -582,7 +709,6 @@ function spotifyHomeRadioCard(card, si, ci, artPath) {
 
 function spotifyHomeDailyMixCard(card, si, ci, artPath) {
   const play = HomeFeed.cardPlayOpts(card) ? `homeFeedPlay(${si}, ${ci})` : null;
-  const download = tileDownloadOnclick(card.playTarget);
   return spotifyMediaCard(
     card.title,
     card.subtitle || '',
@@ -591,7 +717,7 @@ function spotifyHomeDailyMixCard(card, si, ci, artPath) {
     card.title,
     play,
     artPath,
-    { downloadOnclick: download, dailyMix: true },
+    { dailyMix: true, homeTile: true },
   );
 }
 
@@ -603,7 +729,6 @@ function spotifyHomeSectionCard(card, secKind, si, ci, artPath) {
     return spotifyHomeDailyMixCard(card, si, ci, artPath);
   }
   const play = HomeFeed.cardPlayOpts(card) ? `homeFeedPlay(${si}, ${ci})` : null;
-  const download = tileDownloadOnclick(card.playTarget);
   return spotifyMediaCard(
     card.title,
     card.subtitle || '',
@@ -612,7 +737,7 @@ function spotifyHomeSectionCard(card, secKind, si, ci, artPath) {
     card.title,
     play,
     artPath,
-    { downloadOnclick: download },
+    { homeTile: true },
   );
 }
 
@@ -645,6 +770,19 @@ function setupHomeFilterDelegation() {
       }
       sec.hidden = filter !== 'all' && !groups.includes(filter);
     });
+    let empty = document.getElementById('home-filter-empty');
+    if (filter === 'podcasts' || filter === 'audiobooks') {
+      if (!empty) {
+        empty = document.createElement('div');
+        empty.id = 'home-filter-empty';
+        empty.className = 'home-empty-state';
+        document.querySelector('.home-page')?.appendChild(empty);
+      }
+      empty.hidden = false;
+      empty.innerHTML = `<i class="fa fa-podcast" style="font-size:2rem;margin-bottom:12px"></i><p>No ${filter} in your library yet.</p><p class="hint">Bock Media is music-focused — browse Music or Playlists instead.</p>`;
+    } else if (empty) {
+      empty.hidden = true;
+    }
     const quick = document.querySelector('.home-quick-grid');
     if (quick) {
       quick.hidden = filter !== 'all' && filter !== 'music' && filter !== 'playlists'
@@ -655,10 +793,11 @@ function setupHomeFilterDelegation() {
 
 function spotifyMediaCard(title, subtitle, href, icon, seed, playOnclick, artPath, opts) {
   const o = opts || {};
-  const play = playOnclick
+  const homeTile = !!o.homeTile;
+  const play = (!homeTile && playOnclick)
     ? `<button type="button" class="spotify-play-fab" onclick="event.preventDefault();event.stopPropagation();${playOnclick}" aria-label="Play"><i class="fa fa-play"></i></button>`
     : '';
-  const download = o.downloadOnclick
+  const download = (!homeTile && o.downloadOnclick)
     ? `<button type="button" class="spotify-download-fab" onclick="event.preventDefault();event.stopPropagation();${o.downloadOnclick}" aria-label="Download for offline"><i class="fa fa-download"></i></button>`
     : '';
   let artHtml = spotifyCardArtHtml(artPath, seed || title, icon || 'fa-music', 384, o);
@@ -666,7 +805,9 @@ function spotifyMediaCard(title, subtitle, href, icon, seed, playOnclick, artPat
     const mixBadge = (title || '').replace(/^daily mix/i, 'Daily Mix').slice(0, 24);
     artHtml = artHtml.replace('class="spotify-card-art', `class="spotify-card-art home-daily-art" data-mix="${escHtml(mixBadge)}"`);
   }
-  return `<a href="${href}" class="spotify-card">
+  const clickAttr = homeTile ? homeTileClickAttr(playOnclick) : '';
+  const tileCls = homeTile ? ' home-tile-card' : '';
+  return `<a href="${href}" class="spotify-card${tileCls}"${clickAttr}>
     <div class="spotify-card-media">
       ${artHtml}
       ${download}
@@ -842,6 +983,20 @@ async function ensureLibAnalytics() {
   if (window._libAnalytics && (window._libAnalyticsTs || 0) > Date.now() - 120000) {
     return window._libAnalytics;
   }
+  if (typeof WebCache !== 'undefined') {
+    const cached = WebCache.peekSessionAnalytics();
+    if (cached) {
+      window._libAnalytics = {
+        topArtists: cached.topArtists || [],
+        topGenres: cached.topGenres || [],
+        topAlbums: [],
+        topTracks: [],
+        topPlaylists: [],
+      };
+      window._libAnalyticsTs = Date.now();
+      return window._libAnalytics;
+    }
+  }
   window._libAnalytics = await API('/api/analytics').catch(() => ({})) || {};
   window._libAnalyticsTs = Date.now();
   return window._libAnalytics;
@@ -955,6 +1110,15 @@ function folderCardHtml(f) {
     </div>`;
 }
 
+function libArtPaths() {
+  const covers = window._libCovers || {};
+  return [
+    ...Object.values(covers),
+    ...(window._libPlaylists || []).map((p) => p.artPath),
+    ...(window._libSmart || []).map((s) => (s.linkedPlaylistId && covers[s.linkedPlaylistId]) || null),
+  ].filter(Boolean);
+}
+
 async function loadLibrary(opts = {}) {
   if (typeof WebCache !== 'undefined' && WebCache.shouldSkipLibraryReload()) return;
   const [plItems, smartData, folders, genres, remote] = await Promise.all([
@@ -974,12 +1138,14 @@ async function loadLibrary(opts = {}) {
     ...window._libSmart.map((s) => s.linkedPlaylistId),
   ].filter(Boolean);
   window._libCovers = coverIds.length ? await fetchPlaylistCovers(coverIds) : {};
+  await ensureArtworkSigned(libArtPaths());
   if (typeof WebCache !== 'undefined') {
     WebCache.putLibrary({
       playlists: window._libPlaylists,
       smart: window._libSmart,
       folders: window._libFolders,
       genres: window._libGenres,
+      covers: window._libCovers,
     });
     WebCache.markLibraryLoaded();
   }
@@ -1135,6 +1301,8 @@ register('genres', async () => {
 });
 
 function navigate(hash) {
+  clearRouteTimers();
+  const routeGen = bumpRouteGen();
   const [route, ...rest] = (hash || 'dashboard').split('/');
   const params = rest.join('/');
   if (route === 'library' && !params && typeof ClientPrefsSync !== 'undefined') {
@@ -1182,6 +1350,9 @@ function updateTopbarNavButtons() {
 }
 
 async function refreshSidebarPlaylists() {
+  if (typeof ShellLayout !== 'undefined' && typeof ShellLayout.refreshSidebarContent === 'function') {
+    return ShellLayout.refreshSidebarContent();
+  }
   const el = document.getElementById('sidebar-playlist-list');
   if (!el) return;
   try {
@@ -1189,13 +1360,23 @@ async function refreshSidebarPlaylists() {
     const slice = items || [];
     const ids = slice.map((p) => p.id).filter(Boolean);
     const covers = ids.length ? await fetchPlaylistCovers(ids) : {};
+    await ensureArtworkSigned(Object.values(covers), [96]);
+    try {
+      const fav = await API('/api/favorites');
+      window._likedCount = (fav.items || fav.songs || []).length;
+    } catch { window._likedCount = ''; }
+    if (typeof ShellLayout !== 'undefined') {
+      ShellLayout.renderSidebarLibrary(slice, covers);
+      return;
+    }
     const route = (window.location.hash || '').replace('#', '');
     el.innerHTML = slice.map((p) => {
       const href = `#playlists/detail/${encodeURIComponent(p.id)}`;
       const active = route === `playlists/detail/${p.id}` ? ' active' : '';
       const cover = covers[p.id];
-      const art = cover
-        ? `<img src="${escHtml(artworkUrl(cover, 96))}" alt="" loading="lazy">`
+      const artUrl = cover ? artworkUrl(cover, 96) : null;
+      const art = artUrl
+        ? `<img src="${escHtml(artUrl)}" alt="" loading="lazy"${artKeyAttr(cover, 96)}>`
         : `<i class="fa fa-list"></i>`;
       return `<a href="${href}" class="sidebar-pl-item${active}"><span class="sidebar-pl-art">${art}</span><span>${escHtml(p.name)}</span></a>`;
     }).join('') || '<p class="hint" style="padding:8px;font-size:12px;color:var(--text-muted)">No playlists yet</p>';
@@ -1239,9 +1420,9 @@ function renderQueuePanel() {
     const src = st.sourceLabel || st.playlist || '';
     const nextLabel = src ? `Next from: ${src}` : 'Next up';
     const nextHtml = upcoming.length
-      ? `<div class="queue-section-label">${escHtml(nextLabel)}</div>${upcoming.map((tr) => {
+      ? `<div class="queue-section-label">${escHtml(nextLabel)}</div>${upcoming.map((tr, qi) => {
         const url = tr.path ? artworkUrl(tr.path) : null;
-        return `<div class="queue-track">
+        return `<div class="queue-track queue-track-seek" data-queue-offset="${qi}" data-queue-mode="web">
           <div class="queue-track-art">${url ? `<img src="${escHtml(url)}" alt="" loading="lazy">` : ''}</div>
           <div class="queue-track-meta">
             <div class="queue-track-title">${escHtml(tr.title || 'Track')}</div>
@@ -1295,9 +1476,9 @@ function renderQueuePanel() {
     : '';
   const nextLabel = src ? `Next from: ${src}` : 'Next up';
   const nextHtml = upcoming.length
-    ? `<div class="queue-section-label">${escHtml(nextLabel)}</div>${upcoming.map((t) => {
+    ? `<div class="queue-section-label">${escHtml(nextLabel)}</div>${upcoming.map((t, qi) => {
       const url = t.path ? artworkUrl(t.path) : null;
-      return `<div class="queue-track">
+      return `<div class="queue-track queue-track-seek" data-queue-index="${qi}" data-device-id="${escHtml(d.deviceId || '')}">
         <div class="queue-track-art">${url ? `<img src="${escHtml(url)}" alt="" loading="lazy">` : ''}</div>
         <div class="queue-track-meta">
           <div class="queue-track-title">${escHtml(t.title || 'Track')}</div>
@@ -1360,7 +1541,7 @@ function buildPagination(total, page, limit, onPage) {
     if (i === 1 || i === totalPages || (i >= page - radius && i <= page + radius)) {
       pages += `<button class="page-btn ${i === page ? 'active' : ''}" onclick="(${onPage})(${i})">${i}</button>`;
     } else if (i === page - radius - 1 || i === page + radius + 1) {
-      pages += `<span style="padding:4px 6px;color:#99a">…</span>`;
+      pages += `<span style="padding:4px 6px;color:var(--text-secondary)">…</span>`;
     }
   }
 
@@ -1447,13 +1628,13 @@ function renderRoutinesBuilder() {
       <div class="card-header"><h3><i class="fa fa-bolt"></i> Routine Builder</h3></div>
       <div class="card-body">
         ${pls.length ? `
-        <label style="display:block;margin:4px 0 4px;font-size:13px;color:#888">Trigger phrase (what you say)</label>
+        <label style="display:block;margin:4px 0 4px;font-size:13px;color:var(--text-secondary)">Trigger phrase (what you say)</label>
         <input id="rt-trigger" class="settings-input" style="width:100%" placeholder="play my morning music" value="play my morning music">
 
-        <label style="display:block;margin:14px 0 4px;font-size:13px;color:#888">Playlist</label>
+        <label style="display:block;margin:14px 0 4px;font-size:13px;color:var(--text-secondary)">Playlist</label>
         <select id="rt-playlist" class="settings-input" style="width:100%">${options}</select>
 
-        <label style="display:block;margin:14px 0 4px;font-size:13px;color:#888">
+        <label style="display:block;margin:14px 0 4px;font-size:13px;color:var(--text-secondary)">
           <input type="checkbox" id="rt-shuffle"> Shuffle (uses "mix")
         </label>
 
@@ -1653,6 +1834,69 @@ function buildHomeFeed(input) {
   return HomeFeed.applyTileRotation(HomeFeed.compose(input), input);
 }
 
+/** Yield so boot paint / input stay responsive before heavy home compose. */
+function yieldToMain() {
+  return new Promise((resolve) => {
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => setTimeout(resolve, 0));
+    } else {
+      setTimeout(resolve, 0);
+    }
+  });
+}
+
+async function buildHomeFeedAsync(input) {
+  await yieldToMain();
+  return buildHomeFeed(input);
+}
+
+function homeInputFromApi(home, ratingsItems, listeningSummary, shuffleSeed) {
+  const history = (home && home.history && home.history.items) || [];
+  const allPlaylists = (home && home.playlists && home.playlists.items) || [];
+  const recentlyCreatedPlaylists = (home && home.recentlyCreatedPlaylists && home.recentlyCreatedPlaylists.items) || [];
+  const smartData = home && home.smartPlaylists;
+  const dashboard = (home && home.dashboard) || { recent: [], favorites: [] };
+  const continueData = home && home.continue;
+  const libraryNew = (home && home.libraryNew) || { albums: [] };
+  const followedLibraryNew = (home && home.followedLibraryNew) || { albums: [] };
+  const discover = (home && home.discoverWeekly) || { sections: [] };
+  const genres = (home && home.genres) || { items: [] };
+  const newAlbums = libraryNew.albums || [];
+  const releaseLabel = newAlbums.length
+    ? `Added this week · ${newAlbums.length} album${newAlbums.length === 1 ? '' : 's'}`
+    : null;
+  const followedReleaseCards = (followedLibraryNew.albums || []).slice(0, 12).map((a) => {
+    const name = (a.album || '').trim();
+    const artist = (a.artist || '').trim();
+    return {
+      id: `followed-${artist}-${name}`,
+      title: name || 'Album',
+      subtitle: artist ? `${artist} · New in library` : 'New in library',
+      artPath: a.path || null,
+      playTarget: { kind: 'album', name, artist },
+      kind: 'Discover',
+    };
+  }).filter((c) => c.title);
+  return {
+    history,
+    analytics: listeningSummary || null,
+    allPlaylists,
+    recentlyCreatedPlaylists,
+    smartPlaylists: (smartData && smartData.items) || [],
+    favorites: dashboard.favorites || [],
+    ratedSongItems: ratingsItems || [],
+    dashboard,
+    libraryGenres: (genres && genres.items) || [],
+    shuffleSeed,
+    continueResume: continueData && continueData.resume,
+    releaseRadarLabel: releaseLabel,
+    releaseRadarArtPath: newAlbums[0]?.path || null,
+    followedReleaseCards,
+    discoverWeeklyCards: discoverWeeklyCardsFromApi(discover),
+    homeDefaults: home && home.homeDefaults,
+  };
+}
+
 function renderDashboardUI(feed, covers, remote, opts = {}) {
   window._homeFeed = feed;
   if (typeof ClientPrefsSync !== 'undefined') {
@@ -1692,6 +1936,9 @@ function renderDashboardUI(feed, covers, remote, opts = {}) {
   if (mc) mc.classList.add('home-active');
   mc.innerHTML = `
     <div class="home-page">
+      <header class="home-hero">
+        <h1 class="home-greeting">${escHtml(homeGreeting())}</h1>
+      </header>
       <div class="home-top">
         <div class="home-filters" role="tablist" aria-label="Filter home feed">
           <button type="button" class="home-filter active" data-home-filter="all">All</button>
@@ -1710,108 +1957,117 @@ function renderDashboardUI(feed, covers, remote, opts = {}) {
     </div>`;
 }
 
-async function loadDashboard(opts = {}) {
-  if (typeof WebCache !== 'undefined' && WebCache.shouldSkipHomeReload()) {
-    warmBackgroundCaches();
-    return;
+function applyHomeDefaults(feed, homeDefaults) {
+  const pins = (homeDefaults && homeDefaults.sectionPins) || [];
+  if (!pins.length || !feed || !feed.sections) return feed;
+  const bySection = {};
+  for (const pin of pins) {
+    if (!pin.sectionId || !pin.playlistId) continue;
+    (bySection[pin.sectionId] = bySection[pin.sectionId] || []).push(pin);
   }
+  const sections = feed.sections.map((section) => {
+    const sectionPins = (bySection[section.id] || []).slice();
+    if (!sectionPins.length) return section;
+    const pinCards = sectionPins.map((pin) => ({
+      id: `pl-${pin.playlistId}`,
+      title: pin.playlistName || pin.playlistId,
+      subtitle: 'Pinned for you',
+      artPath: null,
+      playlistId: pin.playlistId,
+      playTarget: { kind: 'playlist', id: pin.playlistId, name: pin.playlistName || pin.playlistId },
+      kind: section.kind,
+    }));
+    const pinIds = new Set(pinCards.map((c) => c.playlistId));
+    const rest = (section.cards || []).filter((c) => !c.playlistId || !pinIds.has(c.playlistId));
+    return { ...section, cards: pinCards.concat(rest) };
+  });
+  return { sections };
+}
+
+async function loadDashboard(opts = {}) {
+  if (typeof performance !== 'undefined' && performance.mark) performance.mark('home-load-start');
+  if (typeof WebCache !== 'undefined' && WebCache.isHomeRefreshInFlight()) return;
+  if (typeof WebCache !== 'undefined') WebCache.markHomeRefreshInFlight(true);
 
   const shuffleSeed = HomeFeed.dayOfYear();
-  const hadCache = !!(opts && opts.hadCache);
-  if (hadCache && typeof WebCache !== 'undefined') {
-    const peek = WebCache.peekHome();
-    if (peek) renderDashboardUI(peek.feed, peek.covers || {}, window._plRemote || {}, { refreshing: true });
+  const peek = typeof WebCache !== 'undefined' ? WebCache.peekHome() : null;
+  if (peek) {
+    renderDashboardUI(peek.feed, peek.covers || {}, window._plRemote || {}, { refreshing: true });
   }
 
-  const analyticsP = Promise.race([
-    API(`/api/analytics${profileMemberQuery()}`).catch(() => null),
-    new Promise((resolve) => setTimeout(() => resolve(null), 4000)),
-  ]);
+  const memberQ = profileMemberQuery();
+  const memberParam = memberQ ? memberQ.replace('?', '&') : '';
 
-  const [
-    historyData,
-    allPlaylists,
-    smartData,
-    dashboard,
-    continueData,
-    remote,
-  ] = await Promise.all([
-    API('/api/nowplaying?page=1&limit=150').catch(() => ({ items: [] })),
-    fetchPlaylistsCached('', { memberScoped: true }),
-    API('/api/smart_playlists').catch(() => ({ items: [] })),
-    API('/api/dashboard/quick').catch(() => ({ recent: [], favorites: [] })),
-    API(`/api/continue${profileMemberQuery()}`).catch(() => null),
-    ensureAlexaRemoteStatus().catch(() => ({})),
-  ]);
-  window._plRemote = remote;
+  try {
+    const [home, remote] = await Promise.all([
+      API(`/api/home?deferred=1&includeRatings=1&playlistLimit=500&genreLimit=80&historyLimit=150${memberParam}`).catch(() => null),
+      ensureAlexaRemoteStatus().catch(() => ({})),
+    ]);
+    window._plRemote = remote;
 
-  const history = (historyData && historyData.items) || [];
-  let covers = (typeof WebCache !== 'undefined' && WebCache.peekHome()?.covers) || {};
-  const partialFeed = buildHomeFeed({
-    history,
-    analytics: null,
-    allPlaylists,
-    smartPlaylists: (smartData && smartData.items) || [],
-    favorites: (dashboard && dashboard.favorites) || [],
-    dashboard,
-    libraryGenres: [],
-    shuffleSeed,
-    continueResume: continueData && continueData.resume,
-    releaseRadarLabel: null,
-    releaseRadarArtPath: null,
-    discoverWeeklyCards: [],
-  });
-  renderDashboardUI(partialFeed, covers, remote, { refreshing: true });
+    const history = (home && home.history && home.history.items) || [];
+    const allPlaylists = (home && home.playlists && home.playlists.items) || [];
+    const ratingsItems = (home && home.ratings && home.ratings.items) || [];
+    const listeningSummary = home && home.listeningSummary;
 
-  const needFavorites = !(dashboard && dashboard.favorites && dashboard.favorites.length);
-  const [analytics, genres, libraryNew, discover, favData, ratingsData] = await Promise.all([
-    analyticsP,
-    API('/api/genres?limit=40').catch(() => ({ items: [] })),
-    API('/api/library/new?since=7d&limit=50').catch(() => ({ albums: [] })),
-    API(`/api/recommendations/discover-weekly${profileMemberQuery()}`).catch(() => ({ sections: [] })),
-    needFavorites ? API(`/api/favorites${ratingsScopeQuery()}`).catch(() => []) : Promise.resolve([]),
-    API(`/api/ratings${ratingsScopeQuery()}`).catch(() => ({ items: [] })),
-  ]);
-
-  const newAlbums = (libraryNew && libraryNew.albums) || [];
-  const releaseLabel = newAlbums.length
-    ? `Added this week · ${newAlbums.length} album${newAlbums.length === 1 ? '' : 's'}`
-    : null;
-  const favorites = (dashboard && dashboard.favorites && dashboard.favorites.length)
-    ? dashboard.favorites
-    : (Array.isArray(favData) ? favData : []);
-
-  const feed = buildHomeFeed({
-    history,
-    analytics,
-    allPlaylists,
-    smartPlaylists: (smartData && smartData.items) || [],
-    favorites,
-    ratedSongItems: (ratingsData && ratingsData.items) || [],
-    dashboard,
-    libraryGenres: (genres && genres.items) || [],
-    shuffleSeed,
-    continueResume: continueData && continueData.resume,
-    releaseRadarLabel: releaseLabel,
-    releaseRadarArtPath: newAlbums[0]?.path || null,
-    discoverWeeklyCards: discoverWeeklyCardsFromApi(discover),
-  });
-
-  renderDashboardUI(feed, covers, remote);
-  if (typeof WebCache !== 'undefined') {
-    WebCache.putHome(feed, covers);
-    WebCache.markHomeLoaded();
-  }
-
-  refreshHomeCovers(feed, covers).then((newCovers) => {
     if (typeof WebCache !== 'undefined') {
-      WebCache.putHome(feed, newCovers);
-      WebCache.saveHomeToDisk(feed, newCovers);
+      WebCache.putSessionHistory({ items: history });
+      WebCache.putSessionDashboard((home && home.dashboard) || { recent: [], favorites: [] });
+      WebCache.putSessionPlaylists(memberQ.replace(/.*member=/, '') || 'member', allPlaylists);
+      if (listeningSummary) WebCache.putSessionAnalytics(listeningSummary);
     }
-    if (currentRoute === 'dashboard') renderDashboardUI(feed, newCovers, remote);
-  }).catch(() => {});
 
-  warmBackgroundCaches();
+    let covers = (peek && peek.covers) || {};
+    const input = homeInputFromApi(home, ratingsItems, listeningSummary, shuffleSeed);
+    const feed = applyHomeDefaults(await buildHomeFeedAsync(input), input.homeDefaults);
+
+    const visibleIds = typeof WebCache !== 'undefined'
+      ? WebCache.visibleHomeCoverIds(feed, 32)
+      : [];
+    const coverIds = visibleIds.length
+      ? visibleIds
+      : [...new Set((feed.sections || []).flatMap((s) => (s.cards || []).slice(0, 8).map((c) => c.playlistId).filter(Boolean)))].slice(0, 32);
+    const fetchedCovers = coverIds.length ? await fetchPlaylistCovers(coverIds) : {};
+    covers = { ...covers, ...fetchedCovers };
+
+    renderDashboardUI(feed, covers, remote);
+    if (typeof performance !== 'undefined' && performance.mark) performance.mark('home-wave-a');
+
+    const homeArt = [
+      ...Object.values(covers || {}),
+      input.releaseRadarArtPath,
+      ...(feed.sections || []).flatMap((s) => (s.cards || []).slice(0, 12).map((c) => c.artPath)),
+      (home && home.continue && home.continue.resume && home.continue.resume.path),
+    ].filter(Boolean);
+    ensureArtworkSigned(homeArt).then(() => {
+      if (currentRoute === 'dashboard') renderDashboardUI(feed, covers, remote);
+    }).catch(() => {});
+
+    if (typeof WebCache !== 'undefined') {
+      WebCache.putHome(feed, covers);
+      WebCache.markHomeLoaded();
+      WebCache.saveHomeToDisk(feed, covers);
+    }
+    if (typeof performance !== 'undefined' && performance.mark) {
+      performance.mark('home-wave-b');
+      try {
+        performance.measure('home-refresh', 'home-load-start', 'home-wave-b');
+      } catch { /* marks */ }
+    }
+
+    refreshHomeCovers(feed, covers).then((newCovers) => {
+      if (typeof WebCache !== 'undefined') {
+        WebCache.putHome(feed, newCovers);
+        WebCache.saveHomeToDisk(feed, newCovers);
+      }
+      if (currentRoute === 'dashboard') renderDashboardUI(feed, newCovers, remote);
+      prefetchArtworkPaths(Object.values(newCovers || {}).slice(0, 32));
+    }).catch(() => {});
+  } finally {
+    if (typeof WebCache !== 'undefined') WebCache.markHomeRefreshInFlight(false);
+  }
+
+  warmBackgroundCaches(false);
 }
 
 // ── Service health card ──────────────────────────────────────────────────────
@@ -1912,19 +2168,21 @@ function buildPlaybackCard(pb, remote) {
     </div>`;
 }
 
-async function loadPlaybackCard() {
+async function loadPlaybackCard(routeGen) {
   const wrap = document.getElementById('playback-card-wrap');
   if (!wrap) return;
   const [pb, remote] = await Promise.all([
     API('/api/playback/status').catch(() => null),
     ensureAlexaRemoteStatus().catch(() => ({})),
   ]);
+  if (routeGen != null && !routeAlive(routeGen)) return;
   wrap.innerHTML = buildPlaybackCard(pb, remote);
 }
 
 // ── Now Playing ──────────────────────────────────────────────────────────────
 let _npPage = 1;
 let _npPollTimer = null;
+let _npPollInFlight = false;
 let _npTickTimer = null;
 let _npGlobalTickTimer = null;
 
@@ -2019,8 +2277,11 @@ register('nowplaying', async () => {
   clearInterval(_npTickTimer);
   await loadNowPlaying();
   _npPollTimer = setInterval(async () => {
-    await refreshCurrentTrack();
-  }, 2000);
+    if (_npPollInFlight) return;
+    if (typeof WebPlayback !== 'undefined' && WebPlayback.active && !window._npShowSpeakers) return;
+    _npPollInFlight = true;
+    try { await refreshCurrentTrack(); } finally { _npPollInFlight = false; }
+  }, 5000);
   if (!_npGlobalTickTimer) {
     _npGlobalTickTimer = setInterval(npTickTimes, 1000);
   }
@@ -2118,10 +2379,17 @@ async function reorderRoomRequest(deviceId, requestId, delta) {
   const j = i + delta;
   if (j < 0 || j >= ids.length) return;
   [ids[i], ids[j]] = [ids[j], ids[i]];
+  const fresh = await fetch(`/api/rooms/${encodeURIComponent(deviceId)}/queue`).then(r => r.json()).catch(() => null);
+  const order = (fresh && fresh.queue) ? fresh.queue.map(r => r.id).filter(Boolean) : ids;
+  const fi = order.indexOf(requestId);
+  if (fi < 0) return;
+  const fj = fi + delta;
+  if (fj < 0 || fj >= order.length) return;
+  [order[fi], order[fj]] = [order[fj], order[fi]];
   const res = await fetch(`/api/rooms/${encodeURIComponent(deviceId)}/requests/reorder`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ order: ids }),
+    body: JSON.stringify({ order }),
   });
   if (!res.ok) return showToast('Could not reorder', true);
   await refreshCurrentTrack();
@@ -2131,7 +2399,10 @@ window.reorderRoomRequest = reorderRoomRequest;
 // Tick the time displays in place (smooth) between the 5s data polls.
 function npTickTimes() {
   if (typeof WebPlayback !== 'undefined' && WebPlayback.active) {
-    updateWebPlayerBarProgress(WebPlayback.getState());
+    const st = WebPlayback.getState();
+    updateWebPlayerBarProgress(st);
+    updateWebNowPlayingProgress(st);
+    if (typeof WebMusicVideo !== 'undefined') WebMusicVideo.sync(st);
     return;
   }
   const items = window._npItems || [];
@@ -2202,7 +2473,21 @@ function renderWebPlayerBar(st) {
   if (txt) txt.textContent = t.title || '—';
   if (sub) {
     const src = st.sourceLabel ? ` · ${st.sourceLabel}` : '';
-    sub.textContent = (t.artist || '') + src;
+    sub.textContent = npPlayerSubline(t.artist, t.album, t.year, src);
+  }
+  if (t.path && !t.year && typeof API === 'function') {
+    API(`/api/track_meta?path=${encodeURIComponent(t.path)}`).then((meta) => {
+      if (!meta?.year || !WebPlayback.active) return;
+      const cur = WebPlayback.getState()?.current;
+      if (!cur || cur.path !== t.path) return;
+      cur.year = meta.year;
+      if (meta.album && !cur.album) cur.album = meta.album;
+      const subEl = document.getElementById('np-artist-text');
+      if (subEl) {
+        const src2 = st.sourceLabel ? ` · ${st.sourceLabel}` : '';
+        subEl.textContent = npPlayerSubline(cur.artist, cur.album, cur.year, src2);
+      }
+    }).catch(() => {});
   }
 
   const artImg = document.getElementById('np-art');
@@ -2264,9 +2549,131 @@ function renderWebPlayerBar(st) {
 
   ['np-bar-repeat', 'np-bar-sleep'].forEach((id) => {
     const el = document.getElementById(id);
-    if (el) el.style.display = 'none';
+    if (!el) return;
+    if (id === 'np-bar-repeat') {
+      el.style.display = '';
+      el.classList.toggle('active', st.repeat && st.repeat !== 'off');
+      el.classList.toggle('repeat-one', st.repeat === 'one');
+      return;
+    }
+    el.style.display = 'none';
   });
+
+  const videoBtn = document.getElementById('np-bar-video');
+  if (videoBtn) {
+    videoBtn.style.display = '';
+    const on = typeof ClientPrefsSync !== 'undefined' && ClientPrefsSync.getNowPlayingVideo();
+    videoBtn.classList.toggle('active', !!on);
+    videoBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  }
 }
+
+function toggleNpVideo() {
+  if (typeof ClientPrefsSync === 'undefined') return;
+  const next = !ClientPrefsSync.getNowPlayingVideo();
+  ClientPrefsSync.setNowPlayingVideo(next);
+  if (typeof WebMusicVideo !== 'undefined' && typeof WebPlayback !== 'undefined') {
+    WebMusicVideo.sync(WebPlayback.getState());
+  }
+  renderWebPlayerBar(typeof WebPlayback !== 'undefined' ? WebPlayback.getState() : null);
+  if (window.location.hash.replace('#', '').split('/')[0] === 'nowplaying') {
+    renderWebNowPlayingFullPage(typeof WebPlayback !== 'undefined' ? WebPlayback.getState() : null);
+  }
+}
+window.toggleNpVideo = toggleNpVideo;
+
+function syncWebPlaybackUi(st) {
+  st = st || (typeof WebPlayback !== 'undefined' ? WebPlayback.getState() : null);
+  if (typeof WebMusicVideo !== 'undefined') {
+    WebMusicVideo.sync(st);
+    if (st?.active) WebMusicVideo.prefetchNext(st);
+  }
+  if (typeof WebLyrics !== 'undefined') WebLyrics.sync(st);
+  if (window.location.hash.replace('#', '').split('/')[0] === 'nowplaying' && st?.active) {
+    updateWebNowPlayingProgress(st);
+  }
+}
+
+function buildWebNowPlayingHero(st) {
+  const t = st.current;
+  if (!t) return '';
+  const showVideo = typeof ClientPrefsSync !== 'undefined' && ClientPrefsSync.getNowPlayingVideo();
+  const art = artworkUrl(t.path);
+  const src = st.sourceLabel ? ` · ${st.sourceLabel}` : '';
+  const sub = npPlayerSubline(t.artist, t.album, t.year, src);
+  const pos = npFmtSec((st.positionMs || 0) / 1000);
+  const dur = npFmtSec((st.durationMs || 0) / 1000);
+  const pct = st.durationMs ? Math.min(100, ((st.positionMs || 0) / st.durationMs) * 100) : 0;
+  return `
+    <div class="web-np-hero" id="web-np-hero">
+      <div class="web-np-hero-art">
+        ${showVideo ? `
+          ${art ? `<img class="web-np-hero-art-img" src="${escHtml(art)}" alt="">` : ''}
+          <video id="web-np-video" class="web-np-hero-video" muted playsinline hidden></video>` : (art ? `<img src="${escHtml(art)}" alt="">` : '')}
+      </div>
+      <div class="web-np-hero-overlay">
+        <div class="web-np-hero-title">${escHtml(t.title || '—')}</div>
+        <div class="web-np-hero-sub">${escHtml(sub)}</div>
+      </div>
+    </div>
+    <div class="web-np-controls">
+      <button type="button" class="player-btn player-btn-play" onclick="WebPlayback.toggle()" aria-label="${st.playing ? 'Pause' : 'Play'}">
+        <i class="fa fa-${st.playing ? 'pause' : 'play'}"></i>
+      </button>
+      <button type="button" class="player-btn" onclick="WebPlayback.prev().catch(()=>{})" aria-label="Previous"><i class="fa fa-backward-step"></i></button>
+      <button type="button" class="player-btn" onclick="WebPlayback.next().catch(()=>{})" aria-label="Next"><i class="fa fa-forward-step"></i></button>
+      <button type="button" class="player-btn${st.shuffle ? ' active' : ''}" onclick="WebPlayback.setShuffle(!WebPlayback.getState().shuffle)" aria-label="Shuffle"><i class="fa fa-shuffle"></i></button>
+      <button type="button" class="player-btn${showVideo ? ' active' : ''}" onclick="toggleNpVideo()" aria-label="Music video"><i class="fa fa-video"></i></button>
+      <button type="button" class="player-btn${typeof WebLyrics !== 'undefined' && WebLyrics.isShowing() ? ' active' : ''}" onclick="WebLyrics.toggle(); syncWebPlaybackUi(WebPlayback.getState())" aria-label="Lyrics"><i class="fa fa-align-left"></i></button>
+    </div>
+    <div id="web-np-lyrics" class="web-np-lyrics hidden"></div>
+    <div class="player-progress" style="margin-bottom:24px">
+      <span class="player-time" id="web-np-time-curr">${pos}</span>
+      <div class="player-progress-bar" onclick="webNpSeek(event)"><div class="player-progress-fill" id="web-np-progress-fill" style="width:${pct.toFixed(1)}%"></div></div>
+      <span class="player-time" id="web-np-time-dur">${dur}</span>
+    </div>`;
+}
+
+function renderWebNowPlayingFullPage(st) {
+  if (typeof WebPlayback === 'undefined' || !st?.active || !st.current) return;
+  const hero = buildWebNowPlayingHero(st);
+  renderPage('Now Playing', `
+    ${hero}
+    <div class="card">
+      <div class="card-header"><h3><i class="fa fa-list-ul"></i> Up next</h3></div>
+      <div class="card-body" id="web-np-queue">${renderWebQueueList(st)}</div>
+    </div>`);
+  syncWebPlaybackUi(st);
+}
+
+function renderWebQueueList(st) {
+  const up = WebPlayback.upcoming(15);
+  if (!up.length) return '<p class="hint">Nothing queued after this track.</p>';
+  return `<ul class="web-np-queue">${up.map((t, i) => `
+    <li><button type="button" class="linkish" onclick="WebPlayback.seekToUpcomingOffset(${i}).catch(()=>{})">${escHtml(t.title || '—')}</button>
+    <span class="text-muted"> · ${escHtml(t.artist || '')}</span></li>`).join('')}</ul>`;
+}
+
+function updateWebNowPlayingProgress(st) {
+  if (!st?.active) return;
+  const pos = npFmtSec((st.positionMs || 0) / 1000);
+  const dur = npFmtSec((st.durationMs || 0) / 1000);
+  const pct = st.durationMs ? Math.min(100, ((st.positionMs || 0) / st.durationMs) * 100) : 0;
+  const curr = document.getElementById('web-np-time-curr');
+  const durEl = document.getElementById('web-np-time-dur');
+  const fill = document.getElementById('web-np-progress-fill');
+  if (curr) curr.textContent = pos;
+  if (durEl) durEl.textContent = dur;
+  if (fill) fill.style.width = `${pct.toFixed(1)}%`;
+}
+
+function webNpSeek(e) {
+  if (typeof WebPlayback === 'undefined' || !WebPlayback.active) return;
+  const rect = e.currentTarget.getBoundingClientRect();
+  const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+  WebPlayback.seekRatio(ratio);
+}
+window.webNpSeek = webNpSeek;
 
 function renderPlayerBar() {
   const bar = document.getElementById('now-playing-bar');
@@ -2303,7 +2710,7 @@ function renderPlayerBar() {
     const devLabel = items.length > 1
       ? ` · ${items.length} devices`
       : (d.deviceName ? ` · ${d.deviceName}` : '');
-    sub.textContent = artist ? `${artist}${devLabel}` : devLabel.replace(/^ · /, '');
+    sub.textContent = npPlayerSubline(artist, d.album, d.year, devLabel);
   }
 
   const artImg = document.getElementById('np-art');
@@ -2377,28 +2784,39 @@ function renderPlayerBar() {
 }
 
 async function refreshCurrentTrack() {
+  const webActive = typeof WebPlayback !== 'undefined' && WebPlayback.active && !window._npShowSpeakers;
   try {
-    const [data, remote] = await Promise.all([
-      API('/api/nowplaying_devices'),
-      ensureAlexaRemoteStatus().catch(() => ({})),
-    ]);
-    if (data && Array.isArray(data.items)) {
-      window._npItems = data.items;
-      window._npShuffle = window._npShuffle || {};
-      for (const it of data.items) {
-        if (it.deviceId && typeof it.shuffle === 'boolean') {
-          window._npShuffle[it.deviceId] = it.shuffle;
+    if (!webActive) {
+      const [data, remote] = await Promise.all([
+        API('/api/nowplaying_devices'),
+        ensureAlexaRemoteStatus().catch(() => ({})),
+      ]);
+      if (data && Array.isArray(data.items)) {
+        window._npItems = data.items;
+        window._npShuffle = window._npShuffle || {};
+        window._npLoop = window._npLoop || {};
+        for (const it of data.items) {
+          if (it.deviceId && typeof it.shuffle === 'boolean') {
+            window._npShuffle[it.deviceId] = it.shuffle;
+          }
+          if (it.deviceId && typeof it.loop === 'boolean') {
+            window._npLoop[it.deviceId] = it.loop;
+          }
         }
       }
-    }
-    window._npControlsAvailable = !!(data && data.controlsAvailable) && !!(remote && remote.configured);
-    if (window._npControlsAvailable && window._npItems.length) {
-      await ensureAlexaDevices().catch(() => []);
+      window._npControlsAvailable = !!(data && data.controlsAvailable) && !!(remote && remote.configured);
+      if (window._npControlsAvailable && window._npItems.length) {
+        await ensureAlexaDevices().catch(() => []);
+      }
     }
   } catch (_e) {
     // Keep the last good snapshot when a poll fails briefly.
   }
   renderPlayerBar();
+  if (webActive) {
+    if (!document.getElementById('spotify-queue')?.classList.contains('hidden')) renderQueuePanel();
+    return;
+  }
   const card = document.getElementById('np-current-card');
   if (card) card.outerHTML = buildCurrentCard(window._npItems, window._npControlsAvailable);
   if (!document.getElementById('spotify-queue')?.classList.contains('hidden')) renderQueuePanel();
@@ -2408,22 +2826,24 @@ async function refreshCurrentTrack() {
 function buildDeviceRow(d, controlsAvailable = false) {
   const devAttr = ` data-device-id="${escHtml(d.deviceId)}"`;
   const shuffleCls = npDeviceIdClass(d.deviceId);
-  const controls = npCanControl(d, controlsAvailable) ? `
+  const canControl = npCanControl(d, controlsAvailable);
+  const controls = canControl ? `
     <div class="np-controls row-actions">
       ${actionBtn({ kind: 'muted', onclick: "npControlEl(this,'previous')", title: 'Previous', icon: 'backward-step', dataAttrs: devAttr })}
       ${actionBtn({ kind: 'play', onclick: "npControlEl(this,'play')", title: 'Play', icon: 'play', dataAttrs: devAttr })}
       ${actionBtn({ kind: 'muted', onclick: "npControlEl(this,'pause')", title: 'Pause', icon: 'pause', dataAttrs: devAttr })}
       ${actionBtn({ kind: 'muted', onclick: "npControlEl(this,'next')", title: 'Next', icon: 'forward-step', dataAttrs: devAttr })}
       ${actionBtn({ kind: 'muted', onclick: 'npToggleShuffleEl(this)', title: 'Shuffle', icon: 'shuffle', extraClass: `np-shuffle-btn np-shuffle-${shuffleCls}`, dataAttrs: devAttr })}
+      ${actionBtn({ kind: 'muted', onclick: "npControlEl(this,'loop')", title: 'Loop', icon: 'repeat', extraClass: npDeviceIdClass(d.deviceId) + (window._npLoop && window._npLoop[d.deviceId] ? ' active' : ''), dataAttrs: devAttr })}
       ${actionBtn({ kind: 'muted', onclick: 'npOpenSleepEl(this)', title: 'Sleep timer', icon: 'moon', dataAttrs: devAttr })}
       ${d.filepath ? actionBtn({ kind: 'muted', onclick: 'npFavoriteEl(this)', title: 'Add to favorites', icon: 'star', dataAttrs: devAttr }) : ''}
       ${d.filepath ? actionBtn({ kind: 'muted', onclick: 'npNeverAgainEl(this)', title: 'Never play this song again', icon: 'ban', dataAttrs: devAttr }) : ''}
       ${d.filepath ? actionBtn({ kind: 'muted', onclick: 'npAddToRoomEl(this)', title: 'Add to room queue', icon: 'plus', dataAttrs: devAttr }) : ''}
       ${actionBtn({ kind: 'delete', onclick: "npControlEl(this,'stop')", title: 'Stop', icon: 'stop', dataAttrs: devAttr })}
+      ${d.filepath && canControl ? actionBtn({ kind: 'muted', onclick: `npHandoff('${escHtml(d.deviceId)}','local-phone')`, title: 'Continue on phone', icon: 'mobile', dataAttrs: devAttr }) : ''}
     </div>` : '';
   const sleepBadge = d.sleep ? `<span class="np-sleep-badge" title="Sleep timer armed"><i class="fa fa-moon"></i> ${
     d.sleep.type === 'time' ? `${d.sleep.remainingMin}m` : `${d.sleep.remaining} left`}</span>` : '';
-  const canControl = npCanControl(d, controlsAvailable);
   window._npVolume = window._npVolume || {};
   const knownVol = window._npVolume[d.deviceId];
   const vol = (knownVol == null) ? 50 : knownVol;
@@ -2441,7 +2861,7 @@ function buildDeviceRow(d, controlsAvailable = false) {
         <div class="np-device-meta">
           <div class="np-track">${escHtml(d.track || '—')} ${sleepBadge}</div>
           ${d.artist ? `<div class="np-artist">${escHtml(d.artist)}</div>` : ''}
-          ${d.album ? `<div class="np-album">${escHtml(d.album)}</div>` : ''}
+          ${(d.album || d.year) ? `<div class="np-album">${escHtml(npAlbumWithYear(d.album, d.year))}</div>` : ''}
           ${(d.sourceLabel || d.playlist) ? `<div class="np-playlist"><i class="fa fa-list"></i> ${escHtml(d.sourceLabel || d.playlist)}</div>` : ''}
           <div class="np-device-label">Device: ${escHtml(d.deviceName || (d.deviceId || '').slice(-12) || 'default')}${d.platform ? ` <span class="badge" style="font-size:10px;text-transform:uppercase">${escHtml(d.platform)}</span>` : (String(d.deviceId || '').startsWith('client-') ? ' <span class="badge" style="font-size:10px">mobile</span>' : '')}<span class="np-time" data-device-id="${escHtml(d.deviceId)}">${npTimeText(d)}</span></div>
           ${npProgressHtml(d)}
@@ -2545,6 +2965,56 @@ async function npControlEl(btn, action) {
   await npControl(deviceId, action);
 }
 
+async function npSeekQueueIndex(deviceId, relativeIndex) {
+  const d = (window._npItems || []).find(x => x.deviceId === deviceId);
+  if (!d || !d.deviceName) return;
+  const serial = npResolveSerial(d);
+  if (!serial) return showToast('Cannot control this device', true);
+  try {
+    const res = await fetch('/api/alexa_remote/control', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        deviceId: d.deviceId, device: d.deviceName, serial,
+        action: 'seek_queue_index', index: relativeIndex, relative: true,
+      }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      return showToast(data.error || 'Seek failed', true);
+    }
+    await refreshCurrentTrack();
+    renderQueuePanel();
+  } catch (e) {
+    showToast(e.message || 'Seek failed', true);
+  }
+}
+window.npSeekQueueIndex = npSeekQueueIndex;
+
+async function npHandoff(fromDeviceId, toDeviceId) {
+  const d = (window._npItems || []).find(x => x.deviceId === fromDeviceId) || {};
+  const offsetMs = d.offset_ms || 0;
+  const ctx = { path: d.filepath, filepath: d.filepath, title: d.track, artist: d.artist };
+  try {
+    const res = await fetch('/api/playback/handoff', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fromDeviceId, toDeviceId, offsetMs, context: ctx }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return showToast(data.error || 'Handoff failed', true);
+    if (data.method === 'local' && data.streamUrl && typeof WebPlayback !== 'undefined') {
+      await WebPlayback.play({ kind: 'song', name: d.track || 'Track', path: data.filepath }, { offsetMs: data.offsetMs || 0 });
+    } else {
+      showToast('Playback moved');
+      await refreshCurrentTrack();
+    }
+  } catch (e) {
+    showToast(e.message || 'Handoff failed', true);
+  }
+}
+window.npHandoff = npHandoff;
+
 async function npControl(deviceId, action) {
   const d = (window._npItems || []).find(x => x.deviceId === deviceId);
   if (!d || !d.deviceName) return;
@@ -2570,6 +3040,10 @@ async function npControl(deviceId, action) {
         return showToast('Alexa session expired — sign in to continue', true);
       }
       return showToast(data.error || 'Control failed', true);
+    }
+    if (action === 'loop') {
+      window._npLoop = window._npLoop || {};
+      window._npLoop[deviceId] = !!data.loop;
     }
     const fresh = await API('/api/nowplaying_devices');
     window._npItems = (fresh && fresh.items) || window._npItems;
@@ -2711,7 +3185,7 @@ function buildGroupRow(g, controlsAvailable) {
             <span class="np-group-name">${escHtml(g.name)}</span>
             <span class="np-group-count">${g.members.length} speakers</span>
           </div>
-          <span class="np-group-track">${escHtml(g.track || '—')}${g.artist ? ' — ' + escHtml(g.artist) : ''}${g.members[0] && (g.members[0].sourceLabel || g.members[0].playlist) ? ' · <i class="fa fa-list"></i> ' + escHtml(g.members[0].sourceLabel || g.members[0].playlist) : ''}</span>
+          <span class="np-group-track">${escHtml(g.track || '—')}${g.artist ? ' — ' + escHtml(g.artist) : ''}${g.members[0] && (g.members[0].album || g.members[0].year) ? ' · ' + escHtml(npAlbumWithYear(g.members[0].album, g.members[0].year)) : ''}${g.members[0] && (g.members[0].sourceLabel || g.members[0].playlist) ? ' · <i class="fa fa-list"></i> ' + escHtml(g.members[0].sourceLabel || g.members[0].playlist) : ''}</span>
         </div>
       </div>
       <div class="np-group-members">${sub}</div>
@@ -2724,11 +3198,11 @@ function buildCurrentCard(items, controlsAvailable = false) {
     return `
       <div class="card" id="np-current-card" style="border-left:4px solid #dde3ee;margin-bottom:20px">
         <div class="card-body" style="display:flex;align-items:center;gap:16px">
-          <div style="font-size:32px;color:#ccd3e0"><i class="fa fa-music"></i></div>
+          <div style="font-size:32px;color:var(--text-muted)"><i class="fa fa-music"></i></div>
           <div>
-            <div style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:#aab;margin-bottom:4px">Now Playing</div>
-            <div style="font-size:15px;color:#aab;font-style:italic">Nothing is currently playing</div>
-            <div style="font-size:12px;color:#bbc;margin-top:2px">Ask Alexa to play a playlist, artist, or album</div>
+            <div style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-secondary);margin-bottom:4px">Now Playing</div>
+            <div style="font-size:15px;color:var(--text-secondary);font-style:italic">Nothing is currently playing</div>
+            <div style="font-size:12px;color:var(--text-muted);margin-top:2px">Ask Alexa to play a playlist, artist, or album</div>
           </div>
         </div>
       </div>`;
@@ -2748,6 +3222,11 @@ function buildCurrentCard(items, controlsAvailable = false) {
 }
 
 async function loadNowPlaying() {
+  if (typeof WebPlayback !== 'undefined' && WebPlayback.active) {
+    renderWebNowPlayingFullPage(WebPlayback.getState());
+    renderPlayerBar();
+    return;
+  }
   const [npDevices, histData, remote] = await Promise.all([
     API('/api/nowplaying_devices'),
     API(`/api/nowplaying?page=${_npPage}&limit=25`),
@@ -2765,6 +3244,12 @@ async function loadNowPlaying() {
     }
   }
 
+  const npPaths = [
+    ...(window._npItems || []).map((d) => d.filepath),
+    ...items.map((e) => e.filepath),
+  ].filter(Boolean);
+  await ensureArtworkSigned(npPaths);
+
   const currentCard = buildCurrentCard(window._npItems, window._npControlsAvailable);
 
   const rows = items.map(e => `
@@ -2781,7 +3266,7 @@ async function loadNowPlaying() {
     <div class="card">
       <div class="card-header">
         <h3><i class="fa fa-history"></i> Streaming History (${fmtNum(total)})</h3>
-        <button onclick="loadNowPlaying()" style="background:none;border:none;color:#30426a;cursor:pointer;font-size:12px">
+        <button onclick="loadNowPlaying()" style="background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:12px">
           <i class="fa fa-rotate-right"></i> Refresh
         </button>
       </div>
@@ -2795,6 +3280,10 @@ async function loadNowPlaying() {
     </div>`);
   npLoadVolumes();
   renderPlayerBar();
+  prefetchArtworkPaths([
+    ...(window._npItems || []).map((d) => d.filepath),
+    ...items.map((e) => e.filepath),
+  ].filter(Boolean));
 }
 
 
@@ -2807,7 +3296,10 @@ register('library', async () => {
       window._libSmart = snap.smart || [];
       window._libFolders = snap.folders || [];
       window._libGenres = snap.genres || [];
+      window._libCovers = snap.covers || {};
       window._libRemote = window._plRemote || window._libRemote || {};
+      renderLibraryPage();
+      await ensureArtworkSigned(libArtPaths());
       renderLibraryPage();
       painted = true;
     }
@@ -2818,7 +3310,7 @@ register('library', async () => {
 
 // ── Playlists ────────────────────────────────────────────────────────────────
 let _plPage = 1, _plSearch = '', _plMergeSel = new Set(), _plDetailId = null, _plFolderFilter = '';
-let _plDetailSort = { by: 'title', order: 'asc' };
+let _plDetailSort = { by: 'original', order: 'asc' };
 let _plDetailPage = 1;
 let _plDetailQ = '';
 const _plDetailPageSize = 100;
@@ -2879,17 +3371,35 @@ function plSortTracksInMemory(tracks, by, order) {
 
 function plSortDetailCol(by) {
   const field = by === 'track' ? 'title' : by;
-  const order = (_plDetailSort.by === field && _plDetailSort.order === 'asc') ? 'desc' : 'asc';
-  plApplyDetailSort(field, order);
+  if (_plDetailSort.by === 'original') {
+    plApplyDetailSort(field, 'asc');
+    return;
+  }
+  if (_plDetailSort.by === field) {
+    if (_plDetailSort.order === 'asc') plApplyDetailSort(field, 'desc');
+    else plApplyDetailSort('original', 'asc');
+    return;
+  }
+  plApplyDetailSort(field, 'asc');
 }
 window.plSortDetailCol = plSortDetailCol;
 
 function plApplyDetailSort(by, order) {
+  if (_plDetailSort.by === by && _plDetailSort.order === order && by !== 'original') {
+    by = 'original';
+    order = 'asc';
+  }
   _plDetailSort = { by, order };
   _plDetailPage = 1;
-  const label = by === 'title' ? 'Track' : (by.charAt(0).toUpperCase() + by.slice(1));
-  showToast(`Sorting by ${label} (${order === 'desc' ? 'Z→A' : 'A→Z'})…`);
-  loadPlaylistDetailPage(true).then(() => plPersistDetailSort(by, order));
+  if (by === 'original') {
+    showToast('Showing original playlist order…');
+  } else {
+    const label = by === 'title' ? 'Track' : (by.charAt(0).toUpperCase() + by.slice(1));
+    showToast(`Sorting by ${label} (${order === 'desc' ? 'Z→A' : 'A→Z'})…`);
+  }
+  loadPlaylistDetailPage(true).then(() => {
+    if (by !== 'original') plPersistDetailSort(by, order);
+  });
 }
 
 async function plPersistDetailSort(by, order) {
@@ -2936,10 +3446,10 @@ register('playlists', async (params) => {
     _plDetailId = params.slice(7);
     _plDetailPage = 1;
     _plDetailQ = '';
-    _plDetailSort = { by: 'title', order: 'asc' };
+    _plDetailSort = { by: 'original', order: 'asc' };
     loading();
     document.getElementById('main-content').innerHTML =
-      '<div class="spinner-wrap"><div class="spinner"></div><p style="text-align:center;color:#888;margin-top:12px">Loading playlist…</p></div>';
+      '<div class="spinner-wrap"><div class="spinner"></div><p style="text-align:center;color:var(--text-secondary);margin-top:12px">Loading playlist…</p></div>';
     return loadPlaylistDetail(_plDetailId);
   }
   _plDetailId = null;
@@ -2960,7 +3470,7 @@ function openNewPlaylistModal() {
   overlay.innerHTML = `
     <div class="modal-box" style="max-width:420px">
       <h3 style="margin-top:0"><i class="fa fa-plus"></i> New playlist</h3>
-      <label style="display:block;margin:8px 0 4px;font-size:13px;color:#888">Name</label>
+      <label style="display:block;margin:8px 0 4px;font-size:13px;color:var(--text-secondary)">Name</label>
       <input type="text" id="pl-new-name" class="settings-input" style="width:100%" placeholder="My playlist">
       <p class="hint" style="margin:12px 0 0">Starts empty — open it to add tracks from Search, or merge other playlists.</p>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
@@ -2993,13 +3503,13 @@ function openSmartPlaylistModal() {
   overlay.innerHTML = `
     <div class="modal-box" style="max-width:440px">
       <h3 style="margin-top:0"><i class="fa fa-wand-magic-sparkles"></i> Smart playlist</h3>
-      <label style="display:block;margin:8px 0 4px;font-size:13px;color:#888">Name</label>
+      <label style="display:block;margin:8px 0 4px;font-size:13px;color:var(--text-secondary)">Name</label>
       <input type="text" id="sp-name" class="settings-input" style="width:100%" placeholder="Evening jazz">
-      <label style="display:block;margin:8px 0 4px;font-size:13px;color:#888">Genre contains</label>
+      <label style="display:block;margin:8px 0 4px;font-size:13px;color:var(--text-secondary)">Genre contains</label>
       <input type="text" id="sp-genre" class="settings-input" style="width:100%" placeholder="jazz">
-      <label style="display:block;margin:8px 0 4px;font-size:13px;color:#888">Artist contains</label>
+      <label style="display:block;margin:8px 0 4px;font-size:13px;color:var(--text-secondary)">Artist contains</label>
       <input type="text" id="sp-artist" class="settings-input" style="width:100%" placeholder="">
-      <label style="display:block;margin:8px 0 4px;font-size:13px;color:#888">Max tracks</label>
+      <label style="display:block;margin:8px 0 4px;font-size:13px;color:var(--text-secondary)">Max tracks</label>
       <input type="number" id="sp-limit" class="settings-input" style="width:100%" value="40" min="1" max="500">
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
         <button class="cancel-btn" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
@@ -3056,7 +3566,7 @@ function openMergePlaylistsModal() {
     <div class="modal-box" style="max-width:480px">
       <h3 style="margin-top:0"><i class="fa fa-code-merge"></i> Merge playlists</h3>
       <p class="hint" style="margin:0 0 10px">Merging: ${names.map(n => escHtml(n)).join(', ')}</p>
-      <label style="display:block;margin:8px 0 4px;font-size:13px;color:#888">New playlist name (optional)</label>
+      <label style="display:block;margin:8px 0 4px;font-size:13px;color:var(--text-secondary)">New playlist name (optional)</label>
       <input type="text" id="pl-merge-name" class="settings-input" style="width:100%" placeholder="Combined playlist">
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
         <button class="cancel-btn" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
@@ -3088,11 +3598,11 @@ function openAiPlaylistModal() {
     <div class="modal-box" style="max-width:520px">
       <h3 style="margin-top:0"><i class="fa fa-wand-magic-sparkles"></i> Mix Muse</h3>
       <p class="hint" style="margin:0 0 8px">Describe the vibe — Claude or OpenAI picks tracks from your library. Set <code>claude.apiKey</code> and/or <code>openai.apiKey</code> in config.json.</p>
-      <label style="display:block;margin:8px 0 4px;font-size:13px;color:#888">Prompt</label>
+      <label style="display:block;margin:8px 0 4px;font-size:13px;color:var(--text-secondary)">Prompt</label>
       <textarea id="pl-ai-prompt" class="settings-input" rows="3" style="width:100%" placeholder="Upbeat yacht rock for a summer drive…"></textarea>
-      <label style="display:block;margin:12px 0 4px;font-size:13px;color:#888">Playlist name (optional)</label>
+      <label style="display:block;margin:12px 0 4px;font-size:13px;color:var(--text-secondary)">Playlist name (optional)</label>
       <input type="text" id="pl-ai-name" class="settings-input" style="width:100%">
-      <label style="display:block;margin:12px 0 4px;font-size:13px;color:#888">Max tracks</label>
+      <label style="display:block;margin:12px 0 4px;font-size:13px;color:var(--text-secondary)">Max tracks</label>
       <input type="number" id="pl-ai-max" class="settings-input" value="25" min="5" max="80" style="width:80px">
       <div id="pl-ai-preview" style="margin-top:12px;max-height:200px;overflow:auto;font-size:12px"></div>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;flex-wrap:wrap">
@@ -3119,7 +3629,7 @@ function openAiPlaylistModal() {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      preview().innerHTML = `<span style="color:#c44">${escHtml(data.error || data.detail || 'Failed')}</span>`;
+      preview().innerHTML = `<span style="color:#f06a5e">${escHtml(data.error || data.detail || 'Failed')}</span>`;
       return;
     }
     window._plAiPreview = data;
@@ -3188,7 +3698,7 @@ async function openAcquireIdeasModal(opts = {}) {
     const data = await res.json().catch(() => ({}));
     loading.style.display = 'none';
     if (!res.ok) {
-      results.innerHTML = `<p class="hint" style="color:#c66">${escHtml(data.error || data.detail || 'Lookup failed')}</p>`;
+      results.innerHTML = `<p class="hint" style="color:#f08a80">${escHtml(data.error || data.detail || 'Lookup failed')}</p>`;
       return;
     }
     const items = data.suggestions || [];
@@ -3212,7 +3722,7 @@ async function openAcquireIdeasModal(opts = {}) {
     }).join('')}</ul>`;
   } catch (e) {
     loading.style.display = 'none';
-    results.innerHTML = '<p class="hint" style="color:#c66">Could not reach MusicBrainz — try again later.</p>';
+    results.innerHTML = '<p class="hint" style="color:#f08a80">Could not reach MusicBrainz — try again later.</p>';
   }
 }
 window.openAcquireIdeasModal = openAcquireIdeasModal;
@@ -3260,12 +3770,14 @@ function renderPlaylistDetailBody() {
     const active = _plDetailSort.by === by && _plDetailSort.order === order;
     return `<button class="btn-sm btn-default${active ? ' active' : ''}" onclick="plApplyDetailSort('${by}','${order}')">${label}</button>`;
   };
-  const sortLabel = _plDetailSort.by === 'title' ? 'Track' : (_plDetailSort.by.charAt(0).toUpperCase() + _plDetailSort.by.slice(1));
-  const sortArrow = _plDetailSort.order === 'desc' ? '↓' : '↑';
+  const sortLabel = _plDetailSort.by === 'original'
+    ? 'Original'
+    : (_plDetailSort.by === 'title' ? 'Track' : (_plDetailSort.by.charAt(0).toUpperCase() + _plDetailSort.by.slice(1)));
+  const sortArrow = _plDetailSort.by === 'original' ? '' : (_plDetailSort.order === 'desc' ? '↓' : '↑');
   const trackRows = pageTracks.map((t, i) => {
     const globalIdx = start + i;
     const pathArg = JSON.stringify(t.path || '');
-    const canReorder = !_plDetailQ && _plDetailSort.by === 'title' && _plDetailSort.order === 'asc';
+    const canReorder = !_plDetailQ && _plDetailSort.by === 'original';
     const reorderBtns = canReorder ? `
       <button class="btn-sm btn-default" onclick="plMoveTrackAt(${pathArg}, ${globalIdx - 1})" ${globalIdx <= 0 ? 'disabled' : ''} title="Move up">↑</button>
       <button class="btn-sm btn-default" onclick="plMoveTrackAt(${pathArg}, ${globalIdx + 1})" ${globalIdx >= total - 1 ? 'disabled' : ''} title="Move down">↓</button>` : '';
@@ -3310,7 +3822,7 @@ function renderPlaylistDetailBody() {
       <input type="search" placeholder="Search in playlist…" value="${escHtml(_plDetailQ)}"
         oninput="clearTimeout(window._pldq);window._pldq=setTimeout(()=>{plDetailFilter(this.value)},400)">
     </div>
-    ${!_plDetailQ && _plDetailSort.by === 'title' && _plDetailSort.order === 'asc' ? `
+    ${!_plDetailQ && _plDetailSort.by === 'original' ? `
     <p class="hint" style="margin:0 0 8px">Drag rows or use ↑↓ to reorder. Sorting saves to the playlist file.</p>` : ''}
     <div class="card">
       <div class="card-header"><h3><i class="fa fa-sort"></i> Sort tracks</h3></div>
@@ -3590,7 +4102,7 @@ function updateAlexaLoginPanel(st) {
       Status: <b>${auth ? 'Connected' : escHtml(alexaLoginStatusLabel(status))}</b>
       ${auth ? ` · ${st.deviceCount != null ? st.deviceCount + ' Echoes' : ''}` : ''}
     </p>
-    ${err ? `<p style="color:#c44;font-size:13px;margin:0 0 8px">${escHtml(err)}</p>` : ''}
+    ${err ? `<p style="color:#f06a5e;font-size:13px;margin:0 0 8px">${escHtml(err)}</p>` : ''}
     ${waiting && url ? `<p class="hint" style="margin:0 0 8px">Open this URL on the same network, sign in to Amazon, and choose <b>password</b> if passkey is offered:</p>
       <a class="btn-sm btn-primary" href="${escHtml(url)}" target="_blank" rel="noopener" style="margin-bottom:8px;display:inline-block"><i class="fa fa-key"></i> Open Amazon login</a>
       <code style="display:block;font-size:11px;word-break:break-all;margin-bottom:8px">${escHtml(url)}</code>` : ''}
@@ -3680,7 +4192,7 @@ function buildAlexaRemoteSettingsSection(remote, localIp) {
   if (!remote || !remote.available) {
     return `<div class="settings-section">
       <h4>Alexa Remote — Play on device</h4>
-      <p class="hint" style="color:#c44">alexapy is not installed on this server (<code>pip3 install --user alexapy "aiohttp>=3.10,&lt;3.11"</code>).</p>
+      <p class="hint" style="color:#f06a5e">alexapy is not installed on this server (<code>pip3 install --user alexapy "aiohttp>=3.10,&lt;3.11"</code>).</p>
     </div>`;
   }
   if (!remote.configured) {
@@ -3732,20 +4244,19 @@ async function loadPlaylists(showSpinner) {
     _plAllCacheSearch = searchKey;
   }
   window._plRemote = remoteStatus || window._plRemote || {};
-  renderPlaylistsPage();
-  const pageIds = (window._playlists || []).map((p) => p.id).filter(Boolean);
+  const { items } = getPlaylistsPageItems();
   const smartIds = (window._smartPlaylists || []).map((s) => s.linkedPlaylistId).filter(Boolean);
+  const pageIds = items.map((p) => p.id).filter(Boolean);
   const coverIds = [...new Set(pageIds.concat(smartIds))];
   if (coverIds.length) {
     const covers = await fetchPlaylistCovers(coverIds);
     window._plCovers = { ...(window._plCovers || {}), ...covers };
-    renderPlaylistsPage();
   }
+  await ensureArtworkSigned(playlistArtPaths(items));
+  renderPlaylistsPage();
 }
 
-function renderPlaylistsPage() {
-  const remote = window._plRemote || {};
-  const canPlay = true;
+function getPlaylistsPageItems() {
   let sorted = _plAllCache || [];
   const libSort = getLibSort('playlists');
   if (libSort.by === 'recents') {
@@ -3754,15 +4265,30 @@ function renderPlaylistsPage() {
     const by = libSort.by === 'tracks' ? 'trackCount' : 'name';
     sorted = plSortPlaylistsInMemory(sorted, by, libSort.order);
   }
-  sorted = sorted
-    .filter(p => {
-      if (!_plFolderFilter) return true;
-      const assignments = window._plFolderAssignments || {};
-      return assignments[p.id] === _plFolderFilter;
-    });
+  sorted = sorted.filter((p) => {
+    if (!_plFolderFilter) return true;
+    const assignments = window._plFolderAssignments || {};
+    return assignments[p.id] === _plFolderFilter;
+  });
   const total = sorted.length;
   const start = (_plPage - 1) * _plPageSize;
   const items = sorted.slice(start, start + _plPageSize);
+  return { items, total, libSort };
+}
+
+function playlistArtPaths(items) {
+  const covers = window._plCovers || {};
+  return [
+    ...Object.values(covers),
+    ...(items || []).map((p) => p.artPath),
+    ...(window._smartPlaylists || []).map((s) => (s.linkedPlaylistId && covers[s.linkedPlaylistId]) || null),
+  ].filter(Boolean);
+}
+
+function renderPlaylistsPage() {
+  const remote = window._plRemote || {};
+  const canPlay = true;
+  const { items, total, libSort } = getPlaylistsPageItems();
   window._playlists = items;
   const covers = window._plCovers || {};
 
@@ -3828,7 +4354,7 @@ function renderPlaylistsPage() {
     </tr>`).join('');
 
   const folderChips = (window._plFolders || []).map(f =>
-    `<button class="btn-sm btn-default" onclick="_plFolderFilter='${escHtml(f.id)}';renderPlaylistsPage()">${escHtml(f.name)}</button>`
+    `<button class="btn-sm btn-default" onclick="_plFolderFilter='${escHtml(f.id)}';loadPlaylists()">${escHtml(f.name)}</button>`
   ).join(' ');
   const plCards = items.map((p, i) => {
     const art = covers[p.id] || null;
@@ -3868,10 +4394,10 @@ function renderPlaylistsPage() {
   renderPage('Playlists', spotifyBrowsePage('Playlists', libraryFiltersHtml('playlists'), `
     ${libraryBrowseToolbar('playlists', { search: _plSearch, searchPlaceholder: 'Search playlists…', onSearchFn: 'libSearchInput', total, extraHtml: plActions })}
     ${folderChips ? `<div class="home-filters" style="margin-bottom:16px">${folderChips}
-      <button type="button" class="home-filter${_plFolderFilter ? '' : ' active'}" onclick="_plFolderFilter='';renderPlaylistsPage()">All</button></div>` : ''}
+      <button type="button" class="home-filter${_plFolderFilter ? '' : ' active'}" onclick="_plFolderFilter='';loadPlaylists()">All</button></div>` : ''}
     ${smartCards ? spotifySection('Smart playlists', '#playlists', smartCards) : ''}
     ${plCards ? `<section class="spotify-section"><div class="spotify-section-header"><h2 class="spotify-section-title">Your playlists</h2><span class="hint">${fmtNum(total)} total · sorted by ${sortLabel} ${sortArrow}</span></div><div class="spotify-carousel library-playlist-grid">${plCards}</div></section>` : '<div class="empty-state"><i class="fa fa-list"></i><p>No playlists found.</p></div>'}
-    ${buildPagination(total, _plPage, _plPageSize, (p) => { _plPage = p; renderPlaylistsPage(); })}
+    ${buildPagination(total, _plPage, _plPageSize, (p) => { _plPage = p; loadPlaylists(); })}
   `), { header: false });
 }
 
@@ -4030,7 +4556,7 @@ async function playOnDevice(opts) {
     <div class="modal-box">
       <h3 style="margin-top:0"><i class="fa fa-play"></i> Play "${escHtml(name)}"</h3>
       <p class="hint" style="margin:0 0 8px">Pick a speaker or a <b>group</b> to play on every member at once.</p>
-      <label style="display:block;margin:12px 0 4px;font-size:13px;color:#888">Device or group</label>
+      <label style="display:block;margin:12px 0 4px;font-size:13px;color:var(--text-secondary)">Device or group</label>
       <div style="display:flex;gap:8px;align-items:center">
         <select id="play-device" class="settings-input" style="flex:1">${deviceOpts}</select>
         <button type="button" id="play-pin-btn" class="btn-sm btn-default" title="Pin speaker to your profile" style="min-width:42px;font-size:16px">☆</button>
@@ -4117,7 +4643,7 @@ async function openAddToRoomModal({ path, track, artist }) {
     <div class="modal-box">
       <h3 style="margin-top:0"><i class="fa fa-plus"></i> Add to room</h3>
       <p class="hint" style="margin:0 0 8px">${escHtml(track || 'Track')} queues after what's playing in that room.</p>
-      <label style="display:block;margin:12px 0 4px;font-size:13px;color:#888">Room / speaker</label>
+      <label style="display:block;margin:12px 0 4px;font-size:13px;color:var(--text-secondary)">Room / speaker</label>
       <select id="room-device" class="settings-input" style="width:100%">${deviceOpts}</select>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
         <button class="cancel-btn" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
@@ -4246,6 +4772,7 @@ async function loadArtists() {
   }
   window._artists = items;
   const canPlay = true;
+  await ensureArtworkSigned(items.map((a) => a.art_path).filter(Boolean), [256]);
 
   const cards = items.map((a, i) => {
     const artPath = a.art_path || null;
@@ -4255,7 +4782,7 @@ async function loadArtists() {
       : '';
     const art = spotifyCardArtHtml(artPath, a.artist, 'fa-microphone', 256)
       .replace('class="spotify-card-art', 'class="spotify-card-art spotify-card-art-round');
-    return `<a href="#songs/artist/${encodeURIComponent(a.artist)}" class="spotify-artist-card">
+    return `<a href="#artist/${encodeURIComponent(a.artist)}" class="spotify-artist-card">
       <div class="spotify-card-media">${art}${playFab}</div>
       <div class="spotify-card-title">${escHtml(a.artist)}</div>
       <div class="spotify-card-sub">Artist · ${fmtNum(a.track_count)} songs</div>
@@ -4323,6 +4850,7 @@ async function loadAlbums() {
   }
   window._albums = items;
   const canPlay = true;
+  await ensureArtworkSigned(items.map((a) => a.art_path).filter(Boolean));
 
   const cards = items.map((a, i) => {
     const unplayed = a.played === false;
@@ -4330,7 +4858,7 @@ async function loadAlbums() {
     return spotifyMediaCard(
       a.album + (unplayed ? ' · New' : ''),
       `${a.artist || 'Unknown'} · ${fmtNum(a.track_count)} songs`,
-      `#songs/album/${encodeURIComponent(a.album)}`,
+      `#album/${encodeURIComponent(a.artist || '')}/${encodeURIComponent(a.album)}`,
       'fa-compact-disc',
       a.album,
       play,
@@ -4353,6 +4881,26 @@ async function loadAlbums() {
 // ── Songs ────────────────────────────────────────────────────────────────────
 let _soPage = 1, _soSearch = '', _soArtist = '', _soAlbum = '';
 register('songs', async (params) => {
+  if (params) {
+    const [type, value] = params.split('/');
+    if (type === 'artist' && value) {
+      window.location.hash = `artist/${value}`;
+      return;
+    }
+    if (type === 'album' && value) {
+      const album = decodeURIComponent(value || '');
+      loading();
+      try {
+        const data = await API(`/api/songs?album=${encodeURIComponent(album)}&limit=1`);
+        const artist = data.items?.[0]?.artist || '';
+        window.location.hash = `album/${encodeURIComponent(artist)}/${encodeURIComponent(album)}`;
+      } catch {
+        _soAlbum = album;
+        await loadSongs();
+      }
+      return;
+    }
+  }
   _soPage = 1; _soSearch = '';
   _soArtist = ''; _soAlbum = '';
 
@@ -4364,6 +4912,63 @@ register('songs', async (params) => {
 
   loading();
   await loadSongs();
+});
+
+register('artist', async (params) => {
+  const name = decodeURIComponent(params || '').trim();
+  if (!name) { navigate('artists'); return; }
+  loading();
+  if (typeof ArtistPage !== 'undefined') await ArtistPage.render(name);
+  else {
+    _soArtist = name;
+    await loadSongs();
+  }
+});
+
+register('album', async (params) => {
+  const parts = (params || '').split('/');
+  const artist = decodeURIComponent(parts[0] || '').trim();
+  const album = decodeURIComponent(parts.slice(1).join('/') || parts[1] || '').trim();
+  if (!album) { navigate('albums'); return; }
+  loading();
+  if (typeof AlbumPage !== 'undefined') await AlbumPage.render(artist, album);
+  else {
+    _soArtist = artist;
+    _soAlbum = album;
+    await loadSongs();
+  }
+});
+
+register('liked', async () => {
+  loading();
+  const data = await API('/api/favorites');
+  const items = data.items || data.songs || [];
+  window._songs = items;
+  const rows = items.map((s, i) => {
+    const title = s.title || path2name(s.path);
+    return `<div class="album-track-row" data-drag-path="${escHtml(s.path)}" data-drag-title="${escHtml(title)}" data-drag-artist="${escHtml(s.artist || '')}" draggable="true">
+      <span class="album-track-num">${i + 1}</span>
+      <button type="button" class="album-track-play" onclick="playSongAt(${i})"><i class="fa fa-play"></i></button>
+      <div class="album-track-meta"><span class="album-track-title">${escHtml(title)}</span><span class="artist-track-album">${escHtml(s.artist || '')}</span></div>
+      <button type="button" class="album-track-like liked" onclick="toggleTrackLike('${escHtml(s.path)}','${escHtml(title)}','${escHtml(s.artist || '')}')"><i class="fa fa-check"></i></button>
+      <span class="album-track-dur">${fmtDuration(s.duration_seconds)}</span>
+      <button type="button" class="album-track-menu" onclick="ContextMenu.showTrack(event,${JSON.stringify(s).replace(/"/g, '&quot;')})"><i class="fa fa-ellipsis"></i></button>
+    </div>`;
+  }).join('');
+  renderPage('Liked Songs', `
+    <div class="liked-hero">
+      <div class="liked-hero-icon"><i class="fa fa-heart"></i></div>
+      <div class="entity-hero-meta">
+        <span class="entity-eyebrow">Playlist</span>
+        <h1 class="entity-title">Liked Songs</h1>
+        <p class="entity-sub">${items.length} songs</p>
+      </div>
+    </div>
+    <div class="entity-actions">
+      <button type="button" class="entity-play-btn" onclick="startPlayback({kind:'queue',tracks:window._songs,name:'Liked Songs'})"><i class="fa fa-play"></i></button>
+      <button type="button" class="entity-action-btn" onclick="startPlayback({kind:'queue',tracks:window._songs,name:'Liked Songs',shuffle:true})"><i class="fa fa-shuffle"></i></button>
+    </div>
+    <div class="album-track-list">${rows || '<p class="hint">No liked songs yet</p>'}</div>`, { header: false });
 });
 
 async function loadSongs() {
@@ -4389,16 +4994,16 @@ async function loadSongs() {
   const rows = items.map((s, i) => {
     const title = s.title || path2name(s.path);
     const playBtn = canPlay
-      ? `<button type="button" class="spotify-play-fab" style="position:static;opacity:1;width:32px;height:32px" onclick="playSongAt(${i})" aria-label="Play"><i class="fa fa-play"></i></button>`
+      ? actionBtn({ kind: 'play', onclick: `playSongAt(${i})`, title: 'Play', icon: 'play' })
       : '';
     const roomBtn = s.path
-      ? `<button type="button" class="spotify-play-fab" style="position:static;opacity:1;width:32px;height:32px;margin-left:4px" onclick="openAddToRoomModal({path:${JSON.stringify(s.path)},track:${JSON.stringify(title)},artist:${JSON.stringify(s.artist || '')}})" aria-label="Add to room"><i class="fa fa-plus"></i></button>`
+      ? actionBtn({ kind: 'muted', onclick: `openAddToRoomModal({path:${JSON.stringify(s.path)},track:${JSON.stringify(title)},artist:${JSON.stringify(s.artist || '')}})`, title: 'Add to room', icon: 'plus' })
       : '';
     return `<div class="spotify-track-row">
       <span class="text-muted">${s.track_number || i + 1}</span>
       <span class="track-title">${escHtml(title)}</span>
       <span>${escHtml(s.album || '—')}</span>
-      <span>${playBtn}${roomBtn}</span>
+      <span class="track-actions">${playBtn}${roomBtn}</span>
     </div>`;
   }).join('');
 
@@ -4428,13 +5033,15 @@ function path2name(p) {
 
 // ── Watch Folders ────────────────────────────────────────────────────────────
 register('watchfolders', async () => {
+  const gen = _routeGen;
   _wfSearch = '';
   loading();
-  await loadWatchfolders();
+  await loadWatchfolders(gen);
 });
 
-async function loadWatchfolders() {
+async function loadWatchfolders(routeGen) {
   let folders = await API('/api/watchfolders') || [];
+  if (routeGen != null && !routeAlive(routeGen)) return;
   if (_wfSearch.trim()) {
     const q = _wfSearch.trim().toLowerCase();
     folders = folders.filter((f) =>
@@ -4464,6 +5071,7 @@ window.libWatchfolderSearch = libWatchfolderSearch;
 
 // ── Devices ──────────────────────────────────────────────────────────────────
 register('devices', async () => {
+  const gen = _routeGen;
   loading();
   const [devices, mc, groups, remote] = await Promise.all([
     API('/api/devices'),
@@ -4476,6 +5084,7 @@ register('devices', async () => {
   window._deviceGroups = (groups && groups.items) || [];
   window._devicesRemoteConfigured = !!(remote && remote.configured);
   if (window._devicesRemoteConfigured) await ensureAlexaDevices().catch(() => []);
+  if (!routeAlive(gen)) return;
   renderDevices();
 });
 
@@ -4492,7 +5101,7 @@ function renderDevices() {
     <li id="dev-row-${i}">
       <span class="device-icon-col"><i class="fa fa-headphones"></i></span>
       <span class="device-name-text">${escHtml(d.name)}</span>
-      <span class="device-last-seen" style="font-size:11px;color:#9aa;margin-left:8px">${d.lastSeen ? 'Last seen ' + fmtDateTime(new Date(d.lastSeen * 1000).toISOString()) : ''}</span>
+      <span class="device-last-seen" style="font-size:11px;color:var(--text-secondary);margin-left:8px">${d.lastSeen ? 'Last seen ' + fmtDateTime(new Date(d.lastSeen * 1000).toISOString()) : ''}</span>
       <div class="row-actions">
         ${actionBtn({ kind: 'edit', onclick: `startEditDevice(${i})`, title: 'Edit name', icon: 'pen' })}
         ${actionBtn({ kind: 'merge', onclick: `startMergeDevice(${i})`, title: 'Merge into another device', icon: 'code-branch' })}
@@ -4549,7 +5158,7 @@ function renderDevices() {
             : ''}
         </div>
       </div>
-      <div id="identify-status" style="display:none;padding:8px 16px;font-size:12px;color:#556;border-bottom:1px solid #eef2f8"></div>
+      <div id="identify-status" style="display:none;padding:8px 16px;font-size:12px;color:var(--text-secondary);border-bottom:1px solid var(--border-subtle)"></div>
       ${rows
         ? `<ul class="device-list">${rows}</ul>`
         : `<div class="empty-state"><i class="fa fa-headphones"></i><p>No devices yet — start streaming from an Echo to register it.</p></div>`}
@@ -4565,7 +5174,7 @@ function renderAppClientsCard() {
     <li id="dev-row-${i}">
       <span class="device-icon-col"><i class="fa fa-mobile-screen"></i></span>
       <span class="device-name-text">${escHtml(d.name)}</span>
-      <span class="device-last-seen" style="font-size:11px;color:#9aa;margin-left:8px">${d.lastSeen ? 'Last seen ' + fmtDateTime(new Date(d.lastSeen * 1000).toISOString()) : ''}</span>
+      <span class="device-last-seen" style="font-size:11px;color:var(--text-secondary);margin-left:8px">${d.lastSeen ? 'Last seen ' + fmtDateTime(new Date(d.lastSeen * 1000).toISOString()) : ''}</span>
       <div class="row-actions">
         ${actionBtn({ kind: 'edit', onclick: `startEditDevice(${i})`, title: 'Edit name', icon: 'pen' })}
         ${actionBtn({ kind: 'delete', onclick: `deleteDevice(${i})`, title: 'Remove device', icon: 'trash' })}
@@ -4588,7 +5197,7 @@ function renderSpeakersCard() {
   const rows = speakers.map(s => `
     <li>
       <span class="device-icon-col"><i class="fa fa-volume-high"></i></span>
-      <span class="device-name-text">${escHtml(s.name)}${s.online ? '' : ' <span style="font-size:11px;color:#c66">(offline)</span>'}</span>
+      <span class="device-name-text">${escHtml(s.name)}${s.online ? '' : ' <span style="font-size:11px;color:#f08a80">(offline)</span>'}</span>
       <div class="row-actions">
         ${actionBtn({ kind: 'play', onclick: `testDevice('${escHtml(s.serial)}', ${JSON.stringify(s.name)})`, title: 'Play a short test clip here', icon: 'play' })}
       </div>
@@ -4648,7 +5257,7 @@ function renderFixStep() {
       <p class="hint" style="margin:0 0 10px">Speaker ${fx.idx + 1} of ${fx.queue.length}. Press <b>Play here</b> to hear which room this is, then give it a name.</p>
       <div style="font-weight:600;margin-bottom:6px"><i class="fa fa-volume-high" style="color:#e99d1a"></i> ${escHtml(s.name)}</div>
       <button class="btn-sm btn-default" id="fix-play"><i class="fa fa-play"></i> Play here</button>
-      <label style="display:block;margin:14px 0 4px;font-size:13px;color:#888">Room name</label>
+      <label style="display:block;margin:14px 0 4px;font-size:13px;color:var(--text-secondary)">Room name</label>
       <input id="fix-name" class="settings-input" style="width:100%" value="${escHtml(s.name)}">
       <div style="display:flex;gap:8px;justify-content:space-between;margin-top:16px">
         <button class="cancel-btn" onclick="this.closest('.modal-overlay').remove()">Close</button>
@@ -4741,8 +5350,8 @@ function renderDeviceGroupsCard() {
       <span class="device-icon-col"><i class="fa fa-layer-group"></i></span>
       <span class="device-name-text">
         <b>${escHtml(g.name)}</b>
-        <span style="font-size:11px;color:#9aa;margin-left:6px">${(g.members || []).length} device${(g.members || []).length === 1 ? '' : 's'}</span>
-        <div class="auto-list-meta">${memberNames || '<span style="color:#c66">no devices</span>'}</div>
+        <span style="font-size:11px;color:var(--text-secondary);margin-left:6px">${(g.members || []).length} device${(g.members || []).length === 1 ? '' : 's'}</span>
+        <div class="auto-list-meta">${memberNames || '<span style="color:#f08a80">no devices</span>'}</div>
       </span>
       <div class="row-actions">
         ${actionBtn({ kind: 'edit', onclick: `openGroupEditor('${escHtml(g.id)}')`, title: 'Edit group', icon: 'pen' })}
@@ -4784,9 +5393,9 @@ async function openGroupEditor(groupId) {
   overlay.innerHTML = `
     <div class="modal-box">
       <h3 style="margin-top:0"><i class="fa fa-layer-group"></i> ${group ? 'Edit group' : 'New group'}</h3>
-      <label style="display:block;margin:12px 0 4px;font-size:13px;color:#888">Group name</label>
+      <label style="display:block;margin:12px 0 4px;font-size:13px;color:var(--text-secondary)">Group name</label>
       <input id="group-name" class="settings-input" style="width:100%" placeholder="Up and Downstairs" value="${escHtml(group ? group.name : '')}">
-      <label style="display:block;margin:14px 0 4px;font-size:13px;color:#888">Devices</label>
+      <label style="display:block;margin:14px 0 4px;font-size:13px;color:var(--text-secondary)">Devices</label>
       <div class="group-dev-list">${checkboxes}</div>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
         <button class="cancel-btn" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
@@ -4993,7 +5602,7 @@ function startMergeDevice(i) {
   row.innerHTML = `
     <span class="device-icon-col"><i class="fa fa-code-branch"></i></span>
     <div class="edit-row" style="gap:6px">
-      <span style="font-size:12px;color:#556">Merge <b>${escHtml(src.name)}</b> into:</span>
+      <span style="font-size:12px;color:var(--text-secondary)">Merge <b>${escHtml(src.name)}</b> into:</span>
       <select id="dev-merge-${i}" class="settings-input" style="min-width:160px">${opts}</select>
       <button class="save-btn" onclick="confirmMergeDevice(${i})">Merge</button>
       <button class="cancel-btn" onclick="renderDevices()">Cancel</button>
@@ -5227,7 +5836,7 @@ async function autoSearchPlaylists(q) {
     box.innerHTML = items.map((p, idx) => `
       <div class="auto-pl-item" onclick="autoPickPlaylistIdx(${idx})">
         ${escHtml(p.name)}<small>${fmtNum(p.trackCount)} tracks</small>
-      </div>`).join('') || `<div class="auto-pl-item" style="color:#889;cursor:default">No playlists found</div>`;
+      </div>`).join('') || `<div class="auto-pl-item" style="color:var(--text-secondary);cursor:default">No playlists found</div>`;
     window._autoPlResults = items;
   }, 250);
 }
@@ -5384,7 +5993,12 @@ async function runAutomationNow(id) {
   const res = await fetch(`/api/automations/${encodeURIComponent(id)}/run`, { method: 'POST' });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) return showToast(data.error || 'Run failed', true);
-  showToast(`Started on ${data.device || 'device'}`);
+  const target = (data.devices && data.devices.length)
+    ? data.devices.join(', ')
+    : (data.device || 'device');
+  const errs = data.errors || [];
+  if (errs.length) showToast(`Sent to ${target} — ${errs.join('; ')}`, true);
+  else showToast(`Started on ${target}`);
   await loadAutomation();
 }
 
@@ -5438,6 +6052,7 @@ register('download', () => {
 });
 
 register('settings', async () => {
+  const gen = _routeGen;
   loading();
   const [s, cfg, ipData, health, remote] = await Promise.all([
     API('/api/settings') || {},
@@ -5461,15 +6076,26 @@ register('settings', async () => {
       <span class="toggle-label">${label}</span>
     </div>`;
 
+  if (!routeAlive(gen)) return;
   const requirePw = chk(settings.requirePassword);
   const continueVal = (typeof ClientPrefsSync !== 'undefined')
     ? ClientPrefsSync.getContinueAfterQueue()
     : (settings.continueAfterQueue || 'off');
 
+  const securityWarnings = (health && health.securityWarnings) || [];
+  const securityCard = securityWarnings.length ? `
+    <div class="settings-section settings-security-warn${health.insecureConfig ? ' settings-security-critical' : ''}">
+      <h4><i class="fa fa-shield-halved"></i> Security</h4>
+      <ul style="margin:8px 0 0;padding-left:18px;font-size:13px">
+        ${securityWarnings.map((w) => `<li style="margin-bottom:8px"><strong>${escHtml(w.severity || 'info')}</strong>: ${escHtml(w.message || '')}${w.action ? `<br><span class="hint">${escHtml(w.action)}</span>` : ''}</li>`).join('')}
+      </ul>
+    </div>` : '';
+
   renderPage('Settings', `
     <div class="card">
       <div class="card-header"><h3><i class="fa fa-cog"></i> General</h3></div>
       <div class="card-body">
+        ${securityCard}
 
         <div class="settings-section">
           <h4>Default Playlist</h4>
@@ -5495,18 +6121,32 @@ register('settings', async () => {
         </div>
 
         <div class="settings-section">
+          <h4>Browser playback</h4>
+          <p class="hint">Crossfade and music video apply when listening in this browser. Synced with your profile on phone apps.</p>
+          <div class="settings-row" style="margin-top:8px">
+            <label style="font-size:12px;color:var(--text-secondary);min-width:140px">Crossfade</label>
+            <input type="range" id="s-crossfade" class="settings-input" min="0" max="20" step="1"
+              value="${typeof ClientPrefsSync !== 'undefined' ? ClientPrefsSync.getCrossfadeSeconds() : 0}"
+              oninput="document.getElementById('s-crossfade-val').textContent=this.value==='0'?'Off':this.value+' s'"
+              onchange="saveCrossfadeSeconds(this.value)">
+            <span id="s-crossfade-val" style="font-size:12px;color:var(--text-secondary);min-width:48px">${(typeof ClientPrefsSync !== 'undefined' ? ClientPrefsSync.getCrossfadeSeconds() : 0) === 0 ? 'Off' : `${typeof ClientPrefsSync !== 'undefined' ? ClientPrefsSync.getCrossfadeSeconds() : 0} s`}</span>
+          </div>
+          ${toggle('s-np-video', 'Music video on Now Playing', typeof ClientPrefsSync !== 'undefined' && ClientPrefsSync.getNowPlayingVideo(), 'saveNowPlayingVideo(this.checked)')}
+        </div>
+
+        <div class="settings-section">
           <h4>Additional Audio File Formats — FLAC, WMA, WAV, OGG, AIF</h4>
           <p class="hint">These formats require real-time transcoding through FFmpeg before streaming to Alexa.</p>
           ${toggle('s-flac', 'Enable Transcoding Support', chk(settings.flacSupport))}
           <div class="settings-row" style="margin-top:8px">
-            <label style="font-size:12px;color:#667;min-width:140px">FFmpeg Binary Path</label>
+            <label style="font-size:12px;color:var(--text-secondary);min-width:140px">FFmpeg Binary Path</label>
             <input type="text" id="s-ffmpeg" class="settings-input wide" value="${escHtml(settings.ffmpegLocation || '')}">
             <button class="btn-sm btn-default" onclick="saveSetting('ffmpegLocation', document.getElementById('s-ffmpeg').value)">Set</button>
           </div>
           <div class="settings-row" style="margin-top:8px">
-            <label style="font-size:12px;color:#667;min-width:140px">Transcode Bitrate</label>
+            <label style="font-size:12px;color:var(--text-secondary);min-width:140px">Transcode Bitrate</label>
             <input type="number" id="s-bitrate" class="settings-input narrow" value="${escHtml(settings.transcodeBitrate || '128')}">
-            <span style="font-size:12px;color:#667">kbps</span>
+            <span style="font-size:12px;color:var(--text-secondary)">kbps</span>
           </div>
         </div>
 
@@ -5514,7 +6154,7 @@ register('settings', async () => {
           <h4>Loudness normalization</h4>
           <p class="hint">Analyze your library once, then normalize playback on streams and phone downloads.</p>
           <div class="settings-row">
-            <label style="font-size:12px;color:#667;min-width:140px">Mode</label>
+            <label style="font-size:12px;color:var(--text-secondary);min-width:140px">Mode</label>
             <select id="s-replay-gain" class="settings-input">
               <option value="off" ${(settings.replayGain || 'off') === 'off' ? 'selected' : ''}>Off</option>
               <option value="track" ${settings.replayGain === 'track' || settings.replayGain === 'true' ? 'selected' : ''}>Track</option>
@@ -5539,10 +6179,10 @@ register('settings', async () => {
         <div class="settings-section">
           <h4>Plex Playlist Sync</h4>
           <p class="hint">Playlists are pulled from Plex every 5 minutes, and voice "add this to &lt;playlist&gt;" writes back to Plex. Status: ${
-            !health ? '<span style="color:#9aa">unknown</span>'
-            : !health.plexConfigured ? '<span style="color:#9aa">not configured</span>'
-            : health.plexReachable ? '<span style="color:#1f8a4c;font-weight:600">connected</span>'
-            : '<span style="color:#c0392b;font-weight:600">unreachable</span>'}</p>
+            !health ? '<span style="color:var(--text-secondary)">unknown</span>'
+            : !health.plexConfigured ? '<span style="color:var(--text-secondary)">not configured</span>'
+            : health.plexReachable ? '<span style="color:#2eaa5a;font-weight:600">connected</span>'
+            : '<span style="color:#f06a5e;font-weight:600">unreachable</span>'}</p>
         </div>
 
         <div class="settings-section" style="opacity:.6">
@@ -5551,7 +6191,7 @@ register('settings', async () => {
           ${toggle('s-autoscan', 'Enable Watch Folder Autoscan', !chk(settings.suppressAutoScan))}
           ${toggle('s-autoimport', 'Automatically Import Playlists', chk(settings.autoImportPlaylists))}
           <div class="settings-row" style="margin-top:8px">
-            <label style="font-size:12px;color:#667;min-width:180px">Ignore Folders Containing</label>
+            <label style="font-size:12px;color:var(--text-secondary);min-width:180px">Ignore Folders Containing</label>
             <input type="text" id="s-ignore" class="settings-input" value="${escHtml(settings.scanIgnoreFiles || '.mmaignore')}" placeholder=".mmaignore">
           </div>
           <div class="settings-row" style="margin-top:8px">
@@ -5571,12 +6211,12 @@ register('settings', async () => {
           ${toggle('s-pass', 'Require password for external access', requirePw, 'togglePasswordField(this.checked)')}
           <div id="s-pass-fields" style="${requirePw ? '' : 'display:none'}; margin-top:10px">
             <div class="settings-row">
-              <label style="font-size:12px;color:#667;min-width:100px">Username</label>
+              <label style="font-size:12px;color:var(--text-secondary);min-width:100px">Username</label>
               <input type="text" id="s-web-username" class="settings-input" value="${escHtml(settings.webUsername || 'admin')}" autocomplete="username">
               <button class="btn-sm btn-primary" onclick="saveWebUsername()">Set</button>
             </div>
             <div class="settings-row" style="margin-top:8px">
-              <label style="font-size:12px;color:#667;min-width:100px">New Password</label>
+              <label style="font-size:12px;color:var(--text-secondary);min-width:100px">New Password</label>
               <input type="password" id="s-web-password" class="settings-input" placeholder="Enter password" autocomplete="new-password">
               <button class="btn-sm btn-primary" onclick="savePassword()">Set</button>
             </div>
@@ -5625,7 +6265,7 @@ register('settings', async () => {
           <h4>Public URL — Alexa Skill Endpoint</h4>
           <p class="hint">Required for Alexa to reach this server. Use a Cloudflare named tunnel for a permanent hostname; quick tunnels rotate.</p>
           <div class="settings-row" style="margin-bottom:8px">
-            <code style="background:#f4f6f9;padding:6px 10px;border-radius:4px;font-size:12px;flex:1">cloudflared tunnel run ourmedia  # named tunnel (fixed URL)</code>
+            <code style="background:rgba(255,255,255,0.08);padding:6px 10px;border-radius:4px;font-size:12px;flex:1">cloudflared tunnel run ourmedia  # named tunnel (fixed URL)</code>
           </div>
           <div class="settings-row">
             <input type="text" id="s-public-url" class="settings-input wide" value="${escHtml(publicUrl)}" placeholder="https://alexa.example.com">
@@ -5663,6 +6303,23 @@ async function saveContinueAfterQueue() {
   await saveSetting('continueAfterQueue', value);
 }
 window.saveContinueAfterQueue = saveContinueAfterQueue;
+
+function saveCrossfadeSeconds(value) {
+  if (typeof ClientPrefsSync === 'undefined') return;
+  ClientPrefsSync.setCrossfadeSeconds(value);
+  showToast('Crossfade saved for your profile');
+}
+window.saveCrossfadeSeconds = saveCrossfadeSeconds;
+
+function saveNowPlayingVideo(checked) {
+  if (typeof ClientPrefsSync === 'undefined') return;
+  ClientPrefsSync.setNowPlayingVideo(!!checked);
+  if (typeof WebMusicVideo !== 'undefined' && typeof WebPlayback !== 'undefined') {
+    WebMusicVideo.sync(WebPlayback.getState());
+  }
+  showToast('Music video preference saved');
+}
+window.saveNowPlayingVideo = saveNowPlayingVideo;
 
 async function startLoudnessAnalyze() {
   const el = document.getElementById('loudness-status');
@@ -5788,8 +6445,17 @@ async function clearImageCache() {
 
 // ── Analytics ─────────────────────────────────────────────────────────────
 
-let _anFrom = '', _anTo = '';
+let _anFrom = '', _anTo = '', _anMember = '';
 window._anCharts = window._anCharts || {};
+
+function _analyticsTodayStats(d) {
+  const daySeries = (d && d.activity && d.activity.day) || [];
+  const last = daySeries[daySeries.length - 1];
+  return {
+    label: last?.label || '',
+    count: last?.count || 0,
+  };
+}
 
 async function _loadAnalytics() {
   Object.values(window._anCharts || {}).forEach(c => { try { c && c.destroy(); } catch {} });
@@ -5797,15 +6463,27 @@ async function _loadAnalytics() {
   loading();
   let url = '/api/analytics';
   const params = [];
-  if (_anFrom) params.push(`from=${_anFrom}`);
-  if (_anTo)   params.push(`to=${_anTo}`);
-  const memberId = activeMemberId();
-  if (memberId) params.push(`member=${encodeURIComponent(memberId)}`);
+  if (_anFrom) params.push(`from=${encodeURIComponent(_anFrom)}`);
+  if (_anTo)   params.push(`to=${encodeURIComponent(_anTo)}`);
+  // Household-wide by default — matches Android AnalyticsScreen (householdWide = true).
+  // Active profile is for ratings/continue, not analytics scoping.
+  if (_anMember) params.push(`member=${encodeURIComponent(_anMember)}`);
   if (params.length) url += '?' + params.join('&');
   const data = await API(url);
-  const hasDeviceActivity = (data?.deviceBreakdown || []).some(d =>
+  if (!data) {
+    // Fetch failed (network, 401 pending sign-in, or rate-limited 403) —
+    // an error is not the same as "no plays yet" (WEB-08).
+    renderPage('Analytics', `
+      <div class="card" style="margin-bottom:20px">${_anDatePickerHtml(null)}</div>
+      <div class="empty-state"><i class="fa fa-triangle-exclamation"></i><p>Couldn't load analytics.</p>
+        <p style="font-size:12px;margin-top:8px">Check your connection and sign-in, then try again.</p>
+        <button class="btn-sm btn-primary" onclick="_loadAnalytics()">Retry</button></div>`);
+    _restoreDateInputs();
+    return;
+  }
+  const hasDeviceActivity = (data.deviceBreakdown || []).some(d =>
     (d.plays || 0) + (d.downloads || 0) + (d.connects || 0) > 0);
-  if (!data || (!data.totalPlays && !hasDeviceActivity)) {
+  if (!data.totalPlays && !hasDeviceActivity) {
     renderPage('Analytics', `
       <div class="card" style="margin-bottom:20px">${_anDatePickerHtml(data)}</div>
       <div class="empty-state"><i class="fa fa-chart-bar"></i><p>No device activity yet.</p>
@@ -5834,19 +6512,29 @@ async function _loadAnalytics() {
 function _restoreDateInputs() {
   const fi = document.getElementById('an-date-from');
   const ti = document.getElementById('an-date-to');
+  const mi = document.getElementById('an-member-filter');
   if (fi) fi.value = _anFrom;
   if (ti) ti.value = _anTo;
+  if (mi) mi.value = _anMember;
 }
 
 function _anDatePickerHtml(data) {
   const dr = (data || {}).dateRange || {};
-  const activeFilter = dr.from || dr.to;
+  const activeFilter = dr.from || dr.to || _anMember;
+  const members = (window._household?.members || []);
+  const memberOpts = members.length
+    ? `<select id="an-member-filter" class="settings-input" style="font-size:12px;padding:4px 8px" onchange="_anMember=this.value;_loadAnalytics()">
+        <option value="">Everyone</option>
+        ${members.map((m) => `<option value="${escHtml(m.id)}"${_anMember === m.id ? ' selected' : ''}>${escHtml(m.name)}</option>`).join('')}
+      </select>`
+    : '';
   return `<div class="card-body" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 16px">
-    <span style="font-size:13px;font-weight:600;color:#556">Date Range</span>
-    <input type="date" id="an-date-from" style="padding:4px 8px;border:1px solid #ccd;border-radius:4px;font-size:12px" onchange="_anFrom=this.value;_loadAnalytics()">
-    <span style="font-size:12px;color:#aab">to</span>
-    <input type="date" id="an-date-to" style="padding:4px 8px;border:1px solid #ccd;border-radius:4px;font-size:12px" onchange="_anTo=this.value;_loadAnalytics()">
-    ${activeFilter ? `<button class="btn-sm btn-default" onclick="_anFrom='';_anTo='';_loadAnalytics()"><i class="fa fa-times"></i> Clear</button>` : ''}
+    <span style="font-size:13px;font-weight:600;color:#ffffff">Date Range</span>
+    <input type="date" id="an-date-from" style="padding:4px 8px;border:1px solid var(--border-subtle);background:var(--spotify-elevated);color:var(--text-primary);border-radius:4px;font-size:12px" onchange="_anFrom=this.value;_loadAnalytics()">
+    <span style="font-size:12px;color:#ffffff">to</span>
+    <input type="date" id="an-date-to" style="padding:4px 8px;border:1px solid var(--border-subtle);background:var(--spotify-elevated);color:var(--text-primary);border-radius:4px;font-size:12px" onchange="_anTo=this.value;_loadAnalytics()">
+    ${memberOpts}
+    ${activeFilter ? `<button class="btn-sm btn-default" onclick="_anFrom='';_anTo='';_anMember='';_loadAnalytics()"><i class="fa fa-times"></i> Clear</button>` : ''}
     ${activeFilter ? `<span style="font-size:11px;color:#e99d1a"><i class="fa fa-filter"></i> Filtered</span>` : ''}
     <a class="btn-sm btn-default" href="${anExportUrl()}" style="margin-left:auto"><i class="fa fa-download"></i> Export CSV</a>
   </div>`;
@@ -5856,12 +6544,19 @@ function anExportUrl() {
   let url = '/api/analytics/export?';
   if (_anFrom) url += `from=${encodeURIComponent(_anFrom)}&`;
   if (_anTo) url += `to=${encodeURIComponent(_anTo)}&`;
-  const memberId = activeMemberId();
-  if (memberId) url += `member=${encodeURIComponent(memberId)}&`;
+  if (_anMember) url += `member=${encodeURIComponent(_anMember)}&`;
   return url;
 }
 
-register('analytics', async () => { _anFrom = ''; _anTo = ''; await _loadAnalytics(); });
+register('analytics', async () => {
+  _anFrom = '';
+  _anTo = '';
+  _anMember = '';
+  if (!window._household) {
+    await API('/api/household').then((h) => { window._household = h; }).catch(() => {});
+  }
+  await _loadAnalytics();
+});
 
 // ── Library search ───────────────────────────────────────────────────────────
 let _searchTimer = null;
@@ -5882,19 +6577,112 @@ register('search', async () => {
     const scope = searchScopeQuery();
     const cacheKey = `${q}\0${scope}`;
     if (el && window._lastSearchRunKey === cacheKey && window._lastSearchData) {
-      renderSearchResultsUI(el, window._lastSearchData, q);
+      await renderSearchResultsUI(el, window._lastSearchData, q);
     }
     libSearchDebounced(q);
   } else if (q.length === 1) {
     libSearchDebounced(q);
   } else if (cached) {
     const el = document.getElementById('lib-search-results');
-    if (el) renderSearchBrowseUI(el, cached, window._plRemote || {});
-    loadSearchBrowse();
+    if (el) {
+      await ensureArtworkSigned(searchBrowseSignPaths(cached), [96, 256, 384]);
+      renderSearchBrowseUI(el, cached, window._plRemote || {});
+    }
   } else {
     await loadSearchBrowse();
   }
 });
+
+function searchVisibleItems(data, expanded, key) {
+  const bucket = expanded && expanded[key];
+  if (bucket && bucket[key]) return bucket[key];
+  return (data && data[key]) || [];
+}
+
+function searchPlaylistIds(data, expanded) {
+  const ids = new Set();
+  for (const p of searchVisibleItems(data, expanded, 'playlists')) {
+    if (p.id) ids.add(p.id);
+  }
+  for (const s of searchVisibleItems(data, expanded, 'smartPlaylists')) {
+    if (s.linkedPlaylistId) ids.add(s.linkedPlaylistId);
+    else if (s.id) ids.add(s.id);
+  }
+  return [...ids];
+}
+
+function searchResultArtPaths(data, covers = {}, expanded = {}) {
+  const c = covers || window._searchPlaylistCovers || {};
+  const paths = [...Object.values(c)];
+  for (const key of ['songs', 'artists', 'albums', 'radios', 'similar', 'genres', 'messages']) {
+    for (const item of searchVisibleItems(data, expanded, key)) {
+      if (item.path) paths.push(item.path);
+    }
+  }
+  return paths.filter(Boolean);
+}
+
+async function hydrateSearchResultArt(el, data, expanded) {
+  if (!el) return;
+  window._searchPlaylistCovers = window._searchPlaylistCovers || {};
+  const seq = window._searchArtSeq || 0;
+  const needCoverIds = searchPlaylistIds(data, expanded)
+    .filter((id) => !window._searchPlaylistCovers[id]);
+  if (needCoverIds.length) {
+    Object.assign(
+      window._searchPlaylistCovers,
+      await fetchPlaylistCovers(needCoverIds).catch(() => ({})) || {},
+    );
+  }
+  if (seq !== window._searchArtSeq) return;
+  patchSearchResultArtwork(el);
+  const signPaths = searchResultArtPaths(data, window._searchPlaylistCovers, expanded);
+  if (signPaths.length) {
+    if (_mediaAuthRequired) await ensureArtworkSigned(signPaths, [96]).catch(() => {});
+    else if (typeof ArtCache !== 'undefined') await ArtCache.warmPaths(signPaths, [96]).catch(() => {});
+  }
+  if (seq !== window._searchArtSeq) return;
+  patchSearchResultArtwork(el);
+}
+
+function patchSearchResultArtwork(root) {
+  if (!root) return;
+  root.querySelectorAll('.search-hit').forEach((hit) => {
+    let artPath = hit.getAttribute('data-art-path');
+    if (!artPath) {
+      const pid = hit.getAttribute('data-playlist-id')
+        || hit.querySelector('[data-play-id]')?.getAttribute('data-play-id');
+      if (pid) artPath = (window._searchPlaylistCovers || {})[pid] || null;
+    }
+    if (!artPath) return;
+    const url = artworkUrl(artPath, 96);
+    if (!url) return;
+    const kind = [...hit.classList].find((c) => c.startsWith('search-hit-') && c !== 'search-hit-art')?.slice('search-hit-'.length) || 'song';
+    const seed = hit.getAttribute('data-art-seed') || '';
+    const unplayed = hit.querySelector('.unplayed-album-badge') != null;
+    const actions = hit.querySelector('.search-hit-actions');
+    const main = hit.querySelector('.search-hit-main');
+    const thumbHtml = searchThumbHtml(kind, artPath, seed, null, unplayed);
+    const thumbEl = hit.querySelector('.search-hit-art');
+    if (thumbEl) thumbEl.outerHTML = thumbHtml;
+    else if (main) main.insertAdjacentHTML('beforebegin', thumbHtml);
+    else if (actions) actions.insertAdjacentHTML('beforebegin', thumbHtml);
+    hit.setAttribute('data-art-path', artPath);
+  });
+}
+
+function searchBrowseArtPaths(data) {
+  if (!data) return [];
+  const covers = data.playlistCovers || {};
+  const genreItems = (data.genres && data.genres.items) || (Array.isArray(data.genres) ? data.genres : []);
+  const albums = (data.newAlbums && data.newAlbums.albums) || [];
+  return [
+    ...Object.values(covers),
+    ...genreItems.map((g) => g.art_path || g.path),
+    ...albums.map((a) => a.path || a.art_path),
+    ...(data.playlists || []).slice(0, 12).flatMap((p) => [covers[p.id], p.artPath]),
+  ].filter(Boolean);
+}
 
 function searchThumbHtml(kind, artPath, seed, icon, unplayed) {
   const round = kind === 'artist';
@@ -5907,7 +6695,7 @@ function searchThumbHtml(kind, artPath, seed, icon, unplayed) {
     return `<span class="${cls}" style="background:${grad}"><i class="fa ${ic}"></i>${badge}</span>`;
   }
   return `<span class="${cls} search-hit-art-img" style="background:${grad}">
-    <img src="${escHtml(url)}" alt="" loading="lazy"
+    <img src="${escHtml(url)}" alt="" loading="lazy"${artKeyAttr(artPath, 96)}
       onerror="this.closest('.search-hit-art').classList.add('search-hit-art-fallback');this.remove();">
     ${badge}
   </span>`;
@@ -5989,7 +6777,12 @@ function libSearchHit(opts) {
   const main = href
     ? `<a href="${href}" class="search-hit-main">${mainInner}</a>`
     : `<div class="search-hit-main">${mainInner}</div>`;
-  return `<div class="search-hit search-hit-${kind}">${thumb}${main}<div class="search-hit-actions row-actions">${extraActions}${playBtn}</div></div>`;
+  const plIdAttr = (kind === 'playlist' && playOpts && playOpts.id)
+    ? ` data-playlist-id="${escHtml(playOpts.id)}"`
+    : '';
+  const artAttr = artPath ? ` data-art-path="${escHtml(artPath)}"` : '';
+  const seedAttr = seed ? ` data-art-seed="${escHtml(String(seed).slice(0, 120))}"` : '';
+  return `<div class="search-hit search-hit-${kind}"${artAttr}${seedAttr}${plIdAttr}>${thumb}${main}<div class="search-hit-actions row-actions">${extraActions}${playBtn}</div></div>`;
 }
 
 function searchScopeQuery() {
@@ -6042,47 +6835,137 @@ function clearSearchRecentSelections() {
 
 window.addSearchRecentSelection = addSearchRecentSelection;
 
+function searchBrowseSignPaths(data) {
+  const recentPlays = (data?.quick?.recent) || [];
+  return [
+    ...searchBrowseArtPaths(data),
+    ...recentPlays.map((item) => item.filepath),
+    ...loadSearchRecentSelections().map((r) => r.path),
+  ].filter(Boolean);
+}
+
+function searchBrowseLinkRow(label, onclick, icon) {
+  return `<button type="button" class="search-browse-link-row" onclick="${onclick}">
+    <i class="fa ${icon || 'fa-circle'} search-browse-link-icon" aria-hidden="true"></i>
+    <span class="search-browse-link-label">${escHtml(label)}</span>
+    <i class="fa fa-chevron-right search-browse-link-chevron" aria-hidden="true"></i>
+  </button>`;
+}
+
+function searchAuralChip(label, onclick, icon) {
+  return `<button type="button" class="search-aural-chip" onclick="${onclick}">
+    <i class="fa ${icon}" aria-hidden="true"></i>
+    <span>${escHtml(label)}</span>
+  </button>`;
+}
+
+function searchRecentRow(r, i) {
+  const kind = r.kind || 'song';
+  const thumbKind = kind === 'artist' ? 'artist' : (kind === 'album' ? 'album' : 'song');
+  const thumb = searchThumbHtml(thumbKind, r.path, r.title, null, false);
+  const sub = r.subtitle ? `<span class="search-browse-recent-sub">${escHtml(r.subtitle)}</span>` : '';
+  return `<div class="search-browse-recent-row">
+    <button type="button" class="search-browse-recent-main" onclick="openSearchRecentByIndex(${i})">
+      ${thumb}
+      <span class="search-browse-recent-text"><strong>${escHtml(r.title)}</strong>${sub}</span>
+    </button>
+    <button type="button" class="search-browse-recent-remove" onclick="removeSearchRecentByIndex(${i});loadSearchBrowse();" aria-label="Remove"><i class="fa fa-times"></i></button>
+  </div>`;
+}
+
+function searchJumpBackRow(item) {
+  const title = item.track || item.title || 'Track';
+  const artist = item.artist || '';
+  const thumb = searchThumbHtml('album', item.filepath, title, null, false);
+  const playOpts = item.filepath
+    ? `{kind:'song',name:${JSON.stringify(title)},artist:${JSON.stringify(artist)},path:${JSON.stringify(item.filepath)}}`
+    : null;
+  const playBtn = playOpts
+    ? `<button type="button" class="action-btn action-play lib-search-play" data-play-kind="song" data-play-name="${escHtml(title)}" data-play-artist="${escHtml(artist)}" data-play-path="${escHtml(item.filepath || '')}" title="Play" aria-label="Play"><i class="fa fa-play"></i></button>`
+    : '';
+  return `<div class="search-hit search-hit-song">${thumb}
+    <div class="search-hit-main"><span class="search-hit-title">${escHtml(title)}</span>${artist ? `<span class="search-hit-sub">${escHtml(artist)}</span>` : ''}</div>
+    <div class="search-hit-actions row-actions">${playBtn}</div>
+  </div>`;
+}
+
 function renderSearchBrowseUI(el, data, remote) {
   const recents = loadSearchRecentSelections();
   const pinItems = data.pins || [];
   window._searchBrowsePins = pinItems;
+  const genres = (data.genres && data.genres.items) || (Array.isArray(data.genres) ? data.genres : []);
+  const albums = (data.newAlbums && data.newAlbums.albums) || [];
+  const covers = data.playlistCovers || {};
+  const playlists = (data.playlists || []).slice(0, 12);
   const sec = (title, body, extraHeader) => body
     ? `<section class="spotify-section search-browse-section"><div class="spotify-section-header" style="display:flex;align-items:center;justify-content:space-between;gap:12px"><h2 class="spotify-section-title home-greeting">${escHtml(title)}</h2>${extraHeader || ''}</div>${body}</section>`
     : '';
 
-  const linkRow = (label, onclick) => `<button type="button" class="search-browse-link-row" onclick="${onclick}"><span>${escHtml(label)}</span><i class="fa fa-chevron-right"></i></button>`;
+  let browseAllBody = '';
+  if (albums.length || genres.length) {
+    const topRow = `<div class="search-browse-tiles-row">${searchNewReleasesTile(albums)}${genres[0] ? searchGenreTileHtml(genres[0]) : ''}</div>`;
+    const restGenres = genres.slice(1);
+    browseAllBody = topRow + (restGenres.length
+      ? `<div class="search-genre-grid">${restGenres.map((g) => searchGenreTileHtml(g)).join('')}</div>`
+      : '');
+  } else {
+    browseAllBody = `<div class="search-browse-tiles-row">
+      <a href="#albums" class="search-browse-tile search-browse-tile-fallback" style="background:linear-gradient(135deg,#5038a0 0%,#1db954 100%)">
+        <span class="search-browse-tile-icon"><i class="fa fa-bolt"></i></span>
+        <span class="search-browse-tile-label">New Releases</span>
+      </a>
+      <a href="#genres" class="search-browse-tile search-browse-tile-fallback" style="background:linear-gradient(135deg,#e91429 0%,#ff6b35 100%)">
+        <span class="search-browse-tile-icon"><i class="fa fa-tag"></i></span>
+        <span class="search-browse-tile-label">Browse Genres</span>
+      </a>
+    </div>`;
+  }
 
-  const auralBody = `<div class="search-browse-list">
-    ${linkRow('Top Artists', 'openSearchRanking(\'artists\')')}
-    ${linkRow('Top Albums', 'openSearchRanking(\'albums\')')}
-    ${linkRow('Top Tracks', 'openSearchRanking(\'tracks\')')}
-    ${linkRow('Best Of…', 'openSearchRanking(\'bestof\')')}
-    ${pinItems.map((p, i) => linkRow(p.title || p.name || 'Shortcut', `openSearchPinByIndex(${i})`)).join('')}
-  </div>`;
+  const recentPlays = (data.quick && data.quick.recent) || [];
+  const jumpBackBody = recentPlays.length
+    ? `<div class="search-browse-list search-jump-back">${recentPlays.slice(0, 5).map((item) => searchJumpBackRow(item)).join('')}</div>`
+    : '';
 
-  const sonicBody = `<div class="search-browse-list">
-    ${linkRow('Sonic Adventure', 'openAcquireIdeasModal({explore:true})')}
-    ${linkRow('Sonic Sage', 'openMixMuseModal && openMixMuseModal()')}
+  const playlistCards = playlists.map((p) => spotifyMediaCard(
+    p.name,
+    `${fmtNum(p.trackCount || 0)} tracks`,
+    p.id ? `#playlists/detail/${encodeURIComponent(p.id)}` : '#playlists',
+    'fa-list',
+    p.name,
+    p.id ? `searchPlayPlaylist(${JSON.stringify(p.id)}, ${JSON.stringify(p.name)})` : null,
+    covers[p.id] || p.artPath || null,
+  )).join('');
+  const playlistsBody = playlistCards
+    ? `<div class="spotify-carousel search-playlist-carousel">${playlistCards}</div>`
+    : '';
+
+  const auralBody = `<div class="search-aural-grid">
+    ${searchAuralChip('Top Artists', "openSearchRanking('artists')", 'fa-microphone')}
+    ${searchAuralChip('Top Albums', "openSearchRanking('albums')", 'fa-compact-disc')}
+    ${searchAuralChip('Top Tracks', "openSearchRanking('tracks')", 'fa-music')}
+    ${searchAuralChip('Best Of…', "openSearchRanking('bestof')", 'fa-star')}
+  </div>${pinItems.length ? `<div class="search-browse-list search-pin-list">${pinItems.map((p, i) => searchBrowseLinkRow(p.title || p.name || 'Shortcut', `openSearchPinByIndex(${i})`, 'fa-bookmark')).join('')}</div>` : ''}`;
+
+  const sonicBody = `<div class="search-sonic-grid">
+    ${searchAuralChip('Sonic Adventure', 'openAcquireIdeasModal({explore:true})', 'fa-compass')}
+    ${searchAuralChip('Sonic Sage', 'openMixMuseModal && openMixMuseModal()', 'fa-wand-magic-sparkles')}
   </div>`;
 
   const recentBody = recents.length
     ? `<div class="search-browse-list">${recents.map((r, i) => {
       window._searchBrowseRecents = recents;
-      const sub = r.subtitle ? `<span class="text-muted">${escHtml(r.subtitle)}</span>` : '';
-      return `<div class="search-browse-recent-row">
-        <button type="button" class="search-browse-recent-main" onclick="openSearchRecentByIndex(${i})">
-          <strong>${escHtml(r.title)}</strong>${sub}
-        </button>
-        <button type="button" class="btn-sm btn-default" onclick="removeSearchRecentByIndex(${i});loadSearchBrowse();" aria-label="Remove"><i class="fa fa-times"></i></button>
-      </div>`;
+      return searchRecentRow(r, i);
     }).join('')}</div>`
     : '';
 
   el.innerHTML = [
     searchScopeBarHtml(),
-    sec('Aural fixations', auralBody, '<button type="button" class="btn-sm btn-default" onclick="editSearchPins()">Edit</button>'),
+    browseAllBody ? sec('Browse all', browseAllBody) : '',
+    jumpBackBody ? sec('Jump back in', jumpBackBody) : '',
+    playlistsBody ? sec('Your playlists', playlistsBody, '<a href="#playlists" class="spotify-section-link">Show all</a>') : '',
+    sec('Aural fixations', auralBody, pinItems.length ? '<button type="button" class="btn-sm btn-default" onclick="editSearchPins()">Edit pins</button>' : ''),
     sec('Sonic explorations', sonicBody),
-    recentBody ? sec('Recent', recentBody, recents.length ? '<button type="button" class="btn-sm btn-default" onclick="clearSearchRecentSelections();loadSearchBrowse();">Clear</button>' : '') : '',
+    recentBody ? sec('Recent searches', recentBody, recents.length ? '<button type="button" class="btn-sm btn-default" onclick="clearSearchRecentSelections();loadSearchBrowse();">Clear</button>' : '') : '',
   ].filter(Boolean).join('') || '<div class="empty-state"><p>Nothing in your library yet.</p></div>';
 }
 
@@ -6141,6 +7024,7 @@ async function openSearchRanking(kind, periodDelta) {
     : kind === 'albums' ? 'Top Albums'
       : kind === 'tracks' ? 'Top Tracks'
         : 'Best Of…';
+  await ensureArtworkSigned((rows || []).map((row) => row.path).filter(Boolean), [96]);
   const playLabel = (n) => (n === 1 ? '1 play' : `${n} plays`);
   const body = (rows || []).slice(0, 50).map((row, index) => {
     const name = row.name || row.label || '—';
@@ -6163,8 +7047,8 @@ async function openSearchRanking(kind, periodDelta) {
     const seed = kind === 'albums' ? name : (artist || name);
     const artPath = row.path || null;
     const thumb = searchThumbHtml(thumbKind, artPath, seed, 'fa-music', false);
-    const href = kind === 'artists' ? `#songs/artist/${encodeURIComponent(name)}`
-      : kind === 'albums' ? `#songs/album/${encodeURIComponent(name)}`
+    const href = kind === 'artists' ? `#artist/${encodeURIComponent(name)}`
+      : kind === 'albums' ? `#album/${encodeURIComponent(item.artist || '')}/${encodeURIComponent(name)}`
         : null;
     const main = href
       ? `<a href="${href}" class="search-ranking-main"><div class="search-ranking-text"><strong>${escHtml(headline)}</strong>${subtitle ? `<span>${escHtml(subtitle)}</span>` : ''}<span class="hint">${escHtml(plays)}</span></div></a>`
@@ -6198,8 +7082,8 @@ window.openSearchRanking = openSearchRanking;
 function openSearchRecentSelection(item) {
   if (!item) return;
   switch (item.kind) {
-    case 'artist': location.hash = `#songs/artist/${encodeURIComponent(item.title)}`; break;
-    case 'album': location.hash = `#songs/album/${encodeURIComponent(item.title)}`; break;
+    case 'artist': location.hash = `#artist/${encodeURIComponent(item.title)}`; break;
+    case 'album': location.hash = `#album/${encodeURIComponent(item.artist || '')}/${encodeURIComponent(item.title)}`; break;
     case 'playlist': if (item.id) location.hash = `#playlists/detail/${encodeURIComponent(item.id)}`; break;
     case 'genre': location.hash = '#genres'; break;
     case 'song': if (item.path) playSong(item.path, item.title, item.artist); break;
@@ -6245,8 +7129,8 @@ function openSearchPin(pin) {
   switch ((pin.kind || '').toLowerCase()) {
     case 'playlist': if (pin.id) location.hash = `#playlists/detail/${encodeURIComponent(pin.id)}`; break;
     case 'genre': playArtistRadio(pin.name || title); break;
-    case 'artist': location.hash = `#songs/artist/${encodeURIComponent(pin.name || title)}`; break;
-    case 'album': location.hash = `#songs/album/${encodeURIComponent(pin.name || title)}`; break;
+    case 'artist': location.hash = `#artist/${encodeURIComponent(pin.name || title)}`; break;
+    case 'album': location.hash = `#album/${encodeURIComponent(pin.artist || '')}/${encodeURIComponent(pin.name || title)}`; break;
     default: if (pin.path) playSong(pin.path, title); break;
   }
 }
@@ -6258,6 +7142,9 @@ async function loadSearchBrowse() {
   const cached = typeof WebCache !== 'undefined' ? WebCache.peekSearchBrowse() : null;
   if (cached) {
     renderSearchBrowseUI(el, cached, window._plRemote || {});
+    ensureArtworkSigned(searchBrowseSignPaths(cached), [96, 256, 384])
+      .then(() => renderSearchBrowseUI(el, cached, window._plRemote || {}))
+      .catch(() => {});
   } else {
     el.innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
   }
@@ -6274,6 +7161,9 @@ async function loadSearchBrowse() {
   const data = { quick, genres, playlists: plItems, newAlbums, playlistCovers, pins: pins?.pins || [] };
   if (typeof WebCache !== 'undefined') WebCache.putSearchBrowse(data);
   renderSearchBrowseUI(el, data, remote);
+  ensureArtworkSigned(searchBrowseSignPaths(data), [96, 256, 384])
+    .then(() => renderSearchBrowseUI(el, data, remote))
+    .catch(() => {});
 }
 window.loadSearchBrowse = loadSearchBrowse;
 
@@ -6284,18 +7174,10 @@ function libSearchDebounced(q) {
     const trimmed = (q || '').trim();
     if (trimmed.length === 1) libSearchSuggest(trimmed);
     else libSearchRun(trimmed);
-  }, 280);
+  }, 180);
 }
 
-async function libSearchSuggest(q) {
-  const el = document.getElementById('lib-search-results');
-  if (!el) return;
-  el.innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
-  const data = await API(`/api/search/suggest?q=${encodeURIComponent(q)}`).catch(() => null);
-  if (!data) {
-    el.innerHTML = '<p class="hint">Suggestions unavailable.</p>';
-    return;
-  }
+function paintSearchSuggest(el, data) {
   const rows = [];
   const pushRows = (kind, items, mapFn) => {
     for (const item of items || []) {
@@ -6315,7 +7197,7 @@ async function libSearchSuggest(q) {
     titleHtml: escHtml(a.name),
     artPath: a.path,
     seed: a.name,
-    href: `#songs/artist/${encodeURIComponent(a.name)}`,
+    href: `#artist/${encodeURIComponent(a.name)}`,
     playOpts: { kind: 'artist', name: a.name },
     showPlay: true,
   }));
@@ -6326,7 +7208,7 @@ async function libSearchSuggest(q) {
     artPath: a.path,
     seed: a.name,
     unplayed: a.played === false,
-    href: `#songs/album/${encodeURIComponent(a.name)}`,
+    href: `#album/${encodeURIComponent(a.artist || '')}/${encodeURIComponent(a.name)}`,
     playOpts: { kind: 'album', name: a.name, artist: a.artist || '' },
     showPlay: true,
   }));
@@ -6342,6 +7224,31 @@ async function libSearchSuggest(q) {
   el.innerHTML = rows.length
     ? `<section class="search-suggest-section"><h2 class="search-section-title home-greeting">Suggestions</h2><div class="search-browse-list">${rows.join('')}</div></section>`
     : '<p class="hint">Keep typing to search your library.</p>';
+}
+
+async function libSearchSuggest(q) {
+  const el = document.getElementById('lib-search-results');
+  if (!el) return;
+  el.innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
+  const data = await API(`/api/search/suggest?q=${encodeURIComponent(q)}`).catch(() => null);
+  if (!data) {
+    el.innerHTML = '<p class="hint">Suggestions unavailable.</p>';
+    return;
+  }
+  if ((window._lastSearchQ || '').trim() !== q) return;
+  window._lastSuggestData = data;
+  paintSearchSuggest(el, data);
+  const suggestPaths = [
+    ...(data.artists || []).map((a) => a.path),
+    ...(data.albums || []).map((a) => a.path),
+    ...(data.songs || []).map((s) => s.path),
+  ].filter(Boolean);
+  if (suggestPaths.length) {
+    ensureArtworkSigned(suggestPaths, [96]).then(() => {
+      if ((window._lastSearchQ || '').trim() !== q) return;
+      paintSearchSuggest(el, window._lastSuggestData);
+    }).catch(() => {});
+  }
 }
 
 function libSearchPlayOptsFromBtn(btn) {
@@ -6417,35 +7324,46 @@ async function libSearchRun(q) {
   }
   const scope = searchScopeQuery();
   const cacheKey = `${q}\0${scope}`;
+  const seq = (window._searchRunSeq = (window._searchRunSeq || 0) + 1);
   if (window._lastSearchRunKey === cacheKey && window._lastSearchData) {
-    renderSearchResultsUI(el, window._lastSearchData, q);
+    await renderSearchResultsUI(el, window._lastSearchData, q);
     return;
   }
   el.innerHTML = `${searchScopeBarHtml()}<div class="spinner-wrap"><div class="spinner"></div></div>`;
-  const data = await API(`/api/search?q=${encodeURIComponent(q)}&limit=30&preview=5${scope}`).catch(() => null);
+  const data = await API(`/api/search?q=${encodeURIComponent(q)}&limit=30&preview=5&fast=1${scope}`).catch(() => null);
+  if (seq !== window._searchRunSeq) return;
   if (!data) {
     el.innerHTML = `${searchScopeBarHtml()}<p class="hint" style="padding:12px">Search failed — try again.</p>`;
     return;
   }
   window._lastSearchRunKey = cacheKey;
   window._lastSearchData = data;
-  renderSearchResultsUI(el, data, q);
+  window._lastSearchExpanded = {};
+  window._searchPlaylistCovers = {};
+  await renderSearchResultsUI(el, data, q);
 }
 window.libSearchRun = libSearchRun;
 
 async function libSearchExpandSection(section, q) {
   const scope = searchScopeQuery();
-  const data = await API(`/api/search?q=${encodeURIComponent(q)}&section=${encodeURIComponent(section)}&limit=50&preview=50${scope}`).catch(() => null);
-  if (!data) return;
+  const seq = (window._searchExpandSeq = (window._searchExpandSeq || 0) + 1);
+  const el = document.getElementById('lib-search-results');
+  if (el) {
+    el.querySelectorAll('.search-show-all').forEach((btn) => {
+      if (btn.getAttribute('data-section') === section) btn.disabled = true;
+    });
+  }
+  const data = await API(`/api/search?q=${encodeURIComponent(q)}&section=${encodeURIComponent(section)}&limit=50&preview=50&fast=0${scope}`).catch(() => null);
+  if (seq !== window._searchExpandSeq || !data) return;
+  if ((window._lastSearchQ || '').trim() !== q) return;
   window._lastSearchExpanded = window._lastSearchExpanded || {};
   window._lastSearchExpanded[section] = data;
-  const el = document.getElementById('lib-search-results');
-  if (el && window._lastSearchData) renderSearchResultsUI(el, window._lastSearchData, q);
+  if (el && window._lastSearchData) {
+    await renderSearchResultsUI(el, window._lastSearchData, q);
+  }
 }
 
-function renderSearchResultsUI(el, data, q) {
-  const plIds = (data.playlists || []).map((p) => p.id).filter(Boolean);
-  const smartIds = (data.smartPlaylists || []).map((s) => s.id).filter(Boolean);
+async function renderSearchResultsUI(el, data, q, opts = {}) {
   const expanded = window._lastSearchExpanded || {};
   const preview = data.preview || 5;
 
@@ -6476,22 +7394,25 @@ function renderSearchResultsUI(el, data, q) {
     showPlay: !!p.id,
   })).join('');
 
-  const smartRows = (items) => (items || []).map((s) => libSearchHit({
-    kind: 'playlist',
-    titleHtml: `${escHtml(s.name)} <span class="text-muted">· smart</span>`,
-    artPath: s.id ? (window._searchPlaylistCovers || {})[s.id] : null,
-    seed: s.name,
-    href: s.id ? `#playlists/detail/${encodeURIComponent(s.id)}` : null,
-    playOpts: s.id ? { kind: 'playlist', name: s.name, id: s.id } : null,
-    showPlay: !!s.id,
-  })).join('');
+  const smartRows = (items) => (items || []).map((s) => {
+    const coverId = s.linkedPlaylistId || s.id;
+    return libSearchHit({
+      kind: 'playlist',
+      titleHtml: `${escHtml(s.name)} <span class="text-muted">· smart</span>`,
+      artPath: coverId ? (window._searchPlaylistCovers || {})[coverId] : null,
+      seed: s.name,
+      href: coverId ? `#playlists/detail/${encodeURIComponent(coverId)}` : null,
+      playOpts: coverId ? { kind: 'playlist', name: s.name, id: coverId } : null,
+      showPlay: !!coverId,
+    });
+  }).join('');
 
   const artistRows = (items) => (items || []).map((a) => libSearchHit({
     kind: 'artist',
     titleHtml: escHtml(a.name),
     artPath: a.path,
     seed: a.name,
-    href: `#songs/artist/${encodeURIComponent(a.name)}`,
+    href: `#artist/${encodeURIComponent(a.name)}`,
     playOpts: { kind: 'artist', name: a.name },
     showPlay: true,
   })).join('');
@@ -6502,7 +7423,7 @@ function renderSearchResultsUI(el, data, q) {
     subtitle: a.artist ? escHtml(a.artist) : '',
     artPath: a.path,
     seed: a.name,
-    href: `#songs/album/${encodeURIComponent(a.name)}`,
+    href: `#album/${encodeURIComponent(a.artist || '')}/${encodeURIComponent(a.name)}`,
     playOpts: { kind: 'album', name: a.name, artist: a.artist || '' },
     showPlay: true,
   })).join('');
@@ -6529,40 +7450,40 @@ function renderSearchResultsUI(el, data, q) {
   const sectionHtml = (key, rowsFn, items) => {
     if (!items || !items.length) return '';
     const total = (data.counts && data.counts[key]) || items.length;
-    const body = expanded[key] ? rowsFn(expanded[key][key] || items) : rowsFn(items);
+    const visible = searchVisibleItems(data, expanded, key);
+    const body = expanded[key] ? rowsFn(visible) : rowsFn(items);
     const more = !expanded[key] && total > preview
       ? `<button type="button" class="btn-sm btn-default search-show-all" data-section="${escHtml(key)}" data-q="${escHtml(q)}">Show all ${total}</button>`
       : '';
     return `<section class="search-results-section"><h2 class="search-section-title home-greeting">${escHtml(sectionTitle(key))}</h2><div class="search-browse-list">${body}</div>${more}</section>`;
   };
 
-  Promise.all([
-    plIds.length || smartIds.length ? fetchPlaylistCovers([...new Set(plIds.concat(smartIds))]) : Promise.resolve({}),
-  ]).then(([covers]) => {
-    window._searchPlaylistCovers = covers || {};
-    const radio = (data.radios || []).map((r) => libSearchHit({
-      kind: 'song',
-      titleHtml: escHtml(r.displayTitle || `${r.name} Radio`),
-      subtitle: 'Radio',
-      artPath: r.path,
-      seed: r.name,
-      playOpts: { kind: 'artist', name: r.name || '' },
-      showPlay: true,
-    })).join('');
+  const radioRows = (items) => (items || []).map((r) => libSearchHit({
+    kind: 'song',
+    titleHtml: escHtml(r.displayTitle || `${r.name} Radio`),
+    subtitle: 'Radio',
+    artPath: r.path,
+    seed: r.name,
+    playOpts: { kind: 'artist', name: r.name || '' },
+    showPlay: true,
+  })).join('');
 
-    const body = [
-      sectionHtml('songs', songRows, data.songs),
-      sectionHtml('artists', artistRows, data.artists),
-      sectionHtml('albums', albumRows, data.albums),
-      sectionHtml('radios', () => radio, data.radios),
-      sectionHtml('similar', songRows, data.similar),
-      sectionHtml('playlists', playlistRows, data.playlists),
-      sectionHtml('smartPlaylists', smartRows, data.smartPlaylists),
-      sectionHtml('genres', genreRows, data.genres),
-      sectionHtml('messages', songRows, data.messages),
-    ].filter(Boolean).join('');
-    el.innerHTML = `${searchScopeBarHtml()}${body || '<p class="hint" style="padding:12px">No matches.</p>'}`;
-  });
+  const body = [
+    sectionHtml('songs', songRows, data.songs),
+    sectionHtml('artists', artistRows, data.artists),
+    sectionHtml('albums', albumRows, data.albums),
+    sectionHtml('radios', radioRows, data.radios),
+    sectionHtml('similar', songRows, data.similar),
+    sectionHtml('playlists', playlistRows, data.playlists),
+    sectionHtml('smartPlaylists', smartRows, data.smartPlaylists),
+    sectionHtml('genres', genreRows, data.genres),
+    sectionHtml('messages', songRows, data.messages),
+  ].filter(Boolean).join('');
+  el.innerHTML = `${searchScopeBarHtml()}${body || '<p class="hint" style="padding:12px">No matches.</p>'}`;
+  if (!opts.artOnly) {
+    window._searchArtSeq = (window._searchArtSeq || 0) + 1;
+    hydrateSearchResultArt(el, data, expanded).catch(() => {});
+  }
 }
 window.renderSearchResultsUI = renderSearchResultsUI;
 window.libSearchExpandSection = libSearchExpandSection;
@@ -6580,7 +7501,7 @@ async function libFavorite(path, title, artist) {
 function _platformIcon(platform) {
   const p = (platform || '').toLowerCase();
   if (p === 'android') return '<i class="fa fa-android" style="color:#3ddc84"></i>';
-  if (p === 'ios') return '<i class="fa fa-apple" style="color:#555"></i>';
+  if (p === 'ios') return '<i class="fa fa-apple" style="color:var(--text-secondary)"></i>';
   if (p === 'alexa') return '<i class="fa fa-volume-up" style="color:#00caff"></i>';
   return '<i class="fa fa-circle-question" style="color:#aab"></i>';
 }
@@ -6617,11 +7538,11 @@ function _buildDeviceBreakdownHTML(devices) {
             ${rows.map(d => `
               <tr>
                 <td style="padding:10px 14px;font-weight:600">${escHtml(d.name || d.deviceId || '—')}</td>
-                <td style="text-align:center">${_platformIcon(d.platform)} <span style="font-size:11px;color:#778">${escHtml((d.platform || 'unknown').toUpperCase())}</span></td>
+                <td style="text-align:center">${_platformIcon(d.platform)} <span style="font-size:11px;color:#ffffff">${escHtml((d.platform || 'unknown').toUpperCase())}</span></td>
                 <td style="text-align:center">${fmtNum(d.connects || 0)}</td>
                 <td style="text-align:center">${fmtNum(d.plays || 0)}</td>
                 <td style="text-align:center">${fmtNum(d.downloads || 0)}</td>
-                <td style="text-align:center;color:#778;font-size:12px">${_formatLastSeen(d.lastSeen)}</td>
+                <td style="text-align:center;color:#ffffff;font-size:12px">${_formatLastSeen(d.lastSeen)}</td>
               </tr>`).join('')}
           </tbody>
         </table>
@@ -6637,11 +7558,16 @@ function _buildAnalyticsHTML(d) {
   const hasGenres  = (d.topGenres  || []).length > 0;
   const hasDecades = (d.topDecades || []).length > 0;
   const uniqueDays = Object.keys(d.playsPerDay || {}).length;
+  const today = _analyticsTodayStats(d);
 
   return `
     <div class="card" style="margin-bottom:20px">${_anDatePickerHtml(d)}</div>
 
     <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-icon green"><i class="fa fa-calendar-day"></i></div>
+        <div class="stat-info"><div class="stat-value">${fmtNum(today.count)}</div><div class="stat-label">Plays Today${today.label ? ` · ${escHtml(today.label)}` : ''}</div></div>
+      </div>
       <div class="stat-card">
         <div class="stat-icon blue"><i class="fa fa-headphones"></i></div>
         <div class="stat-info"><div class="stat-value">${fmtNum(d.totalPlays)}</div><div class="stat-label">Total Plays</div></div>
@@ -6649,28 +7575,28 @@ function _buildAnalyticsHTML(d) {
       <div class="stat-card">
         <div class="stat-icon orange"><i class="fa fa-fire"></i></div>
         <div class="stat-info">
-          <div class="stat-value">${sk.current || 0}<span style="font-size:13px;font-weight:400;color:#778"> day streak</span></div>
+          <div class="stat-value">${sk.current || 0}<span style="font-size:13px;font-weight:400;color:#ffffff"> day streak</span></div>
           <div class="stat-label">Current Streak</div>
         </div>
       </div>
       <div class="stat-card">
         <div class="stat-icon green"><i class="fa fa-trophy"></i></div>
         <div class="stat-info">
-          <div class="stat-value">${sk.longest || 0}<span style="font-size:13px;font-weight:400;color:#778"> days</span></div>
+          <div class="stat-value">${sk.longest || 0}<span style="font-size:13px;font-weight:400;color:#ffffff"> days</span></div>
           <div class="stat-label">Longest Streak</div>
         </div>
       </div>
       <div class="stat-card">
         <div class="stat-icon purple"><i class="fa fa-compact-disc"></i></div>
         <div class="stat-info">
-          <div class="stat-value">${(cov.heard > 0 && cov.pct < 0.1) ? '&lt;&nbsp;0.1' : (cov.pct || 0)}<span style="font-size:13px;font-weight:400;color:#778">%</span></div>
+          <div class="stat-value">${(cov.heard > 0 && cov.pct < 0.1) ? '&lt;&nbsp;0.1' : (cov.pct || 0)}<span style="font-size:13px;font-weight:400;color:#ffffff">%</span></div>
           <div class="stat-label">Catalog Heard &middot; ${fmtNum(cov.heard || 0)}/${fmtNum(cov.total || 0)}</div>
         </div>
       </div>
       <div class="stat-card">
         <div class="stat-icon teal"><i class="fa fa-rotate"></i></div>
         <div class="stat-info">
-          <div class="stat-value">${rr.pct || 0}<span style="font-size:13px;font-weight:400;color:#778">%</span></div>
+          <div class="stat-value">${rr.pct || 0}<span style="font-size:13px;font-weight:400;color:#ffffff">%</span></div>
           <div class="stat-label">Repeat Rate</div>
         </div>
       </div>
@@ -6797,10 +7723,10 @@ async function loadIgnoredPanel() {
     <ul class="device-list" style="margin:0">
       ${items.map(it => `
         <li>
-          <span class="device-icon-col"><i class="fa fa-ban" style="color:#c0392b"></i></span>
+          <span class="device-icon-col"><i class="fa fa-ban" style="color:#f06a5e"></i></span>
           <span class="device-name-text">
             <b>${escHtml(it.title || (it.path || '').split('/').pop())}</b>
-            ${it.artist ? `<span style="font-size:11px;color:#9aa;margin-left:6px">${escHtml(it.artist)}</span>` : ''}
+            ${it.artist ? `<span style="font-size:11px;color:#ffffff;margin-left:6px">${escHtml(it.artist)}</span>` : ''}
           </span>
           <div class="row-actions">
             <button class="btn-sm btn-default" onclick="unignoreTrack('${escHtml(encodeURIComponent(it.path))}')">Allow again</button>
@@ -6821,7 +7747,7 @@ async function unignoreTrack(encodedPath) {
 }
 
 function _buildHeatmapHTML(matrix) {
-  if (!matrix || !matrix.length) return '<p style="color:#aab;font-size:13px">No data</p>';
+  if (!matrix || !matrix.length) return '<p style="color:var(--text-muted);font-size:13px">No data</p>';
   const days   = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
   const maxVal = Math.max(1, ...matrix.map(row => Math.max(...row)));
   let html = '<div class="an-heatmap">';
@@ -6846,12 +7772,14 @@ function _initAnalyticsCharts(d) {
     return;
   }
   const gridColor = '#282828';
+  const textColor = '#ffffff';
+  Chart.defaults.color = textColor;
   const C = {
     navy: '#509bf5', orange: '#e99d1a', green: '#1db954',
     purple: '#b49bc8', teal: '#1db954',
   };
-  const xTick = { color: '#b3b3b3', font: { size: 11 } };
-  const yTick = { color: '#b3b3b3', font: { size: 11 } };
+  const xTick = { color: textColor, font: { size: 11 } };
+  const yTick = { color: textColor, font: { size: 11 } };
   const noLegend = { legend: { display: false } };
 
   // Activity line chart with hover tooltip
@@ -6930,7 +7858,7 @@ function _initAnalyticsCharts(d) {
     if (!el) return;
     if (!items || !items.length) {
       const wrap = el.closest('.an-hbar-wrap');
-      if (wrap) wrap.innerHTML = '<p style="color:#aab;font-size:13px;padding:16px 0">No data yet</p>';
+      if (wrap) wrap.innerHTML = '<p style="color:#ffffff;font-size:13px;padding:16px 0">No data yet</p>';
       return;
     }
     window._anCharts[id] = new Chart(el, {
@@ -6959,7 +7887,7 @@ function _initAnalyticsCharts(d) {
         },
         scales: {
           x: { grid: { color: gridColor }, ticks: xTick, beginAtZero: true },
-          y: { grid: { display: false }, ticks: { color: '#333', font: { size: 11 } } },
+          y: { grid: { display: false }, ticks: { color: textColor, font: { size: 11 } } },
         },
       },
     });
@@ -6982,13 +7910,13 @@ function _initAnalyticsCharts(d) {
           labels: d.topGenres.map(r => r.name),
           datasets: [{
             data: d.topGenres.map(r => r.count),
-            backgroundColor: PAL, borderWidth: 2, borderColor: '#fff',
+            backgroundColor: PAL, borderWidth: 2, borderColor: '#282828',
           }],
         },
         options: {
           cutout: '60%',
           plugins: {
-            legend: { position: 'bottom', labels: { font: { size: 11 }, color: '#333', boxWidth: 12, padding: 10 } },
+            legend: { position: 'bottom', labels: { font: { size: 11 }, color: textColor, boxWidth: 12, padding: 10 } },
           },
         },
       });
@@ -7036,6 +7964,8 @@ const _AN_COLORS = ['#4e91e6','#e6914e','#4ec74e','#e64e4e','#a44ee6','#e6c84e',
 function _buildEntityChart(canvasId, seriesMap) {
   const canvas = document.getElementById(canvasId);
   if (!canvas || typeof Chart === 'undefined') return;
+  const textColor = '#ffffff';
+  const gridColor = '#282828';
   const allDays = [...new Set(Object.values(seriesMap).flatMap(m => Object.keys(m)))].sort();
   if (!allDays.length) return;
   const datasets = Object.entries(seriesMap).map(([label, dayCounts], i) => ({
@@ -7052,10 +7982,13 @@ function _buildEntityChart(canvasId, seriesMap) {
       responsive: true,
       interaction: { mode: 'index', intersect: false },
       plugins: {
-        legend: { position: 'bottom', labels: { font: { size: 11 } } },
+        legend: { position: 'bottom', labels: { font: { size: 11 }, color: textColor } },
         tooltip: { mode: 'index', intersect: false },
       },
-      scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
+      scales: {
+        x: { grid: { color: gridColor }, ticks: { color: textColor, font: { size: 11 } } },
+        y: { beginAtZero: true, grid: { color: gridColor }, ticks: { precision: 0, color: textColor, font: { size: 11 } } },
+      },
     },
   });
 }
@@ -7132,6 +8065,13 @@ function setupPlayerBarListeners() {
     npToggleShuffleEl(e.currentTarget);
   });
 
+  document.getElementById('np-bar-video')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (typeof WebPlayback !== 'undefined' && WebPlayback.active) {
+      toggleNpVideo();
+    }
+  });
+
   document.getElementById('np-bar-favorite')?.addEventListener('click', (e) => {
     e.stopPropagation();
     if (typeof WebPlayback !== 'undefined' && WebPlayback.active) {
@@ -7185,12 +8125,24 @@ function setupPlayerBarListeners() {
 
 function setupShellListeners() {
   setupPlayerBarListeners();
-  document.getElementById('account-menu-btn')?.addEventListener('click', openAppDrawer);
-  document.querySelector('.sidebar-user-btn')?.addEventListener('click', openAppDrawer);
-  document.getElementById('topbar-settings')?.addEventListener('click', openAppDrawer);
-  document.getElementById('topbar-profile')?.addEventListener('click', openAppDrawer);
+  document.getElementById('notifications-close')?.addEventListener('click', () => {
+    document.getElementById('notifications-panel')?.classList.add('hidden');
+  });
   document.getElementById('topbar-back')?.addEventListener('click', () => window.history.back());
   document.getElementById('spotify-queue-close')?.addEventListener('click', () => toggleQueuePanel(false));
+  document.getElementById('spotify-queue-body')?.addEventListener('click', (e) => {
+    const row = e.target.closest('.queue-track-seek');
+    if (!row) return;
+    if (row.getAttribute('data-queue-mode') === 'web') {
+      const offset = parseInt(row.getAttribute('data-queue-offset'), 10);
+      if (Number.isNaN(offset) || typeof WebPlayback === 'undefined' || !WebPlayback.active) return;
+      WebPlayback.seekToUpcomingOffset(offset).then(() => renderQueuePanel()).catch(() => {});
+      return;
+    }
+    const deviceId = row.getAttribute('data-device-id');
+    const idx = parseInt(row.getAttribute('data-queue-index'), 10);
+    if (deviceId && !Number.isNaN(idx)) npSeekQueueIndex(deviceId, idx);
+  });
   document.getElementById('np-bar-queue')?.addEventListener('click', (e) => {
     e.stopPropagation();
     toggleQueuePanel();
@@ -7198,8 +8150,20 @@ function setupShellListeners() {
   document.getElementById('np-bar-repeat')?.addEventListener('click', (e) => {
     e.stopPropagation();
     const deviceId = e.currentTarget.dataset.deviceId;
-    if (deviceId) npControl(deviceId, 'loop');
-    e.currentTarget.classList.toggle('active');
+    if (deviceId) {
+      npControl(deviceId, 'loop');
+      e.currentTarget.classList.toggle('active');
+      return;
+    }
+    if (typeof WebPlayback !== 'undefined' && WebPlayback.active) {
+      WebPlayback.cycleRepeat?.();
+      renderWebPlayerBar(WebPlayback.getState());
+    }
+  });
+  document.getElementById('np-bar-np-panel')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (typeof ShellLayout !== 'undefined') ShellLayout.toggleRightPanel(true);
+    if (typeof RightPanel !== 'undefined') RightPanel.setTab('nowplaying');
   });
   const topSearch = document.getElementById('topbar-search-q');
   const topForm = document.getElementById('topbar-search-form');
@@ -7461,10 +8425,10 @@ function renderFamilyStats() {
         ${bm.length ? bm.map(x => `
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
             <span style="width:120px;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(x.name)}</span>
-            <div style="flex:1;background:#eef2f8;border-radius:6px;height:14px;overflow:hidden">
-              <div style="width:${Math.round(x.plays / maxPlays * 100)}%;height:100%;background:#30426a"></div>
+            <div style="flex:1;background:rgba(255,255,255,0.12);border-radius:6px;height:14px;overflow:hidden">
+              <div style="width:${Math.round(x.plays / maxPlays * 100)}%;height:100%;background:var(--bock-green)"></div>
             </div>
-            <span style="width:50px;text-align:right;font-size:12px;color:#556">${fmtNum(x.plays)}</span>
+            <span style="width:50px;text-align:right;font-size:12px;color:var(--text-secondary)">${fmtNum(x.plays)}</span>
           </div>`).join('') : '<p class="hint" style="margin:0">No attributed plays yet.</p>'}
         ${bp.length ? `<p class="hint" style="margin:10px 0 0">By platform: ${bp.map(p => `${escHtml(p.platform)} ${fmtNum(p.plays)}`).join(' · ')}</p>` : ''}
       </div>
@@ -7687,15 +8651,22 @@ async function init() {
   setupSearchDelegation();
   setupHomeFilterDelegation();
   setupShellListeners();
+  if (typeof ShellLayout !== 'undefined') ShellLayout.init();
+  if (typeof RightPanel !== 'undefined') RightPanel.init();
+  if (typeof SearchSuggest !== 'undefined') SearchSuggest.init();
+  if (typeof Shortcuts !== 'undefined') Shortcuts.init();
+  if (typeof ContextMenu !== 'undefined') ContextMenu.initDragDrop();
   refreshAppDownloadLinks();
 
   if (typeof WebPlayback !== 'undefined') {
     WebPlayback.onChange((st) => {
       if (!st.active) {
+        if (typeof WebMusicVideo !== 'undefined') WebMusicVideo.hideVideoLayer();
         renderPlayerBar();
         return;
       }
       renderWebPlayerBar(st);
+      syncWebPlaybackUi(st);
       if (!document.getElementById('spotify-queue')?.classList.contains('hidden')) {
         renderQueuePanel();
       }
@@ -7711,7 +8682,7 @@ async function init() {
   }).catch(() => {});
 
   refreshCurrentTrack();
-  setInterval(refreshCurrentTrack, 6000);
+  setInterval(() => { if (currentRoute !== 'nowplaying') refreshCurrentTrack(); }, 6000);
   refreshSidebarPlaylists();
   setInterval(refreshSidebarPlaylists, 120000);
   if (!_npGlobalTickTimer) {
@@ -7725,4 +8696,6 @@ async function init() {
 }
 
 window.routes = routes;
+window.renderQueuePanel = renderQueuePanel;
+window.navigate = navigate;
 init();

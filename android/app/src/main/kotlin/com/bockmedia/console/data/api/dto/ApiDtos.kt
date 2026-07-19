@@ -15,12 +15,39 @@ data class OkResponse(
 )
 
 @Serializable
+data class AutomationRunResponse(
+    val ok: Boolean = false,
+    val error: String? = null,
+    val code: String? = null,
+    val count: Int = 0,
+    val device: String? = null,
+    val devices: List<String> = emptyList(),
+    val errors: List<String> = emptyList(),
+)
+
+@Serializable
 data class SummaryResponse(
     val songs: Int = 0,
     val artists: Int = 0,
     val albums: Int = 0,
     val playlists: Int = 0,
     val watchFolders: Int = 0,
+)
+
+@Serializable
+data class SecurityWarningDto(
+    val id: String? = null,
+    val severity: String? = null,
+    val message: String? = null,
+    val action: String? = null,
+)
+
+@Serializable
+data class MusicVideoHealthDto(
+    val cookiesStale: Boolean? = null,
+    val cookiesPresent: Boolean? = null,
+    val verifiedOk: Boolean? = null,
+    val refreshHint: String? = null,
 )
 
 @Serializable
@@ -40,6 +67,10 @@ data class HealthResponse(
     val skillTesting: JsonElement? = null,
     val plexConfigured: Boolean? = null,
     val plexReachable: Boolean? = null,
+    val credentialsConfigured: Boolean? = null,
+    val insecureConfig: Boolean? = null,
+    val securityWarnings: List<SecurityWarningDto>? = null,
+    val musicVideo: MusicVideoHealthDto? = null,
 )
 
 @Serializable
@@ -180,6 +211,7 @@ data class NowPlayingDeviceItem(
     val offset_ms: Long = 0,
     val paused: Boolean = false,
     val shuffle: Boolean = false,
+    val loop: Boolean = false,
     val playlist: String? = null,
     val playlistId: String? = null,
     val sourceLabel: String? = null,
@@ -308,6 +340,7 @@ data class SearchHit(
     val title: String? = null,
     val artist: String? = null,
     val album: String? = null,
+    val genre: String? = null,
     val path: String? = null,
     val tracks: Int? = null,
     val albums: Int? = null,
@@ -343,6 +376,7 @@ data class PlaylistDetailResponse(
     val name: String = "",
     val tracks: List<PlaylistTrack> = emptyList(),
     val total: Int = 0,
+    @SerialName("totalDurationSeconds") val totalDurationSeconds: Int = 0,
     val page: Int = 1,
     val source: String? = null,
     val sourceName: String? = null,
@@ -360,7 +394,8 @@ data class PlaylistTrack(
     val artist: String? = null,
     val album: String? = null,
     val path: String? = null,
-    val duration: Int? = null,
+    @SerialName("duration_seconds") val duration: Int? = null,
+    val year: Int? = null,
 )
 
 @Serializable
@@ -386,6 +421,66 @@ data class ArtistPortraitResponse(
     @SerialName("art_path") val artPath: String? = null,
     val source: String? = null,
     val cached: Boolean = false,
+)
+
+@Serializable
+data class ArtistDetailSimilar(
+    val artist: String = "",
+    val path: String? = null,
+)
+
+@Serializable
+data class ArtistDetailAbout(
+    val firstAdded: String? = null,
+    val topDecade: Int? = null,
+    val topGenres: List<String> = emptyList(),
+)
+
+@Serializable
+data class ArtistDetailAlbum(
+    @SerialName("album") val name: String = "",
+    val artist: String? = null,
+    val path: String? = null,
+    val year: Int? = null,
+    @SerialName("track_count") val tracks: Int = 0,
+    @SerialName("first_seen_at") val firstSeenAt: String? = null,
+) {
+    fun toAlbumItem() = AlbumItem(
+        name = name,
+        artist = artist,
+        tracks = tracks,
+        year = year,
+        artPath = path,
+    )
+}
+
+@Serializable
+data class ArtistDetailTrack(
+    val title: String? = null,
+    val artist: String? = null,
+    val album: String? = null,
+    val path: String? = null,
+    @SerialName("duration_seconds") val durationSeconds: Double? = null,
+    val genre: String? = null,
+    val year: Int? = null,
+    @SerialName("playCount") val playCount: Int = 0,
+    val liked: Boolean = false,
+    val rating: Int = 0,
+)
+
+@Serializable
+data class ArtistDetailResponse(
+    val artist: String = "",
+    val trackCount: Int = 0,
+    val albumCount: Int = 0,
+    val totalPlays: Int = 0,
+    val followed: Boolean = false,
+    val rating: Int = 0,
+    val topTracks: List<ArtistDetailTrack> = emptyList(),
+    val albums: List<ArtistDetailAlbum> = emptyList(),
+    val similarArtists: List<ArtistDetailSimilar> = emptyList(),
+    val appearsOn: List<ArtistDetailAlbum> = emptyList(),
+    val about: ArtistDetailAbout? = null,
 )
 
 @Serializable
@@ -415,6 +510,47 @@ data class AlbumItem(
 
 @Serializable
 data class GenresResponse(val items: List<GenreItem> = emptyList(), val total: Int = 0)
+
+@Serializable
+data class HomeSectionPinDto(
+    val sectionId: String = "",
+    val playlistId: String = "",
+    val playlistName: String = "",
+    val pinnedAtMs: Long = 0,
+)
+
+@Serializable
+data class HomeDefaultsResponse(
+    val version: Int = 1,
+    val savedAt: String? = null,
+    val policy: HomeDefaultsPolicy = HomeDefaultsPolicy(),
+    val sectionPins: List<HomeSectionPinDto> = emptyList(),
+)
+
+@Serializable
+data class HomeDefaultsPolicy(
+    val playlistsScope: String = "household",
+    val playlistLimit: Int = 2000,
+    val genreLimit: Int = 80,
+)
+
+@Serializable
+data class HomeResponse(
+    val history: StreamHistoryResponse? = null,
+    val dashboard: DashboardQuickResponse? = null,
+    val playlists: PlaylistsResponse? = null,
+    val smartPlaylists: SmartPlaylistsResponse? = null,
+    val genres: GenresResponse? = null,
+    val libraryNew: LibraryNewResponse? = null,
+    val followedLibraryNew: LibraryNewResponse? = null,
+    val discoverWeekly: DiscoverWeeklyResponse? = null,
+    val `continue`: ContinueResponse? = null,
+    val analytics: AnalyticsResponse? = null,
+    val ratings: RatingsResponse? = null,
+    val listeningSummary: AnalyticsResponse? = null,
+    val homeDefaults: HomeDefaultsResponse? = null,
+    val recentlyCreatedPlaylists: PlaylistsResponse? = null,
+)
 
 @Serializable
 data class GenreItem(
@@ -479,9 +615,31 @@ data class LyricLine(
 )
 
 @Serializable
+data class MusicVideoRelatedItem(
+    val videoId: String = "",
+    val title: String = "",
+    val artist: String = "",
+    val thumbnail: String? = null,
+)
+
+@Serializable
+data class MusicVideoRelatedResponse(
+    val items: List<MusicVideoRelatedItem> = emptyList(),
+)
+
+@Serializable
 data class MusicVideoResponse(
     val videoId: String? = null,
     val title: String? = null,
+    val streamReady: Boolean? = null,
+    val playUrl: String? = null,
+    val streamReason: String? = null,
+)
+
+data class MusicVideoPrepareResult(
+    val videoId: String?,
+    val playUrl: String?,
+    val error: String?,
 )
 
 @Serializable
@@ -741,9 +899,23 @@ data class AiPlaylistResponse(
 )
 
 @Serializable
+data class ListenAgentResponse(
+    val name: String? = null,
+    val tracks: List<PlaylistTrack> = emptyList(),
+    val trackCount: Int? = null,
+    val shuffle: Boolean? = null,
+    val intent: String? = null,
+    val mode: String? = null,
+    val message: String? = null,
+    val source: String? = null,
+)
+
+@Serializable
 data class MixMuseStatusResponse(
     val configured: Boolean = false,
     val provider: String? = null,
+    val mode: String? = null,
+    val supportsLocal: Boolean = true,
     val supportsOpenAi: Boolean = false,
     val supportsClaude: Boolean = false,
 )
@@ -830,7 +1002,23 @@ data class LibraryNewAlbum(
 )
 
 @Serializable
-data class LibraryNewTrack(val title: String? = null, val artist: String? = null, val album: String? = null, val path: String? = null)
+data class LibraryNewTrack(
+    val title: String? = null,
+    val artist: String? = null,
+    val album: String? = null,
+    val path: String? = null,
+    @SerialName("first_seen_at") val firstSeenAt: String? = null,
+)
+
+@Serializable
+data class FollowedNotificationsResponse(
+    val since: String? = null,
+    val albums: List<LibraryNewAlbum> = emptyList(),
+    val tracks: List<LibraryNewTrack> = emptyList(),
+    @SerialName("unreadCount") val unreadCount: Int = 0,
+    @SerialName("followedCount") val followedCount: Int = 0,
+    @SerialName("followedArtists") val followedArtists: List<String> = emptyList(),
+)
 
 @Serializable
 data class DiscoverWeeklyResponse(

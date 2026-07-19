@@ -15,6 +15,7 @@ _MEMBER_KEYS = frozenset({
     'activeMemberId',
     'searchSelections',
     'homeTileEngagement',
+    'homeSectionPins',
     'lastDevice',
     'pinnedDevices',
     'offlineDownloads',
@@ -24,6 +25,7 @@ _MEMBER_KEYS = frozenset({
     'libraryViewMode',
     'libraryTab',
     'nowPlayingVideo',
+    'followNotificationsLastSeenAt',
 })
 _CLIENT_KEYS = frozenset()
 _DEVICE_PREF_KEYS = frozenset({'lastDevice', 'pinnedDevices'})

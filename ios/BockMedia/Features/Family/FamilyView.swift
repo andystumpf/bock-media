@@ -2,8 +2,10 @@ import SwiftUI
 
 struct FamilyView: View {
     @ObservedObject var appState: AppState
+    @Environment(\.dismiss) private var dismiss
 
-    @State private var household = HouseholdResponse()
+    @State private var storeRevision = HouseholdStore.revision
+    @State private var loadError: String?
     @State private var rooms: [DeviceItem] = []
     @State private var stats: HouseholdAnalytics?
     @State private var messages: [FamilyMessage] = []
@@ -18,6 +20,11 @@ struct FamilyView: View {
     @State private var policyRoom: DeviceItem?
     @State private var pinMember: HouseholdMember?
     @State private var pendingRoomRequests: [(DeviceItem, RoomRequestItem)] = []
+    @State private var profileSyncing = false
+
+    private var household: HouseholdResponse {
+        HouseholdStore.cached ?? HouseholdResponse()
+    }
 
     private var ownerByDevice: [String: String] {
         Dictionary(uniqueKeysWithValues: household.deviceOwners.compactMap { o in
@@ -25,26 +32,53 @@ struct FamilyView: View {
         })
     }
 
+    private var displayedMembers: [HouseholdMember] {
+        household.members
+    }
+
     private var activeMember: HouseholdMember? {
-        household.members.first { $0.id == activeMemberId }
+        displayedMembers.first { $0.id == activeMemberId }
     }
 
     var body: some View {
-        List {
-            actingSection
-            membersSection
-            roomsSection
-            roomRequestsSection
-            statsSection
-            messagesSection
+        ZStack {
+            List {
+                actingSection
+                membersSection
+                roomsSection
+                roomRequestsSection
+                statsSection
+                messagesSection
+            }
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .bockBackground()
+            .id(storeRevision)
+
+            if loading && displayedMembers.isEmpty {
+                LoadingBox()
+            }
+            if profileSyncing {
+                LoadingBox()
+                    .background(Color.black.opacity(0.35).ignoresSafeArea())
+            }
         }
-        .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
-        .bockBackground()
+        .accessibilityIdentifier(BockTestTags.familyBody)
         .navigationTitle("Family")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Done") { dismiss() }
+            }
+        }
         .refreshable { await load() }
         .task { await load() }
+        .onReceive(NotificationCenter.default.publisher(for: HouseholdStore.changedNotification)) { _ in
+            storeRevision = HouseholdStore.revision
+        }
+        .onChange(of: appState.profileChangeRevision) { _, _ in
+            activeMemberId = ActiveProfileStore.activeMemberId() ?? ""
+        }
         .sheet(item: $policyRoom) { room in
             RoomPolicySheet(appState: appState, room: room, actingMemberId: activeMemberId) {
                 policyRoom = nil
@@ -64,32 +98,46 @@ struct FamilyView: View {
         Section {
             Picker("Acting as", selection: $activeMemberId) {
                 Text("Unattributed").tag("")
-                ForEach(household.members) { m in
+                ForEach(displayedMembers) { m in
                     Text(m.name).tag(m.id)
                 }
             }
-            .onChange(of: activeMemberId) { _, newValue in
-                ActiveProfileStore.setActiveMember(newValue.isEmpty ? nil : newValue)
+            .onChange(of: activeMemberId) { oldValue, newValue in
+                let stored = ActiveProfileStore.activeMemberId() ?? ""
+                guard newValue != stored else { return }
+                let previous = oldValue.isEmpty ? stored : oldValue
                 Task {
+                    profileSyncing = true
+                    defer { profileSyncing = false }
                     await ClientPrefsSync.onActiveMemberChanged(
                         repository: appState.repository,
-                        memberId: newValue.isEmpty ? nil : newValue
+                        memberId: newValue.isEmpty ? nil : newValue,
+                        previousMemberId: previous.isEmpty ? nil : previous
                     )
                     await loadMessages()
                 }
             }
         } footer: {
-            Text("Attributes your plays and is used when sending messages, sharing playlists, and approving requests.")
+            if displayedMembers.isEmpty, let loadError {
+                Text(loadError)
+            } else {
+                Text("Attributes your plays and is used when sending messages, sharing playlists, and approving requests.")
+            }
         }
     }
 
     private var membersSection: some View {
         Section("Members") {
-            if household.members.isEmpty {
+            if let loadError, displayedMembers.isEmpty {
+                Text(loadError)
+                    .font(.caption)
+                    .foregroundStyle(BockColors.muted)
+                Button("Retry") { Task { await load() } }
+            } else if displayedMembers.isEmpty {
                 Text("No members yet. Add the people in your household.")
                     .font(.caption).foregroundStyle(BockColors.muted)
             }
-            ForEach(household.members) { m in
+            ForEach(displayedMembers) { m in
                 HStack {
                     MemberBadge(member: m)
                     Spacer()
@@ -132,7 +180,7 @@ struct FamilyView: View {
                     HStack {
                         Picker("Owner", selection: ownerBinding(for: room)) {
                             Text("Unattributed").tag("")
-                            ForEach(household.members) { m in
+                            ForEach(displayedMembers) { m in
                                 Text(m.name).tag(m.id)
                             }
                         }
@@ -213,7 +261,7 @@ struct FamilyView: View {
             HStack {
                 Picker("", selection: $messageTo) {
                     Text("Everyone").tag("")
-                    ForEach(household.members) { m in Text(m.name).tag(m.id) }
+                    ForEach(displayedMembers) { m in Text(m.name).tag(m.id) }
                 }
                 .labelsHidden()
                 TextField("Say something…", text: $messageText)
@@ -251,7 +299,13 @@ struct FamilyView: View {
     private func load() async {
         loading = true
         defer { loading = false }
-        household = (try? await appState.repository.household()) ?? HouseholdResponse()
+        let fresh = await HouseholdStore.refresh(repository: appState.repository, force: true)
+        storeRevision = HouseholdStore.revision
+        if fresh.members.isEmpty {
+            loadError = HouseholdStore.lastLoadError ?? "No household members returned from server."
+        } else {
+            loadError = nil
+        }
         let all = (try? await appState.repository.devices()) ?? []
         rooms = all.filter { !$0.deviceId.hasPrefix("client-") }
         stats = try? await appState.repository.householdAnalytics()
@@ -311,8 +365,17 @@ struct FamilyView: View {
 
     private func removeMember(_ m: HouseholdMember) async {
         do {
+            let wasActive = activeMemberId == m.id
+            let previous = wasActive ? m.id : nil
             try await appState.repository.deleteMember(id: m.id)
-            if activeMemberId == m.id { activeMemberId = ""; ActiveProfileStore.setActiveMember(nil) }
+            if wasActive {
+                activeMemberId = ""
+                await ClientPrefsSync.onActiveMemberChanged(
+                    repository: appState.repository,
+                    memberId: nil,
+                    previousMemberId: previous
+                )
+            }
             await load()
         } catch { appState.toast = "Couldn't remove" }
     }
@@ -320,7 +383,8 @@ struct FamilyView: View {
     private func setOwner(_ room: DeviceItem, _ memberId: String) async {
         do {
             try await appState.repository.setDeviceOwner(deviceId: room.deviceId, memberId: memberId.isEmpty ? nil : memberId)
-            household = (try? await appState.repository.household()) ?? household
+            _ = await HouseholdStore.refresh(repository: appState.repository)
+            storeRevision = HouseholdStore.revision
         } catch { appState.toast = "Couldn't set owner" }
     }
 
@@ -350,7 +414,9 @@ private struct MemberBadge: View {
                 .fill(color)
                 .frame(width: 24, height: 24)
                 .overlay(Text(initial).font(.caption).bold().foregroundStyle(.white))
-            Text(member.name).foregroundStyle(BockColors.onSurface)
+            Text(member.name)
+                .foregroundStyle(BockColors.onSurface)
+                .accessibilityIdentifier("family-member-\(member.id)")
             if member.isParent {
                 Image(systemName: "person.badge.shield.checkmark")
                     .font(.caption2).foregroundStyle(BockColors.muted)

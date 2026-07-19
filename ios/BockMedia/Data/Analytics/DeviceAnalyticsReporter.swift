@@ -9,12 +9,21 @@ enum DeviceAnalyticsReporter {
         post(repository: repository, event: "connect") { _ in }
     }
 
-    static func reportPlay(repository: BockMediaRepository, track: LocalTrack) {
+    static func reportPlay(
+        repository: BockMediaRepository,
+        track: LocalTrack,
+        playlist: String? = nil,
+        playlistId: String? = nil,
+        sourceLabel: String? = nil
+    ) {
         post(repository: repository, event: "play") { body in
             body["track"] = track.title
             if let artist = track.artist { body["artist"] = artist }
             if let album = track.album { body["album"] = album }
             body["filepath"] = track.path
+            if let playlist { body["playlist"] = playlist }
+            if let playlistId { body["playlistId"] = playlistId }
+            if let sourceLabel { body["sourceLabel"] = sourceLabel }
         }
         reportPlayback(
             repository: repository,
@@ -22,7 +31,10 @@ enum DeviceAnalyticsReporter {
             playing: true,
             offsetMs: 0,
             durationMs: 0,
-            force: true
+            force: true,
+            playlist: playlist,
+            playlistId: playlistId,
+            sourceLabel: sourceLabel
         )
     }
 
@@ -32,7 +44,10 @@ enum DeviceAnalyticsReporter {
         playing: Bool,
         offsetMs: Int64,
         durationMs: Int64,
-        force: Bool = false
+        force: Bool = false,
+        playlist: String? = nil,
+        playlistId: String? = nil,
+        sourceLabel: String? = nil
     ) {
         let now = Int64(Date().timeIntervalSince1970 * 1000)
         if !force, now - lastPlaybackReportMs < playbackThrottleMs { return }
@@ -46,6 +61,9 @@ enum DeviceAnalyticsReporter {
             body["paused"] = !playing
             body["offset_ms"] = offsetMs
             body["duration_ms"] = durationMs
+            if let playlist { body["playlist"] = playlist }
+            if let playlistId { body["playlistId"] = playlistId }
+            if let sourceLabel { body["sourceLabel"] = sourceLabel }
         }
     }
 

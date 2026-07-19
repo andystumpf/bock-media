@@ -45,7 +45,7 @@ enum HomeTileEngagement {
             map[cardId] = TileEngagementEntry(firstSeenMs: now, lastSelectedMs: now)
         }
         save(map)
-        ClientPrefsSync.schedulePush()
+        Task { @MainActor in ClientPrefsSync.schedulePush() }
     }
 
     static func exportJson() -> String? {
@@ -123,7 +123,9 @@ enum HomeTileRotation {
 
     private static func isRotatable(_ kind: HomeSectionKind) -> Bool {
         switch kind {
-        case .favorites, .offline: return false
+        // browseGenres is a genre directory — rotation would swap genre tiles
+        // for unrelated playlists.
+        case .favorites, .offline, .decade, .browseGenres: return false
         default: return true
         }
     }
@@ -166,6 +168,7 @@ enum HomeTileRotation {
         case .radio: return "From your library"
         case .discover: return "\(playlist.tracks) tracks · Discover"
         case .recentPlaylists: return "\(playlist.tracks) tracks · Suggested for you"
+        case .recentlyCreated: return "\(playlist.tracks) tracks · Recently created"
         default: return "\(playlist.tracks) tracks"
         }
     }

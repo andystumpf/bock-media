@@ -30,14 +30,21 @@ fun AddToPlaylistSheet(
     val scope = rememberCoroutineScope()
     var playlists by remember { mutableStateOf<List<PlaylistSummary>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
+    var search by remember { mutableStateOf("") }
     var showNew by remember { mutableStateOf(false) }
     var newName by remember { mutableStateOf("") }
     var saving by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         loading = true
-        runCatching { playlists = repository.playlists(limit = 300).items }
+        runCatching { playlists = repository.playlists(limit = 500).items }
         loading = false
+    }
+
+    val filtered = remember(playlists, search) {
+        val q = search.trim()
+        if (q.isEmpty()) playlists
+        else playlists.filter { it.name.contains(q, ignoreCase = true) }
     }
 
     ModalBottomSheet(
@@ -98,32 +105,56 @@ fun AddToPlaylistSheet(
                     modifier = Modifier.clickable { showNew = true },
                 )
             }
+            SearchField(search, { search = it }, "Search playlists", modifier = Modifier.padding(vertical = 8.dp))
             if (loading) {
                 Box(Modifier.fillMaxWidth().height(120.dp), contentAlignment = Alignment.Center) {
                     BockProgressIndicator()
                 }
             } else {
-                playlists.forEach { pl ->
-                    ListItem(
-                        headlineContent = { Text(pl.name, color = Color.White) },
-                        supportingContent = {
+                Text(
+                    "${filtered.size} playlist${if (filtered.size == 1) "" else "s"}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.White.copy(alpha = 0.55f),
+                    modifier = Modifier.padding(bottom = 4.dp),
+                )
+                BockLazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 360.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    if (filtered.isEmpty()) {
+                        item {
                             Text(
-                                "${pl.tracks} tracks",
+                                "No playlists match",
                                 color = Color.White.copy(alpha = 0.55f),
+                                modifier = Modifier.padding(12.dp),
                             )
-                        },
-                        modifier = Modifier.clickable(enabled = !saving) {
-                            scope.launch {
-                                saving = true
-                                runCatching {
-                                    repository.addPlaylistTrack(pl.id, trackPath)
-                                    onAdded("Added to \"${pl.name}\"")
-                                    onDismiss()
-                                }
-                                saving = false
-                            }
-                        },
-                    )
+                        }
+                    } else {
+                        items(filtered, key = { it.id }) { pl ->
+                            ListItem(
+                                headlineContent = { Text(pl.name, color = Color.White) },
+                                supportingContent = {
+                                    Text(
+                                        "${pl.tracks} tracks",
+                                        color = Color.White.copy(alpha = 0.55f),
+                                    )
+                                },
+                                modifier = Modifier.clickable(enabled = !saving) {
+                                    scope.launch {
+                                        saving = true
+                                        runCatching {
+                                            repository.addPlaylistTrack(pl.id, trackPath)
+                                            onAdded("Added to \"${pl.name}\"")
+                                            onDismiss()
+                                        }
+                                        saving = false
+                                    }
+                                },
+                            )
+                        }
+                    }
                 }
             }
         }

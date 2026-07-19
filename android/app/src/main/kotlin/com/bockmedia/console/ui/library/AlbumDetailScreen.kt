@@ -16,6 +16,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import com.bockmedia.console.ui.testing.BockTestTags
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -50,8 +52,23 @@ import com.bockmedia.console.ui.discovery.DiscoverySeed
 import com.bockmedia.console.ui.discovery.DiscoverySeedKind
 import com.bockmedia.console.ui.discovery.MixMuseDialog
 import com.bockmedia.console.ui.discovery.runResonanceMix
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Link
+import com.bockmedia.console.data.api.dto.PlaylistTrack
+import com.bockmedia.console.domain.model.ArtistDetailRules
+import com.bockmedia.console.ui.components.DetailShareSheet
+import com.bockmedia.console.ui.components.PlayDownloadActions
+import com.bockmedia.console.ui.discovery.playDiscoveryTracksLocally
 import com.bockmedia.console.ui.discovery.runResonanceRadio
 import com.bockmedia.console.ui.theme.BockGold
+import com.bockmedia.console.local.DownloadState
+import com.bockmedia.console.local.OfflineDownloadManager
 import android.app.Activity
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.platform.LocalView
@@ -80,6 +97,15 @@ fun AlbumDetailScreen(
     var showDiscovery by remember { mutableStateOf(false) }
     var showMixMuse by remember { mutableStateOf(false) }
     var showMore by remember { mutableStateOf(false) }
+    var showShare by remember { mutableStateOf(false) }
+
+    val listState = rememberLazyListState()
+    val showStickyHeader by remember {
+        derivedStateOf {
+            listState.firstVisibleItemIndex > 1 ||
+                (listState.firstVisibleItemIndex == 1 && listState.firstVisibleItemScrollOffset > 120)
+        }
+    }
     var addToPlaylist by remember { mutableStateOf<Pair<String, String>?>(null) }
     var trackMenu by remember { mutableStateOf<SongItem?>(null) }
     var addToRoom by remember { mutableStateOf<Triple<String, String, String?>?>(null) }
@@ -97,6 +123,9 @@ fun AlbumDetailScreen(
         )
     }
     val artistName = artistFilter ?: tracks.firstOrNull()?.artist ?: albumMeta?.artist
+    val isCompilation = remember(albumName, artistName) {
+        ArtistDetailRules.isCompilationAlbumName(albumName, artistName)
+    }
     val year = albumMeta?.year ?: tracks.firstNotNullOfOrNull { it.year }
     val artPath = albumMeta?.artPath ?: tracks.firstNotNullOfOrNull { it.path }
     val artUrl = rememberArtworkUrl(
@@ -199,7 +228,20 @@ fun AlbumDetailScreen(
         )
     }
 
-    Box(Modifier.fillMaxSize()) {
+    if (showShare) {
+        DetailShareSheet(
+            title = albumName,
+            deepLink = "bockmedia://album/${java.net.URLEncoder.encode(albumName, "UTF-8")}",
+            repository = repository,
+            remoteOk = remoteOk,
+            onAddToPlaylist = { showShare = false },
+            onAddToRoom = { showShare = false },
+            onDismiss = { showShare = false },
+            onCopied = { msg -> scope.launch { snackbarHostState?.showSnackbar(msg) } },
+        )
+    }
+
+    Box(Modifier.fillMaxSize().testTag(BockTestTags.ALBUM_DETAIL_BODY)) {
         ArtBackdrop(artUrl = artUrl)
         Column(Modifier.fillMaxSize()) {
             AlbumInlineTopBar(title = albumName, onBack = onBack)
@@ -211,8 +253,12 @@ fun AlbumDetailScreen(
             AlbumHeroHeader(
                 artistName = artistName,
                 year = year,
+                trackCount = totalTracks,
+                totalSeconds = totalSeconds,
                 artUrl = artUrl,
                 albumName = albumName,
+                playTarget = playTarget,
+                remoteOk = remoteOk,
                 onPlayAlbum = { onPlay(playTarget) },
                 onShuffle = { onPlay(PlayTarget.Album(albumName, artistFilter, shuffle = true)) },
                 onRadio = { showDiscovery = true },
@@ -224,7 +270,7 @@ fun AlbumDetailScreen(
                 color = Color.White.copy(alpha = 0.12f),
             )
 
-            BockLazyColumn(Modifier.weight(1f)) {
+            BockLazyColumn(Modifier.weight(1f), state = listState) {
                 discGroups.forEach { disc ->
                     val summaryTracks = if (discGroups.size == 1) totalTracks else disc.tracks.size
                     val summarySeconds = if (discGroups.size == 1) totalSeconds else disc.tracks.sumOf { it.duration ?: 0 }
@@ -233,16 +279,39 @@ fun AlbumDetailScreen(
                             discNumber = disc.number,
                             trackCount = summaryTracks,
                             totalSeconds = summarySeconds,
-                            onPlayDisc = { onPlay(playTarget) },
+                            onPlayDisc = {
+                                scope.launch {
+                                    repository.playDiscoveryTracksLocally(
+                                        context = context,
+                                        tracks = disc.tracks.map { t ->
+                                            PlaylistTrack(
+                                                path = t.path,
+                                                title = t.title,
+                                                artist = t.artist,
+                                                album = t.album,
+                                            )
+                                        },
+                                        title = "$albumName · Disc ${disc.number}",
+                                        shuffle = false,
+                                        activeTarget = playTarget,
+                                    )
+                                }
+                            },
                         )
                     }
                     itemsIndexed(disc.tracks, key = { idx, track ->
                         track.path ?: "${disc.number}-$idx-${track.title}"
                     }) { index, track ->
+                        val offlineComplete = track.path?.let { path ->
+                            OfflineDownloadManager.statusFor(context, PlayTarget.Song(path, track.title ?: ""))
+                                ?.state == DownloadState.Complete
+                        } == true
                         AlbumTrackRow(
                             track = track,
                             displayNumber = track.trackNumber ?: (index + 1),
                             isHot = track.title?.trim()?.lowercase() in hotTrackTitles,
+                            showArtist = isCompilation,
+                            offlineComplete = offlineComplete,
                             onClick = {
                                 track.path?.let { path ->
                                     onPlay(PlayTarget.Song(path, track.title ?: ""))
@@ -262,6 +331,18 @@ fun AlbumDetailScreen(
                     }
                 }
             }
+        }
+        AnimatedVisibility(
+            visible = showStickyHeader,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier.align(Alignment.TopCenter),
+        ) {
+            AlbumStickyMiniHeader(
+                title = albumName,
+                onBack = onBack,
+                onPlay = { onPlay(playTarget) },
+            )
         }
     }
 
@@ -309,6 +390,14 @@ fun AlbumDetailScreen(
             ),
             repository = repository,
             actions = listOf(
+                PlexampSheetAction("Share…", Icons.Default.Link, onClick = {
+                    showMore = false
+                    showShare = true
+                }),
+                PlexampSheetAction("Download album", Icons.Default.Download, onClick = {
+                    scope.launch { OfflineDownloadManager.download(context, playTarget) }
+                    showMore = false
+                }),
                 PlexampSheetAction("Resonance radio", Icons.Outlined.GraphicEq, onClick = { showDiscovery = true }),
                 PlexampSheetAction("Mix Muse playlist…", Icons.Default.AutoAwesome, onClick = { showMixMuse = true }),
             ),
@@ -321,8 +410,12 @@ fun AlbumDetailScreen(
 private fun AlbumHeroHeader(
     artistName: String?,
     year: Int?,
+    trackCount: Int,
+    totalSeconds: Int,
     artUrl: String?,
     albumName: String,
+    playTarget: PlayTarget.Album,
+    remoteOk: Boolean,
     onPlayAlbum: () -> Unit,
     onShuffle: () -> Unit,
     onRadio: () -> Unit,
@@ -363,18 +456,21 @@ private fun AlbumHeroHeader(
                     modifier = Modifier.padding(top = 2.dp),
                 )
             }
-            Spacer(Modifier.height(14.dp))
-            FilledIconButton(
-                onClick = onPlayAlbum,
-                modifier = Modifier.size(52.dp),
-                shape = CircleShape,
-                colors = IconButtonDefaults.filledIconButtonColors(
-                    containerColor = Color.White.copy(alpha = 0.18f),
-                    contentColor = Color.White,
-                ),
-            ) {
-                Icon(Icons.Default.PlayArrow, contentDescription = "Play album", modifier = Modifier.size(28.dp))
+            if (trackCount > 0) {
+                Text(
+                    formatAlbumSummary(trackCount, totalSeconds),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White.copy(alpha = 0.55f),
+                    modifier = Modifier.padding(top = 4.dp),
+                )
             }
+            Spacer(Modifier.height(14.dp))
+            PlayDownloadActions(
+                playTarget = playTarget,
+                remoteOk = remoteOk,
+                onPlay = onPlayAlbum,
+                showDownload = true,
+            )
             Spacer(Modifier.height(4.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onShuffle) {
@@ -386,6 +482,24 @@ private fun AlbumHeroHeader(
                 IconButton(onClick = onMore) {
                     Icon(Icons.Default.MoreVert, contentDescription = "More", tint = Color.White)
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AlbumStickyMiniHeader(title: String, onBack: () -> Unit, onPlay: () -> Unit) {
+    Surface(color = Color.Black.copy(alpha = 0.92f)) {
+        Row(
+            Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 4.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
+            }
+            Text(title, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            IconButton(onClick = onPlay) {
+                Icon(Icons.Default.PlayArrow, contentDescription = "Play", tint = com.bockmedia.console.ui.theme.BockGreen)
             }
         }
     }
@@ -433,6 +547,8 @@ private fun AlbumTrackRow(
     track: SongItem,
     displayNumber: Int,
     isHot: Boolean,
+    showArtist: Boolean = false,
+    offlineComplete: Boolean = false,
     onClick: () -> Unit,
     onMenu: () -> Unit,
 ) {
@@ -441,7 +557,7 @@ private fun AlbumTrackRow(
             .fillMaxWidth()
             .clickable(onClick = onClick)
             .padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
-        verticalAlignment = Alignment.Top,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         if (isHot) {
             Icon(
@@ -469,13 +585,25 @@ private fun AlbumTrackRow(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
-            track.duration?.let { dur ->
+            if (showArtist && !track.artist.isNullOrBlank()) {
                 Text(
-                    formatTrackDuration(dur),
+                    track.artist!!,
                     style = MaterialTheme.typography.bodySmall,
                     color = Color.White.copy(alpha = 0.55f),
+                    maxLines = 1,
                 )
             }
+        }
+        track.duration?.takeIf { it > 0 }?.let { dur ->
+            Text(
+                formatTrackDuration(dur),
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.White.copy(alpha = 0.45f),
+                modifier = Modifier.padding(end = 4.dp),
+            )
+        }
+        if (offlineComplete) {
+            Text("✓", color = com.bockmedia.console.ui.theme.BockGreen, modifier = Modifier.padding(end = 4.dp))
         }
         IconButton(onClick = onMenu) {
             Icon(Icons.Default.MoreVert, contentDescription = "Track options", tint = Color.White.copy(alpha = 0.7f))

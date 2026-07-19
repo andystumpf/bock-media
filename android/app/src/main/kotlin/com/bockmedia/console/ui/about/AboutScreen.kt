@@ -18,6 +18,8 @@ import com.bockmedia.console.BuildConfig
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.ui.components.LoadingBox
 import com.bockmedia.console.ui.components.bockVerticalScroll
+import androidx.compose.ui.platform.testTag
+import com.bockmedia.console.ui.testing.BockTestTags
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
@@ -42,6 +44,7 @@ fun AboutScreen(repository: BockMediaRepository) {
     Column(
         Modifier
             .fillMaxSize()
+            .testTag(BockTestTags.ABOUT_BODY)
             .bockVerticalScroll()
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -147,6 +150,6 @@ private fun applyAboutConfig(
 }
 
 object AboutLinks {
-    const val GITHUB_PUBLIC = "https://github.com/andystumpf/ourMedia"
-    const val GITHUB_PRIVATE = "https://github.com/andystumpf/ourMedia"
+    const val GITHUB_PUBLIC = "https://github.com/andystumpf/bock-media"
+    const val GITHUB_PRIVATE = "https://github.com/andystumpf/bock-media"
 }

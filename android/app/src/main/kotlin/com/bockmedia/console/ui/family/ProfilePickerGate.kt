@@ -9,11 +9,14 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import com.bockmedia.console.ui.testing.BockTestTags
 import com.bockmedia.console.data.api.dto.HouseholdMember
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.local.ActiveProfileStore
 import com.bockmedia.console.local.ClientPrefsSync
+import com.bockmedia.console.local.HouseholdStore
 import kotlinx.coroutines.launch
 
 /** Blocks until the user picks a household profile or explicitly continues unattributed. */
@@ -27,9 +30,15 @@ fun ProfilePickerGate(
     var members by remember { mutableStateOf<List<HouseholdMember>?>(null) }
     var loading by remember { mutableStateOf(false) }
     val choiceMade by ActiveProfileStore.profileChoiceMadeState.collectAsState()
+    val householdRevision by HouseholdStore.revision.collectAsState()
 
-    LaunchedEffect(choiceMade) {
-        if (choiceMade || members != null) return@LaunchedEffect
+    LaunchedEffect(choiceMade, householdRevision) {
+        if (choiceMade) return@LaunchedEffect
+        val cached = HouseholdStore.members()
+        if (cached.isNotEmpty()) {
+            members = cached
+            return@LaunchedEffect
+        }
         members = runCatching { repository.household().members }.getOrDefault(emptyList())
     }
 
@@ -48,6 +57,7 @@ fun ProfilePickerGate(
         else -> {
             AlertDialog(
                 onDismissRequest = {},
+                modifier = Modifier.testTag(BockTestTags.PROFILE_PICKER),
                 title = { Text("Who's listening?") },
                 text = {
                     Column(Modifier.fillMaxWidth()) {

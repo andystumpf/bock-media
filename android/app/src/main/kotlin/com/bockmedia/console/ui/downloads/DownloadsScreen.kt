@@ -35,6 +35,8 @@ import com.bockmedia.console.BockMediaApp
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.ui.components.BockLazyColumn
 import com.bockmedia.console.ui.components.TabScreenHeader
+import androidx.compose.ui.platform.testTag
+import com.bockmedia.console.ui.testing.BockTestTags
 import kotlinx.coroutines.launch
 
 private val SpotifySheetBg = Color(0xFF121212)
@@ -135,7 +137,7 @@ fun DownloadsManagementSection(
         return
     }
 
-    Column(modifier) {
+    Column(modifier.then(if (!embedded) Modifier.testTag(BockTestTags.DOWNLOADS_LIST) else Modifier)) {
         if (!embedded) {
             TabScreenHeader("Downloads")
         }

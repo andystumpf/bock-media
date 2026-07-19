@@ -6,31 +6,60 @@ struct MainTabView: View {
     @State private var selectedTab = 0
     @State private var accountRoute: AccountRoute?
     @State private var showNowPlaying = false
+    @State private var showListenAgent = false
 
     var body: some View {
-        TabView(selection: $selectedTab) {
-            tabShell { HomeView(appState: appState, accountRoute: $accountRoute) }
-                .tabItem { Label("Home", icon: .home) }
-                .tag(0)
-
-            tabShell(showAccount: true) { SearchView(appState: appState) }
-                .tabItem { Label("Search", icon: .search) }
-                .tag(1)
-
-            tabShell(showAccount: true) { LibraryView(appState: appState) }
-                .tabItem { Label("Library", icon: .libraryMusic) }
-                .tag(2)
-
-            tabShell(showAccount: true) { AutomationsView(appState: appState) }
-                .tabItem { Label("Automations", icon: .schedule) }
-                .tag(3)
+        VisibleDownloadStatusesProvider(appState: appState) {
+            tabContent
         }
-        .tint(BockColors.green)
+    }
+
+    private var tabContent: some View {
+        Group {
+            switch selectedTab {
+            case 0:
+                tabShell(showAccount: false) {
+                    HomeView(
+                        appState: appState,
+                        accountRoute: $accountRoute,
+                        onOpenListenAgent: { showListenAgent = true }
+                    )
+                }
+            case 1:
+                tabShell(showAccount: true) { SearchView(appState: appState) }
+            case 2:
+                tabShell(showAccount: true) { LibraryView(appState: appState) }
+            case 3:
+                tabShell(showAccount: false) { DownloadsView(appState: appState, embeddedInTab: true) }
+            case 4:
+                tabShell(showAccount: true) { AutomationsView(appState: appState) }
+            default:
+                EmptyView()
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(BockColors.black)
-        .sheet(isPresented: $showNowPlaying) {
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                MiniNowPlayingBar(
+                    appState: appState,
+                    model: miniModel,
+                    onOpen: { showNowPlaying = true },
+                    onControl: { dev, action in
+                        await miniControl(dev: dev, action: action)
+                    }
+                )
+                BockBottomNavBar(selectedTab: $selectedTab)
+            }
+            .background(BockColors.surfaceVariant.ignoresSafeArea(edges: .bottom))
+        }
+        .fullScreenCover(isPresented: $showNowPlaying) {
             NavigationStack {
                 NowPlayingView(appState: appState)
             }
+        }
+        .fullScreenCover(isPresented: $showListenAgent) {
+            ListenAgentView(appState: appState)
         }
         .sheet(item: $accountRoute) { route in
             NavigationStack {
@@ -49,7 +78,7 @@ struct MainTabView: View {
                     .padding(.vertical, 10)
                     .background(.ultraThinMaterial)
                     .clipShape(Capsule())
-                    .padding(.bottom, miniModel.device != nil ? 112 : 72)
+                    .padding(.bottom, miniModel.device != nil ? 88 : 56)
                     .onAppear {
                         DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                             if appState.toast == toast { appState.toast = nil }
@@ -58,9 +87,37 @@ struct MainTabView: View {
             }
         }
         .onAppear {
-            OfflineDownloadManager.shared.refresh()
+            Task.detached(priority: .utility) {
+                await OfflineDownloadManager.shared.refresh()
+            }
             miniModel.start(repository: appState.repository, remoteOk: appState.remoteOk)
             Task { await processPendingControls() }
+            UITestSupport.applyLaunchOverrides(appState: appState)
+            if UITestSupport.isEnabled, ProcessInfo.processInfo.arguments.contains("-NowPlayingPreview") {
+                LocalPlaybackController.shared.installUITestPreviewIfNeeded(force: true)
+                if ProcessInfo.processInfo.arguments.contains("-NowPlayingVideoPreview") {
+                    appState.preferences.nowPlayingVideo = true
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    showNowPlaying = true
+                }
+            }
+        }
+        .onChange(of: appState.uitestSelectedTab) { _, tab in
+            if let tab {
+                selectedTab = tab
+                appState.uitestSelectedTab = nil
+            }
+        }
+        .onChange(of: appState.uitestResetGeneration) { _, _ in
+            accountRoute = nil
+            selectedTab = 0
+        }
+        .onChange(of: appState.pendingPlayTarget) { _, target in
+            if target != nil {
+                accountRoute = nil
+                showNowPlaying = false
+            }
         }
         .onDisappear { miniModel.stop() }
         .onChange(of: appState.playbackFocusGeneration) { _, _ in
@@ -179,7 +236,10 @@ struct MainTabView: View {
     }
 
     @ViewBuilder
-    private func tabShell<Content: View>(showAccount: Bool = false, @ViewBuilder content: () -> Content) -> some View {
+    private func tabShell<Content: View>(
+        showAccount: Bool = false,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
         NavigationStack {
             content()
                 .bockBackground()
@@ -192,7 +252,11 @@ struct MainTabView: View {
                     case .managePlaylists:
                         ManagePlaylistsView(appState: appState)
                     case .playlistDetail(let id):
-                        PlaylistDetailView(appState: appState, playlistId: id)
+                        PlaylistDetailView(
+                            appState: appState,
+                            playlistId: id,
+                            suggestHomePin: appState.suggestHomePinPlaylistId == id
+                        )
                     case .artists:
                         ArtistsView(appState: appState)
                     case .albums(let artist):
@@ -209,26 +273,24 @@ struct MainTabView: View {
                         ArtistDetailView(appState: appState, artistName: name)
                     case .album(let name, let artist):
                         AlbumDetailView(appState: appState, albumName: name, artist: artist)
+                    case .releaseRadar:
+                        ReleaseRadarView(appState: appState)
+                    case .sonicAdventure:
+                        SearchSonicAdventureView(appState: appState)
                     }
                 }
                 .toolbar {
                     if showAccount {
                         ToolbarItem(placement: .topBarTrailing) {
-                            AccountMenuButton(route: $accountRoute)
+                            HStack(spacing: 4) {
+                                ListenAgentMicButton { showListenAgent = true }
+                                AccountMenuButton(route: $accountRoute)
+                            }
                         }
                     }
                 }
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            MiniNowPlayingBar(
-                appState: appState,
-                model: miniModel,
-                onOpen: { showNowPlaying = true },
-                onControl: { dev, action in
-                    await miniControl(dev: dev, action: action)
-                }
-            )
-        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func miniControl(dev: NowPlayingDeviceItem, action: String) async {

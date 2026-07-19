@@ -68,10 +68,11 @@ test('genres route renders live genre cards', async () => {
   assert.match(html, /library-filter/);
 });
 
-test('playlists route still renders list shell', async () => {
+test('playlists route renders card grid with playlists', async () => {
   const { window, document } = bootstrap({ fetchImpl: plFetch });
   await window.routes.playlists('');
   const html = document.getElementById('main-content').innerHTML;
-  assert.match(html, /Morning|Playlists/i);
-  assert.match(html, /pl-row-art/);
+  assert.match(html, /Morning Mix/);
+  assert.match(html, /library-playlist-grid/);
+  assert.match(html, /spotify-card/);
 });

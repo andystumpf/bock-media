@@ -19,7 +19,7 @@ object BockUiHarness {
 
     fun AndroidComposeTestRule<ActivityScenarioRule<MainActivity>, MainActivity>.mainShellVisible(): Boolean {
         if (hasTag(BockTestTags.BOTTOM_NAV)) return true
-        if (greetingTexts.any { hasText(it) }) return true
+        if (hasTag(BockTestTags.HOME_GREETING)) return true
         return runCatching {
             onAllNodesWithText("Home").fetchSemanticsNodes().isNotEmpty()
         }.getOrDefault(false)
@@ -34,33 +34,58 @@ object BockUiHarness {
     fun AndroidComposeTestRule<ActivityScenarioRule<MainActivity>, MainActivity>.assumeMainAppReady(
         timeoutMs: Long = 30_000,
     ) {
-        waitUntil(timeoutMs) { mainShellVisible() }
-        val onSetup = runCatching {
-            onNodeWithText("Sign in to your server").assertExists()
-            true
-        }.getOrDefault(false)
+        val deadline = SystemClock.elapsedRealtime() + timeoutMs
+        while (SystemClock.elapsedRealtime() < deadline) {
+            dismissProfilePickerIfNeeded()
+            if (!hasTag(BockTestTags.SPLASH)) {
+                val onSetup = hasTag(BockTestTags.SETUP_SCREEN) || hasText("Sign in to your server")
+                Assume.assumeFalse(
+                    "Complete server setup on device (Sign in) before running instrumented tests",
+                    onSetup,
+                )
+                if (mainShellVisible()) {
+                    waitForIdle()
+                    return
+                }
+            }
+            Thread.sleep(100)
+        }
+        dismissProfilePickerIfNeeded()
+        waitUntil(5_000) { !hasTag(BockTestTags.SPLASH) }
         Assume.assumeFalse(
-            "Complete server setup on device (Sign in) before running perf audits",
-            onSetup,
+            "Complete server setup on device (Sign in) before running instrumented tests",
+            hasTag(BockTestTags.SETUP_SCREEN) || hasText("Sign in to your server"),
         )
+        waitUntil(5_000) { mainShellVisible() }
+        waitForIdle()
+    }
+
+    private fun AndroidComposeTestRule<ActivityScenarioRule<MainActivity>, MainActivity>.dismissProfilePickerIfNeeded() {
+        if (!hasTag(BockTestTags.PROFILE_PICKER) && !hasText("Who's listening?")) return
+        runCatching { onNodeWithText("Continue unattributed").performClick() }
+            .onFailure {
+                runCatching {
+                    onAllNodesWithText("Parent").fetchSemanticsNodes().firstOrNull()
+                    onNodeWithText("Parent").performClick()
+                }
+            }
         waitForIdle()
     }
 
     fun AndroidComposeTestRule<ActivityScenarioRule<MainActivity>, MainActivity>.tapBottomNav(
         tag: String,
     ) {
+        val label = when (tag) {
+            BockTestTags.NAV_HOME -> "Home"
+            BockTestTags.NAV_SEARCH -> "Search"
+            BockTestTags.NAV_LIBRARY -> "Library"
+            BockTestTags.NAV_DOWNLOADS -> "Downloads"
+            BockTestTags.NAV_AUTOMATIONS -> "Automations"
+            else -> error("Unknown nav tag: $tag")
+        }
+        waitUntil(15_000) { hasTag(tag) || hasText(label) }
         runCatching { onNodeWithTag(tag).performClick() }
-            .onFailure {
-                val label = when (tag) {
-                    BockTestTags.NAV_HOME -> "Home"
-                    BockTestTags.NAV_SEARCH -> "Search"
-                    BockTestTags.NAV_LIBRARY -> "Library"
-                    BockTestTags.NAV_DOWNLOADS -> "Downloads"
-                    BockTestTags.NAV_AUTOMATIONS -> "Automations"
-                    else -> error("Unknown nav tag: $tag")
-                }
-                onNodeWithText(label).performClick()
-            }
+            .onFailure { onNodeWithText(label).performClick() }
         waitForIdle()
     }
 

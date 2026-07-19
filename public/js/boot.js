@@ -8,6 +8,10 @@
   const HOME_DISK_TTL_MS = 24 * 60 * 60 * 1000;
   const MOOD_MIN = 8;
 
+  function escBoot(s) {
+    return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
   function bootGradient(seed) {
     const palette = [
       ['#5038a0', '#283248'], ['#8d67ab', '#1db954'], ['#ba5d07', '#e91429'],
@@ -48,7 +52,7 @@
     const art = url
       ? `<span class="spotify-shortcut-art spotify-shortcut-art-img" style="background:${grad}"><img src="${url}" alt="" loading="eager"></span>`
       : `<span class="spotify-shortcut-art" style="background:${grad}"></span>`;
-    return `<div class="home-quick-card boot-card">${art}<span class="home-quick-title">${card.title || ''}</span></div>`;
+    return `<div class="home-quick-card boot-card">${art}<span class="home-quick-title">${escBoot(card.title)}</span></div>`;
   }
 
   function bootSectionCard(card, covers, kind) {
@@ -63,8 +67,8 @@
         <div class="spotify-card-media"><div class="home-radio-stage" style="background:${grad}">
           <span class="home-radio-badge">RADIO</span><div class="home-radio-disc">${disc}</div>
         </div></div>
-        <div class="spotify-card-title">${card.title || ''}</div>
-        <div class="spotify-card-sub">${card.subtitle || ''}</div>
+        <div class="spotify-card-title">${escBoot(card.title)}</div>
+        <div class="spotify-card-sub">${escBoot(card.subtitle)}</div>
       </div>`;
     }
     const art = url
@@ -72,8 +76,8 @@
       : `<div class="spotify-card-art" style="background:${grad}"></div>`;
     return `<div class="spotify-card spotify-home-card boot-card">
       <div class="spotify-card-media">${art}</div>
-      <div class="spotify-card-title">${card.title || ''}</div>
-      <div class="spotify-card-sub">${card.subtitle || ''}</div>
+      <div class="spotify-card-title">${escBoot(card.title)}</div>
+      <div class="spotify-card-sub">${escBoot(card.subtitle)}</div>
     </div>`;
   }
 
@@ -118,12 +122,13 @@
       const cards = (sec.cards || []).slice(0, 8).map((c) => bootSectionCard(c, snap.covers, sec.kind)).join('');
       if (!cards) return '';
       return `<section class="spotify-section spotify-home-section" data-home-groups="all">
-        <div class="spotify-section-header"><h2 class="spotify-section-title home-greeting">${sec.title || ''}</h2></div>
+        <div class="spotify-section-header"><h2 class="spotify-section-title home-greeting">${escBoot(sec.title)}</h2></div>
         <div class="spotify-carousel">${cards}</div>
       </section>`;
     }).filter(Boolean).join('');
     mc.classList.add('home-active');
     mc.innerHTML = `<div class="home-page boot-home">
+      <header class="home-hero"><h1 class="home-greeting">Good evening</h1></header>
       <div class="home-top">
         <div class="home-filters">
           <button type="button" class="home-filter active" data-home-filter="all">All</button>
@@ -143,4 +148,9 @@
   if (route !== 'dashboard') return;
   const snap = loadHomeSnap();
   if (snap && paintHome(snap)) window.__BOOT_HOME_PAINTED__ = true;
+
+  if ('serviceWorker' in navigator) {
+    const swVer = document.querySelector('script[src*="boot.js"]')?.src?.match(/[?&]v=(\d+)/)?.[1] || '1';
+    navigator.serviceWorker.register(`/sw.js?v=${swVer}`).catch(() => {});
+  }
 })();

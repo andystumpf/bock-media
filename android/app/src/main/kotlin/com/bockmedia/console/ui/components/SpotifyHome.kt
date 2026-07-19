@@ -28,15 +28,19 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.bockmedia.console.data.repository.BockMediaRepository
+import com.bockmedia.console.domain.model.HomeArtworkResolver
 import com.bockmedia.console.domain.model.HomeFeedRules
 import com.bockmedia.console.domain.model.HomeCardBrowse
 import com.bockmedia.console.domain.model.HomeCard
 import com.bockmedia.console.domain.model.linkedPlaylistId
+import com.bockmedia.console.domain.model.showsHomeDownloadOverlay
+import com.bockmedia.console.domain.model.showsHomePlayOverlay
 import com.bockmedia.console.domain.model.HomeFilter
 import com.bockmedia.console.domain.model.HomeSection
 import com.bockmedia.console.domain.model.HomeSectionKind
 import com.bockmedia.console.domain.model.PlayTarget
 import com.bockmedia.console.local.DownloadState
+import com.bockmedia.console.ui.listen.ListenAgentMicButton
 import com.bockmedia.console.ui.theme.*
 
 private val PillShape = RoundedCornerShape(50)
@@ -57,6 +61,8 @@ fun HomeHeader(
     selected: HomeFilter,
     onSelect: (HomeFilter) -> Unit,
     onAccountNavigate: (String) -> Unit,
+    onOpenListenAgent: () -> Unit = {},
+    profileFirstName: String? = null,
     modifier: Modifier = Modifier,
 ) {
     val gradient = Brush.verticalGradient(
@@ -80,7 +86,8 @@ fun HomeHeader(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                HomeGreeting(modifier = Modifier.weight(1f))
+                HomeGreeting(profileFirstName = profileFirstName, modifier = Modifier.weight(1f))
+                ListenAgentMicButton(onClick = onOpenListenAgent)
                 AccountMenuButton(onAccountNavigate)
             }
             HomePillFilters(
@@ -247,13 +254,17 @@ fun SpotifyHomeSection(
                 }
             }
         }
+        // LazyRow so only visible tiles compose — an eager Row builds every card in
+        // the section the moment it scrolls in, freezing the vertical fling.
         LazyRow(
             horizontalArrangement = Arrangement.spacedBy(16.dp),
             contentPadding = PaddingValues(horizontal = 16.dp),
         ) {
-            items(section.cards, key = { it.id }) { card ->
+            items(section.cards, key = { it.id }, contentType = { "home_tile" }) { card ->
                 HomeCollectionTile(
                     card = card,
+                    sectionKind = section.kind,
+                    sectionId = section.id,
                     repository = repository,
                     remoteOk = remoteOk || card.kind == HomeSectionKind.Offline,
                     onBrowse = onBrowse,
@@ -310,7 +321,7 @@ fun HomeCardActionSheet(
                     Text("Play", color = Color.White, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold)
                 }
             }
-            if (downloadState != DownloadState.Downloading) {
+            if (downloadState != DownloadState.Downloading && downloadState != DownloadState.Idle) {
                 Surface(
                     onClick = onDownload,
                     shape = RoundedCornerShape(4.dp),
@@ -328,6 +339,8 @@ fun HomeCardActionSheet(
                         )
                     }
                 }
+            } else if (downloadState == DownloadState.Idle) {
+                Text("Queued for download…", color = BockMuted, modifier = Modifier.padding(16.dp))
             } else {
                 Text("Download in progress…", color = BockMuted, modifier = Modifier.padding(16.dp))
             }
@@ -415,7 +428,8 @@ fun HomeSectionShowAllSheet(
                                 playTarget = card.playTarget,
                                 remoteOk = remoteOk || card.kind == HomeSectionKind.Offline,
                                 onPlay = { onPlay(card) },
-                                showDownload = card.kind != HomeSectionKind.Offline,
+                                showDownload = card.showsHomeDownloadOverlay(section.kind, section.id),
+                                showPlay = card.showsHomePlayOverlay(section.kind, section.id),
                             )
                         },
                     )
@@ -433,6 +447,18 @@ private fun HomeCardArt(
     modifier: Modifier = Modifier,
 ) {
     val target = card.playTarget
+    val baseUrl = remember(repository) { repository.peekBaseUrl() }
+    HomeArtworkResolver.peekUrl(baseUrl, card)?.let { cachedUrl ->
+        BockArtwork(
+            model = cachedUrl,
+            title = card.title,
+            modifier = modifier,
+            shape = ArtShape,
+            fallbackFontSize = 18.sp,
+            crossfadeMs = 0,
+        )
+        return
+    }
     val playlistId = card.linkedPlaylistId() ?: (target as? PlayTarget.Playlist)?.id
     if (!playlistId.isNullOrBlank()) {
         PlaylistTileArt(
@@ -483,6 +509,8 @@ private fun HomeCardArt(
 @Composable
 private fun HomeCollectionTile(
     card: HomeCard,
+    sectionKind: HomeSectionKind,
+    sectionId: String,
     repository: BockMediaRepository,
     remoteOk: Boolean,
     onBrowse: (HomeCard) -> Unit,
@@ -514,7 +542,8 @@ private fun HomeCollectionTile(
             }
             ArtworkTileOverlayActions(
                 playTarget = card.playTarget,
-                showDownload = card.kind != HomeSectionKind.Offline,
+                showDownload = card.showsHomeDownloadOverlay(sectionKind, sectionId),
+                showPlay = card.showsHomePlayOverlay(sectionKind, sectionId),
                 onPlay = { onPlay(card) },
             )
         }
@@ -541,18 +570,27 @@ private fun HomeCollectionTile(
 }
 
 @Composable
-fun HomeGreeting(modifier: Modifier = Modifier) {
-    val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
-    val greeting = when (hour) {
-        in 0..11 -> "Good morning"
-        in 12..16 -> "Good afternoon"
-        else -> "Good evening"
-    }
+fun HomeGreeting(
+    profileFirstName: String? = null,
+    modifier: Modifier = Modifier,
+) {
     Text(
-        greeting,
+        homeGreetingText(profileFirstName),
         style = MaterialTheme.typography.titleMedium,
         fontWeight = FontWeight.Bold,
         color = MaterialTheme.colorScheme.onSurface,
         modifier = modifier.testTag(BockTestTags.HOME_GREETING),
     )
+}
+
+/** Time-of-day greeting, optionally with the active profile's first name ("Good morning Andy"). */
+fun homeGreetingText(profileFirstName: String? = null): String {
+    val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+    val period = when (hour) {
+        in 0..11 -> "Good morning"
+        in 12..16 -> "Good afternoon"
+        else -> "Good evening"
+    }
+    val first = profileFirstName?.trim()?.substringBefore(' ')?.takeIf { it.isNotBlank() }
+    return if (first != null) "$period $first" else period
 }

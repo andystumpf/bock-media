@@ -79,6 +79,37 @@ class HomeCardBrowseTest {
     }
 
     @Test
+    fun destination_rotatedPlaylistInBrowseGenresOpensPlaylist() {
+        // Tile rotation can replace a stale genre tile with a playlist card that
+        // keeps kind=BrowseGenres — it must open the playlist, not a bogus genre.
+        val card = HomeCard(
+            id = "pl-rotated",
+            title = "This Is Paul Simon",
+            playlistId = "pl-123",
+            playTarget = Playlist("pl-123", "This Is Paul Simon"),
+            kind = HomeSectionKind.BrowseGenres,
+        )
+        assertEquals(
+            HomeCardBrowse.Destination.Playlist("pl-123"),
+            HomeCardBrowse.destination(card),
+        )
+    }
+
+    @Test
+    fun destination_genreTileStillOpensGenre() {
+        val card = HomeCard(
+            id = "browse-genre-Rock",
+            title = "Rock",
+            playTarget = PlayTarget.Radio("Rock Radio", PlayTarget.RadioSeedKind.Genre, "Rock"),
+            kind = HomeSectionKind.BrowseGenres,
+        )
+        assertEquals(
+            HomeCardBrowse.Destination.Genre("Rock"),
+            HomeCardBrowse.destination(card),
+        )
+    }
+
+    @Test
     fun destination_radioGenreUsesTitleNotArtistSeed() {
         val card = HomeCard(
             id = "radio-rock",

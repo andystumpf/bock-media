@@ -6,6 +6,9 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
+/** Registry bucket when no household profile is selected yet — downloads still run locally. */
+internal const val OFFLINE_LOCAL_MEMBER_KEY = "__local__"
+
 /** Server-synced registry of offline collections per household profile. */
 @Serializable
 data class OfflineDownloadRecord(
@@ -25,7 +28,7 @@ object OfflineDownloadSync {
     }
 
     fun remove(context: Context, collectionId: String) {
-        val memberId = ActiveProfileStore.activeMemberId(context) ?: return
+        val memberId = registryMemberId(context)
         val map = loadMap(context).toMutableMap()
         val list = map[memberId]?.toMutableList() ?: return
         if (list.removeAll { it.id == collectionId }) {
@@ -40,9 +43,9 @@ object OfflineDownloadSync {
         return loadMap(context)[memberId].orEmpty()
     }
 
-    /** Collection ids owned by the active profile (empty when none selected). */
+    /** Collection ids visible for the active profile (or local bucket before profile pick). */
     fun visibleCollectionIds(context: Context): Set<String> =
-        collectionIdsForMember(context, ActiveProfileStore.activeMemberId(context))
+        collectionIdsForMember(context, registryMemberId(context))
 
     fun collectionIdsForMember(context: Context, memberId: String?): Set<String> {
         if (memberId.isNullOrBlank()) return emptySet()
@@ -65,9 +68,12 @@ object OfflineDownloadSync {
         val orphans = OfflineDownloadStore(context).listManifests()
             .filter { it.id !in assigned }
             .map { it.toRecord() }
-        if (orphans.isEmpty()) return
+        val localPending = map.remove(OFFLINE_LOCAL_MEMBER_KEY).orEmpty()
+            .filter { it.id !in assigned }
+        val toClaim = mergeRecords(orphans + localPending)
+        if (toClaim.isEmpty()) return
         val list = map[memberId]?.toMutableList() ?: mutableListOf()
-        list.addAll(orphans)
+        list.addAll(toClaim)
         map[memberId] = mergeRecords(list)
         saveMap(context, map)
     }
@@ -92,6 +98,9 @@ object OfflineDownloadSync {
             val manifest = store.readManifest(record.id)
             if (manifest != null && store.isCollectionComplete(manifest)) continue
             if (OfflineDownloadManager.statusFor(context, target)?.state == DownloadState.Downloading) continue
+            // Partial or failed downloads require an explicit user retry.
+            if (OfflineDownloadManager.statusFor(context, target)?.state == DownloadState.Failed) continue
+            if (manifest != null && !store.isCollectionComplete(manifest)) continue
             OfflineDownloadManager.download(appContext, target)
         }
     }
@@ -104,8 +113,22 @@ object OfflineDownloadSync {
         return runCatching { json.decodeFromString<List<OfflineDownloadRecord>>(raw) }.getOrNull()
     }
 
+    /** Clears registry prefs and decode cache (instrumented tests only). */
+    internal fun resetRegistryForTests(context: Context) {
+        cachedRaw = null
+        cachedMap = emptyMap()
+        context.applicationContext
+            .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .clear()
+            .commit()
+    }
+
+    private fun registryMemberId(context: Context): String =
+        ActiveProfileStore.activeMemberId(context) ?: OFFLINE_LOCAL_MEMBER_KEY
+
     private fun add(context: Context, record: OfflineDownloadRecord) {
-        val memberId = ActiveProfileStore.activeMemberId(context) ?: return
+        val memberId = registryMemberId(context)
         val map = loadMap(context).toMutableMap()
         val list = map[memberId]?.toMutableList() ?: mutableListOf()
         list.removeAll { it.id == record.id }
@@ -120,21 +143,33 @@ object OfflineDownloadSync {
         return out.values.toList()
     }
 
+    // Decode cache — loadMap is called from composition on every download progress
+    // tick; re-parsing the JSON registry each time janks the main thread.
+    @Volatile private var cachedRaw: String? = null
+    @Volatile private var cachedMap: Map<String, List<OfflineDownloadRecord>> = emptyMap()
+
     private fun loadMap(context: Context): Map<String, List<OfflineDownloadRecord>> {
         val raw = context.applicationContext
             .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .getString(KEY, null)
             ?: return emptyMap()
-        return runCatching {
+        if (raw == cachedRaw) return cachedMap
+        val parsed = runCatching {
             json.decodeFromString<Map<String, List<OfflineDownloadRecord>>>(raw)
         }.getOrDefault(emptyMap())
+        cachedRaw = raw
+        cachedMap = parsed
+        return parsed
     }
 
     private fun saveMap(context: Context, map: Map<String, List<OfflineDownloadRecord>>) {
+        val encoded = json.encodeToString(map)
+        cachedRaw = encoded
+        cachedMap = map
         context.applicationContext
             .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
-            .putString(KEY, json.encodeToString(map))
+            .putString(KEY, encoded)
             .apply()
     }
 }

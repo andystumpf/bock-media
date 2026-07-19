@@ -13,6 +13,7 @@ struct DevicesView: View {
     @State private var renameDevice: DeviceItem?
     @State private var editGroup: DeviceGroup?
     @State private var showNewGroup = false
+    @State private var showFixWizard = false
 
     var body: some View {
         List {
@@ -28,8 +29,7 @@ struct DevicesView: View {
                     }
                     Spacer()
                     if identify?.running == true {
-                        ProgressView()
-                            .tint(BockColors.green)
+                        BockProgressIndicator(size: 24)
                     }
                 }
             }
@@ -42,6 +42,10 @@ struct DevicesView: View {
                     }
                 }
                 .disabled(identify?.running == true)
+                Button("Fix my devices") {
+                    showFixWizard = true
+                }
+                .disabled(alexaDevices.filter { $0.online && !($0.serial ?? "").isEmpty }.isEmpty)
                 Button("New speaker group") { showNewGroup = true }
             }
 
@@ -152,7 +156,8 @@ struct DevicesView: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .bockBackground()
-        .navigationTitle("Devices")
+        .accessibilityIdentifier(BockTestTags.devicesBody)
+        .navigationTitle("Alexa Devices")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
@@ -180,16 +185,38 @@ struct DevicesView: View {
                 Task { await load() }
             }
         }
+        .sheet(isPresented: $showFixWizard) {
+            DeviceFixWizard(
+                appState: appState,
+                speakers: alexaDevices.filter { $0.online && !($0.serial ?? "").isEmpty },
+                onDismiss: { showFixWizard = false },
+                onComplete: {
+                    showFixWizard = false
+                    Task { await load() }
+                }
+            )
+        }
     }
 
     private func load() async {
-        loading = true
+        if let snap = DeviceCatalog.peek() {
+            alexaDevices = snap.devices
+            groups = snap.groups
+            loading = false
+        } else if alexaDevices.isEmpty && groups.isEmpty {
+            loading = true
+        }
         defer { loading = false }
-        savedDevices = (try? await appState.repository.devices()) ?? []
-        alexaDevices = (try? await appState.repository.alexaRemoteDevices()) ?? []
-        candidates = (try? await appState.repository.mergeCandidates()) ?? []
-        groups = (try? await appState.repository.deviceGroups())?.items ?? []
-        identify = try? await appState.repository.identifyStatus()
+        async let savedTask = appState.repository.devices()
+        async let alexaTask = appState.repository.alexaRemoteDevices()
+        async let candidatesTask = appState.repository.mergeCandidates()
+        async let groupsTask = appState.repository.deviceGroups()
+        async let identifyTask = appState.repository.identifyStatus()
+        savedDevices = (try? await savedTask) ?? savedDevices
+        alexaDevices = (try? await alexaTask) ?? alexaDevices
+        candidates = (try? await candidatesTask) ?? candidates
+        groups = (try? await groupsTask)?.items ?? groups
+        identify = try? await identifyTask
     }
 
     private func pollIdentifyIfNeeded() async {

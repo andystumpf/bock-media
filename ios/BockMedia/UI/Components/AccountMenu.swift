@@ -75,5 +75,23 @@ struct AccountMenuButton: View {
                 .background(BockColors.surfaceVariant.opacity(0.92))
                 .clipShape(Circle())
         }
+        .accessibilityIdentifier(BockTestTags.accountMenuButton)
+        .accessibilityLabel("Account menu")
+    }
+}
+
+struct ListenAgentMicButton: View {
+    var onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            BockIcon(icon: .mic, size: 22)
+                .foregroundStyle(BockColors.onSurface)
+                .padding(8)
+                .background(BockColors.surfaceVariant.opacity(0.92))
+                .clipShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Listen agent")
     }
 }

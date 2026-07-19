@@ -10,14 +10,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.bockmedia.console.ui.testing.BockTestTags
+import com.bockmedia.console.data.api.httpErrorMessage
 import com.bockmedia.console.data.api.dto.AutomationItem
+import com.bockmedia.console.data.api.dto.PlaylistSummary
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.AutomationSessionCache
 import com.bockmedia.console.ui.components.*
+import com.bockmedia.console.ui.listen.ListenAgentMicButton
 import com.bockmedia.console.ui.util.formatTime12
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -49,8 +51,10 @@ private fun formatAutomationDays(days: List<Int>): String {
 fun AutomationScreen(
     repository: BockMediaRepository,
     onAccountNavigate: (String) -> Unit = {},
+    onOpenListenAgent: () -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
+    val snackbar = remember { SnackbarHostState() }
     val cachedAutomation = AutomationSessionCache.peek()
     var automations by remember { mutableStateOf(cachedAutomation?.items.orEmpty()) }
     var remoteOk by remember { mutableStateOf(cachedAutomation?.remoteOk ?: false) }
@@ -93,6 +97,7 @@ fun AutomationScreen(
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
+        snackbarHost = { SnackbarHost(snackbar) },
         floatingActionButton = {
             if (remoteOk) {
                 FloatingActionButton(onClick = { editItem = null; showSheet = true }) {
@@ -108,6 +113,7 @@ fun AutomationScreen(
         ) {
         Column(Modifier.fillMaxSize()) {
             TabScreenHeader("Automations") {
+                ListenAgentMicButton(onClick = onOpenListenAgent)
                 AccountMenuButton(onAccountNavigate)
             }
             if (!remoteOk) {
@@ -137,7 +143,28 @@ fun AutomationScreen(
                             },
                             trailingContent = {
                                 Row {
-                                    TextButton(onClick = { scope.launch { repository.runAutomation(auto.id) } }) {
+                                    TextButton(onClick = {
+                                        scope.launch {
+                                            try {
+                                                val resp = repository.runAutomation(auto.id)
+                                                val target = resp.devices.firstOrNull()
+                                                    ?: resp.device
+                                                    ?: auto.deviceName
+                                                    ?: "device"
+                                                val msg = if (resp.errors.isNotEmpty()) {
+                                                    "Sent to $target — ${resp.errors.joinToString("; ")}"
+                                                } else {
+                                                    "Started on $target"
+                                                }
+                                                snackbar.showSnackbar(msg)
+                                                load()
+                                            } catch (e: Exception) {
+                                                snackbar.showSnackbar(
+                                                    httpErrorMessage(e, "Automation failed"),
+                                                )
+                                            }
+                                        }
+                                    }) {
                                         Text("Run")
                                     }
                                     TextButton(onClick = {
@@ -192,7 +219,8 @@ private fun AutomationFormSheet(
     var volume by remember(editItem) { mutableStateOf(editItem?.volume?.toString() ?: "") }
     var shuffle by remember(editItem) { mutableStateOf(editItem?.shuffle ?: false) }
     var enabled by remember(editItem) { mutableStateOf(editItem?.enabled ?: true) }
-    var playlistHits by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    var playlists by remember { mutableStateOf<List<PlaylistSummary>>(emptyList()) }
+    var playlistsLoading by remember { mutableStateOf(true) }
     var dayPreset by remember(editItem) {
         mutableStateOf(
             when {
@@ -214,17 +242,11 @@ private fun AutomationFormSheet(
             val groups = repository.deviceGroups().items
             deviceOptions = buildDeviceOptions(groups, devs)
         }
-    }
-
-    LaunchedEffect(playlistSearch, playlistPick) {
-        delay(250)
-        if (playlistPick.first != null || playlistSearch.length < 1) {
-            playlistHits = emptyList()
-            return@LaunchedEffect
-        }
+        playlistsLoading = true
         runCatching {
-            playlistHits = repository.playlists(playlistSearch, limit = 25).items.map { it.id to it.name }
+            playlists = repository.playlists(limit = 500).items
         }
+        playlistsLoading = false
     }
 
     val selectedDays = when (dayPreset) {
@@ -236,6 +258,7 @@ private fun AutomationFormSheet(
         Column(
             Modifier
                 .fillMaxWidth()
+                .bockVerticalScroll()
                 .padding(horizontal = 16.dp)
                 .navigationBarsPadding()
                 .padding(bottom = 24.dp),
@@ -246,25 +269,17 @@ private fun AutomationFormSheet(
                 style = MaterialTheme.typography.titleLarge,
             )
             BockTextField(label, { label = it }, "Label")
-            SearchField(
-                playlistSearch,
-                { query ->
-                    playlistSearch = query
-                    if (playlistPick.second != null && query != playlistPick.second) {
-                        playlistPick = null to null
-                    }
-                },
-                "Search playlist",
+            PlaylistSelectField(
+                playlists = playlists,
+                selectedId = playlistPick.first,
+                selectedName = playlistPick.second,
+                onSelect = { pl -> playlistPick = pl.id to pl.name },
+                onClear = { playlistPick = null to null },
+                searchQuery = playlistSearch,
+                onSearchQueryChange = { playlistSearch = it },
+                loading = playlistsLoading,
+                placeholder = "Search or select playlist…",
             )
-            if (playlistPick.first == null && playlistHits.isNotEmpty()) {
-                playlistHits.take(8).forEach { (id, name) ->
-                    TextButton(onClick = {
-                        playlistPick = id to name
-                        playlistSearch = name
-                        playlistHits = emptyList()
-                    }) { Text(name) }
-                }
-            }
             DeviceSelectField(
                 options = deviceOptions,
                 selectedValue = deviceValue,

@@ -143,6 +143,7 @@ struct MiniNowPlayingBar: View {
                     }
                 }
                 .buttonStyle(.plain)
+                .accessibilityIdentifier("miniNowPlayingOpen")
 
                 if model.canControl {
                     Button {

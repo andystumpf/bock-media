@@ -1,18 +1,22 @@
 import Foundation
 
 enum HomeCachePersistence {
-    static let feedLayoutVersion = 2
+    static let feedLayoutVersion = 3
     private static let fileName = "home_cache.json"
     private static let maxAgeMs: Int64 = 24 * 60 * 60 * 1000
 
     struct Snapshot {
         let feed: HomeFeed
+        let playlistPaths: [String: String]
+        let hasRatedSongs: Bool?
     }
 
     private struct SnapshotDto: Codable {
         let savedAtMs: Int64
         let feedVersion: Int
         let sections: [SectionDto]
+        let playlistPaths: [String: String]?
+        let hasRatedSongs: Bool?
     }
 
     private struct SectionDto: Codable {
@@ -43,12 +47,14 @@ enum HomeCachePersistence {
         let seedKind: String?
     }
 
-    static func save(_ feed: HomeFeed) {
+    static func save(_ feed: HomeFeed, playlistPaths: [String: String] = HomeArtworkCache.allPlaylistPaths()) {
         guard !feed.sections.isEmpty else { return }
         let dto = SnapshotDto(
             savedAtMs: Int64(Date().timeIntervalSince1970 * 1000),
             feedVersion: feedLayoutVersion,
-            sections: feed.sections.map(sectionToDto)
+            sections: feed.sections.map(sectionToDto),
+            playlistPaths: playlistPaths.isEmpty ? nil : playlistPaths,
+            hasRatedSongs: HomeFeedCache.peekHasRatedSongs()
         )
         guard let url = cacheURL(), let json = try? JSONEncoder().encode(dto) else { return }
         try? json.write(to: url, options: .atomic)
@@ -63,8 +69,11 @@ enum HomeCachePersistence {
         let sections = dto.sections.compactMap(dtoToSection)
         guard !sections.isEmpty else { return nil }
         let feed = HomeFeed(sections: sections)
-        guard feed.hasCurrentHomeLayout() else { return nil }
-        return Snapshot(feed: feed)
+        guard feed.isUsableHomeCache(
+            activeProfileLinked: ActiveProfileStore.activeMemberId() != nil,
+            hasRatedSongs: dto.hasRatedSongs
+        ) else { return nil }
+        return Snapshot(feed: feed, playlistPaths: dto.playlistPaths ?? [:], hasRatedSongs: dto.hasRatedSongs)
     }
 
     static func clear() {
@@ -122,10 +131,14 @@ enum HomeCachePersistence {
         switch kind {
         case .jumpBackIn: return "jumpBackIn"
         case .favorites: return "favorites"
+        case .ratedSongs: return "ratedSongs"
         case .topMixes: return "topMixes"
+        case .browseGenres: return "browseGenres"
         case .exploreThemes: return "exploreThemes"
         case .mood: return "mood"
+        case .decade: return "decade"
         case .dailyMixes: return "dailyMixes"
+        case .recentlyCreated: return "recentlyCreated"
         case .recentPlaylists: return "recentPlaylists"
         case .radio: return "radio"
         case .discover: return "discover"
@@ -137,10 +150,14 @@ enum HomeCachePersistence {
         switch raw {
         case "jumpBackIn": return .jumpBackIn
         case "favorites": return .favorites
+        case "ratedSongs": return .ratedSongs
         case "topMixes": return .topMixes
+        case "browseGenres": return .browseGenres
         case "exploreThemes": return .exploreThemes
         case "mood": return .mood
+        case "decade": return .decade
         case "dailyMixes": return .dailyMixes
+        case "recentlyCreated": return .recentlyCreated
         case "recentPlaylists": return .recentPlaylists
         case "radio": return .radio
         case "discover": return .discover
@@ -195,8 +212,4 @@ enum HomeCachePersistence {
     }
 }
 
-extension HomeFeed {
-    func hasCurrentHomeLayout() -> Bool {
-        sections.filter { $0.kind == .mood }.count >= HomeMoodSections.all().count
-    }
-}
+// hasCurrentHomeLayout / isUsableHomeCache live on HomeFeed in HomeFeed.swift

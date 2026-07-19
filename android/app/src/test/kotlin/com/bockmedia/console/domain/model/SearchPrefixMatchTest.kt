@@ -18,8 +18,14 @@ class SearchPrefixMatchTest {
     }
 
     @Test
-    fun wordPrefixMatches() {
-        assertTrue(SearchPrefixMatch.fieldMatchesQuery("rem", "Remix"))
-        assertFalse(SearchPrefixMatch.fieldMatchesQuery("rem", "Premium"))
+    fun learnToMatchesMultiWordTitle() {
+        assertTrue(SearchPrefixMatch.fieldMatchesQuery("learn to", "Learn to Fly"))
+    }
+
+    @Test
+    fun typingToleranceExtendsValidPrefix() {
+        assertTrue(SearchPrefixMatch.fieldMatchesQuery("rem", "R.E.M."))
+        assertTrue(SearchPrefixMatch.fieldMatchesQuery("reme", "R.E.M."))
+        assertFalse(SearchPrefixMatch.fieldMatchesQuery("prem", "R.E.M."))
     }
 }

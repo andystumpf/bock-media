@@ -1,0 +1,1 @@
+{"path": "/private/var/folders/09/rbl5h4vs23q6316yvzf5gpkr0000gn/T/pytest-of-demo/pytest-239/test_lrclib_synced_preferred_o0/song.mp3", "synced": true, "lines": [{"timeMs": 5000, "text": "Synced line"}, {"timeMs": 10000, "text": "Next line"}], "plain": "Synced line\nNext line", "source": "lrclib", "estimated": false, "fetchedAt": 1783820289}

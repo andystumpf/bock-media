@@ -21,6 +21,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -31,9 +32,12 @@ import androidx.compose.ui.unit.dp
 import com.bockmedia.console.data.api.dto.*
 import com.bockmedia.console.data.api.dto.displayName
 import com.bockmedia.console.data.repository.BockMediaRepository
+import com.bockmedia.console.local.ActiveProfileStore
+import com.bockmedia.console.local.ClientPrefsSync
 import com.bockmedia.console.ui.components.BockLazyColumn
 import com.bockmedia.console.ui.components.BockPullRefresh
 import com.bockmedia.console.ui.components.LoadingBox
+import com.bockmedia.console.ui.testing.BockTestTags
 import com.bockmedia.console.ui.theme.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.ui.geometry.CornerRadius
@@ -178,14 +182,18 @@ fun AnalyticsScreen(repository: BockMediaRepository) {
     var refreshing by remember { mutableStateOf(false) }
     var exporting by remember { mutableStateOf(false) }
 
+    val activeMemberId by ActiveProfileStore.activeMemberIdState.collectAsState()
+    val profileRevision by ClientPrefsSync.profileChangeRevision.collectAsState()
+
     val effectivePreset = if (customFrom != null || customTo != null) DatePreset.Custom else DatePreset.AllTime
-    val queryKey = analyticsRangeKey(effectivePreset, customFrom, customTo, null)
+    val queryKey = analyticsRangeKey(effectivePreset, customFrom, customTo, activeMemberId)
 
     suspend fun loadAnalytics() {
         if (data == null) loading = true else refreshing = true
         val (from, to) = analyticsDateRange(effectivePreset, customFrom, customTo)
+        val householdWide = activeMemberId.isNullOrBlank()
         try {
-            data = repository.analytics(from, to, deviceId = null, householdWide = true)
+            data = repository.analytics(from, to, deviceId = null, householdWide = householdWide)
             ignored = repository.ignored().items
         } catch (e: CancellationException) {
             throw e
@@ -197,7 +205,7 @@ fun AnalyticsScreen(repository: BockMediaRepository) {
         }
     }
 
-    LaunchedEffect(queryKey) {
+    LaunchedEffect(queryKey, activeMemberId, profileRevision) {
         loadAnalytics()
     }
 
@@ -206,7 +214,13 @@ fun AnalyticsScreen(repository: BockMediaRepository) {
             exporting = true
             val (from, to) = analyticsDateRange(effectivePreset, customFrom, customTo)
             runCatching {
-                val file = repository.exportAnalyticsCsv(from, to, context.cacheDir, deviceId = null, householdWide = true)
+                val file = repository.exportAnalyticsCsv(
+                    from,
+                    to,
+                    context.cacheDir,
+                    deviceId = null,
+                    householdWide = activeMemberId.isNullOrBlank(),
+                )
                 val uri = androidx.core.content.FileProvider.getUriForFile(
                     context,
                     "${context.packageName}.fileprovider",
@@ -281,7 +295,9 @@ fun AnalyticsScreen(repository: BockMediaRepository) {
                 } == true
                 val showEmpty = analytics != null && analytics.totalPlays == 0 && !hasDeviceActivity
                 BockLazyColumn(
-                    Modifier.fillMaxSize(),
+                    Modifier
+                        .fillMaxSize()
+                        .testTag(BockTestTags.ANALYTICS_BODY),
                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 32.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
@@ -574,10 +590,11 @@ private fun StatCard(
     label: String,
     modifier: Modifier = Modifier,
 ) {
+    val taggedModifier = modifier
     Surface(
         shape = RoundedCornerShape(14.dp),
         color = SpotifyElevated,
-        modifier = modifier,
+        modifier = taggedModifier,
     ) {
         Row(
             Modifier.padding(14.dp),
@@ -601,6 +618,11 @@ private fun StatCard(
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
+                        modifier = if (label == "Total Plays") {
+                            Modifier.testTag(BockTestTags.ANALYTICS_TOTAL_PLAYS)
+                        } else {
+                            Modifier
+                        },
                     )
                     valueSuffix?.let {
                         Text(

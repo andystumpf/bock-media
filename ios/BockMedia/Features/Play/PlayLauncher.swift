@@ -5,7 +5,7 @@ struct PlayLauncherModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .sheet(item: $appState.pendingPlayTarget) { target in
+            .fullScreenCover(item: $appState.pendingPlayTarget) { target in
                 DevicePickerSheet(
                     repository: appState.repository,
                     playLabel: target.label,

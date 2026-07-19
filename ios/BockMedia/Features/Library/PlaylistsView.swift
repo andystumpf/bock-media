@@ -4,15 +4,29 @@ struct PlaylistsView: View {
     @ObservedObject var appState: AppState
     @State private var items: [PlaylistSummary] = []
     @State private var loading = true
+    @State private var artEpoch = 0
 
     var body: some View {
         Group {
             if loading {
                 LoadingBox()
+            } else if items.isEmpty {
+                Text("No playlists for this profile.")
+                    .foregroundStyle(BockColors.muted)
+                    .multilineTextAlignment(.center)
+                    .padding(24)
             } else {
                 List(items) { pl in
                     NavigationLink(value: LibraryRoute.playlistDetail(pl.id)) {
-                        HStack {
+                        HStack(spacing: 12) {
+                            PlaylistRowArt(
+                                appState: appState,
+                                playlistId: pl.id,
+                                title: pl.name,
+                                artPath: pl.artPath,
+                                size: 56,
+                                artEpoch: artEpoch
+                            )
                             VStack(alignment: .leading) {
                                 Text(pl.name).foregroundStyle(BockColors.onSurface)
                                 Text(playlistShareSubtitle(pl))
@@ -33,15 +47,29 @@ struct PlaylistsView: View {
                 .scrollContentBackground(.hidden)
             }
         }
+        .accessibilityIdentifier(BockTestTags.playlistsListBody)
         .navigationTitle("Playlists")
         .task { await load() }
-        .refreshable { await load() }
+        .refreshable { await load(forceRefresh: true) }
+        .onChange(of: appState.profileChangeRevision) { _, _ in
+            Task { await load(forceRefresh: true) }
+        }
     }
 
-    private func load() async {
-        loading = true
+    private func load(forceRefresh: Bool = false) async {
+        let memberKey = ActiveProfileStore.activeMemberId() ?? ""
+        if forceRefresh {
+            SessionDataStore.invalidatePlaylists()
+        } else if let cached = SessionDataStore.peekPlaylists(memberKey: memberKey) {
+            items = cached.items
+            loading = false
+        } else if items.isEmpty {
+            loading = true
+        }
         defer { loading = false }
-        items = (try? await appState.repository.playlists(limit: 300, memberScoped: true))?.items ?? []
+        items = (try? await appState.repository.playlists(limit: 300, memberScoped: true))?.items ?? items
+        await appState.repository.prefetchPlaylistCoverPaths(ids: items.map(\.id))
+        artEpoch += 1
     }
 }
 
@@ -156,12 +184,13 @@ struct SharePlaylistSheet: View {
 struct PlaylistDetailView: View {
     @ObservedObject var appState: AppState
     let playlistId: String
+    var suggestHomePin: Bool = false
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
     @State private var tracks: [PlaylistTrack] = []
     @State private var total = 0
     @State private var filter = ""
-    @State private var sortBy = "title"
+    @State private var sortBy = "original"
     @State private var sortOrder = "asc"
     @State private var loading = true
     @State private var loadingMore = false
@@ -170,19 +199,24 @@ struct PlaylistDetailView: View {
     @State private var mixMuseSeed: DiscoverySeed?
     @State private var showAcquire = false
     @State private var acquireSeed: DiscoverySeed?
-    @State private var editMode: EditMode = .inactive
+    @State private var reorderMode = false
+    @State private var heroArtURL: URL?
+    @State private var showPlaylistMenu = false
+    @State private var trackMenuTrack: PlaylistTrack?
     @State private var isDaily = false
     @State private var ownerMemberId: String?
     @State private var ownerName: String?
     @State private var visibility: String?
     @State private var sharedWith: [String] = []
     @State private var showShare = false
+    @State private var showHomePin = false
+    @State private var homePinPrompted = false
     @State private var householdMembers: [HouseholdMember] = []
     @State private var addToRoom: AddToRoomContext?
     private let pageSize = 100
 
     private var canReorder: Bool {
-        filter.isEmpty && sortBy == "title" && sortOrder == "asc"
+        filter.isEmpty && sortBy == "original"
     }
 
     /// Stable, unique identity for each row. `key` = "offset-trackId": the trackId keeps
@@ -193,123 +227,154 @@ struct PlaylistDetailView: View {
     }
 
     var body: some View {
-        Group {
-            if loading && tracks.isEmpty {
-                LoadingBox()
-            } else if let loadError, tracks.isEmpty {
-                VStack(spacing: 12) {
-                    Text(loadError).foregroundStyle(.red)
-                    Button("Retry") { Task { await loadPage(1, append: false) } }
-                }
-                .padding()
-            } else {
-                List {
-                    Section {
-                        playlistHeader
-                        HStack(spacing: 8) {
-                            Image(systemName: "magnifyingglass")
-                                .foregroundStyle(BockColors.muted)
-                            TextField("Search in playlist", text: $filter)
-                                .textInputAutocapitalization(.never)
-                                .autocorrectionDisabled()
+        ZStack {
+            ArtBackdrop(url: heroArtURL)
+            VStack(spacing: 0) {
+                PlexampInlineTopBar(title: name.isEmpty ? "Playlist" : name)
+                Group {
+                    if loading && tracks.isEmpty {
+                        LoadingBox()
+                            .frame(maxHeight: .infinity)
+                    } else if let loadError, tracks.isEmpty {
+                        VStack(spacing: 12) {
+                            Text(loadError).foregroundStyle(.red)
+                            Button("Retry") { Task { await loadPage(1, append: false) } }
                         }
-                        filterSortBar
+                        .padding()
+                        .frame(maxHeight: .infinity)
+                    } else {
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 0) {
+                                PlexampPlaylistHero(
+                                    appState: appState,
+                                    playlistId: playlistId,
+                                    name: name.isEmpty ? "Playlist" : name,
+                                    tracks: tracks,
+                                    artURL: heroArtURL,
+                                    onPlay: { appState.play(.playlist(id: playlistId, name: name)) },
+                                    onShuffle: {
+                                        Task {
+                                            await LocalPlaybackController.shared.playTarget(
+                                                repository: appState.repository,
+                                                target: .playlist(id: playlistId, name: name),
+                                                shuffle: true
+                                            )
+                                            if LocalPlaybackController.shared.state.error == nil {
+                                                appState.showNowPlayingSheet = true
+                                            }
+                                        }
+                                    },
+                                    onMenu: { showPlaylistMenu = true }
+                                )
+                                playlistMetaSection
+                                playlistSearchRow
+                                filterSortBar
+                                if reorderMode && !canReorder {
+                                    Text("Clear search and reset sort to reorder tracks.")
+                                        .font(.caption)
+                                        .foregroundStyle(.white.opacity(0.55))
+                                        .padding(.horizontal, 16)
+                                        .padding(.bottom, 8)
+                                }
+                                ForEach(indexedTracks, id: \.key) { item in
+                                    HStack(spacing: 0) {
+                                        if reorderMode && canReorder {
+                                            reorderControls(for: item.index)
+                                        }
+                                        PlexampPlaylistTrackRow(
+                                            appState: appState,
+                                            track: item.track,
+                                            onTap: { playTrackAtIndex(item.index, track: item.track) },
+                                            onMenu: { trackMenuTrack = item.track }
+                                        )
+                                    }
+                                }
+                                if loadingMore {
+                                    HStack { Spacer(); BockProgressIndicator(size: 32); Spacer() }
+                                        .padding(.vertical, 12)
+                                } else if tracks.count < total {
+                                    Color.clear.frame(height: 1)
+                                        .onAppear { Task { await loadMoreIfNeeded() } }
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.bottom, 24)
+                        }
                     }
-                    .listRowInsets(EdgeInsets())
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.clear)
-
-                    Section {
-                        ForEach(indexedTracks, id: \.key) { item in
-                            trackRow(index: item.index + 1, track: item.track)
-                        }
-                        .onMove(perform: canReorder && editMode == .active ? moveTracks : nil)
-                        if loadingMore {
-                            HStack { Spacer(); ProgressView(); Spacer() }
-                        } else if tracks.count < total {
-                            Color.clear.frame(height: 1)
-                                .onAppear { Task { await loadMoreIfNeeded() } }
-                        }
-                    }
                 }
-                .listStyle(.plain)
-                .scrollContentBackground(.hidden)
-                .environment(\.editMode, $editMode)
             }
         }
-        .navigationTitle(name.isEmpty ? "Playlist" : name)
-        .searchable(text: $filter, prompt: "Search in playlist")
-        .toolbar {
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
+        .accessibilityIdentifier(BockTestTags.playlistDetailBody)
+        .navigationBarBackButtonHidden(true)
+        .toolbar(.hidden, for: .navigationBar)
+        .confirmationDialog(name.isEmpty ? "Playlist" : name, isPresented: $showPlaylistMenu, titleVisibility: .visible) {
             if canReorder {
-                ToolbarItem(placement: .topBarLeading) {
-                    EditButton()
+                Button(reorderMode ? "Done reordering" : "Reorder tracks") {
+                    reorderMode.toggle()
+                    if reorderMode { Task { await loadAllTracksIfNeeded() } }
                 }
             }
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Button("Sort by title") { Task { await applySort(by: "title", order: sortOrder) } }
-                    Button("Sort by artist") { Task { await applySort(by: "artist", order: sortOrder) } }
-                    Button("Sort by album") { Task { await applySort(by: "album", order: sortOrder) } }
-                    Button("Ascending") { Task { await applySort(by: sortBy, order: "asc") } }
-                    Button("Descending") { Task { await applySort(by: sortBy, order: "desc") } }
-                    Divider()
-                    Button {
-                        mixMuseSeed = DiscoverySeed(kind: .playlist, title: name, playlistId: playlistId)
-                        showMixMuse = true
-                    } label: { Label("Mix Muse playlist…", systemImage: "sparkles") }
-                    Button { Task { await runResonanceRadio(seed: playlistSeed) } } label: {
-                        Label("Resonance radio", systemImage: "waveform")
+            Button("Sort by title") { Task { await applySort(by: "title") } }
+            Button("Sort by artist") { Task { await applySort(by: "artist") } }
+            Button("Sort by album") { Task { await applySort(by: "album") } }
+            Button("Ascending") { Task { await applySort(order: "asc") } }
+            Button("Descending") { Task { await applySort(order: "desc") } }
+            Button("Mix Muse playlist…") {
+                mixMuseSeed = DiscoverySeed(kind: .playlist, title: name, playlistId: playlistId)
+                showMixMuse = true
+            }
+            Button("Resonance radio") { Task { await runResonanceRadio(seed: playlistSeed) } }
+            Button("Resonance mix (save)") { Task { await runResonanceMix(seed: playlistSeed) } }
+            Button("Music to seek out…") {
+                acquireSeed = playlistSeed
+                showAcquire = true
+            }
+            Button("Add to Home row…") {
+                showHomePin = true
+            }
+            if !isDaily {
+                Button("Share with…") {
+                    Task {
+                        householdMembers = (try? await appState.repository.household().members) ?? []
+                        showShare = true
                     }
-                    Button { Task { await runResonanceMix(seed: playlistSeed) } } label: {
-                        Label("Resonance mix (save)", systemImage: "music.note.list")
-                    }
-                    Button {
-                        acquireSeed = playlistSeed
-                        showAcquire = true
-                    } label: {
-                        Label("Music to seek out…", systemImage: "binoculars")
-                    }
-                    if !isDaily {
-                        Divider()
-                        Button {
-                            Task {
-                                householdMembers = (try? await appState.repository.household().members) ?? []
-                                showShare = true
-                            }
-                        } label: {
-                            Label("Share with…", systemImage: "square.and.arrow.up")
-                        }
-                    }
-                    Divider()
-                    Button("Delete playlist", role: .destructive) {
-                        Task {
-                            try? await appState.repository.deletePlaylist(id: playlistId)
-                            dismiss()
-                        }
-                    }
-                } label: {
-                    BockIcon(icon: .moreVert, size: 22)
                 }
             }
-            if !name.isEmpty {
-                ToolbarItem(placement: .topBarTrailing) {
-                    PlayDownloadActions(
-                        appState: appState,
-                        target: .playlist(id: playlistId, name: name)
-                    )
+            Button("Delete playlist", role: .destructive) {
+                Task {
+                    try? await appState.repository.deletePlaylist(id: playlistId)
+                    dismiss()
                 }
             }
+            Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog(trackMenuTrack?.title ?? "Track", isPresented: Binding(
+            get: { trackMenuTrack != nil },
+            set: { if !$0 { trackMenuTrack = nil } }
+        ), titleVisibility: .visible) {
+            if let track = trackMenuTrack, let path = track.path {
+                Button("Play") { playTrackAtIndex(tracks.firstIndex(where: { $0.path == path }) ?? 0, track: track) }
+                if appState.remoteOk {
+                    Button("Add to room") {
+                        addToRoom = AddToRoomContext(path: path, title: track.title ?? path, artist: track.artist)
+                    }
+                }
+                Button("Remove from playlist", role: .destructive) {
+                    Task {
+                        try? await appState.repository.removePlaylistTrack(playlistId: playlistId, path: path)
+                        await reload()
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
         }
         .onChange(of: filter) { _, _ in
-            editMode = .inactive
+            reorderMode = false
             Task {
                 try? await Task.sleep(nanoseconds: 400_000_000)
                 await reload()
-            }
-        }
-        .onChange(of: editMode) { _, mode in
-            if mode == .active {
-                Task { await loadAllTracksIfNeeded() }
             }
         }
         .task { await reload() }
@@ -319,6 +384,26 @@ struct PlaylistDetailView: View {
         }
         .sheet(isPresented: $showAcquire) {
             AcquireIdeasSheet(appState: appState, seed: acquireSeed)
+        }
+        .sheet(isPresented: $showHomePin) {
+            HomeSectionPinSheet(
+                playlistId: playlistId,
+                playlistName: name.isEmpty ? "Playlist" : name,
+                suggestedSectionId: HomePinTargets.suggestSectionId(playlistName: name),
+                onDismiss: { showHomePin = false },
+                onPinned: { sectionTitle in
+                    appState.toast = "Pinned to \(sectionTitle) on Home"
+                }
+            )
+        }
+        .onChange(of: name) { _, newName in
+            guard suggestHomePin || appState.suggestHomePinPlaylistId == playlistId else { return }
+            guard !homePinPrompted, !loading, !newName.isEmpty else { return }
+            homePinPrompted = true
+            showHomePin = true
+            if appState.suggestHomePinPlaylistId == playlistId {
+                appState.suggestHomePinPlaylistId = nil
+            }
         }
         .sheet(isPresented: $showShare) {
             let me = ActiveProfileStore.activeMemberId()
@@ -390,13 +475,21 @@ struct PlaylistDetailView: View {
         }
     }
 
-    private var playlistHeader: some View {
+    private var playlistMetaSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(name)
-                .font(.title.bold())
-            Text("\(total > 0 ? total : tracks.count) songs")
-                .font(.subheadline)
-                .foregroundStyle(BockColors.muted)
+            HStack {
+                Text("\(total > 0 ? total : tracks.count) songs")
+                    .font(.subheadline)
+                    .foregroundStyle(.white.opacity(0.65))
+                Spacer()
+                if !name.isEmpty {
+                    PlayDownloadActions(
+                        appState: appState,
+                        target: .playlist(id: playlistId, name: name),
+                        compact: true
+                    )
+                }
+            }
             if let badge = playlistShareBadge(
                 ownerMemberId: ownerMemberId,
                 ownerName: ownerName,
@@ -413,7 +506,7 @@ struct PlaylistDetailView: View {
             if isDaily {
                 Text("Fresh daily mix — these songs change every day. Save it to keep today's set.")
                     .font(.caption)
-                    .foregroundStyle(BockColors.muted)
+                    .foregroundStyle(.white.opacity(0.55))
                 Button {
                     Task { await saveDaily() }
                 } label: {
@@ -427,7 +520,21 @@ struct PlaylistDetailView: View {
                 .buttonStyle(.plain)
             }
         }
-        .padding(16)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 8)
+    }
+
+    private var playlistSearchRow: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.white.opacity(0.45))
+            TextField("Search in playlist", text: $filter)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .foregroundStyle(.white)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
     }
 
     private func saveDaily() async {
@@ -444,11 +551,11 @@ struct PlaylistDetailView: View {
     private var filterSortBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack {
-                sortChip("Title", sortBy == "title") { Task { await applySort(by: "title", order: sortOrder) } }
-                sortChip("Artist", sortBy == "artist") { Task { await applySort(by: "artist", order: sortOrder) } }
-                sortChip("Album", sortBy == "album") { Task { await applySort(by: "album", order: sortOrder) } }
-                sortChip("↑", sortOrder == "asc") { Task { await applySort(by: sortBy, order: "asc") } }
-                sortChip("↓", sortOrder == "desc") { Task { await applySort(by: sortBy, order: "desc") } }
+                sortChip("Title", sortBy == "title") { Task { await applySort(by: "title") } }
+                sortChip("Artist", sortBy == "artist") { Task { await applySort(by: "artist") } }
+                sortChip("Album", sortBy == "album") { Task { await applySort(by: "album") } }
+                sortChip("↑", sortOrder == "asc" && sortBy != "original") { Task { await applySort(order: "asc") } }
+                sortChip("↓", sortOrder == "desc" && sortBy != "original") { Task { await applySort(order: "desc") } }
             }
             .padding(.horizontal, 16)
         }
@@ -467,77 +574,104 @@ struct PlaylistDetailView: View {
         .buttonStyle(.plain)
     }
 
-    private func trackRow(index: Int, track: PlaylistTrack) -> some View {
-        HStack {
-            Text("\(index)")
-                .font(.caption)
-                .foregroundStyle(BockColors.muted)
-                .frame(width: 28, alignment: .trailing)
-            VStack(alignment: .leading) {
-                Text(track.title ?? "Track").foregroundStyle(BockColors.onSurface)
-                Text(track.artist ?? "").font(.caption).foregroundStyle(BockColors.muted)
+    private func reorderControls(for index: Int) -> some View {
+        VStack(spacing: 2) {
+            Button {
+                moveTrack(from: index, to: index - 1)
+            } label: {
+                Image(systemName: "chevron.up")
+                    .font(.caption.weight(.bold))
             }
-            Spacer()
-            if let path = track.path {
-                PlayDownloadActions(
-                    appState: appState,
-                    target: .song(path: path, title: track.title ?? path),
-                    compact: true
-                )
+            .disabled(index <= 0)
+            Button {
+                moveTrack(from: index, to: index + 1)
+            } label: {
+                Image(systemName: "chevron.down")
+                    .font(.caption.weight(.bold))
             }
+            .disabled(index >= tracks.count - 1)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .contextMenu {
-            if let path = track.path {
-                DiscoveryContextMenuItems(
-                    appState: appState,
-                    seed: DiscoverySeed(kind: .song, title: track.title ?? path, path: path, album: track.album, artist: track.artist),
-                    showMixMuse: $showMixMuse,
-                    mixMuseSeed: $mixMuseSeed,
-                    showAcquire: $showAcquire,
-                    acquireSeed: $acquireSeed
-                )
-                Divider()
-                if appState.remoteOk {
-                    Button {
-                        addToRoom = AddToRoomContext(
-                            path: path,
-                            title: track.title ?? path,
-                            artist: track.artist
-                        )
-                    } label: { Label("Add to room", systemImage: "plus") }
-                }
-                Button(role: .destructive) {
-                    Task {
-                        try? await appState.repository.removePlaylistTrack(playlistId: playlistId, path: path)
-                        await reload()
-                    }
-                } label: { Text("Remove") }
-            }
-        }
+        .foregroundStyle(.white.opacity(0.65))
+        .frame(width: 28)
+        .padding(.leading, 8)
     }
 
-    private func applySort(by: String, order: String) async {
-        editMode = .inactive
-        sortBy = by
-        sortOrder = order
-        await reload()
-        if filter.isEmpty {
-            try? await appState.repository.sortPlaylist(id: playlistId, sortBy: by, order: order)
-        }
-    }
-
-    private func moveTracks(from source: IndexSet, to destination: Int) {
+    private func moveTrack(from index: Int, to newIndex: Int) {
+        guard newIndex >= 0, newIndex < tracks.count, index != newIndex else { return }
         var reordered = tracks
-        reordered.move(fromOffsets: source, toOffset: destination)
+        let item = reordered.remove(at: index)
+        reordered.insert(item, at: newIndex)
         tracks = reordered
-        guard let moved = reordered.indices.contains(destination) ? reordered[destination].path : nil else { return }
+        guard let path = item.path else { return }
         Task {
             try? await appState.repository.movePlaylistTrack(
-                playlistId: playlistId, path: moved, toIndex: destination
+                playlistId: playlistId, path: path, toIndex: newIndex
             )
             await reload()
+        }
+    }
+
+    private func playTrackAtIndex(_ index: Int, track: PlaylistTrack) {
+        Task {
+            var slots: [LocalTrack?] = Array(repeating: nil, count: tracks.count)
+            await withTaskGroup(of: (Int, LocalTrack?).self) { group in
+                for (i, t) in tracks.enumerated() {
+                    group.addTask {
+                        guard let path = t.path, !path.isEmpty,
+                              let urlStr = await appState.repository.streamURL(for: path),
+                              let url = URL(string: urlStr) else { return (i, nil) }
+                        return (i, LocalTrack(
+                            path: path,
+                            title: t.title ?? path,
+                            artist: t.artist,
+                            album: t.album,
+                            streamURL: url
+                        ))
+                    }
+                }
+                for await (i, resolved) in group {
+                    slots[i] = resolved
+                }
+            }
+            let localTracks = slots.compactMap { $0 }
+            guard !localTracks.isEmpty else { return }
+            let startIdx = localTracks.firstIndex(where: { $0.path == track.path }) ?? min(index, localTracks.count - 1)
+            LocalPlaybackController.shared.setPlayContext(
+                repository: appState.repository,
+                target: .playlist(id: playlistId, name: name)
+            )
+            try? await LocalPlaybackController.shared.playTracks(localTracks, shuffle: false, startIndex: startIdx)
+            if LocalPlaybackController.shared.state.error == nil {
+                appState.showNowPlayingSheet = true
+            }
+        }
+    }
+
+    private func applySort(by: String? = nil, order: String? = nil) async {
+        reorderMode = false
+        if let by {
+            sortBy = (by == sortBy) ? "original" : by
+        }
+        if let order, sortBy != "original" {
+            sortOrder = order
+        }
+        await reload()
+        if filter.isEmpty, sortBy != "original" {
+            try? await appState.repository.sortPlaylist(id: playlistId, sortBy: sortBy, order: sortOrder)
+        }
+    }
+
+    private func loadHeroArt() async {
+        if let cached = try? await appState.repository.playlistCoverPath(id: playlistId),
+           let str = await appState.repository.artworkURL(for: cached),
+           let url = URL(string: str) {
+            heroArtURL = url
+            return
+        }
+        if let path = tracks.compactMap(\.path).first,
+           let str = await appState.repository.artworkURL(for: path),
+           let url = URL(string: str) {
+            heroArtURL = url
         }
     }
 
@@ -557,7 +691,26 @@ struct PlaylistDetailView: View {
         tracks = all
     }
 
+    private func seedFromSessionCache() {
+        let memberKey = ActiveProfileStore.activeMemberId() ?? ""
+        guard let pl = SessionDataStore.peekPlaylists(memberKey: memberKey)?.items.first(where: { $0.id == playlistId }) else {
+            return
+        }
+        if name.isEmpty { name = pl.name }
+        if total == 0 { total = pl.tracks }
+        loading = false
+        if heroArtURL == nil, let artPath = pl.artPath ?? HomeArtworkCache.playlistPath(id: playlistId) {
+            Task {
+                if let str = await appState.repository.artworkURL(for: artPath),
+                   let url = URL(string: str) {
+                    heroArtURL = url
+                }
+            }
+        }
+    }
+
     private func reload() async {
+        if filter.isEmpty { seedFromSessionCache() }
         await loadPage(1, append: false)
     }
 
@@ -604,6 +757,7 @@ struct PlaylistDetailView: View {
             } else {
                 tracks = detail.tracks
             }
+            await loadHeroArt()
         } catch {
             if !append { loadError = error.localizedDescription }
         }

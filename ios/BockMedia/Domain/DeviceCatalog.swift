@@ -5,6 +5,8 @@ enum DeviceCatalog {
         let status: AlexaRemoteStatus?
         let remoteReady: Bool
         let options: [DeviceOption]
+        let devices: [AlexaDevice]
+        let groups: [DeviceGroup]
         let atMs: Int64
     }
 
@@ -30,6 +32,16 @@ enum DeviceCatalog {
             let devices = (try? await devicesTask) ?? []
             let groups = (try? await groupsTask)?.items ?? []
             options = DeviceOptionBuilder.build(groups: groups, devices: devices)
+            let snapshot = Snapshot(
+                status: status,
+                remoteReady: remoteReady,
+                options: options,
+                devices: devices,
+                groups: groups,
+                atMs: Int64(Date().timeIntervalSince1970 * 1000)
+            )
+            cached = snapshot
+            return snapshot
         } else {
             options = []
         }
@@ -37,6 +49,8 @@ enum DeviceCatalog {
             status: status,
             remoteReady: remoteReady,
             options: options,
+            devices: [],
+            groups: [],
             atMs: Int64(Date().timeIntervalSince1970 * 1000)
         )
         cached = snapshot

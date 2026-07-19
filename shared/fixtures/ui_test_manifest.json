@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "artifactPrefix": "uitest-",
+  "householdMemberName": "UI Test",
+  "playlist": {
+    "small": {
+      "name": "UITest Small",
+      "trackCountMin": 1,
+      "trackCountMax": 15,
+      "resolveBy": "api_search_name"
+    }
+  },
+  "artist": {
+    "known": {
+      "name": "Gillian Welch",
+      "resolveBy": "api_first_match"
+    }
+  },
+  "album": {
+    "known": {
+      "title": "Soul Journey",
+      "artist": "Gillian Welch",
+      "resolveBy": "api_search"
+    }
+  },
+  "genre": {
+    "known": {
+      "name": "Rock",
+      "resolveBy": "api_first_match"
+    }
+  },
+  "search": {
+    "query": "love",
+    "shortQuery": "ab",
+    "expectedMinResults": 1
+  },
+  "automation": {
+    "testNamePrefix": "uitest-automation-"
+  }
+}

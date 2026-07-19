@@ -53,19 +53,22 @@ object SearchBrowseLoader {
 
     suspend fun load(repository: BockMediaRepository): SearchBrowseFeed = coroutineScope {
         val historyDef = async {
-            withTimeoutOrNull(REQUEST_TIMEOUT_MS) {
-                runCatching { repository.streamHistory(1, HISTORY_LIMIT) }.getOrNull()
-            }
+            SessionDataStore.peekHistory()
+                ?: withTimeoutOrNull(REQUEST_TIMEOUT_MS) {
+                    runCatching { repository.streamHistory(1, HISTORY_LIMIT) }.getOrNull()
+                }
         }
         val analyticsDef = async {
-            withTimeoutOrNull(ANALYTICS_TIMEOUT_MS) {
-                runCatching { repository.analytics() }.getOrNull()
-            }
+            SessionDataStore.peekAnalytics()
+                ?: withTimeoutOrNull(ANALYTICS_TIMEOUT_MS) {
+                    runCatching { repository.analytics() }.getOrNull()
+                }
         }
         val playlistsDef = async {
-            withTimeoutOrNull(REQUEST_TIMEOUT_MS) {
-                runCatching { repository.playlists(limit = PLAYLIST_LIMIT) }.getOrNull()
-            }
+            SessionDataStore.peekPlaylists("")
+                ?: withTimeoutOrNull(REQUEST_TIMEOUT_MS) {
+                    runCatching { repository.playlists(limit = PLAYLIST_LIMIT) }.getOrNull()
+                }
         }
         val smartDef = async {
             withTimeoutOrNull(REQUEST_TIMEOUT_MS) {
@@ -83,9 +86,10 @@ object SearchBrowseLoader {
             }
         }
         val dashboardDef = async {
-            withTimeoutOrNull(REQUEST_TIMEOUT_MS) {
-                runCatching { repository.dashboardQuick() }.getOrNull()
-            }
+            SessionDataStore.peekDashboard()
+                ?: withTimeoutOrNull(REQUEST_TIMEOUT_MS) {
+                    runCatching { repository.dashboardQuick() }.getOrNull()
+                }
         }
 
         val history = historyDef.await()?.items.orEmpty()

@@ -5,6 +5,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.bockmedia.console.data.repository.BockMediaRepository
@@ -17,6 +18,7 @@ fun LibraryArtListItem(
     artPath: String? = null,
     artistName: String? = null,
     albumName: String? = null,
+    artShape: Shape = RoundedCornerShape(6.dp),
     showUnplayed: Boolean = false,
     modifier: Modifier = Modifier,
     trailing: @Composable () -> Unit = {},
@@ -38,7 +40,7 @@ fun LibraryArtListItem(
                     model = artUrl,
                     title = title,
                     modifier = Modifier.size(48.dp),
-                    shape = RoundedCornerShape(6.dp),
+                    shape = artShape,
                     fallbackFontSize = 16.sp,
                 )
             }

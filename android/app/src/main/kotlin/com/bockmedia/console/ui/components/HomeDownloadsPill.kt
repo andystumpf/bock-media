@@ -29,12 +29,17 @@ fun HomeDownloadsPillRow(
 ) {
     val statuses = rememberVisibleDownloadStatuses()
     val active = remember(statuses) {
-        statuses.values.filter { it.state == DownloadState.Downloading || it.state == DownloadState.Failed }
+        statuses.values.filter {
+            it.state == DownloadState.Downloading ||
+                it.state == DownloadState.Idle ||
+                it.state == DownloadState.Failed
+        }
     }
     if (active.isEmpty()) return
 
     var showSheet by remember { mutableStateOf(false) }
     val downloading = active.filter { it.state == DownloadState.Downloading }
+    val queued = active.filter { it.state == DownloadState.Idle }
     val aggregateProgress = remember(downloading) {
         if (downloading.isEmpty()) 0f
         else downloading.sumOf { it.progress.toDouble() }.toFloat() / downloading.size
@@ -45,6 +50,7 @@ fun HomeDownloadsPillRow(
             "Downloading · $pct%"
         }
         downloading.isNotEmpty() -> "Downloading · ${downloading.size}"
+        queued.isNotEmpty() -> "Queued · ${queued.size}"
         active.any { it.state == DownloadState.Failed } -> "Download failed"
         else -> "Downloads"
     }
@@ -160,6 +166,13 @@ private fun DownloadProgressRow(status: OfflineCollectionStatus) {
                         color = BockGreen,
                     )
                 }
+                DownloadState.Idle -> {
+                    Text(
+                        "Queued",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = BockGreen.copy(alpha = 0.75f),
+                    )
+                }
                 DownloadState.Failed -> {
                     Text(
                         "Failed",
@@ -177,6 +190,14 @@ private fun DownloadProgressRow(status: OfflineCollectionStatus) {
                     progress = { status.progress.coerceIn(0f, 1f) },
                     modifier = Modifier.fillMaxWidth().height(4.dp),
                     color = BockGreen,
+                    trackColor = Color.White.copy(alpha = 0.15f),
+                )
+            }
+            DownloadState.Idle -> {
+                LinearProgressIndicator(
+                    progress = { 0f },
+                    modifier = Modifier.fillMaxWidth().height(4.dp),
+                    color = BockGreen.copy(alpha = 0.55f),
                     trackColor = Color.White.copy(alpha = 0.15f),
                 )
             }

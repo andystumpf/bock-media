@@ -27,6 +27,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.bockmedia.console.data.api.dto.SearchResponse
+import com.bockmedia.console.data.local.AppPreferences
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.*
 import com.bockmedia.console.ui.components.TILE_ART_SIZE_PX
@@ -37,6 +39,10 @@ import com.bockmedia.console.local.OfflineDownloadManager
 import com.bockmedia.console.ui.downloads.rememberVisibleDownloadStatuses
 import com.bockmedia.console.local.toPlayTarget
 import com.bockmedia.console.ui.components.*
+import com.bockmedia.console.ui.listen.ListenAgentMicButton
+import com.bockmedia.console.ui.search.SearchResultFilter
+import com.bockmedia.console.ui.search.SearchResultFilterChips
+import com.bockmedia.console.ui.search.SearchResultsList
 import com.bockmedia.console.ui.theme.HomePillActive
 import com.bockmedia.console.ui.theme.HomePillInactive
 import kotlinx.coroutines.delay
@@ -60,7 +66,7 @@ internal data class LibraryPaginatedBrowse(
 }
 
 private fun LibraryFilter.usesPagination(): Boolean =
-    this == LibraryFilter.Artists || this == LibraryFilter.Albums
+    this == LibraryFilter.Artists || this == LibraryFilter.Albums || this == LibraryFilter.Tracks
 
 @Composable
 fun LibraryScreen(
@@ -73,6 +79,7 @@ fun LibraryScreen(
     onOpenFavorites: () -> Unit,
     onOpenPlaylists: () -> Unit = {},
     onAccountNavigate: (String) -> Unit = {},
+    onOpenListenAgent: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -85,6 +92,18 @@ fun LibraryScreen(
     var sort by remember { mutableStateOf(LibrarySort.Recents) }
     var prefsLoaded by remember { mutableStateOf(false) }
     var search by remember { mutableStateOf("") }
+    var unifiedResults by remember { mutableStateOf<SearchResponse?>(null) }
+    var unifiedLoading by remember { mutableStateOf(false) }
+    var unifiedActiveQuery by remember { mutableStateOf("") }
+    var searchSource by remember { mutableStateOf<String?>(null) }
+    var resultFilter by remember { mutableStateOf(SearchResultFilter.All) }
+    var songRatings by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
+    val appPrefs = remember { AppPreferences(context) }
+
+    LaunchedEffect(Unit) {
+        val allLibs = appPrefs.isSearchAllLibrariesSync()
+        searchSource = if (allLibs) null else appPrefs.getSearchSourcePathSync()
+    }
 
     LaunchedEffect(Unit) {
         val prefs = LibraryPrefsStore(context).loadSync()
@@ -114,6 +133,7 @@ fun LibraryScreen(
         val (batch, total) = when (filter) {
             LibraryFilter.Artists -> LibraryLoader.loadArtistPage(repository, nextPage, searchQuery)
             LibraryFilter.Albums -> LibraryLoader.loadAlbumPage(repository, nextPage, searchQuery)
+            LibraryFilter.Tracks -> LibraryLoader.loadTrackPage(repository, nextPage, searchQuery)
             else -> emptyList<LibraryItem>() to 0
         }
         val merged = if (reset) batch else (current.items + batch).distinctBy { it.id }
@@ -204,8 +224,42 @@ fun LibraryScreen(
     }
 
     LaunchedEffect(filter, search) {
+        if (filter == LibraryFilter.All && search.isNotBlank()) {
+            delay(UnifiedSearchCoordinator.DEBOUNCE_MS)
+            val trimmed = search.trim()
+            if (trimmed.isEmpty()) return@LaunchedEffect
+        unifiedActiveQuery = trimmed
+        UnifiedSearchCoordinator.resolveCached(trimmed)?.let { cached ->
+            if (cached.fromCache) {
+                unifiedResults = cached.response
+                unifiedLoading = false
+                return@LaunchedEffect
+            }
+            unifiedResults = cached.response
+        } ?: run {
+            unifiedResults = null
+        }
+        unifiedLoading = true
+            runCatching { UnifiedSearchCoordinator.fetch(repository, trimmed, searchSource) }
+                .onSuccess { full ->
+                    if (search.trim() != trimmed || filter != LibraryFilter.All) return@onSuccess
+                    unifiedResults = full
+                    unifiedLoading = false
+                    UnifiedSearchCoordinator.cachePut(trimmed, full)
+                }
+                .onFailure {
+                    if (search.trim() == trimmed && filter == LibraryFilter.All) {
+                        unifiedResults = null
+                        unifiedLoading = false
+                    }
+                }
+            return@LaunchedEffect
+        }
+        unifiedResults = null
+        unifiedLoading = false
+        unifiedActiveQuery = ""
         if (filter.usesPagination()) {
-            delay(if (search.isBlank()) 0 else 300)
+            delay(if (search.isBlank()) 0 else UnifiedSearchCoordinator.DEBOUNCE_MS)
             loadPaginatedPage(filter, search.trim(), reset = true)
         } else {
             paginatedBrowse = LibraryPaginatedBrowse()
@@ -216,6 +270,7 @@ fun LibraryScreen(
         OfflineDownloadManager.refresh(context)
         bootstrapLibrary()
         loadHealth()
+        TabWarmCoordinator.warmLibrary(scope, context, repository)
     }
 
     LaunchedEffect(filter) {
@@ -227,11 +282,12 @@ fun LibraryScreen(
     }
 
     LaunchedEffect(filter, search) {
+        if (filter == LibraryFilter.All && search.isNotBlank()) return@LaunchedEffect
         if (search.isBlank() || filter.usesPagination()) {
             if (!filter.usesPagination()) searchItems = null
             return@LaunchedEffect
         }
-        delay(300)
+        delay(UnifiedSearchCoordinator.DEBOUNCE_MS)
         searchItems = null
         runCatching {
             searchItems = LibraryLoader.search(repository, context, filter, search)
@@ -241,11 +297,13 @@ fun LibraryScreen(
 
     val sorted = remember(displayItems, sort, filter) {
         if (filter.usesPagination()) displayItems
-        else when (sort) {
-            LibrarySort.Name -> displayItems.sortedBy { it.title.lowercase() }
-            LibrarySort.Recents -> displayItems.sortedWith(
-                compareByDescending<LibraryItem> { it.sortDate }.thenBy { it.title.lowercase() },
-            )
+        else when {
+            filter == LibraryFilter.Playlists && sort == LibrarySort.Recents -> displayItems
+            sort == LibrarySort.Name -> displayItems.sortedBy { it.title.lowercase() }
+            else -> displayItems.withIndex().sortedWith(
+                compareByDescending<IndexedValue<LibraryItem>> { it.value.sortDate }
+                    .thenBy { it.index },
+            ).map { it.value }
         }
     }
 
@@ -259,6 +317,7 @@ fun LibraryScreen(
                 onSortChange = { sort = it },
                 onOpenFavorites = onOpenFavorites,
                 onAccountNavigate = onAccountNavigate,
+                onOpenListenAgent = onOpenListenAgent,
             )
         SearchField(search, { search = it }, "Search in Your Library", modifier = Modifier.padding(horizontal = 16.dp))
         LibraryFilterRow(
@@ -302,7 +361,63 @@ fun LibraryScreen(
             val paginated = filter.usesPagination()
             val showInitialLoading = (loading && displayItems.isEmpty()) ||
                 (paginated && paginatedBrowse.loadingInitial && displayItems.isEmpty())
+            val unifiedSearchActive = filter == LibraryFilter.All && search.isNotBlank()
+            val offlineMatches = if (unifiedSearchActive) {
+                liveDownloads.filter { it.title.contains(search, ignoreCase = true) }
+            } else emptyList()
             when {
+                unifiedSearchActive && unifiedLoading && unifiedResults == null -> LoadingBox(Modifier.fillMaxSize())
+                unifiedSearchActive && unifiedResults != null -> Column(Modifier.fillMaxSize()) {
+                    SearchResultFilterChips(
+                        selected = resultFilter,
+                        onSelect = { resultFilter = it },
+                    )
+                    SearchResultsList(
+                        repository = repository,
+                        results = unifiedResults!!,
+                        query = unifiedActiveQuery.ifBlank { search.trim() },
+                        searchSource = searchSource,
+                        remoteOk = remoteOk,
+                        songRatings = songRatings,
+                        onPlay = onPlay,
+                        onOpenArtist = onOpenArtist,
+                        onOpenAlbum = onOpenAlbum,
+                        onOpenGenre = { },
+                        onOpenPlaylist = { id, _ -> onOpenPlaylist(id) },
+                        onRatingChange = { path, hit, stars ->
+                            scope.launch {
+                                runCatching {
+                                    repository.setRating(
+                                        kind = RatingKind.Song,
+                                        id = path,
+                                        stars = stars,
+                                        title = hit.title,
+                                        artist = hit.artist,
+                                        album = hit.album,
+                                    )
+                                    songRatings = songRatings + (path to stars)
+                                }
+                            }
+                        },
+                        sectionFilter = resultFilter,
+                    )
+                    if (offlineMatches.isNotEmpty()) {
+                        LibraryList(
+                            items = offlineMatches,
+                            repository = repository,
+                            remoteOk = remoteOk,
+                            onClick = { item -> handleLibraryClick(item, onPlay, onOpenPlaylist, onOpenArtist, onOpenAlbum) },
+                            onPlay = onPlay,
+                        )
+                    }
+                }
+                unifiedSearchActive && !unifiedLoading && (unifiedResults == null || !unifiedResults!!.hasAnyResults()) &&
+                    offlineMatches.isEmpty() -> Box(
+                    Modifier.fillMaxSize().padding(24.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("No results for \"$search\".", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
                 showInitialLoading -> LoadingBox(Modifier.fillMaxSize())
                 sorted.isEmpty() -> Box(
                     Modifier.fillMaxSize().padding(24.dp),
@@ -367,7 +482,7 @@ private fun handleLibraryClick(
             val album = item.albumName ?: return
             onOpenAlbum(album, item.artistName)
         }
-        LibraryItemKind.Downloaded -> onPlay(item.playTarget)
+        LibraryItemKind.Track, LibraryItemKind.Downloaded -> onPlay(item.playTarget)
     }
 }
 
@@ -379,6 +494,7 @@ private fun LibraryHeader(
     onSortChange: (LibrarySort) -> Unit,
     onOpenFavorites: () -> Unit,
     onAccountNavigate: (String) -> Unit,
+    onOpenListenAgent: () -> Unit = {},
 ) {
     Row(
         Modifier
@@ -416,6 +532,7 @@ private fun LibraryHeader(
                 contentDescription = "Toggle view",
             )
         }
+        ListenAgentMicButton(onClick = onOpenListenAgent)
         AccountMenuButton(onAccountNavigate)
     }
 }

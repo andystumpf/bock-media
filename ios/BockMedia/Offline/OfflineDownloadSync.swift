@@ -23,9 +23,28 @@ enum OfflineDownloadSync {
         saveMap(map)
     }
 
-    static func visibleCollectionIds() -> Set<String>? {
-        guard let memberId = ActiveProfileStore.activeMemberId() else { return nil }
+    static func visibleCollectionIds() -> Set<String> {
+        guard let memberId = ActiveProfileStore.activeMemberId() else { return [] }
         return Set((loadMap()[memberId] ?? []).map(\.id))
+    }
+
+    /// Attach on-disk collections not yet assigned to any profile (legacy / pre-registry).
+    static func claimOrphansForActiveProfile(store: OfflineDownloadStore = OfflineDownloadStore()) {
+        guard let memberId = ActiveProfileStore.activeMemberId() else { return }
+        var map = loadMap()
+        let assigned = Set(map.values.flatMap { $0 }.map(\.id))
+        let orphans = store.listManifests()
+            .filter { !assigned.contains($0.id) }
+            .map { $0.toRecord() }
+        guard !orphans.isEmpty else { return }
+        var list = map[memberId] ?? []
+        list.append(contentsOf: orphans)
+        map[memberId] = mergeRecords(list)
+        saveMap(map)
+    }
+
+    static func collectionIdsForMember(_ memberId: String) -> [String] {
+        (loadMap()[memberId] ?? []).map(\.id)
     }
 
     static func collectForMember(store: OfflineDownloadStore = OfflineDownloadStore()) -> [OfflineDownloadRecord] {
@@ -41,7 +60,10 @@ enum OfflineDownloadSync {
             map[memberId] = mergeRecords(records)
             saveMap(map)
         }
-        restoreMissing(records, repository: repository)
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            restoreMissing(records, repository: repository)
+        }
     }
 
     @MainActor
@@ -117,7 +139,7 @@ private extension OfflineDownloadRecord {
         case "artist": return .artist(name: title)
         case "album": return .album(name: title, artist: nil)
         case "song": return .song(path: "", title: title)
-        case "mix", "radio": return .radio(name: title, seedKind: .artist, seedName: title)
+        case "mix", "radio": return .radio(displayTitle: title, seedKind: .artist, name: title, path: nil)
         default:
             let pid = sourcePlaylistId ?? id.replacingOccurrences(of: "pl-", with: "")
             return .playlist(id: pid, name: title)

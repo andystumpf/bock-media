@@ -104,8 +104,8 @@ while IFS=$'\t' read -r count dir; do
     continue
   fi
 
-  # -q never prompts; -A skip album art fetch
-  if ! beet import -qA "$dir" >> "$LOG_FILE" 2>&1; then
+  # -q never prompts; -A skip album art; -I force re-import (incremental skips whole dirs)
+  if ! beet import -qA -I "$dir" >> "$LOG_FILE" 2>&1; then
     log "WARN: beet import had errors on: $dir (continuing)"
   fi
 

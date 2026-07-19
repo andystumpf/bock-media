@@ -7,7 +7,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import com.bockmedia.console.ui.testing.BockTestTags
 import com.bockmedia.console.BockMediaApp
 import com.bockmedia.console.BuildConfig
 import com.bockmedia.console.ui.components.BockProgressIndicator
@@ -42,7 +44,11 @@ fun SetupScreen(
     }
 
     Column(
-        Modifier.fillMaxSize().bockVerticalScroll().padding(24.dp),
+        Modifier
+            .fillMaxSize()
+            .testTag(BockTestTags.SETUP_SCREEN)
+            .bockVerticalScroll()
+            .padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text("Bock Media", style = MaterialTheme.typography.headlineMedium)

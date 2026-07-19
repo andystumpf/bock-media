@@ -1,0 +1,1078 @@
+# Bock Media mobile UI test workflow catalog (Android + iOS).
+# Validated by scripts/validate_ui_workflow_catalog.py
+
+# ── Tier 1: smoke shell, tabs, search, account menu (15) ─────────────────────
+
+- id: smoke.launch_shell
+  tier: 1
+  area: shell
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - wait_loading_gone: true
+    - assert_tag: bock_bottom_nav
+
+- id: smoke.home_content
+  tier: 1
+  area: home
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_home
+    - wait_loading_gone: true
+    - assert_any_tag: [bock_home_greeting, bock_home_feed]
+
+- id: smoke.nav_home
+  tier: 1
+  area: home
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_home
+    - wait_loading_gone: true
+    - assert_tag: bock_home_feed
+
+- id: smoke.nav_search
+  tier: 1
+  area: search
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_search
+    - assert_tag: bock_search_field
+
+- id: smoke.nav_library
+  tier: 1
+  area: library
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_library
+    - wait_loading_gone: true
+    - assert_tag: bock_library_list
+
+- id: smoke.nav_downloads
+  tier: 1
+  area: downloads
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_downloads
+    - assert_tag: bock_downloads_list
+
+- id: smoke.nav_automations
+  tier: 1
+  area: automations
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_automations
+    - wait_loading_gone: true
+    - assert_tag: bock_automations_content
+
+- id: smoke.search_browse_grid
+  tier: 1
+  area: search
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_search
+    - clear_search: true
+    - assert_tag: bock_search_browse_grid
+
+- id: smoke.search_query
+  tier: 1
+  area: search
+  platforms: [android, ios]
+  automation: automated
+  fixtures: [search.query]
+  steps:
+    - tap_nav: bock_nav_search
+    - type_search: {fixture: search.query}
+    - wait_search_results: true
+    - assert_tag: bock_search_results
+
+- id: smoke.search_clear
+  tier: 1
+  area: search
+  platforms: [android, ios]
+  automation: automated
+  fixtures: [search.query]
+  steps:
+    - tap_nav: bock_nav_search
+    - type_search: {fixture: search.query}
+    - wait_search_results: true
+    - clear_search: true
+    - assert_tag: bock_search_field
+
+- id: smoke.account_menu_opens
+  tier: 1
+  area: account
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_home
+    - open_account_menu: true
+    - assert_tag: bock_account_menu
+
+- id: smoke.account_settings
+  tier: 1
+  area: account
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_home
+    - navigate_account: Settings
+    - wait_loading_gone: true
+    - assert_tag: bock_settings_body
+
+- id: smoke.account_analytics
+  tier: 1
+  area: account
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_home
+    - navigate_account: Analytics
+    - wait_loading_gone: true
+    - assert_tag: bock_analytics_body
+
+- id: smoke.account_family
+  tier: 1
+  area: account
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_home
+    - navigate_account: Family
+    - wait_loading_gone: true
+    - assert_tag: bock_family_body
+
+- id: smoke.tab_round_trip
+  tier: 1
+  area: shell
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_home
+    - assert_tag: bock_home_feed
+    - tap_nav: bock_nav_search
+    - assert_tag: bock_search_field
+    - tap_nav: bock_nav_library
+    - wait_loading_gone: true
+    - tap_nav: bock_nav_downloads
+    - assert_tag: bock_downloads_list
+    - tap_nav: bock_nav_automations
+    - wait_loading_gone: true
+    - tap_nav: bock_nav_home
+    - assert_tag: bock_home_feed
+
+# ── Tier 2: navigation audit — all major routes (25) ─────────────────────────
+
+- id: nav.audit.home
+  tier: 2
+  area: home
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_home
+    - wait_loading_gone: true
+    - assert_tag: bock_home_feed
+
+- id: nav.audit.search
+  tier: 2
+  area: search
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_search
+    - assert_tag: bock_search_field
+
+- id: nav.audit.search_browse
+  tier: 2
+  area: search
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_search
+    - clear_search: true
+    - assert_tag: bock_search_browse_grid
+
+- id: nav.audit.library
+  tier: 2
+  area: library
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_library
+    - wait_loading_gone: true
+    - assert_tag: bock_library_list
+
+- id: nav.audit.downloads
+  tier: 2
+  area: downloads
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_downloads
+    - assert_tag: bock_downloads_list
+
+- id: nav.audit.automations
+  tier: 2
+  area: automations
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_automations
+    - wait_loading_gone: true
+    - assert_tag: bock_automations_content
+
+- id: nav.audit.settings
+  tier: 2
+  area: account
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_home
+    - navigate_account: Settings
+    - wait_loading_gone: true
+    - assert_tag: bock_settings_body
+
+- id: nav.audit.analytics
+  tier: 2
+  area: account
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_home
+    - navigate_account: Analytics
+    - wait_loading_gone: true
+    - assert_tag: bock_analytics_body
+
+- id: nav.audit.family
+  tier: 2
+  area: account
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_home
+    - navigate_account: Family
+    - wait_loading_gone: true
+    - assert_tag: bock_family_body
+
+- id: nav.audit.devices
+  tier: 2
+  area: account
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_home
+    - navigate_account: Alexa Devices
+    - wait_loading_gone: true
+    - assert_tag: bock_devices_body
+
+- id: nav.audit.rooms
+  tier: 2
+  area: account
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_home
+    - navigate_account: Rooms
+    - wait_loading_gone: true
+    - assert_tag: bock_rooms_body
+
+- id: nav.audit.voice_log
+  tier: 2
+  area: account
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_home
+    - navigate_account: Voice log
+    - wait_loading_gone: true
+    - assert_tag: bock_voice_log_body
+
+- id: nav.audit.driving
+  tier: 2
+  area: account
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_home
+    - navigate_account: Driving Mode
+    - wait_loading_gone: true
+    - assert_tag: bock_driving_body
+
+- id: nav.audit.about
+  tier: 2
+  area: account
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_home
+    - navigate_account: About
+    - wait_loading_gone: true
+    - assert_tag: bock_about_body
+
+- id: nav.audit.playlists_list
+  tier: 2
+  area: library
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_library
+    - tap_link: Playlists
+    - wait_loading_gone: true
+    - assert_tag: bock_playlists_list_body
+
+- id: nav.audit.artists_list
+  tier: 2
+  area: library
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_library
+    - tap_link: Artists
+    - wait_loading_gone: true
+    - assert_tag: bock_artists_list_body
+
+- id: nav.audit.albums_list
+  tier: 2
+  area: library
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_library
+    - tap_link: Albums
+    - wait_loading_gone: true
+    - assert_tag: bock_albums_list_body
+
+- id: nav.audit.songs_list
+  tier: 2
+  area: library
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_library
+    - tap_link: Songs
+    - wait_loading_gone: true
+    - assert_tag: bock_songs_list_body
+
+- id: nav.audit.favorites
+  tier: 2
+  area: library
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_library
+    - tap_link: Rated Songs
+    - wait_loading_gone: true
+    - assert_tag: bock_favorites_body
+
+- id: nav.audit.routines
+  tier: 2
+  area: library
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_library
+    - tap_link: Routines
+    - wait_loading_gone: true
+    - assert_tag: bock_routines_body
+
+- id: nav.audit.playlist_detail
+  tier: 2
+  area: library
+  platforms: [android, ios]
+  automation: automated
+  fixtures: [playlist.small]
+  steps:
+    - open_fixture: playlist.small
+    - wait_loading_gone: true
+    - assert_tag: bock_playlist_detail_body
+
+- id: nav.audit.artist_detail
+  tier: 2
+  area: library
+  platforms: [android, ios]
+  automation: automated
+  fixtures: [artist.known]
+  steps:
+    - open_fixture: artist.known
+    - wait_loading_gone: true
+    - assert_tag: bock_artist_detail_body
+
+- id: nav.audit.album_detail
+  tier: 2
+  area: library
+  platforms: [android, ios]
+  automation: automated
+  fixtures: [album.known]
+  steps:
+    - open_fixture: album.known
+    - wait_loading_gone: true
+    - assert_tag: bock_album_detail_body
+
+- id: nav.audit.genre_detail
+  tier: 2
+  area: library
+  platforms: [android, ios]
+  automation: automated
+  fixtures: [genre.known]
+  steps:
+    - open_fixture: genre.known
+    - wait_loading_gone: true
+    - assert_tag: bock_genre_detail_body
+
+- id: nav.audit.now_playing
+  tier: 2
+  area: playback
+  platforms: [android, ios]
+  automation: automated
+  fixtures: [playlist.small]
+  steps:
+    - open_fixture: playlist.small
+    - tap_play_first: true
+    - assert_tag: bock_now_playing_body
+
+# ── Tier 3: filters, drill-down, discovery, prefs (40) ───────────────────────
+
+- id: home.filter_all
+  tier: 3
+  area: home
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_home
+    - tap_filter: All
+    - assert_tag: bock_home_feed
+
+- id: home.filter_recents
+  tier: 3
+  area: home
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_home
+    - tap_filter: Recents
+    - assert_tag: bock_home_feed
+
+- id: home.filter_playlists
+  tier: 3
+  area: home
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_home
+    - tap_filter: Playlists
+    - assert_tag: bock_home_feed
+
+- id: home.filter_mixes
+  tier: 3
+  area: home
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_home
+    - tap_filter: Mixes
+    - assert_tag: bock_home_feed
+
+- id: home.filter_radio
+  tier: 3
+  area: home
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_home
+    - tap_filter: Radio
+    - assert_tag: bock_home_feed
+
+- id: home.filter_discover
+  tier: 3
+  area: home
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_home
+    - tap_filter: Discover
+    - assert_tag: bock_home_feed
+
+- id: home.filter_offline
+  tier: 3
+  area: home
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_home
+    - tap_filter: Downloads
+    - assert_tag: bock_home_feed
+
+- id: playlist.open_small
+  tier: 3
+  area: library
+  platforms: [android, ios]
+  automation: automated
+  fixtures: [playlist.small]
+  steps:
+    - open_fixture: playlist.small
+    - wait_loading_gone: true
+    - assert_tag: bock_playlist_detail_body
+
+- id: playlist.play_from_detail
+  tier: 3
+  area: playback
+  platforms: [android, ios]
+  automation: automated
+  fixtures: [playlist.small]
+  steps:
+    - open_fixture: playlist.small
+    - tap_play: true
+    - assert_tag: bock_now_playing_body
+
+- id: playlist.queue_from_detail
+  tier: 3
+  area: playback
+  platforms: [android, ios]
+  automation: automated
+  fixtures: [playlist.small]
+  steps:
+    - open_fixture: playlist.small
+    - tap_queue: true
+    - assert_tag: bock_now_playing_queue
+
+- id: playlist.discovery_menu
+  tier: 3
+  area: discovery
+  platforms: [android, ios]
+  automation: automated
+  fixtures: [playlist.small]
+  steps:
+    - open_fixture: playlist.small
+    - tap_discovery_menu: true
+    - assert_tag: bock_discovery_menu
+
+- id: library.playlists_list
+  tier: 3
+  area: library
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_library
+    - tap_link: Playlists
+    - wait_loading_gone: true
+    - assert_tag: bock_playlists_list_body
+
+- id: library.artists_list
+  tier: 3
+  area: library
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_library
+    - tap_link: Artists
+    - wait_loading_gone: true
+    - assert_tag: bock_artists_list_body
+
+- id: library.albums_list
+  tier: 3
+  area: library
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_library
+    - tap_link: Albums
+    - wait_loading_gone: true
+    - assert_tag: bock_albums_list_body
+
+- id: library.songs_list
+  tier: 3
+  area: library
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_library
+    - tap_link: Songs
+    - wait_loading_gone: true
+    - assert_tag: bock_songs_list_body
+
+- id: library.favorites_body
+  tier: 3
+  area: library
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_library
+    - tap_link: Rated Songs
+    - wait_loading_gone: true
+    - assert_tag: bock_favorites_body
+
+- id: library.open_artist_known
+  tier: 3
+  area: library
+  platforms: [android, ios]
+  automation: automated
+  fixtures: [artist.known]
+  steps:
+    - open_fixture: artist.known
+    - wait_loading_gone: true
+    - assert_tag: bock_artist_detail_body
+
+- id: library.open_album_known
+  tier: 3
+  area: library
+  platforms: [android, ios]
+  automation: automated
+  fixtures: [album.known]
+  steps:
+    - open_fixture: album.known
+    - wait_loading_gone: true
+    - assert_tag: bock_album_detail_body
+
+- id: library.open_genre_known
+  tier: 3
+  area: library
+  platforms: [android, ios]
+  automation: automated
+  fixtures: [genre.known]
+  steps:
+    - open_fixture: genre.known
+    - wait_loading_gone: true
+    - assert_tag: bock_genre_detail_body
+
+- id: library.search_to_artist
+  tier: 3
+  area: search
+  platforms: [android, ios]
+  automation: automated
+  fixtures: [artist.known, search.query]
+  steps:
+    - tap_nav: bock_nav_search
+    - type_search: {fixture: artist.known}
+    - wait_search_results: true
+    - tap_search_result: {fixture: artist.known}
+    - assert_tag: bock_artist_detail_body
+
+- id: library.search_to_album
+  tier: 3
+  area: search
+  platforms: [android, ios]
+  automation: automated
+  fixtures: [album.known]
+  steps:
+    - tap_nav: bock_nav_search
+    - type_search: {fixture: album.known}
+    - wait_search_results: true
+    - tap_search_result: {fixture: album.known}
+    - assert_tag: bock_album_detail_body
+
+- id: downloads.list_visible
+  tier: 3
+  area: downloads
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_downloads
+    - assert_tag: bock_downloads_list
+
+- id: downloads.collection_row
+  tier: 3
+  area: downloads
+  platforms: [android, ios]
+  automation: automated
+  requires: [downloads_present]
+  steps:
+    - tap_nav: bock_nav_downloads
+    - tap_first: bock_download_collection_row
+    - assert_tag: bock_download_detail_body
+
+- id: downloads.open_detail
+  tier: 3
+  area: downloads
+  platforms: [android, ios]
+  automation: automated
+  requires: [downloads_present]
+  steps:
+    - tap_nav: bock_nav_downloads
+    - tap_first: bock_download_collection_row
+    - wait_loading_gone: true
+    - assert_tag: bock_download_detail_body
+
+- id: downloads.empty_state
+  tier: 3
+  area: downloads
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_downloads
+    - assert_any_text: [Nothing downloaded, No downloads]
+
+- id: playback.device_picker_sheet
+  tier: 3
+  area: playback
+  platforms: [android, ios]
+  automation: automated
+  fixtures: [playlist.small]
+  steps:
+    - open_fixture: playlist.small
+    - tap_play: true
+    - tap_device_picker: true
+    - assert_tag: bock_device_picker_sheet
+    - dismiss_sheet: true
+
+- id: search.discovery_pins_editor
+  tier: 3
+  area: discovery
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_search
+    - clear_search: true
+    - tap_link: Edit shortcuts
+    - dismiss_sheet: true
+
+- id: search.discovery_sonic_adventure
+  tier: 3
+  area: discovery
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_search
+    - clear_search: true
+    - tap_link: Sonic Adventure
+    - navigate_back: true
+    - assert_tag: bock_search_browse_grid
+
+- id: search.discovery_sonic_sage
+  tier: 3
+  area: discovery
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_search
+    - clear_search: true
+    - tap_link: Sonic Sage
+    - dismiss_sheet: true
+    - assert_tag: bock_search_browse_grid
+
+- id: search.discovery_mixmuse_sheet
+  tier: 3
+  area: discovery
+  platforms: [android, ios]
+  automation: automated
+  fixtures: [album.known]
+  steps:
+    - open_fixture: album.known
+    - tap_link: MixMuse
+    - assert_tag: bock_mixmuse_sheet
+    - dismiss_sheet: true
+
+- id: search.browse_grid_sections
+  tier: 3
+  area: search
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_search
+    - clear_search: true
+    - assert_tag: bock_search_browse_grid
+    - assert_any_text: [Sonic explorations, Edit shortcuts]
+
+- id: listen_agent.from_home
+  tier: 3
+  area: listen_agent
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_home
+    - tap_link: Listen agent
+    - assert_tag: bock_listen_agent_body
+    - dismiss_sheet: true
+
+- id: listen_agent.from_search
+  tier: 3
+  area: listen_agent
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_search
+    - tap_link: Listen agent
+    - assert_tag: bock_listen_agent_body
+    - dismiss_sheet: true
+
+- id: listen_agent.submit_prompt_stub
+  tier: 3
+  area: listen_agent
+  platforms: [android, ios]
+  automation: manual
+  steps:
+    - tap_nav: bock_nav_home
+    - tap_link: Listen agent
+    - type_prompt: Play something mellow
+    - submit_prompt: true
+    - assert_tag: bock_listen_agent_body
+
+- id: automations.list_content
+  tier: 3
+  area: automations
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_automations
+    - wait_loading_gone: true
+    - assert_tag: bock_automations_content
+
+- id: automations.open_row
+  tier: 3
+  area: automations
+  platforms: [android, ios]
+  automation: automated
+  requires: [automation_present]
+  steps:
+    - tap_nav: bock_nav_automations
+    - tap_first: bock_automation_row
+    - assert_tag: bock_automation_form
+
+- id: automations.create_form
+  tier: 3
+  area: automations
+  platforms: [android, ios]
+  automation: manual
+  steps:
+    - tap_nav: bock_nav_automations
+    - tap_link: New automation
+    - assert_tag: bock_automation_form
+    - dismiss_sheet: true
+
+- id: automations.empty_state
+  tier: 3
+  area: automations
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_automations
+    - assert_any_text: [No automations, Automations]
+
+- id: settings.wifi_only_toggle
+  tier: 3
+  area: settings
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_home
+    - navigate_account: Settings
+    - toggle: bock_settings_wifi_only
+    - assert_tag: bock_settings_body
+
+- id: settings.continue_after_queue
+  tier: 3
+  area: settings
+  platforms: [android, ios]
+  automation: automated
+  steps:
+    - tap_nav: bock_nav_home
+    - navigate_account: Settings
+    - tap_picker: bock_settings_continue_picker
+    - select_option: Artist radio
+    - assert_tag: bock_settings_body
+
+# ── Tier 4: profile switch + offline resilience (8) ──────────────────────────
+
+- id: profile.switch_member_a
+  tier: 4
+  area: profile
+  platforms: [android, ios]
+  automation: automated
+  requires: [two_household_members]
+  steps:
+    - switch_profile: member_a
+    - assert_tag: bock_home_feed
+
+- id: profile.switch_member_b
+  tier: 4
+  area: profile
+  platforms: [android, ios]
+  automation: automated
+  requires: [two_household_members]
+  steps:
+    - switch_profile: member_b
+    - assert_tag: bock_home_feed
+
+- id: profile.prefs_isolated_continue
+  tier: 4
+  area: profile
+  platforms: [android, ios]
+  automation: automated
+  requires: [two_household_members]
+  steps:
+    - switch_profile: member_a
+    - navigate_account: Settings
+    - tap_picker: bock_settings_continue_picker
+    - select_option: Artist radio
+    - switch_profile: member_b
+    - navigate_account: Settings
+    - assert_option: Similar songs
+
+- id: profile.prefs_isolated_wifi
+  tier: 4
+  area: profile
+  platforms: [android, ios]
+  automation: automated
+  requires: [two_household_members]
+  steps:
+    - switch_profile: member_a
+    - navigate_account: Settings
+    - toggle: bock_settings_wifi_only
+    - switch_profile: member_b
+    - navigate_account: Settings
+    - assert_toggle_off: bock_settings_wifi_only
+
+- id: profile.analytics_scope
+  tier: 4
+  area: profile
+  platforms: [android, ios]
+  automation: automated
+  requires: [two_household_members]
+  steps:
+    - switch_profile: member_a
+    - navigate_account: Analytics
+    - assert_tag: bock_analytics_total_plays
+    - switch_profile: member_b
+    - navigate_account: Analytics
+    - assert_tag: bock_analytics_body
+
+- id: offline.home_filter_shows_downloads
+  tier: 4
+  area: offline
+  platforms: [android, ios]
+  automation: manual
+  requires: [downloads_present, airplane_mode]
+  steps:
+    - enable_airplane_mode: true
+    - tap_nav: bock_nav_home
+    - tap_filter: Downloads
+    - assert_tag: bock_home_feed
+    - disable_airplane_mode: true
+
+- id: offline.downloads_tab_without_network
+  tier: 4
+  area: offline
+  platforms: [android, ios]
+  automation: manual
+  requires: [downloads_present, airplane_mode]
+  steps:
+    - enable_airplane_mode: true
+    - tap_nav: bock_nav_downloads
+    - assert_tag: bock_downloads_list
+    - disable_airplane_mode: true
+
+- id: offline.playback_local_stub
+  tier: 4
+  area: offline
+  platforms: [android, ios]
+  automation: manual
+  requires: [downloads_present, airplane_mode]
+  steps:
+    - enable_airplane_mode: true
+    - tap_nav: bock_nav_downloads
+    - tap_first: bock_download_collection_row
+    - tap_play: true
+    - assert_tag: bock_now_playing_body
+    - disable_airplane_mode: true
+
+# ── Tier 6: API resilience stubs (8) ─────────────────────────────────────────
+
+- id: resilience.home_api_500
+  tier: 6
+  area: resilience
+  platforms: [android, ios]
+  automation: stub
+  steps:
+    - stub_inject: {endpoint: /api/home, status: 500}
+    - tap_nav: bock_nav_home
+    - assert_any_text: [Something went wrong, Try again, Nothing here yet]
+    - stub_clear: true
+
+- id: resilience.playlist_timeout
+  tier: 6
+  area: resilience
+  platforms: [android, ios]
+  automation: stub
+  fixtures: [playlist.small]
+  steps:
+    - stub_inject: {endpoint: /api/playlists, delay_ms: 30000}
+    - open_fixture: playlist.small
+    - assert_any_text: [Loading, timed out, Try again]
+    - stub_clear: true
+
+- id: resilience.mid_sync
+  tier: 6
+  area: resilience
+  platforms: [android, ios]
+  automation: stub
+  steps:
+    - stub_inject: {endpoint: /api/sync, status: 503}
+    - tap_nav: bock_nav_home
+    - wait_loading_gone: true
+    - assert_tag: bock_home_feed
+    - stub_clear: true
+
+- id: resilience.search_api_error
+  tier: 6
+  area: resilience
+  platforms: [android, ios]
+  automation: stub
+  fixtures: [search.query]
+  steps:
+    - stub_inject: {endpoint: /api/search, status: 502}
+    - tap_nav: bock_nav_search
+    - type_search: {fixture: search.query}
+    - assert_any_text: [Search failed, Try again, No results]
+    - stub_clear: true
+
+- id: resilience.library_empty_cache
+  tier: 6
+  area: resilience
+  platforms: [android, ios]
+  automation: stub
+  steps:
+    - stub_inject: {endpoint: /api/library, body: empty}
+    - tap_nav: bock_nav_library
+    - wait_loading_gone: true
+    - assert_any_text: [No items found, Library needs attention]
+    - stub_clear: true
+
+- id: resilience.downloads_sync_fail
+  tier: 6
+  area: resilience
+  platforms: [android, ios]
+  automation: stub
+  steps:
+    - stub_inject: {endpoint: /api/downloads, status: 500}
+    - tap_nav: bock_nav_downloads
+    - assert_tag: bock_downloads_list
+    - assert_any_text: [Sync failed, Try again]
+    - stub_clear: true
+
+- id: resilience.automations_load_fail
+  tier: 6
+  area: resilience
+  platforms: [android, ios]
+  automation: stub
+  steps:
+    - stub_inject: {endpoint: /api/automations, status: 500}
+    - tap_nav: bock_nav_automations
+    - assert_any_text: [Could not load, Try again, No automations]
+    - stub_clear: true
+
+- id: resilience.analytics_degraded
+  tier: 6
+  area: resilience
+  platforms: [android, ios]
+  automation: stub
+  steps:
+    - stub_inject: {endpoint: /api/analytics, status: 503}
+    - tap_nav: bock_nav_home
+    - navigate_account: Analytics
+    - assert_any_text: [No analytics data, unavailable, Try again]
+    - stub_clear: true

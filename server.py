@@ -33,6 +33,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding as rsa_padding
 from flask import Flask, jsonify, request, send_from_directory, send_file, Response, stream_with_context
 
+import bock_aggregates
 import bock_loudness
 import bock_continue
 import bock_folders
@@ -45,6 +46,9 @@ from bock_routes import register as register_bock_routes
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 app = Flask(__name__, static_folder=os.path.join(HERE, 'public'))
+
+import bock_perf
+app.after_request(bock_perf.attach_server_timing)
 
 # Service-health bookkeeping (surfaced by /api/health + the dashboard card).
 _START_TIME = time.time()
@@ -151,6 +155,11 @@ def _albums_agg_exists():
     return bool(row.get('name'))
 
 
+def _genres_agg_exists():
+    row = db_one("SELECT name FROM sqlite_master WHERE type='table' AND name='genres_agg'")
+    return bool(row.get('name'))
+
+
 def refresh_albums_agg():
     """Rebuild albums_agg from songs_cache. One row per (album, artist)."""
     global _ALBUMS_AGG_BUILDING
@@ -161,22 +170,7 @@ def refresh_albums_agg():
     try:
         print('[albums_agg] rebuilding…', flush=True)
         conn = get_db_rw()
-        conn.execute('DROP TABLE IF EXISTS albums_agg')
-        conn.execute('''
-            CREATE TABLE albums_agg AS
-            SELECT album,
-                   COALESCE(NULLIF(album_artist, ''), artist) AS artist,
-                   COUNT(*) AS track_count,
-                   MAX(CAST(NULLIF(year, '') AS INTEGER)) AS year,
-                   MIN(CASE WHEN path IS NOT NULL AND path != '' THEN path END) AS art_path,
-                   MIN(first_seen_at) AS first_seen_at
-            FROM songs_cache
-            WHERE album IS NOT NULL AND album != ''
-            GROUP BY album, COALESCE(NULLIF(album_artist, ''), artist)
-        ''')
-        conn.execute('CREATE INDEX idx_albums_agg_album ON albums_agg(album COLLATE NOCASE)')
-        conn.execute('CREATE INDEX idx_albums_agg_artist ON albums_agg(artist COLLATE NOCASE)')
-        conn.commit()
+        bock_aggregates.rebuild(conn)
         conn.close()
         print('[albums_agg] rebuild complete', flush=True)
         return True
@@ -262,7 +256,7 @@ def xml_text(el, tag, default=''):
 def xml_int(el, tag, default=0):
     try:
         return int(xml_text(el, tag, str(default)))
-    except:
+    except (TypeError, ValueError):
         return default
 
 _pref_cache: dict = {}
@@ -277,7 +271,7 @@ def get_pref(xml_tag, default=''):
             tree = ET.parse(path)
             _pref_cache = {el.tag: (el.text or '') for el in tree.getroot()}
             _pref_mtime = mtime
-    except:
+    except OSError:
         pass
     return _pref_cache.get(xml_tag, default)
 
@@ -301,8 +295,27 @@ def apply_logging():
 # Direct port-forward hits (public IP :3001) must NOT treat these as public.
 _ALEXA_TUNNEL_PREFIXES = ('/alexa', '/stream/', '/artwork/', '/music', '/oauth/')
 
-def _is_loopback_remote():
+def _effective_remote_addr():
+    """Peer IP, unwrapping the local nginx proxy.
+
+    nginx fronts gunicorn on :3001 and always overwrites X-Real-IP with the
+    actual peer, so when the direct peer is loopback we trust that header.
+    Without this every client shares remote_addr=127.0.0.1 — which broke the
+    per-IP auth rate limit (one stale client locked out the whole LAN) and
+    let external clients forge Cf-* headers to pass the tunnel check.
+    """
     ra = (request.remote_addr or '').strip().split('%')[0]
+    try:
+        if ipaddress.ip_address(ra).is_loopback:
+            xr = (request.headers.get('X-Real-IP') or '').strip().split('%')[0]
+            if xr:
+                return xr
+    except ValueError:
+        pass
+    return ra
+
+def _is_loopback_remote():
+    ra = _effective_remote_addr()
     try:
         return ipaddress.ip_address(ra).is_loopback
     except ValueError:
@@ -311,9 +324,20 @@ def _is_loopback_remote():
 def _is_tunnel_request():
     # Trust Cf-* only when cloudflared connects locally (loopback). Port-forward
     # clients can forge Cf-Connecting-Ip to bypass external auth (C-03).
-    if not (request.headers.get('Cf-Connecting-Ip') or request.headers.get('Cf-Ray')):
-        return False
-    return _is_loopback_remote()
+    if (request.headers.get('Cf-Connecting-Ip') or request.headers.get('Cf-Ray')):
+        if _is_loopback_remote():
+            return True
+    # cloudflared → nginx on 127.0.0.1:3001 — peer is loopback and Host is the tunnel hostname.
+    if _is_loopback_remote():
+        try:
+            pub = (load_config().get('publicUrl') or '').strip().rstrip('/')
+            if pub.startswith('https://'):
+                tun_host = pub[8:].split('/')[0].split(':')[0].lower()
+                if tun_host and _host_ip() == tun_host:
+                    return True
+        except Exception:
+            pass
+    return False
 
 def _client_ip():
     """Best-effort client IP. Trust Cf-Connecting-Ip only on Cloudflare tunnel hits."""
@@ -321,7 +345,7 @@ def _client_ip():
         cf = (request.headers.get('Cf-Connecting-Ip') or '').strip()
         if cf:
             return cf.split(',')[0].strip()
-    return (request.remote_addr or '').strip()
+    return _effective_remote_addr()
 
 def _is_private_ip(ip):
     if not ip:
@@ -381,7 +405,7 @@ def _mobile_api_token_ok():
     try:
         ma = load_config().get('mobileApi') or {}
         expected = ma.get('token', '').strip()
-        if not expected or token != expected:
+        if not expected or not hmac.compare_digest(token, expected):
             return False
         ext = _is_external_request() and not _is_tunnel_request()
         tun = _is_tunnel_request()
@@ -404,24 +428,21 @@ def _redact_config(cfg):
             redacted[key] = {'_redacted': True}
     return redacted
 
+def _production_tunnel_configured():
+    import bock_security
+    return bock_security.production_tunnel_configured(load_config())
+
+
 def _allow_open_lan_api():
+    # P0: ignore open-LAN when a real tunnel is configured without credentials.
+    if _production_tunnel_configured() and not _credentials_configured():
+        return False
     return _cfg_flag('mobileApi', 'allowOpenLanApi')
 
 def _allow_open_lan_media():
+    if _production_tunnel_configured() and not _credentials_configured():
+        return False
     return _cfg_flag('mobileApi', 'allowOpenLanMedia')
-
-def _allow_public_console():
-    """Public demo (e.g. Render) — browse UI + read APIs without auth."""
-    v = os.environ.get('OURMEDIA_ALLOW_PUBLIC_CONSOLE', '').strip().lower()
-    if v in ('1', 'true', 'yes', 'on'):
-        return True
-    if os.environ.get('RENDER', '').strip().lower() == 'true':
-        return True
-    # Demo fixture path (Render blueprint sets this; also the server default).
-    dd = os.environ.get('OURMEDIA_DATA_DIR', DATA_DIR).replace('\\', '/')
-    if dd.endswith('fixtures/demo-data') or '/fixtures/demo-data' in dd:
-        return True
-    return False
 
 def _credentials_configured():
     if get_pref('WebPassword', '').strip():
@@ -510,7 +531,6 @@ def _api_read_auth_ok():
 _API_LAN_GET_PUBLIC = frozenset({
     '/api/health',
     '/api/auth/info',
-    '/api/summary',
 })
 
 def _api_auth_required():
@@ -521,7 +541,13 @@ def _api_auth_required():
         return False
     return _cfg_flag('mobileApi', 'allowExternalAccess')
 
+def _alexa_debug(msg):
+    if os.environ.get('OURMEDIA_DEBUG', '').strip().lower() in ('1', 'true', 'yes', 'on'):
+        print(msg, flush=True)
+
 def _auth_required():
+    import bock_rate_limit
+    bock_rate_limit.record_auth_failure(_effective_remote_addr() or 'unknown')
     return Response('Authentication required', 401,
                     {'WWW-Authenticate': 'Basic realm="Bock Media"'})
 
@@ -717,7 +743,24 @@ def _warn_app_version_mismatch(releases, android_version):
             flush=True,
         )
 
+def _ios_app_deployed_version():
+    """Version stamp written next to the IPA in DATA_DIR on mobile deploy."""
+    path = os.path.join(DATA_DIR, 'bockmedia-console-ios.version')
+    try:
+        if os.path.isfile(path):
+            with open(path, encoding='utf-8') as fh:
+                v = (fh.read() or '').strip()
+            if v:
+                return v
+    except Exception as e:
+        print(f'app ios version sidecar read {path}: {e}', flush=True)
+    return None
+
+
 def _ios_app_version():
+    deployed = _ios_app_deployed_version()
+    if deployed:
+        return deployed
     try:
         with open(os.path.join(HERE, 'ios', 'project.yml')) as f:
             for line in f:
@@ -874,6 +917,11 @@ _APP_DOWNLOAD_PATHS = frozenset({
 
 @app.before_request
 def check_auth():
+    if request.path.startswith('/api/'):
+        import bock_rate_limit
+        client_key = _effective_remote_addr() or 'unknown'
+        if bock_rate_limit.is_blocked(client_key):
+            return _forbidden('Too many failed auth attempts')
     if request.path == '/api/auth/info':
         return None
 
@@ -889,11 +937,6 @@ def check_auth():
     is_alexa_tunnel_path = any(request.path.startswith(p) for p in _ALEXA_TUNNEL_PREFIXES)
     external = _is_external_request()
     tunnel = _is_tunnel_request()
-
-    if _allow_public_console():
-        if any(request.path.startswith(p) for p in ('/alexa', '/music', '/oauth/')):
-            return _forbidden('Alexa and OAuth endpoints are not available on the public demo')
-        return None
 
     # Direct port-forward / public-IP access (:3001) — never expose Alexa paths or
     # anonymous streams. Require admin Basic auth and/or mobileApi Bearer token.
@@ -911,9 +954,9 @@ def check_auth():
         return _auth_required()
 
     if tunnel and not is_alexa_tunnel_path:
-        if request.path.startswith('/api/') and _mobile_api_token_ok():
+        if _mobile_api_token_ok() or _basic_auth_ok():
             return None
-        return _forbidden()
+        return _auth_required()
 
     # Alexa/audio fetches via cloudflared (loopback + Cf-* headers).
     if tunnel and is_alexa_tunnel_path:
@@ -941,15 +984,18 @@ def check_auth():
                 'API writes require authentication — set credentials or mobileApi.allowOpenLanApi'
             )
 
-    # Read-only API on LAN — require auth when credentials are configured (C-01 partial).
+    # Read-only API on LAN — default-deny unless allowOpenLanApi or credentials (C-01).
     if (request.path.startswith('/api/')
             and request.method == 'GET'
             and request.path not in _API_LAN_GET_PUBLIC
             and _is_lan_request()
-            and not tunnel
-            and _credentials_configured()):
+            and not tunnel):
         if not _api_read_auth_ok():
-            return _auth_required()
+            if _credentials_configured():
+                return _auth_required()
+            return _forbidden(
+                'LAN API reads require authentication — set credentials or mobileApi.allowOpenLanApi'
+            )
 
     if request.path.startswith('/api/') and _mobile_api_token_ok():
         return None
@@ -1073,6 +1119,29 @@ def admin_upload_android_apk():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
     print(f'mobile-app upload: android v{version} ({len(data)} bytes) -> {apk_path}', flush=True)
+    return jsonify({'ok': True, 'version': version, 'sizeMb': round(len(data) / (1024 * 1024), 1)})
+
+
+@app.route('/api/admin/mobile-app/ios', methods=['PUT'])
+def admin_upload_ios_ipa():
+    """Upload sideload IPA + version sidecar (mobile API token; works off-LAN)."""
+    if not _mobile_api_token_ok():
+        return _forbidden()
+    version = (request.headers.get('X-App-Version') or request.args.get('version') or '').strip()
+    if not version:
+        return jsonify({'error': 'version required (X-App-Version header or ?version=)'}), 400
+    data = request.get_data()
+    if len(data) < 100_000:
+        return jsonify({'error': 'IPA body too small'}), 400
+    ipa_path = os.path.join(DATA_DIR, 'bockmedia-console.ipa')
+    ver_path = os.path.join(DATA_DIR, 'bockmedia-console-ios.version')
+    try:
+        _atomic_binary_write(ipa_path, data)
+        with open(ver_path, 'w', encoding='utf-8') as fh:
+            fh.write(version)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    print(f'mobile-app upload: ios v{version} ({len(data)} bytes) -> {ipa_path}', flush=True)
     return jsonify({'ok': True, 'version': version, 'sizeMb': round(len(data) / (1024 * 1024), 1)})
 
 
@@ -1268,7 +1337,13 @@ def _render_app_download_html(android, ios, releases=None):
 # ── API: Summary ─────────────────────────────────────────────────────────────
 
 @app.route('/api/summary')
+@bock_perf.timed_route('summary')
 def summary():
+    import catalog_cache
+    cached = catalog_cache.read_summary_cache(DATA_DIR)
+    if cached is not None:
+        return jsonify(cached)
+
     songs = db_one('SELECT COUNT(*) as count FROM songs_cache')
     artists = db_one('SELECT COUNT(DISTINCT artist) as count FROM songs_cache WHERE artist IS NOT NULL AND artist != ""')
     albums = db_one('SELECT COUNT(DISTINCT album) as count FROM songs_cache WHERE album IS NOT NULL AND album != ""')
@@ -1278,21 +1353,25 @@ def summary():
     try:
         wf = ET.parse(os.path.join(DATA_DIR, 'WatchFolders.xml'))
         watch_folders = len(wf.getroot().findall('WatchFolder'))
-    except:
+    except (OSError, ET.ParseError):
         pass
     try:
-        tree = _load_playlists_tree()
-        playlists = len(tree.getroot().findall('Entry'))
-    except:
+        playlists = len(_load_playlist_catalog_raw())
+    except Exception:
         pass
 
-    return jsonify({
+    stats = {
         'songs': songs.get('count', 0),
         'artists': artists.get('count', 0),
         'albums': albums.get('count', 0),
         'playlists': playlists,
         'watchFolders': watch_folders,
-    })
+    }
+    try:
+        catalog_cache.write_summary_cache(DATA_DIR, stats)
+    except Exception:
+        pass
+    return jsonify(stats)
 
 # ── API: Watch Folders ───────────────────────────────────────────────────────
 
@@ -1344,38 +1423,147 @@ def watchfolders():
 
 # ── API: Playlists ───────────────────────────────────────────────────────────
 
+_PLAYLIST_CATALOG_CACHE = {'mtime': 0.0, 'items': ()}
+
+
+def _load_playlist_catalog_raw():
+    """All playlist dicts from sidecar or XML (mtime-cached in memory)."""
+    global _PLAYLIST_CATALOG_CACHE
+    import catalog_cache
+    try:
+        mtime = os.path.getmtime(PLAYLISTS_XML)
+    except OSError:
+        mtime = 0.0
+    cached = _PLAYLIST_CATALOG_CACHE
+    if cached.get('mtime') == mtime and cached.get('items'):
+        return list(cached['items'])
+    sidecar = catalog_cache.read_playlists_index(DATA_DIR, PLAYLISTS_XML)
+    if sidecar is None:
+        sidecar = catalog_cache.read_playlists_index(DATA_DIR, PLAYLISTS_XML, allow_stale=True)
+    if sidecar is not None:
+        items = list(sidecar)
+    else:
+        items = []
+        try:
+            tree = _load_playlists_tree()
+            for entry in tree.getroot().findall('Entry'):
+                key = entry.find('Key')
+                if key is None:
+                    continue
+                source = xml_text(key, 'SourceID')
+                items.append({
+                    'id': xml_text(key, 'ID'),
+                    'name': xml_text(key, 'Name'),
+                    'trackCount': xml_int(key, 'TrackCount'),
+                    'shuffle': xml_text(key, 'Shuffle') == 'true',
+                    'loop': xml_text(key, 'Loop') == 'true',
+                    'createDate': xml_text(key, 'CreateDate'),
+                    'lastUsed': xml_text(key, 'LastUsed'),
+                    'source': source,
+                    'sourceName': xml_text(key, 'SourceName'),
+                    'isAudioBook': xml_text(key, 'IsAudioBook') == 'true',
+                    'editable': bool(source and os.path.isfile(source)),
+                })
+            try:
+                catalog_cache.write_playlists_index(DATA_DIR, items, mtime)
+            except Exception:
+                pass
+        except Exception as e:
+            print(f'Playlist catalog error: {e}', flush=True)
+    _PLAYLIST_CATALOG_CACHE = {'mtime': mtime, 'items': tuple(items)}
+    _PLAYLIST_ENTRIES_CACHE.clear()
+    _PLAYLIST_ENTRIES_CACHE.update({'mtime': 0, 'entries': ()})
+    return list(items)
+
+
+def _playlist_summaries_for_home(member_filter='', limit=500):
+    """Lightweight playlist rows for /api/home (member-scoped, cover from disk cache only)."""
+    pl_folders = bock_folders.load_folders(PLAYLIST_FOLDERS_PATH)
+    assignments = pl_folders.get('assignments') or {}
+    pl_meta = _load_playlist_meta()
+    household = _load_household() if member_filter else None
+    _start_playlist_cover_warm()
+    out = []
+    for raw in _load_playlist_catalog_raw():
+        pid = raw.get('id') or ''
+        meta_entry = pl_meta.get(pid)
+        if member_filter and not _playlist_visible_to(meta_entry, member_filter):
+            continue
+        item = bock_folders.enrich_playlist_item({
+            **raw,
+            **_public_playlist_meta(meta_entry, household),
+        }, assignments)
+        item['artPath'] = _playlist_cover_fast(pid, raw.get('source'), compute=False)
+        out.append(item)
+        if len(out) >= limit:
+            break
+    return {'items': out, 'total': len(out)}
+
+
+def _recently_created_playlists_for_home(member_filter='', limit=10):
+    """Top N playlists by CreateDate from the full catalog (not the home playlist cap)."""
+    pl_folders = bock_folders.load_folders(PLAYLIST_FOLDERS_PATH)
+    assignments = pl_folders.get('assignments') or {}
+    pl_meta = _load_playlist_meta()
+    household = _load_household() if member_filter else None
+    candidates = []
+    for raw in _load_playlist_catalog_raw():
+        pid = raw.get('id') or ''
+        if (raw.get('trackCount') or 0) <= 0:
+            continue
+        name = (raw.get('name') or '').strip()
+        if name.startswith('Automations -'):
+            continue
+        meta_entry = pl_meta.get(pid)
+        if member_filter and not _playlist_visible_to(meta_entry, member_filter):
+            continue
+        item = bock_folders.enrich_playlist_item({
+            **raw,
+            **_public_playlist_meta(meta_entry, household),
+        }, assignments)
+        item['artPath'] = _playlist_cover_fast(pid, raw.get('source'), compute=False)
+        candidates.append(item)
+    candidates.sort(key=lambda x: x.get('createDate') or '', reverse=True)
+    items = candidates[:max(1, int(limit or 10))]
+    return {'items': items, 'total': len(items)}
+
+
 @app.route('/api/playlists')
+@bock_perf.timed_route('playlists')
 def playlists():
+    import bock_search
     page = int(request.args.get('page', 1))
     limit = int(request.args.get('limit', 50))
-    search = request.args.get('search', '').lower()
-    sort_by = (request.args.get('sortBy') or 'name').strip().lower()
+    search = (request.args.get('search') or '').strip()
+    sort_by = (request.args.get('sortBy') or 'catalog').strip().lower()
     order = (request.args.get('order') or 'asc').strip().lower()
     if sort_by in ('tracks', 'track', 'trackcount', 'count'):
         sort_by = 'trackCount'
+    elif sort_by in ('catalog', 'order', 'original'):
+        sort_by = 'catalog'
     elif sort_by != 'name':
-        sort_by = 'name'
+        sort_by = 'catalog'
     reverse = order == 'desc'
 
     member_filter = (request.args.get('member') or '').strip()
     if not member_filter and (request.args.get('clientId') or '').strip():
         member_filter = member_for_client(request.args.get('clientId').strip()) or ''
     folder_filter = (request.args.get('folder') or '').strip()
+    fields = (request.args.get('fields') or '').strip().lower()
+    summary_only = fields == 'summary'
     pl_folders = bock_folders.load_folders(PLAYLIST_FOLDERS_PATH)
     assignments = pl_folders.get('assignments') or {}
     pl_meta = _load_playlist_meta()
     household = _load_household() if member_filter else None
     try:
-        tree = _load_playlists_tree()
         all_playlists = []
-        for entry in tree.getroot().findall('Entry'):
-            key = entry.find('Key')
-            if key is None:
+        for raw in _load_playlist_catalog_raw():
+            name = raw.get('name') or ''
+            if search and bock_search.best_match_score(
+                search, name, allow_substring=True, allow_fuzzy=True,
+            ) < 0.35:
                 continue
-            name = xml_text(key, 'Name')
-            if search and search not in name.lower():
-                continue
-            pid = xml_text(key, 'ID')
+            pid = raw.get('id') or ''
             if folder_filter == 'root':
                 if assignments.get(pid):
                     continue
@@ -1384,35 +1572,34 @@ def playlists():
             meta_entry = pl_meta.get(pid)
             if member_filter and not _playlist_visible_to(meta_entry, member_filter):
                 continue
-            all_playlists.append(bock_folders.enrich_playlist_item({
-                'id': pid,
-                'name': name,
-                'trackCount': xml_int(key, 'TrackCount'),
-                'shuffle': xml_text(key, 'Shuffle') == 'true',
-                'loop': xml_text(key, 'Loop') == 'true',
-                'createDate': xml_text(key, 'CreateDate'),
-                'lastUsed': xml_text(key, 'LastUsed'),
-                'source': xml_text(key, 'SourceID'),
-                'sourceName': xml_text(key, 'SourceName'),
-                'isAudioBook': xml_text(key, 'IsAudioBook') == 'true',
-                **_public_playlist_meta(meta_entry, household),
-            }, assignments))
+            if summary_only:
+                all_playlists.append({
+                    'id': pid,
+                    'name': name,
+                    'trackCount': raw.get('trackCount') or 0,
+                    'source': raw.get('source'),
+                    'artPath': None,
+                })
+            else:
+                all_playlists.append(bock_folders.enrich_playlist_item({
+                    **raw,
+                    **_public_playlist_meta(meta_entry, household),
+                }, assignments))
 
         if sort_by == 'trackCount':
             all_playlists.sort(key=lambda x: (x.get('trackCount') or 0, (x.get('name') or '').lower()),
                                reverse=reverse)
-        else:
+        elif sort_by == 'name':
             all_playlists.sort(key=lambda x: (x.get('name') or '').lower(),
                                reverse=reverse)
 
         total = len(all_playlists)
         start = (page - 1) * limit
         items = all_playlists[start:start + limit]
-        # Inline cover art for the returned page (cached by mtime) so tiles render from
-        # the list itself — no separate /covers round-trip. Bound disk reads per request;
-        # a background thread warms the rest so repeat loads are fully covered and fast.
+        # Cover art: summary mode and default list use persisted cache only (no inline m3u reads).
         _start_playlist_cover_warm()
-        inline_budget = _PLAYLIST_COVER_INLINE_BUDGET
+        allow_inline = request.args.get('inlineCovers', '0' if summary_only else '1') == '1'
+        inline_budget = _PLAYLIST_COVER_INLINE_BUDGET if allow_inline else 0
         for it in items:
             cached = _playlist_cover_fast(it.get('id'), it.get('source'), compute=False)
             if cached is None and inline_budget > 0:
@@ -1533,7 +1720,7 @@ def _login_advertise_host(body):
         import alexa_remote
     except ImportError:
         alexa_remote = None
-    client = (request.remote_addr or '').split('%')[0].strip()
+    client = _effective_remote_addr()
     # Phones on home Wi‑Fi cannot load the public IP (router hairpin NAT) — use LAN.
     if alexa_remote and _is_private_ip(client):
         return alexa_remote.lan_ip()
@@ -1584,6 +1771,40 @@ def _read_health_state():
     except Exception:
         return {}
 
+_LIBRARY_STATS_CACHE = {'ts': 0.0, 'stats': {}}
+
+
+def _library_index_stats():
+    """Search-index coverage counters for /api/health (cached 5 min)."""
+    now = time.time()
+    if now - _LIBRARY_STATS_CACHE['ts'] < 300 and _LIBRARY_STATS_CACHE['stats']:
+        return _LIBRARY_STATS_CACHE['stats']
+
+    def _count(sql):
+        try:
+            row = db_one(sql)
+            return int(row.get('n') or 0)
+        except Exception:
+            return None
+
+    import bock_search_ext
+    stats = {
+        'songsCacheRows': _count(
+            'SELECT COUNT(*) AS n FROM songs_cache WHERE path IS NOT NULL AND path != ""'
+        ),
+        'songsWithGenre': _count(
+            'SELECT COUNT(*) AS n FROM songs_cache WHERE genre IS NOT NULL AND TRIM(genre) != ""'
+        ),
+        'ftsRowCount': _count('SELECT COUNT(*) AS n FROM songs_fts'),
+        'genresAggRows': _count('SELECT COUNT(*) AS n FROM genres_agg'),
+        'albumsAggRows': _count('SELECT COUNT(*) AS n FROM albums_agg'),
+        **bock_search_ext.fts_status(),
+    }
+    _LIBRARY_STATS_CACHE['ts'] = now
+    _LIBRARY_STATS_CACHE['stats'] = stats
+    return stats
+
+
 @app.route('/api/health')
 def health():
     """Single-pane service health for the dashboard. Merges the out-of-process
@@ -1631,6 +1852,10 @@ def health():
         'credentialsConfigured': _credentials_configured(),
         'allowOpenLanApi': _allow_open_lan_api(),
         'allowOpenLanMedia': _allow_open_lan_media(),
+        'productionTunnel': _production_tunnel_configured(),
+        'musicVideo': _music_video_cookies_health(),
+        **_library_index_stats(),
+        **(_security_audit_summary()),
     })
 
 # ── Plex sync status (dashboard panel) ───────────────────────────────────────
@@ -1668,7 +1893,7 @@ def plex_sync_status():
         'logPath': PLEX_SYNC_LOG,
         'logUpdatedAt': log_mtime,
         'logTail': [ln.rstrip() for ln in log_lines],
-        'cronHint': '*/5 * * * * scripts/sync_plex_playlists.py',
+        'cronHint': '*/5 * * * * scripts/run_plex_playlist_sync.sh --quiet',
     })
 
 # ── Favorites (starred tracks) ───────────────────────────────────────────────
@@ -1797,9 +2022,21 @@ def ratings_set():
         return jsonify({'ok': True, 'stars': 0})
     return jsonify({'ok': True, 'item': row, 'stars': stars})
 
+_DASHBOARD_QUICK_CACHE = {}
+
+
 @app.route('/api/dashboard/quick')
+@bock_perf.timed_route('dashboard_quick')
 def dashboard_quick():
     """Recent unique plays + favorites for the dashboard."""
+    try:
+        hist_mtime = os.path.getmtime(STREAM_HISTORY_PATH) if os.path.isfile(STREAM_HISTORY_PATH) else 0.0
+    except OSError:
+        hist_mtime = 0.0
+    cache_key = hist_mtime
+    hit = _DASHBOARD_QUICK_CACHE.get(cache_key)
+    if hit and time.monotonic() < hit[0]:
+        return jsonify(hit[1])
     seen = set()
     recent = []
     for row in reversed(_read_stream_history()):
@@ -1819,7 +2056,10 @@ def dashboard_quick():
         })
         if len(recent) >= 5:
             break
-    return jsonify({'recent': recent, 'favorites': _load_favorites()[:20]})
+    payload = {'recent': recent, 'favorites': _load_favorites()[:20]}
+    _DASHBOARD_QUICK_CACHE.clear()
+    _DASHBOARD_QUICK_CACHE[cache_key] = (time.monotonic() + 30.0, payload)
+    return jsonify(payload)
 
 # ── Library search ─────────────────────────────────────────────────────────────
 
@@ -1828,21 +2068,68 @@ def _library_search_song_match(q, title, album):
     return bock_search.library_search_song_match(q, title, album)
 
 
+# Short-TTL response cache for hot read-only GET endpoints (search + songs list).
+# Keyed by path+query; results are global (no member scoping on these routes), so a
+# 45s window lets repeated/typed-again queries and tab switches skip DB work entirely.
+_RESPONSE_CACHE = {}
+_RESPONSE_CACHE_TTL = 45.0
+_RESPONSE_CACHE_MAX = 256
+
+
+def _response_cache_get(key):
+    hit = _RESPONSE_CACHE.get(key)
+    if not hit:
+        return None
+    payload, expiry = hit
+    if time.monotonic() > expiry:
+        _RESPONSE_CACHE.pop(key, None)
+        return None
+    return payload
+
+
+def _response_cache_put(key, payload):
+    if len(_RESPONSE_CACHE) >= _RESPONSE_CACHE_MAX:
+        # Drop oldest-expiring entries to bound memory.
+        for k in sorted(_RESPONSE_CACHE, key=lambda k: _RESPONSE_CACHE[k][1])[:_RESPONSE_CACHE_MAX // 4]:
+            _RESPONSE_CACHE.pop(k, None)
+    _RESPONSE_CACHE[key] = (payload, time.monotonic() + _RESPONSE_CACHE_TTL)
+
+
+def _response_cache_bust(prefix=None):
+    """Drop response cache entries (optional path prefix, e.g. 'search?')."""
+    if prefix is None:
+        _RESPONSE_CACHE.clear()
+        return
+    for key in list(_RESPONSE_CACHE.keys()):
+        if key.startswith(prefix):
+            _RESPONSE_CACHE.pop(key, None)
+
+
 @app.route('/api/search')
 def library_search():
     import bock_search
     import bock_search_ext
     import bock_resonance
+    import bock_uitest
+    injected = bock_uitest.uitest_fail_response('search')
+    if injected is not None:
+        return injected
 
     def _list_devices():
         import alexa_remote
         return alexa_remote.list_devices()
+
+    cache_key = f'search?{request.query_string.decode("utf-8", "ignore")}'
+    cached = _response_cache_get(cache_key)
+    if cached is not None:
+        return jsonify(cached)
 
     q = (request.args.get('q') or '').strip()
     limit = min(max(int(request.args.get('limit', 30) or 30), 1), 100)
     preview = min(max(int(request.args.get('preview', 5) or 5), 1), 15)
     section = (request.args.get('section') or '').strip() or None
     source = (request.args.get('source') or '').strip() or None
+    fast = request.args.get('fast', '1' if not section else '0') != '0'
 
     payload = bock_search.run_search(
         db_query=db_query,
@@ -1852,19 +2139,25 @@ def library_search():
         preview=preview,
         section=section,
         source=source,
-        include_rooms=request.args.get('includeRooms', '1') != '0',
+        fast=fast,
+        include_rooms=request.args.get('includeRooms', '0' if fast else '1') != '0',
         include_messages=request.args.get('includeMessages') == '1',
-        include_resonance=request.args.get('includeResonance', '1') != '0',
-        ensure_fts_fn=lambda: bock_search_ext.ensure_fts(get_db_rw, db_query),
+        include_resonance=request.args.get(
+            'includeResonance',
+            '0' if fast and not section else '1',
+        ) != '0',
         load_playlist_entries_fn=_load_playlist_entries,
         score_playlist_fn=_score_playlist,
         load_smart_playlists_fn=_load_smart_playlists,
-        albums_played_fn=_albums_played_flags,
+        albums_played_fn=_albums_played_flags if not fast else None,
         playlist_paths_fn=_playlist_paths_cached,
         list_devices_fn=_list_devices,
         messages_path=MESSAGES_PATH,
         resonance_mod=bock_resonance,
     )
+    # Only cache device-independent results (rooms come from live Alexa state).
+    if not (request.args.get('includeRooms', '0' if fast else '1') != '0'):
+        _response_cache_put(cache_key, payload)
     return jsonify(payload)
 
 @app.route('/api/alexa_remote/devices')
@@ -1925,6 +2218,42 @@ def _optimistic_np_skip(device_id, delta):
         **src,
     })
 
+def _np_seek_queue_index(device_id, target_index, *, serial=None):
+    """Jump Echo queue to target_index — updates NP state and plays via alexa_remote."""
+    st = read_np_state_for_device(device_id) or {}
+    token = st.get('token') or ''
+    if not token:
+        return False, 'nothing_playing'
+    data = decode_token(token) or {}
+    tracks = data.get('tracks') or []
+    try:
+        target_index = int(target_index)
+    except (TypeError, ValueError):
+        return False, 'invalid_index'
+    if target_index < 0 or target_index >= len(tracks):
+        return False, 'index_out_of_range'
+    next_path = tracks[target_index]
+    if not next_path:
+        return False, 'track_unavailable'
+    qid = data.get('qid')
+    next_token = f"{qid}:{target_index}" if qid else encode_token({**data, 'idx': target_index})
+    _np_eager_track_state(next_path, next_token, prev_state=st, device_id=device_id)
+    serial = (serial or '').strip() or _np_serial_for_device(device_id)
+    if serial:
+        seek_token = _register_play_queue_seek_token(data, target_index)
+        if seek_token:
+            alias = _alexa_alias()
+            text = f"ask {alias} to start file token {seek_token}"
+            import alexa_remote
+            alexa_remote.play_text_timed(serial, text)
+        else:
+            title, artist, album, _ = track_metadata_fast(next_path)
+            text = _build_play_text('song', title, False, artist=artist, path=next_path)
+            import alexa_remote
+            alexa_remote.play_text_timed(serial, text)
+    return True, {'index': target_index}
+
+
 @app.route('/api/alexa_remote/control', methods=['POST'])
 def alexa_remote_control():
     """Pause/play/skip/shuffle on a specific Echo (unofficial Alexa API)."""
@@ -1933,15 +2262,47 @@ def alexa_remote_control():
     device_id = (data.get('deviceId') or '').strip()
     serial = (data.get('serial') or '').strip()
     action = (data.get('action') or '').strip().lower()
-    allowed = {'pause', 'play', 'stop', 'next', 'previous', 'shuffle_on', 'shuffle_off'}
+    allowed = {
+        'pause', 'play', 'stop', 'next', 'previous',
+        'shuffle_on', 'shuffle_off', 'loop', 'seek_queue_index',
+    }
     target = serial or device
+    if action == 'seek_queue_index':
+        if not device_id:
+            return jsonify({'error': 'deviceId required'}), 400
+        try:
+            index = int(data.get('index', data.get('queueIndex', -1)))
+        except (TypeError, ValueError):
+            return jsonify({'error': 'invalid index'}), 400
+        if data.get('relative'):
+            st = read_np_state_for_device(device_id) or {}
+            tok_data = decode_token(st.get('token') or '') or {}
+            index = int(tok_data.get('idx', 0)) + 1 + index
+        ok, payload = _np_seek_queue_index(device_id, index, serial=serial or None)
+        if not ok:
+            status = 409 if payload == 'nothing_playing' else 400
+            return jsonify({'error': payload}), status
+        return jsonify({'ok': True, **payload})
+    if action == 'loop':
+        if not device_id:
+            return jsonify({'error': 'deviceId required'}), 400
+        st = read_np_state_for_device(device_id) or {}
+        token = st.get('token') or ''
+        if not token:
+            return jsonify({'error': 'nothing_playing'}), 409
+        tok_data = decode_token(token) or {}
+        qid = tok_data.get('qid')
+        new_loop = not bool(tok_data.get('loop'))
+        if qid:
+            _update_queue_flags(qid, loop=new_loop)
+        return jsonify({'ok': True, 'loop': new_loop})
     if not target:
         return jsonify({'error': 'device required'}), 400
     if action not in allowed:
         return jsonify({'error': 'invalid action'}), 400
     try:
         import alexa_remote
-        result = alexa_remote.device_control(target, action, _alexa_alias())
+        result = alexa_remote.device_control_timed(target, action, _alexa_alias())
         # Keep UI state in sync without waiting for the skill round-trip.
         if device_id:
             st = read_np_state_for_device(device_id) or {}
@@ -1963,6 +2324,8 @@ def alexa_remote_control():
         return jsonify({'error': 'alexapy not installed', 'code': 'not_installed'}), 503
     except Exception as e:
         code = str(e)
+        if code == 'timeout':
+            return jsonify({'error': 'timeout', 'code': 'timeout'}), 503
         status = 400 if code in ('not_configured', 'not_authenticated', 'device_not_found', 'invalid_action') else 500
         return jsonify({'error': code, 'code': code}), status
 
@@ -2275,6 +2638,36 @@ def _register_play_album_token(album, artist=None, shuffle=False):
     return token
 
 
+def _register_play_queue_seek_token(data, target_index):
+    """Short-lived token so queue seek resumes the full playlist at target_index."""
+    tracks = data.get('tracks') or []
+    try:
+        target_index = int(target_index)
+    except (TypeError, ValueError):
+        return None
+    if not tracks or target_index < 0 or target_index >= len(tracks):
+        return None
+    token = _new_playlist_token_id()
+    now = time.time()
+    with _PLAYLIST_TOKEN_LOCK:
+        for k in [k for k, v in _PLAYLIST_TOKENS.items() if v.get('exp', 0) < now]:
+            del _PLAYLIST_TOKENS[k]
+        _PLAYLIST_TOKENS[token] = {
+            'kind': 'queue_seek',
+            'tracks': list(tracks),
+            'start_idx': target_index,
+            'shuffle': bool(data.get('shuffle')),
+            'loop': bool(data.get('loop')),
+            'name': data.get('playlist') or data.get('context') or 'playlist',
+            'id': data.get('playlist_id'),
+            'source': data.get('source'),
+            'exp': now + _PLAYLIST_TOKEN_TTL,
+        }
+        _save_playlist_tokens()
+    print(f'[PLAY TOKEN] registered {token} queue_seek idx={target_index} tracks={len(tracks)}', flush=True)
+    return token
+
+
 def _normalize_play_token(raw):
     """Extract digit token from Alexa slot (handles 'token 12345678' or '12 34 56 78')."""
     chunk = (raw or '').strip().lower()
@@ -2305,6 +2698,8 @@ def _start_playlist_token_entry(token_entry, shuffle=None):
     pid = token_entry.get('id')
     source = token_entry.get('source')
     inline = token_entry.get('tracks')
+    start_idx = int(token_entry.get('start_idx') or 0)
+    do_loop = bool(token_entry.get('loop'))
     if pid:
         rated = _resolve_rated_playlist(pid)
         if rated:
@@ -2323,16 +2718,35 @@ def _start_playlist_token_entry(token_entry, shuffle=None):
         if not queue:
             return alexa_speak("Sorry, I couldn't find any tracks to play.")
         return start_playing(queue, shuffle=do_shuffle, speech=None,
-                            playlist=name, playlist_id=pid)
+                            playlist=name, playlist_id=pid,
+                            start_idx=start_idx, loop=do_loop)
     # App-initiated token plays: skip TTS — outputSpeech + AudioPlayer on Echo
     # Show often drops lifecycle events (no NearlyFinished → no auto-advance).
     return start_playing(None, shuffle=do_shuffle, speech=None,
                         playlist=name, playlist_id=pid, source=source)
 
 
+
+_STREAMABLE_NATIVE = frozenset({'.mp3', '.m4a', '.aac'})
+_STREAMABLE_TRANSCODE = frozenset({'.flac', '.wma', '.wav', '.ogg', '.aif', '.aiff'})
+
+
+def _streamable_exts():
+    """File extensions the stream endpoint can play (native + optional transcode)."""
+    exts = set(_STREAMABLE_NATIVE)
+    if get_pref('FlacSupport', '').lower() == 'true':
+        exts |= _STREAMABLE_TRANSCODE
+    return exts
+
+
+def _streamable_ext_sql():
+    quoted = ', '.join(repr(e.lower()) for e in sorted(_streamable_exts()))
+    return f"AND LOWER(SUBSTR(path,-4)) IN ({quoted})"
+
+
 def _album_tracks_for_play(album, artist=None, shuffle=False, limit=50):
     order = 'ORDER BY RANDOM()' if shuffle else 'ORDER BY CAST(track_number AS INTEGER), title'
-    ext = "AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac')"
+    ext = _streamable_ext_sql()
     base = f"SELECT path FROM songs_cache WHERE album = ? AND path IS NOT NULL {ext}"
     artist = (artist or '').strip() or None
     if artist:
@@ -2384,7 +2798,8 @@ def _play_named_playlist_if_strong_match(query, shuffle=False):
                          playlist=name, playlist_id=pid, source=source)
 
 
-def _build_play_text(kind, name, shuffle, artist=None, path=None, playlist_id=None, playlist_source=None):
+def _build_play_text(kind, name, shuffle, artist=None, path=None, playlist_id=None, playlist_source=None,
+                     member_id=None):
     """Build a collision-safe utterance that routes to our custom skill.
 
     "play"/"shuffle" get grabbed by Amazon's music domain; "start"/"mix" route
@@ -2414,7 +2829,12 @@ def _build_play_text(kind, name, shuffle, artist=None, path=None, playlist_id=No
         pid = (playlist_id or '').strip()
         src = (playlist_source or '').strip()
         if pid:
-            rated = _resolve_rated_playlist(pid, _ratings_member_from_request())
+            if member_id is None:
+                try:
+                    member_id = _ratings_member_from_request()
+                except RuntimeError:
+                    member_id = ''
+            rated = _resolve_rated_playlist(pid, member_id)
             if rated:
                 rname, paths = rated
                 if rname:
@@ -3431,6 +3851,7 @@ def _fire_automation(auto):
         'playlist', pl_name, shuffle,
         playlist_id=pid or None,
         playlist_source=src,
+        member_id='',
     )
     print(f'[AUTOMATION] {auto.get("name")!r} device={auto.get("deviceName")!r} playlist={pl_name!r} text={text!r}', flush=True)
     import alexa_remote
@@ -3455,11 +3876,25 @@ def _fire_automation(auto):
             errors.append(f'{member_name}: {e}')
     if not results:
         raise RuntimeError('; '.join(errors) or 'play_failed')
-    return {'count': len(results), 'errors': errors}
+    devices = [r.get('device') for r in results if r.get('device')]
+    return {
+        'count': len(results),
+        'errors': errors,
+        'device': devices[0] if devices else None,
+        'devices': devices,
+    }
 
 
 def _tick_automations():
-    now = datetime.datetime.now()
+    tz_name = (load_config().get('timezone') or '').strip()
+    if tz_name and tz_name.lower() not in ('local', ''):
+        try:
+            from zoneinfo import ZoneInfo
+            now = datetime.datetime.now(ZoneInfo(tz_name))
+        except Exception:
+            now = datetime.datetime.now()
+    else:
+        now = datetime.datetime.now()
     slot_key = now.strftime('%Y-%m-%d %H:%M')
     current_time = now.strftime('%H:%M')
     current_day = now.weekday()
@@ -3476,8 +3911,9 @@ def _tick_automations():
         if auto.get('lastFiredAt') == slot_key:
             continue
         try:
-            _fire_automation(auto)
-            auto['lastRunStatus'] = 'ok'
+            result = _fire_automation(auto)
+            errs = result.get('errors') or []
+            auto['lastRunStatus'] = 'ok' + (f'; {"; ".join(errs)}' if errs else '')
             print(f'AUTOMATION ok: {auto.get("name")} -> {auto.get("deviceName")} at {slot_key}')
         except Exception as e:
             auto['lastRunStatus'] = str(e)
@@ -3577,41 +4013,81 @@ def run_automation_now(auto_id):
 
 @app.route('/api/artists')
 def artists():
+    import bock_search
+    search = (request.args.get('search') or '').strip()
+    cache_key = f'artists?{request.query_string.decode("utf-8", "ignore")}'
+    if search:
+        cached = _response_cache_get(cache_key)
+        if cached is not None:
+            return jsonify(cached)
     page = int(request.args.get('page', 1))
     limit = int(request.args.get('limit', 50))
-    search = request.args.get('search', '')
     sort = (request.args.get('sort') or 'name').strip().lower()
     order = (request.args.get('order') or 'asc').strip().lower()
     desc = order == 'desc'
     offset = (page - 1) * limit
 
-    where = 'artist IS NOT NULL AND artist != ""'
+    use_agg = _albums_agg_exists()
+    table = 'albums_agg' if use_agg else 'songs_cache'
+    artist_col = 'artist'
+    if use_agg:
+        where = f'{artist_col} IS NOT NULL AND {artist_col} != ""'
+        select = (
+            f'SELECT {artist_col}, SUM(track_count) as track_count, '
+            f'COUNT(*) as album_count, MIN(art_path) as art_path'
+        )
+        group = f'GROUP BY {artist_col}'
+    else:
+        where = f'{artist_col} IS NOT NULL AND {artist_col} != ""'
+        select = (
+            f'SELECT {artist_col}, COUNT(*) as track_count, COUNT(DISTINCT album) as album_count, '
+            f'MIN(CASE WHEN path IS NOT NULL AND path != "" THEN path END) as art_path'
+        )
+        group = f'GROUP BY {artist_col}'
+
     params = []
     if search:
-        where += ' AND artist LIKE ?'
-        params.append(f'%{search}%')
+        clause, extra = bock_search._song_field_match_clause(
+            search, ('artist',), include_substring=True,
+        )
+        if clause:
+            where += f' AND ({clause})'
+            params.extend(extra)
+
+    fetch_limit = limit + offset + limit * 2 if search else limit
+    fetch_offset = 0 if search else offset
 
     if sort == 'tracks':
-        order_sql = f'track_count {"DESC" if desc else "ASC"}, artist COLLATE NOCASE ASC'
+        order_sql = f'track_count {"DESC" if desc else "ASC"}, {artist_col} COLLATE NOCASE ASC'
     else:
-        order_sql = f'artist COLLATE NOCASE {"DESC" if desc else "ASC"}'
+        order_sql = f'{artist_col} COLLATE NOCASE {"DESC" if desc else "ASC"}'
 
     rows = db_query(
-        f'SELECT artist, COUNT(*) as track_count, COUNT(DISTINCT album) as album_count, '
-        f'MIN(CASE WHEN path IS NOT NULL AND path != "" THEN path END) as art_path '
-        f'FROM songs_cache WHERE {where} GROUP BY artist ORDER BY {order_sql} LIMIT ? OFFSET ?',
-        params + [limit, offset]
+        f'{select} FROM {table} WHERE {where} {group} ORDER BY {order_sql} LIMIT ? OFFSET ?',
+        params + [fetch_limit, fetch_offset]
     )
-    total_row = db_one(
-        f'SELECT COUNT(DISTINCT artist) as total FROM songs_cache WHERE {where}',
-        params
-    )
+    if search:
+        rows = bock_search.filter_rows_for_query(search, rows, 'artist')
+        rows = rows[offset:offset + limit]
+    if search:
+        page_count = len(rows)
+        total = offset + page_count if page_count < limit else offset + page_count + 1
+    else:
+        total_row = db_one(
+            f'SELECT COUNT(*) as total FROM (SELECT 1 FROM {table} WHERE {where} {group})',
+            params
+        )
+        total = total_row.get('total', 0)
+    # SQL clause is authoritative so items match `total` (correct infinite scroll).
     for row in rows:
         name = (row.get('artist') or '').strip()
         cached = bock_artist_art.cached_portrait_rel_path(name, ARTWORK_CACHE)
         if cached:
             row['art_path'] = cached
-    return jsonify({'items': rows, 'total': total_row.get('total', 0)})
+    payload = {'items': rows, 'total': total}
+    if search:
+        _response_cache_put(cache_key, payload)
+    return jsonify(payload)
 
 
 @app.route('/api/artist-portrait')
@@ -3639,9 +4115,15 @@ def albums():
         ensure_albums_agg_async()
         return jsonify({'items': [], 'total': 0, 'status': 'building'}), 503
 
+    search = (request.args.get('search') or '').strip()
+    cache_key = f'albums?{request.query_string.decode("utf-8", "ignore")}'
+    if search and not request.args.get('member'):
+        cached = _response_cache_get(cache_key)
+        if cached is not None:
+            return jsonify(cached)
+
     page = int(request.args.get('page', 1))
     limit = int(request.args.get('limit', 50))
-    search = request.args.get('search', '')
     artist = request.args.get('artist', '')
     sort = (request.args.get('sort') or 'name').strip().lower()
     order = (request.args.get('order') or 'asc').strip().lower()
@@ -3652,8 +4134,13 @@ def albums():
     conditions = ['1=1']
     params = []
     if search:
-        conditions.append('(album LIKE ? OR artist LIKE ?)')
-        params += [f'%{search}%', f'%{search}%']
+        import bock_search
+        clause, extra = bock_search._song_field_match_clause(
+            search, ('album', 'artist'), include_substring=True,
+        )
+        if clause:
+            conditions.append(f'({clause})')
+            params.extend(extra)
     if artist:
         conditions.append('artist = ?')
         params.append(artist)
@@ -3678,8 +4165,11 @@ def albums():
     rows = db_query(
         f'SELECT {select_cols} FROM albums_agg '
         f'WHERE {where} ORDER BY {order_sql} LIMIT ? OFFSET ?',
-        params + [limit, offset]
+        params + [limit + offset + limit * 2 if search else limit, 0 if search else offset]
     )
+    if search:
+        rows = bock_search.filter_rows_for_query(search, rows, 'album', ('artist',))
+        rows = rows[offset:offset + limit]
     played = _albums_played_flags(rows)
     if unplayed_only:
         rows = [
@@ -3699,15 +4189,40 @@ def albums():
             row['avg_stars'] = None
             row['rated_count'] = 0
     total_row = db_one(f'SELECT COUNT(*) as total FROM albums_agg WHERE {where}', params)
-    return jsonify({'items': rows, 'total': total_row.get('total', 0)})
+    payload = {'items': rows, 'total': total_row.get('total', 0)}
+    if search:
+        _response_cache_put(cache_key, payload)
+    return jsonify(payload)
 
 
 @app.route('/api/genres')
+@bock_perf.timed_route('genres')
 def genres_list():
-    limit = min(max(int(request.args.get('limit', 20) or 20), 1), 500)
-    sort = (request.args.get('sort') or 'tracks').strip().lower()
-    order = (request.args.get('order') or 'desc').strip().lower()
-    search = (request.args.get('search') or '').strip()
+    limit = request.args.get('limit', 20)
+    sort = request.args.get('sort') or 'tracks'
+    order = request.args.get('order') or 'desc'
+    search = request.args.get('search') or ''
+    items = _genres_items(limit=limit, search=search, sort=sort, order=order)
+    return jsonify({'items': items, 'total': len(items)})
+
+
+def _genres_items(limit=40, search='', sort='tracks', order='desc'):
+    """Genre rows for /api/genres and /api/home."""
+    import bock_search
+    limit = min(max(int(limit or 20), 1), 500)
+    sort = (sort or 'tracks').strip().lower()
+    order = (order or 'desc').strip().lower()
+    search = (search or '').strip()
+    if search:
+        rows = bock_search.search_genres(db_query, search, limit)
+        return [
+            {
+                'name': r.get('genre') or '',
+                'track_count': r.get('track_count') or 0,
+                'art_path': r.get('path'),
+            }
+            for r in rows if r.get('genre')
+        ]
     desc = order == 'desc'
     params = []
     where = 'genre IS NOT NULL AND genre != ""'
@@ -3718,27 +4233,31 @@ def genres_list():
         order_sql = f'genre COLLATE NOCASE {"DESC" if desc else "ASC"}'
     else:
         order_sql = f'track_count {"DESC" if desc else "ASC"}, genre COLLATE NOCASE ASC'
-    rows = db_query(
-        f'SELECT genre, COUNT(*) as track_count FROM songs_cache '
-        f'WHERE {where} '
-        f'GROUP BY genre ORDER BY {order_sql} LIMIT ?',
-        params + [limit],
-    ) or []
+    if _genres_agg_exists() and not search:
+        rows = db_query(
+            f'SELECT genre, track_count, path FROM genres_agg WHERE {where} '
+            f'ORDER BY {order_sql} LIMIT ?',
+            params + [limit],
+        ) or []
+    else:
+        rows = db_query(
+            f'SELECT genre, COUNT(*) as track_count, '
+            f'MIN(CASE WHEN path IS NOT NULL AND path != "" THEN path END) AS path '
+            f'FROM songs_cache WHERE {where} '
+            f'GROUP BY genre ORDER BY {order_sql} LIMIT ?',
+            params + [limit],
+        ) or []
     items = []
     for row in rows:
         genre = row.get('genre') or ''
         if not genre:
             continue
-        art_row = db_one(
-            'SELECT path FROM songs_cache WHERE genre = ? AND path IS NOT NULL AND path != "" LIMIT 1',
-            [genre],
-        )
         items.append({
             'name': genre,
             'track_count': row.get('track_count') or 0,
-            'art_path': art_row.get('path') if art_row else None,
+            'art_path': row.get('path'),
         })
-    return jsonify({'items': items, 'total': len(items)})
+    return items
 
 
 @app.route('/api/library/health')
@@ -3879,7 +4398,7 @@ def _lrclib_http_json(url, timeout=18, retries=3):
     last_err = None
     for attempt in range(retries):
         try:
-            req = Request(url, headers={'User-Agent': 'BockMedia/1.0 (https://github.com/ourMedia)'})
+            req = Request(url, headers={'User-Agent': 'BockMedia/1.0 (https://github.com/andystumpf/bock-media)'})
             with urlopen(req, timeout=timeout) as resp:
                 return json.loads(resp.read().decode('utf-8', errors='replace'))
         except HTTPError as e:
@@ -4267,8 +4786,8 @@ def _music_video_cache_save(data):
 
 
 def _music_video_cache_key(title, artist):
-    # v4 — stricter title/duration scoring (bump to invalidate cache).
-    return f"v4|{(artist or '').strip().lower()}|{title.strip().lower()}"
+    # v5 — official-artist-channel scoring (bump to invalidate cache).
+    return f"v5|{(artist or '').strip().lower()}|{title.strip().lower()}"
 
 
 def _music_video_search_queries(artist, title):
@@ -4303,6 +4822,11 @@ _MUSIC_VIDEO_BAD_TITLE = (
     'the tonight show', 'late night', 'unplugged', 'acoustic version', 'acoustic session',
     'behind the scenes', 'making of', 'reaction', 'review', 'reading', 'storytime',
     'interview', 'documentary', 'trailer', 'teaser', 'announcement',
+)
+_MUSIC_VIDEO_OFFBRAND_TITLE = (
+    'alternate music video', 'alternate video', 'alt version', 'fan made',
+    'fanmade', 'fan video', 'unofficial', 'reupload', 're-upload', 'remake',
+    'ai upscaled', 'ai remaster', 'tribute',
 )
 _MUSIC_VIDEO_GOOD_TITLE = (
     'official music video', 'official video', '(official video)', '[official video]',
@@ -4341,6 +4865,20 @@ def _music_video_artist_matches(artist, picked_title, channel=None):
     if not tokens:
         return True
     return all(tok in blob for tok in tokens)
+
+
+def _music_video_channel_is_artist(artist, channel):
+    """True when the uploader looks like the artist's own channel (incl. VEVO)."""
+    def core(s):
+        s = _music_video_compact(s or '')
+        return s[3:] if s.startswith('the') and len(s) > 5 else s
+
+    a, c = core(artist), core(channel)
+    if not a or not c:
+        return False
+    if a == c:
+        return True
+    return any(c == a + suffix for suffix in ('vevo', 'official', 'music', 'tv', 'band'))
 
 
 def _music_video_extract_song_title(picked_title, artist=None):
@@ -4412,6 +4950,10 @@ def _music_video_score(artist, title, picked_title, duration_sec=None, channel=N
             break
     if 'music video' in t or 'official video' in t:
         score += 25
+    if _music_video_channel_is_artist(artist, channel):
+        # Official artist channel is the strongest signal — beats title bait
+        # like "(Alternate Music Video)" from random uploaders.
+        score += 55
     if _music_video_artist_matches(artist, picked_title, channel):
         score += 14
     elif (artist or '').strip():
@@ -4421,6 +4963,10 @@ def _music_video_score(artist, title, picked_title, duration_sec=None, channel=N
     for bad in _MUSIC_VIDEO_BAD_TITLE:
         if bad in t:
             score -= 45
+    for offbrand in _MUSIC_VIDEO_OFFBRAND_TITLE:
+        if offbrand in t:
+            score -= 30
+            break
     if duration_sec is not None:
         try:
             dur = int(duration_sec)
@@ -4623,9 +5169,9 @@ def _music_video_piped_bases():
                 bases.append(b.strip().rstrip('/'))
     if not bases:
         bases = [
+            'https://api.piped.private.coffee',
             'https://pipedapi.kavin.rocks',
-            'https://api.piped.yt',
-            'https://pipedapi-libre.kavin.rocks',
+            'https://piped-api.lunar.icu',
         ]
     seen = set()
     out = []
@@ -4657,7 +5203,80 @@ def _music_video_lookup(artist, title, track_duration_sec=None):
     return None, None
 
 
-def _music_video_payload(title, artist=None, track_duration_sec=None):
+def _music_video_from_piped_streams(video_id, max_height=360):
+    """Direct CDN URL playable from the phone — no home-server proxy hop."""
+    import urllib.error
+    import urllib.request
+
+    video_id = (video_id or '').strip()
+    if not video_id:
+        return None
+    for base in _music_video_piped_bases():
+        url = f"{base.rstrip('/')}/streams/{video_id}"
+        req = urllib.request.Request(url, headers={'User-Agent': 'BockMedia/1.0'})
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, ValueError) as e:
+            print(f'music video piped streams {video_id} ({base}): {e}', flush=True)
+            continue
+        candidates = []
+        for stream in data.get('videoStreams') or []:
+            raw = (stream.get('url') or '').strip()
+            if not raw.startswith('http') or '.m3u8' in raw or 'manifest' in raw:
+                continue
+            mime = (stream.get('mimeType') or stream.get('format') or '').lower()
+            if mime and not mime.startswith('video/'):
+                continue
+            height = stream.get('height') or 0
+            if isinstance(height, str) and height.isdigit():
+                height = int(height)
+            try:
+                height = int(height or 0)
+            except (TypeError, ValueError):
+                height = 0
+            if height <= 0 or height <= max_height:
+                candidates.append((height, raw))
+        if candidates:
+            candidates.sort(key=lambda item: item[0], reverse=True)
+            return candidates[0][1]
+    return None
+
+
+def _music_video_client_play_url(video_id, mobile, stream_url):
+    """Return (playUrl, direct). Always the NAS proxy — ExoPlayer hangs on IP-locked
+    googlevideo URLs over cellular; the proxy resolves yt-dlp/Piped on first byte."""
+    if mobile:
+        return f'/api/music-video/{video_id}/proxy?mobile=1', False
+    return f'/api/music-video/{video_id}/proxy', False
+
+
+def _music_video_apply_stream_payload(payload, video_id, mobile, wait_sec):
+    """Attach streamReady/playUrl/direct to a music-video payload after optional wait."""
+    video_id = (video_id or '').strip()
+    if not video_id or wait_sec <= 0:
+        return payload
+    stream_url = _music_video_wait_stream(video_id, mobile, max_wait=wait_sec)
+    play_url, direct = _music_video_client_play_url(video_id, mobile, stream_url)
+    if not play_url:
+        payload['streamReady'] = False
+        payload['streamReason'] = (
+            'Video is taking too long to prepare — try Wi‑Fi or Open in YouTube'
+        )
+        return payload
+    payload['streamReady'] = True
+    payload['playUrl'] = play_url
+    payload['direct'] = direct
+    payload['streamReason'] = None
+    return payload
+
+
+def _music_video_warm_both(video_id):
+    _music_video_warm_stream(video_id, mobile=False)
+    _music_video_warm_stream(video_id, mobile=True)
+
+
+def _music_video_payload(title, artist=None, track_duration_sec=None, warm_mobile_only=False):
     title = (title or '').strip()
     if not title:
         return {'videoId': None, 'title': None}
@@ -4668,7 +5287,10 @@ def _music_video_payload(title, artist=None, track_duration_sec=None):
         hit = cached.get(key)
         if hit:
             if hit.get('videoId'):
-                _music_video_warm_stream(hit['videoId'])
+                if warm_mobile_only:
+                    _music_video_warm_stream(hit['videoId'], mobile=True)
+                else:
+                    _music_video_warm_both(hit['videoId'])
             return hit
     vid, picked_title = _music_video_lookup(artist or '', title, track_duration_sec)
     payload = {'videoId': vid, 'title': picked_title}
@@ -4677,27 +5299,66 @@ def _music_video_payload(title, artist=None, track_duration_sec=None):
             cached = _music_video_cache_load()
             cached[key] = payload
             _music_video_cache_save(cached)
-        _music_video_warm_stream(vid)
+        if warm_mobile_only:
+            _music_video_warm_stream(vid, mobile=True)
+        else:
+            _music_video_warm_both(vid)
     return payload
 
 
-def _music_video_warm_stream(video_id):
-    """Resolve googlevideo URL in the background so the proxy is hot when the client connects."""
+_MUSIC_VIDEO_INFLIGHT = set()
+_MUSIC_VIDEO_INFLIGHT_LOCK = threading.Lock()
+
+
+def _music_video_ensure_stream(video_id, mobile=False):
+    """Start a single background stream resolve per cache key (deduped)."""
     video_id = (video_id or '').strip()
     if not video_id or not _MUSIC_VIDEO_ID_RE.fullmatch(video_id):
         return
-    if _music_video_stream_cache_get(video_id):
+    if _music_video_stream_cache_get(video_id, mobile=mobile):
         return
-    if not _music_video_cookies_path() or not shutil.which('yt-dlp'):
-        return
+    key = _music_video_stream_cache_key(video_id, mobile)
+    with _MUSIC_VIDEO_INFLIGHT_LOCK:
+        if key in _MUSIC_VIDEO_INFLIGHT:
+            return
+        _MUSIC_VIDEO_INFLIGHT.add(key)
 
     def _run():
         try:
-            _music_video_direct_stream_url(video_id)
+            _music_video_direct_stream_url(video_id, mobile=mobile)
         except Exception as e:
-            print(f'music video warm {video_id}: {e}', flush=True)
+            print(f'music video resolve {video_id}: {e}', flush=True)
+        finally:
+            with _MUSIC_VIDEO_INFLIGHT_LOCK:
+                _MUSIC_VIDEO_INFLIGHT.discard(key)
 
-    threading.Thread(target=_run, name=f'mv-warm-{video_id[:8]}', daemon=True).start()
+    threading.Thread(
+        target=_run,
+        name=f'mv-resolve-{"m" if mobile else "d"}-{video_id[:8]}',
+        daemon=True,
+    ).start()
+
+
+def _music_video_warm_stream(video_id, mobile=False):
+    _music_video_ensure_stream(video_id, mobile=mobile)
+
+
+def _music_video_wait_stream(video_id, mobile=False, max_wait=20.0):
+    """Poll stream cache until populated or deadline (used by /play?wait=)."""
+    video_id = (video_id or '').strip()
+    if not video_id:
+        return None
+    hit = _music_video_stream_cache_get(video_id, mobile=mobile)
+    if hit:
+        return hit
+    _music_video_ensure_stream(video_id, mobile=mobile)
+    deadline = time.monotonic() + max(0.0, max_wait)
+    while time.monotonic() < deadline:
+        hit = _music_video_stream_cache_get(video_id, mobile=mobile)
+        if hit:
+            return hit
+        time.sleep(0.1)
+    return None
 
 
 @app.route('/api/music-video')
@@ -4711,13 +5372,167 @@ def music_video():
     track_duration_sec = None
     if duration_raw.isdigit():
         track_duration_sec = int(duration_raw)
-    return jsonify(_music_video_payload(title, artist, track_duration_sec))
+    warm_mobile_only = _music_video_request_mobile()
+    payload = _music_video_payload(title, artist, track_duration_sec, warm_mobile_only=warm_mobile_only)
+    wait_raw = (request.args.get('wait') or '').strip()
+    try:
+        wait_sec = min(max(float(wait_raw), 0.0), 30.0) if wait_raw else 0.0
+    except ValueError:
+        wait_sec = 0.0
+    vid = (payload.get('videoId') or '').strip()
+    if vid and wait_sec > 0:
+        _music_video_apply_stream_payload(payload, vid, warm_mobile_only, wait_sec)
+    return jsonify(payload)
 
 
 _MUSIC_VIDEO_ID_RE = re.compile(r'^[\w-]{11}$')
 _MUSIC_VIDEO_STREAM_CACHE = {}
 _MUSIC_VIDEO_STREAM_CACHE_LOCK = threading.Lock()
 _MUSIC_VIDEO_STREAM_TTL_SEC = 2 * 3600
+_MUSIC_VIDEO_STREAM_DISK_PATH = os.path.join(DATA_DIR, 'music_video_streams.json')
+_MUSIC_VIDEO_STREAM_DISK_LOADED = False
+_MUSIC_VIDEO_PROXY_CHUNK = 262144
+
+
+def _music_video_stream_cache_key(video_id, mobile=False):
+    return f'{video_id}|{"m" if mobile else "d"}'
+
+
+def _music_video_request_mobile():
+    q = (request.args.get('mobile') or '').strip().lower()
+    if q in ('1', 'true', 'yes'):
+        return True
+    hdr = (request.headers.get('X-BockMedia-LowBandwidth') or '').strip().lower()
+    return hdr in ('1', 'true', 'yes')
+
+
+def _music_video_cookies_health():
+    """Lightweight status for /api/health (no yt-dlp probe on every request)."""
+    path = _music_video_cookies_path()
+    out = {
+        'cookiesPresent': bool(path),
+        'cookiesPath': path,
+        'ytDlpInstalled': bool(shutil.which('yt-dlp')),
+        'denoInstalled': os.path.isfile(os.path.expanduser('~/.deno/bin/deno')),
+        'verifiedOk': None,
+        'verifiedAt': None,
+        'cookiesAgeHours': None,
+        'cookiesStale': None,
+        'refreshHint': None,
+    }
+    if not path:
+        out['cookiesStale'] = True
+        out['refreshHint'] = 'Run scripts/youtube_cookies.sh from a Mac logged into YouTube'
+        return out
+    try:
+        age_sec = time.time() - os.path.getmtime(path)
+        out['cookiesAgeHours'] = round(age_sec / 3600.0, 1)
+    except OSError:
+        pass
+    verify_path = os.path.join(DATA_DIR, 'youtube-cookies-verify.json')
+    try:
+        with open(verify_path, encoding='utf-8') as f:
+            v = json.load(f) or {}
+        out['verifiedOk'] = bool(v.get('ok'))
+        out['verifiedAt'] = v.get('verifiedAt')
+        if v.get('error'):
+            out['lastVerifyError'] = str(v.get('error'))[:200]
+    except (OSError, json.JSONDecodeError, TypeError):
+        pass
+    stale, hint = _music_video_cookies_stale(out)
+    out['cookiesStale'] = stale
+    out['refreshHint'] = hint
+    return out
+
+
+def _music_video_cookies_stale(health=None):
+    """Return (stale: bool, hint: str|None)."""
+    health = health or _music_video_cookies_health()
+    if not health.get('cookiesPresent'):
+        return True, 'Run scripts/youtube_cookies.sh from a Mac logged into YouTube'
+    age = health.get('cookiesAgeHours')
+    if age is not None and age > 168:
+        return True, 'Cookie file is over 7 days old — re-run scripts/youtube_cookies.sh'
+    if health.get('verifiedOk') is False:
+        return True, health.get('lastVerifyError') or 'Last cookie verification failed — refresh cookies'
+    if health.get('verifiedOk') is None and age is not None and age > 24:
+        return True, 'Cookies not verified in 24h — run scripts/youtube_cookies.sh or wait for nightly probe'
+    return False, None
+
+
+_MUSIC_VIDEO_COOKIE_PROBE_ID = 'jNQXAC9IVRw'  # short public clip for --simulate probe
+_YOUTUBE_COOKIES_VERIFY_PATH = None
+
+
+def _youtube_cookies_verify_path():
+    global _YOUTUBE_COOKIES_VERIFY_PATH
+    if _YOUTUBE_COOKIES_VERIFY_PATH is None:
+        _YOUTUBE_COOKIES_VERIFY_PATH = os.path.join(DATA_DIR, 'youtube-cookies-verify.json')
+    return _YOUTUBE_COOKIES_VERIFY_PATH
+
+
+def _music_video_verify_cookies_probe():
+    """Probe yt-dlp with cookies; persist result for health + clients."""
+    path = _music_video_cookies_path()
+    result = {
+        'ok': False,
+        'verifiedAt': datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
+        'cookiesPath': path,
+    }
+    if not path:
+        result['error'] = 'no cookie file'
+    elif not shutil.which('yt-dlp'):
+        result['error'] = 'yt-dlp not installed'
+    else:
+        cmd = _music_video_ytdlp_cmd(
+            _MUSIC_VIDEO_COOKIE_PROBE_ID,
+            '--simulate',
+            '-f',
+            '18/b',
+            mobile=False,
+        )
+        out = _music_video_ytdlp_run(cmd, timeout=30)
+        if out and out.returncode == 0:
+            result['ok'] = True
+        else:
+            err = (out.stderr or out.stdout or 'probe failed').strip()[:400] if out else 'probe failed'
+            result['error'] = err
+            print(f'music video cookie probe failed: {err[:200]}', flush=True)
+            _music_video_stream_cache_clear()
+    try:
+        tmp = _youtube_cookies_verify_path() + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(result, f, indent=2)
+        os.replace(tmp, _youtube_cookies_verify_path())
+    except OSError as e:
+        print(f'music video cookie verify write: {e}', flush=True)
+    return result
+
+
+def _start_youtube_cookies_monitor():
+    """Daily cookie probe + one deferred probe after startup."""
+    interval = float(os.environ.get('OURMEDIA_YT_COOKIE_PROBE_HOURS', '24')) * 3600.0
+
+    def _loop():
+        time.sleep(45.0)
+        _music_video_verify_cookies_probe()
+        while True:
+            time.sleep(interval)
+            _music_video_verify_cookies_probe()
+
+    threading.Thread(target=_loop, daemon=True, name='yt-cookies-monitor').start()
+
+
+def _music_video_stream_cache_clear(video_id=None):
+    with _MUSIC_VIDEO_STREAM_CACHE_LOCK:
+        if video_id is None:
+            _MUSIC_VIDEO_STREAM_CACHE.clear()
+        else:
+            for mobile in (False, True):
+                _MUSIC_VIDEO_STREAM_CACHE.pop(
+                    _music_video_stream_cache_key(video_id, mobile=mobile), None,
+                )
+    _music_video_stream_cache_persist()
 
 
 def _music_video_cookies_path():
@@ -4738,12 +5553,17 @@ def _music_video_ytdlp_env():
     return env
 
 
-def _music_video_ytdlp_cmd(video_id, *extra):
+def _music_video_ytdlp_cmd(video_id, *extra, mobile=False):
     deno_bin = os.path.expanduser('~/.deno/bin/deno')
-    cmd = ['yt-dlp', '--no-update', '--no-warnings']
+    cmd = ['yt-dlp', '--no-update', '--no-warnings', '--no-playlist']
+    cookies = _music_video_cookies_path()
+    if mobile:
+        cmd.extend(['--socket-timeout', '12'])
+        # android client ignores cookies and format 18 fails — use web with cookies instead.
+        if not cookies:
+            cmd.extend(['--extractor-args', 'youtube:player_client=android'])
     if os.path.isfile(deno_bin):
         cmd.extend(['--js-runtimes', f'deno:{deno_bin}'])
-    cookies = _music_video_cookies_path()
     if cookies:
         cmd.extend(['--cookies', cookies])
     cmd.extend(extra)
@@ -4766,47 +5586,135 @@ def _music_video_ytdlp_run(cmd, *, timeout=45):
         return None
 
 
-def _music_video_stream_cache_get(video_id):
+def _music_video_stream_cache_load_disk():
+    global _MUSIC_VIDEO_STREAM_DISK_LOADED
+    if _MUSIC_VIDEO_STREAM_DISK_LOADED:
+        return
+    _MUSIC_VIDEO_STREAM_DISK_LOADED = True
+    try:
+        with open(_MUSIC_VIDEO_STREAM_DISK_PATH, encoding='utf-8') as f:
+            data = json.load(f) or {}
+    except (OSError, json.JSONDecodeError, TypeError):
+        return
+    now = time.time()
     with _MUSIC_VIDEO_STREAM_CACHE_LOCK:
-        hit = _MUSIC_VIDEO_STREAM_CACHE.get(video_id)
+        for key, hit in data.items():
+            if not isinstance(hit, dict):
+                continue
+            if hit.get('expires', 0) > now and hit.get('url'):
+                _MUSIC_VIDEO_STREAM_CACHE[key] = hit
+
+
+def _music_video_stream_cache_persist():
+    with _MUSIC_VIDEO_STREAM_CACHE_LOCK:
+        snapshot = dict(_MUSIC_VIDEO_STREAM_CACHE)
+    try:
+        tmp = _MUSIC_VIDEO_STREAM_DISK_PATH + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(snapshot, f)
+        os.replace(tmp, _MUSIC_VIDEO_STREAM_DISK_PATH)
+    except OSError:
+        pass
+
+
+def _music_video_stream_cache_get(video_id, mobile=False):
+    _music_video_stream_cache_load_disk()
+    key = _music_video_stream_cache_key(video_id, mobile)
+    with _MUSIC_VIDEO_STREAM_CACHE_LOCK:
+        hit = _MUSIC_VIDEO_STREAM_CACHE.get(key)
         if hit and hit.get('expires', 0) > time.time():
             return hit.get('url')
     return None
 
 
-def _music_video_stream_cache_set(video_id, url):
+def _music_video_stream_cache_set(video_id, url, mobile=False):
+    key = _music_video_stream_cache_key(video_id, mobile)
+    ttl = 2700 if mobile and (url or '').startswith('http') else _MUSIC_VIDEO_STREAM_TTL_SEC
     with _MUSIC_VIDEO_STREAM_CACHE_LOCK:
-        _MUSIC_VIDEO_STREAM_CACHE[video_id] = {
+        _MUSIC_VIDEO_STREAM_CACHE[key] = {
             'url': url,
-            'expires': time.time() + _MUSIC_VIDEO_STREAM_TTL_SEC,
+            'expires': time.time() + ttl,
         }
+    _music_video_stream_cache_persist()
 
 
-def _music_video_direct_stream_url(video_id):
-    cached = _music_video_stream_cache_get(video_id)
-    if cached:
-        return cached
-    # Prefer smaller progressive MP4 first — faster first frame through the proxy.
-    format_specs = [
+def _music_video_format_specs(mobile=False):
+    if mobile:
+        # itag 18 (progressive 360p H.264+AAC) — YouTube throttles DASH/video-only
+        # formats (134/etc) to ~380kbps, but leaves progressive 18 un-throttled
+        # (NAS pulls it at ~40MB/s), so the proxy is limited only by home upload.
+        return ['18/b']
+    return [
         'best[ext=mp4][height<=480][protocol=https][vcodec!=none][acodec!=none]/'
         'best[ext=mp4][height<=720][protocol=https][vcodec!=none][acodec!=none]/'
         'best[ext=mp4][protocol=https][vcodec!=none][acodec!=none]/22/18/b',
     ]
+
+
+def _music_video_direct_stream_url(video_id, mobile=False):
+    cached = _music_video_stream_cache_get(video_id, mobile=mobile)
+    if cached:
+        return cached
+    max_h = 360 if mobile else 720
+    if _music_video_cookies_path() and shutil.which('yt-dlp'):
+        url = _music_video_ytdlp_stream_url(video_id, mobile=mobile)
+        if url:
+            return url
+    piped_url = _music_video_from_piped_streams(video_id, max_height=max_h)
+    if piped_url:
+        _music_video_stream_cache_set(video_id, piped_url, mobile=mobile)
+        return piped_url
+    return None
+
+
+def _music_video_pick_stream_line(out):
+    """Single progressive https URL from yt-dlp -g output, else None."""
+    if out is None:
+        return None
+    urls = []
+    for line in (out.stdout or '').splitlines():
+        line = line.strip()
+        if line.startswith('http'):
+            urls.append(line)
+    if len(urls) == 1 and '.m3u8' not in urls[0] and 'manifest' not in urls[0]:
+        return urls[0]
+    return None
+
+
+def _music_video_ytdlp_cmd_android_vr(video_id, *extra):
+    """android_vr player client — no cookies or PO token required; survives the
+    bot-check that blocks the web client. Progressive itag 22/18 only (~360-720p)."""
+    cmd = [
+        'yt-dlp', '--no-update', '--no-warnings', '--no-playlist',
+        '--socket-timeout', '12',
+        '--extractor-args', 'youtube:player_client=android_vr',
+    ]
+    cmd.extend(extra)
+    cmd.append(f'https://www.youtube.com/watch?v={video_id}')
+    return cmd
+
+
+def _music_video_ytdlp_stream_url(video_id, mobile=False):
+    format_specs = _music_video_format_specs(mobile=mobile)
+    ytdlp_timeout = 12 if mobile else 45
     for fmt in format_specs:
-        cmd = _music_video_ytdlp_cmd(video_id, '-f', fmt, '-g')
-        out = _music_video_ytdlp_run(cmd)
-        if out is None:
-            continue
-        urls = []
-        for line in (out.stdout or '').splitlines():
-            line = line.strip()
-            if line.startswith('http'):
-                urls.append(line)
-        if len(urls) == 1 and '.m3u8' not in urls[0] and 'manifest' not in urls[0]:
-            _music_video_stream_cache_set(video_id, urls[0])
-            return urls[0]
-        if out.stderr:
+        cmd = _music_video_ytdlp_cmd(video_id, '-f', fmt, '-g', mobile=mobile)
+        out = _music_video_ytdlp_run(cmd, timeout=ytdlp_timeout)
+        url = _music_video_pick_stream_line(out)
+        if url:
+            _music_video_stream_cache_set(video_id, url, mobile=mobile)
+            return url
+        if out is not None and out.stderr:
             print(f'music video stream url ({fmt}): {out.stderr.strip()[:280]}', flush=True)
+    # Web+cookies path bot-checked — android_vr works anonymously.
+    cmd = _music_video_ytdlp_cmd_android_vr(video_id, '-f', '22/18/b', '-g')
+    out = _music_video_ytdlp_run(cmd, timeout=ytdlp_timeout)
+    url = _music_video_pick_stream_line(out)
+    if url:
+        _music_video_stream_cache_set(video_id, url, mobile=mobile)
+        return url
+    if out is not None and out.stderr:
+        print(f'music video stream url (android_vr): {out.stderr.strip()[:280]}', flush=True)
     return None
 
 
@@ -4823,9 +5731,9 @@ def _music_video_play_reason():
     return 'Could not resolve a playable stream for this video'
 
 
-def _music_video_can_stream(video_id):
+def _music_video_can_stream(video_id, mobile=False):
     """True when yt-dlp can extract a stream for this id (check only; do not give URL to clients)."""
-    return _music_video_direct_stream_url(video_id) is not None
+    return _music_video_direct_stream_url(video_id, mobile=mobile) is not None
 
 
 @app.route('/api/music-video/<video_id>/play')
@@ -4834,12 +5742,36 @@ def music_video_play(video_id):
     video_id = (video_id or '').strip()
     if not _MUSIC_VIDEO_ID_RE.fullmatch(video_id):
         return jsonify({'error': 'bad video id'}), 400
-    if not _music_video_cookies_path() or not shutil.which('yt-dlp'):
-        return jsonify({'ready': False, 'reason': _music_video_play_reason()}), 503
-    if not _music_video_can_stream(video_id):
-        return jsonify({'ready': False, 'reason': _music_video_play_reason()}), 503
-    play_url = f'/api/music-video/{video_id}/proxy'
-    return jsonify({'ready': True, 'playUrl': play_url, 'proxied': True})
+    mobile = _music_video_request_mobile()
+    wait_raw = (request.args.get('wait') or '').strip()
+    try:
+        wait_sec = min(max(float(wait_raw), 0.0), 30.0) if wait_raw else 0.0
+    except ValueError:
+        wait_sec = 0.0
+    if wait_sec > 0:
+        stream_url = _music_video_wait_stream(video_id, mobile, max_wait=wait_sec)
+        if not stream_url:
+            return jsonify({
+                'ready': False,
+                'reason': 'Video is taking too long to prepare — try Wi‑Fi or Open in YouTube',
+            }), 503
+    else:
+        stream_url = _music_video_stream_cache_get(video_id, mobile=mobile)
+    play_url, direct = _music_video_client_play_url(video_id, mobile, stream_url)
+    if not play_url:
+        stale, hint = _music_video_cookies_stale()
+        reason = hint or 'Video is taking too long to prepare — try Wi‑Fi or Open in YouTube'
+        body = {'ready': False, 'reason': reason}
+        if stale:
+            body['cookiesStale'] = True
+        return jsonify(body), 503
+    return jsonify({
+        'ready': True,
+        'playUrl': play_url,
+        'proxied': not direct,
+        'direct': direct,
+        'mobile': mobile,
+    })
 
 
 @app.route('/api/music-video/<video_id>/proxy', methods=['GET', 'HEAD'])
@@ -4851,25 +5783,45 @@ def music_video_proxy(video_id):
     video_id = (video_id or '').strip()
     if not _MUSIC_VIDEO_ID_RE.fullmatch(video_id):
         return jsonify({'error': 'bad video id'}), 400
-    if not _music_video_cookies_path():
-        return jsonify({'error': _music_video_play_reason()}), 503
-    upstream_url = _music_video_direct_stream_url(video_id)
+    mobile = _music_video_request_mobile()
+    upstream_url = _music_video_stream_cache_get(video_id, mobile=mobile)
     if not upstream_url:
-        return jsonify({'error': _music_video_play_reason()}), 503
+        _music_video_ensure_stream(video_id, mobile=mobile)
+        # Hold the request until yt-dlp/Piped resolves — a 503 here makes ExoPlayer
+        # error out to a still frame; a slow first byte keeps it waiting happily.
+        upstream_url = _music_video_wait_stream(video_id, mobile, max_wait=25.0)
+    if not upstream_url:
+        return jsonify({'error': 'Stream preparing — retry shortly', 'retry': True}), 503
 
-    req_headers = {'User-Agent': 'Mozilla/5.0 (compatible; BockMedia/1.0)', 'Accept': '*/*'}
+    def _open_upstream(url):
+        req_headers = {'User-Agent': 'Mozilla/5.0 (compatible; BockMedia/1.0)', 'Accept': '*/*'}
+        if range_header:
+            req_headers['Range'] = range_header
+        upstream_req = urllib.request.Request(url, headers=req_headers, method=request.method)
+        return urllib.request.urlopen(upstream_req, timeout=120)
+
     range_header = request.headers.get('Range')
-    if range_header:
-        req_headers['Range'] = range_header
-    upstream_req = urllib.request.Request(upstream_url, headers=req_headers, method=request.method)
+    upstream = None
     try:
-        upstream = urllib.request.urlopen(upstream_req, timeout=120)
+        upstream = _open_upstream(upstream_url)
     except urllib.error.HTTPError as e:
         body = e.read()
         return Response(body, status=e.code, headers=dict(e.headers.items()))
     except urllib.error.URLError as e:
-        print(f'music video proxy upstream failed: {e}', flush=True)
-        return jsonify({'error': 'upstream stream failed'}), 502
+        print(f'music video proxy upstream failed (attempt 1): {e}', flush=True)
+        _music_video_stream_cache_clear(video_id)
+        fresh = _music_video_direct_stream_url(video_id, mobile=mobile)
+        if fresh and fresh != upstream_url:
+            try:
+                upstream = _open_upstream(fresh)
+            except urllib.error.HTTPError as e:
+                body = e.read()
+                return Response(body, status=e.code, headers=dict(e.headers.items()))
+            except urllib.error.URLError as e2:
+                print(f'music video proxy upstream failed (retry): {e2}', flush=True)
+                return jsonify({'error': 'upstream stream failed', 'retry': True}), 502
+        else:
+            return jsonify({'error': 'upstream stream failed', 'retry': True}), 502
 
     hop_by_hop = {
         'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization',
@@ -4887,7 +5839,7 @@ def music_video_proxy(video_id):
     def generate():
         try:
             while True:
-                chunk = upstream.read(65536)
+                chunk = upstream.read(_MUSIC_VIDEO_PROXY_CHUNK)
                 if not chunk:
                     break
                 yield chunk
@@ -4903,9 +5855,16 @@ def music_video_proxy(video_id):
 
 @app.route('/api/songs')
 def songs():
+    import bock_search
+    cache_key = f'songs?{request.query_string.decode("utf-8", "ignore")}'
+    album_filter = (request.args.get('album') or '').strip()
+    probe_durations = bool(album_filter)
+    cached = _response_cache_get(cache_key)
+    if cached is not None and _cached_songs_usable(cached, album_filter):
+        return jsonify(cached)
     page = int(request.args.get('page', 1))
     limit = int(request.args.get('limit', 100))
-    search = request.args.get('search', '')
+    search = (request.args.get('search') or '').strip()
     artist = request.args.get('artist', '')
     album = request.args.get('album', '')
     genre = (request.args.get('genre') or '').strip()
@@ -4914,11 +5873,53 @@ def songs():
     desc = order == 'desc'
     offset = (page - 1) * limit
 
-    conditions = ['1=1']
+    # FTS-first track search: ~10ms vs full-table LIKE + COUNT on 400k+ rows.
+    # FTS upkeep happens on the background maintenance thread, not here.
+    if search and not artist and not album and not genre:
+        fts_q = bock_search._fts_query(search)
+        if fts_q:
+            try:
+                fetch_n = min(limit + offset + limit * 2, 500)
+                fts_rows = db_query(
+                    'SELECT s.id, s.title, s.artist, s.album, s.genre, s.year, '
+                    's.duration_seconds, s.bitrate, s.track_number, s.path, s.first_seen_at '
+                    'FROM songs_fts f '
+                    'JOIN songs_cache s ON s.rowid = f.rowid '
+                    'WHERE songs_fts MATCH ? AND s.path IS NOT NULL AND s.path != "" '
+                    'ORDER BY bm25(songs_fts) LIMIT ?',
+                    [fts_q, fetch_n],
+                ) or []
+                matched = [
+                    dict(r) for r in fts_rows
+                    if bock_search.library_search_song_match(
+                        search, r.get('title'), r.get('album'), artist=r.get('artist'),
+                        genre=r.get('genre'),
+                    )
+                ]
+                page_rows = matched[offset:offset + limit]
+                items = [dict(r) for r in page_rows]
+                _apply_song_durations(items, probe=probe_durations)
+                if len(page_rows) < limit:
+                    total = offset + len(page_rows)
+                elif len(matched) < fetch_n:
+                    total = len(matched)
+                else:
+                    total = offset + len(page_rows) + 1
+                payload = {'items': items, 'total': total}
+                _response_cache_put(cache_key, payload)
+                return jsonify(payload)
+            except Exception:
+                pass
+
+    conditions = ['path IS NOT NULL AND path != ""']
     params = []
     if search:
-        conditions.append('(title LIKE ? OR artist LIKE ? OR album LIKE ?)')
-        params += [f'%{search}%', f'%{search}%', f'%{search}%']
+        clause, extra = bock_search._song_field_match_clause(
+            search, ('title', 'artist', 'album'), include_substring=True,
+        )
+        if clause:
+            conditions.append(f'({clause})')
+            params.extend(extra)
     if artist:
         conditions.append('artist = ?')
         params.append(artist)
@@ -4954,18 +5955,42 @@ def songs():
         f'SELECT COUNT(*) as total FROM songs_cache WHERE {where}',
         params
     )
-    items = []
-    for row in rows:
-        r = dict(row)
+    # SQL clause is the single source of truth so `total` matches returned rows
+    # (keeps mobile infinite-scroll `hasMore` correct). Use the cached DB duration
+    # only — no per-row mutagen/stat probe, which was 60-100 filesystem hits/page.
+    items = [dict(row) for row in rows]
+    _apply_song_durations(items, probe=probe_durations)
+    if request.args.get('enrich', '1') != '0':
         try:
-            r['duration_seconds'] = _song_duration_seconds(r.get('path'), r.get('duration_seconds'))
+            import bock_play_counts
+            import bock_ratings
+            member = (request.args.get('member') or '').strip()
+            if not member and (request.args.get('clientId') or '').strip():
+                member = member_for_client(request.args.get('clientId').strip()) or ''
+            counts = bock_play_counts.load_counts(os.path.join(DATA_DIR, 'play_counts.json'))
+            path_counts = counts.get('paths') or {}
+            member_counts = (counts.get('byMember') or {}).get(member or 'household', {})
+            if member and member in (counts.get('byMember') or {}):
+                member_counts = counts['byMember'][member]
+            ratings_list = bock_ratings.list_ratings(RATINGS_PATH, member) if member else []
+            song_ratings = {}
+            for rt in ratings_list:
+                if (rt.get('kind') or 'song') != 'song':
+                    continue
+                pid = rt.get('id') or rt.get('path')
+                if pid:
+                    song_ratings[pid] = int(rt.get('stars') or 0)
+            for r in items:
+                path = r.get('path') or ''
+                r['playCount'] = int(member_counts.get(path) or path_counts.get(path) or 0)
+                stars = song_ratings.get(path, 0)
+                r['rating'] = stars
+                r['liked'] = stars >= 5
         except Exception:
-            try:
-                r['duration_seconds'] = int(float(r.get('duration_seconds') or 0))
-            except (TypeError, ValueError):
-                r['duration_seconds'] = 0
-        items.append(r)
-    return jsonify({'items': items, 'total': total_row.get('total', 0)})
+            pass
+    payload = {'items': items, 'total': total_row.get('total', 0)}
+    _response_cache_put(cache_key, payload)
+    return jsonify(payload)
 
 # ── API: Settings ────────────────────────────────────────────────────────────
 
@@ -5797,10 +6822,12 @@ def _member_id_for_room_name(device_name, members):
         name = (m.get('name') or '').strip()
         if not name:
             continue
+        nl = name.lower()
         first = name.split()[0].lower()
         if len(first) < 2:
             continue
         markers = (
+            f"{nl}'s",
             f"{first}'s",
             f"{first}s room",
             f"{first}s bedroom",
@@ -6872,9 +7899,12 @@ def client_report():
         artist = (body.get('artist') or '').strip() or None
         album = (body.get('album') or '').strip() or None
         filepath = (body.get('filepath') or body.get('path') or '').strip()
+        playlist = (body.get('playlist') or '').strip() or None
+        playlist_id = (body.get('playlistId') or body.get('playlist_id') or '').strip() or None
+        source_label = (body.get('sourceLabel') or body.get('source_label') or '').strip() or None
         if not track and not filepath:
             return jsonify({'error': 'track or filepath required for play'}), 400
-        append_stream_history({
+        entry = {
             'track': track or os.path.splitext(os.path.basename(filepath))[0],
             'artist': artist,
             'album': album,
@@ -6884,15 +7914,22 @@ def client_report():
             'platform': platform or None,
             'memberId': member_id or None,
             'date': now_iso,
-        })
+        }
+        if playlist:
+            entry['playlist'] = playlist
+        if playlist_id:
+            entry['playlistId'] = playlist_id
+        if source_label:
+            entry['sourceLabel'] = source_label
+        append_stream_history(entry)
         _write_client_np_state(did, {
             'track': track,
             'artist': artist,
             'album': album,
             'filepath': filepath,
-            'playlist': (body.get('playlist') or '').strip() or None,
-            'playlistId': (body.get('playlistId') or body.get('playlist_id') or '').strip() or None,
-            'sourceLabel': (body.get('sourceLabel') or body.get('source_label') or '').strip() or None,
+            'playlist': playlist,
+            'playlistId': playlist_id,
+            'sourceLabel': source_label,
             'playing': True,
             'paused': False,
             'offset_ms': 0,
@@ -6947,6 +7984,14 @@ def _row_dt(row):
         return None
 
 
+
+def _csv_safe_cell(value):
+    """Prefix spreadsheet formula characters so Excel/LibreOffice won't execute."""
+    s = str(value or '')
+    if s and s[0] in ('=', '+', '-', '@', '\t', '\r'):
+        return "'" + s
+    return s
+
 @app.route('/api/analytics/export')
 def analytics_export():
     """CSV download of streaming history for the optional date range."""
@@ -6978,13 +8023,13 @@ def analytics_export():
     w.writerow(['date', 'track', 'artist', 'album', 'device', 'platform', 'filepath'])
     for r in rows:
         w.writerow([
-            r.get('date') or r.get('timestamp') or '',
-            r.get('track') or '',
-            r.get('artist') or '',
-            r.get('album') or '',
-            r.get('device') or '',
-            r.get('platform') or '',
-            r.get('filepath') or '',
+            _csv_safe_cell(r.get('date') or r.get('timestamp') or ''),
+            _csv_safe_cell(r.get('track') or ''),
+            _csv_safe_cell(r.get('artist') or ''),
+            _csv_safe_cell(r.get('album') or ''),
+            _csv_safe_cell(r.get('device') or ''),
+            _csv_safe_cell(r.get('platform') or ''),
+            _csv_safe_cell(r.get('filepath') or ''),
         ])
     return Response(
         buf.getvalue(),
@@ -7653,11 +8698,30 @@ def append_stream_history(entry):
     try:
         with open(STREAM_HISTORY_PATH, 'a') as f:
             f.write(json.dumps(entry) + '\n')
+        _bust_stream_history_cache()
         _bust_analytics_cache()
     except Exception as e:
         print(f'history write error: {e}', flush=True)
 
+_STREAM_HISTORY_CACHE = {'mtime': 0.0, 'rows': ()}
+
+
+def _bust_stream_history_cache():
+    global _STREAM_HISTORY_CACHE, _PLAYED_PATHS_CACHE
+    _STREAM_HISTORY_CACHE = {'mtime': 0.0, 'rows': ()}
+    _PLAYED_PATHS_CACHE = {'history_mtime': 0.0, 'counts_mtime': 0.0, 'paths': set()}
+    _DASHBOARD_QUICK_CACHE.clear()
+
+
 def _read_stream_history():
+    global _STREAM_HISTORY_CACHE
+    try:
+        mtime = os.path.getmtime(STREAM_HISTORY_PATH) if os.path.isfile(STREAM_HISTORY_PATH) else 0.0
+    except OSError:
+        mtime = 0.0
+    cached = _STREAM_HISTORY_CACHE
+    if cached.get('mtime') == mtime and cached.get('rows') is not None:
+        return list(cached['rows'])
     rows = []
     try:
         with open(STREAM_HISTORY_PATH) as f:
@@ -7667,7 +8731,7 @@ def _read_stream_history():
                     continue
                 try:
                     rows.append(json.loads(line))
-                except:
+                except json.JSONDecodeError:
                     continue
     except FileNotFoundError:
         pass
@@ -7679,7 +8743,12 @@ def _read_stream_history():
                     f.write(json.dumps(r) + '\n')
         except Exception:
             pass
-    return rows
+        try:
+            mtime = os.path.getmtime(STREAM_HISTORY_PATH)
+        except OSError:
+            mtime = 0.0
+    _STREAM_HISTORY_CACHE = {'mtime': mtime, 'rows': tuple(rows)}
+    return list(rows)
 
 @app.route('/api/nowplaying')
 def now_playing():
@@ -7710,7 +8779,7 @@ def load_config():
             with open(CONFIG_PATH) as f:
                 _config_cache = json.load(f)
             _config_mtime = mtime
-    except:
+    except (OSError, json.JSONDecodeError):
         pass
     return _config_cache
 
@@ -8236,7 +9305,12 @@ def can_stream_track(path):
 
 def normalize_track_queue(tracks):
     """Return tracks that can actually be streamed right now."""
-    return [p for p in tracks if can_stream_track(p)]
+    out = []
+    for p in tracks:
+        resolved = _path_under_music_root(p) or p
+        if can_stream_track(resolved):
+            out.append(resolved)
+    return out
 
 _FFMPEG_AVAILABLE = None
 
@@ -8275,7 +9349,7 @@ def _load_queues():
             try:
                 with open(QUEUES_PATH) as f:
                     return json.load(f)
-            except:
+            except (OSError, json.JSONDecodeError):
                 return {}
 
 def _save_queues(queues):
@@ -8367,7 +9441,10 @@ def _update_queue_flags(qid, **kwargs):
         if qid not in queues:
             return
         for k, v in kwargs.items():
-            queues[qid][k] = v
+            if k == 'tracks' and v is None:
+                queues[qid].pop('tracks', None)
+            else:
+                queues[qid][k] = v
         _save_queues(queues)
 
 def _set_queue_stop(qid, minutes=None, songs=None, current_idx=0):
@@ -8427,6 +9504,22 @@ def encode_token(data):
             playlist_id=data.get('playlist_id'),
             context=data.get('context'),
         )
+    if 'stopAfterIdx' in data or 'stopAt' in data:
+        with _QUEUES_LOCK:
+            queues = _load_queues()
+            entry = queues.get(qid)
+            if entry:
+                if 'stopAfterIdx' in data:
+                    if data.get('stopAfterIdx') is None:
+                        entry.pop('stopAfterIdx', None)
+                    else:
+                        entry['stopAfterIdx'] = int(data['stopAfterIdx'])
+                if 'stopAt' in data:
+                    if data.get('stopAt') is None:
+                        entry.pop('stopAt', None)
+                    else:
+                        entry['stopAt'] = data['stopAt']
+                _save_queues(queues)
     return f"{qid}:{idx}"
 
 def decode_token(token):
@@ -8455,7 +9548,7 @@ def decode_token(token):
             }
         padding = 4 - len(token) % 4
         return json.loads(base64.urlsafe_b64decode(token + '=' * padding))
-    except:
+    except (ValueError, json.JSONDecodeError, TypeError):
         return None
 
 
@@ -8503,6 +9596,10 @@ def parse_m3u(filepath, verify_exists=True):
                 if not line or line.startswith('#'):
                     continue
                 path = line if os.path.isabs(line) else os.path.normpath(os.path.join(base_dir, line))
+                if verify_exists and not os.path.isfile(path):
+                    alt = _path_under_music_root(line)
+                    if alt:
+                        path = alt
                 if os.path.splitext(path)[1].lower() not in SUPPORTED_EXTS:
                     continue
                 if verify_exists and not os.path.isfile(path):
@@ -8532,6 +9629,7 @@ BOCK_PLAYLIST_DIR = os.path.join(
 BOCK_SOURCE_NAME = 'bockmedia'
 # Enriched track lists for large playlists (keyed by playlist id + m3u mtime).
 _PLAYLIST_TRACKS_CACHE = {}
+_PLAYLIST_ENTRIES_CACHE = {'mtime': 0, 'entries': ()}
 _XSI = 'http://www.w3.org/2001/XMLSchema-instance'
 _XSD = 'http://www.w3.org/2001/XMLSchema'
 
@@ -8559,6 +9657,18 @@ def _save_playlists_tree(tree):
         tmp = PLAYLISTS_XML + '.tmp'
         tree.write(tmp, xml_declaration=True, encoding='utf-8')
         os.replace(tmp, PLAYLISTS_XML)
+    _PLAYLIST_ENTRIES_CACHE.clear()
+    _PLAYLIST_ENTRIES_CACHE.update({'mtime': 0, 'entries': ()})
+    global _PLAYLIST_CATALOG_CACHE
+    _PLAYLIST_CATALOG_CACHE = {'mtime': 0.0, 'items': ()}
+    try:
+        import catalog_cache
+        catalog_cache.rebuild_playlists_index_from_xml(DATA_DIR, PLAYLISTS_XML)
+    except Exception:
+        pass
+    _response_cache_bust()
+    import bock_home
+    bock_home.bust_home_cache()
 
 
 def _write_m3u_file(path, track_paths):
@@ -8615,6 +9725,27 @@ def _playlist_meta_from_key(key):
     }
 
 
+def _playlist_meta_by_id(playlist_id):
+    """Resolve playlist header fields from the catalog sidecar (no XML flock)."""
+    for raw in _load_playlist_catalog_raw():
+        if (raw.get('id') or '') == str(playlist_id):
+            source = raw.get('source') or ''
+            return {
+                'id': raw.get('id'),
+                'name': raw.get('name'),
+                'trackCount': raw.get('trackCount') or 0,
+                'shuffle': bool(raw.get('shuffle')),
+                'loop': bool(raw.get('loop')),
+                'createDate': raw.get('createDate'),
+                'lastUsed': raw.get('lastUsed'),
+                'source': source,
+                'sourceName': raw.get('sourceName'),
+                'isAudioBook': bool(raw.get('isAudioBook')),
+                'editable': bool(raw.get('editable')),
+            }
+    return None
+
+
 def _safe_playlist_filename(name):
     s = re.sub(r'[^\w\-. ]', '_', (name or '').strip()) or 'playlist'
     return s[:120]
@@ -8622,6 +9753,27 @@ def _safe_playlist_filename(name):
 
 def _music_root_abs():
     return os.path.abspath(MUSIC_ROOT)
+
+
+def _path_under_music_root(path):
+    """Resolve a DB or playlist-relative path to an existing file under MUSIC_ROOT."""
+    if not path or not str(path).strip():
+        return None
+    raw = str(path).strip()
+    root = _music_root_abs()
+    candidates = []
+    if os.path.isabs(raw):
+        candidates.append(os.path.normpath(raw))
+    else:
+        candidates.append(os.path.normpath(os.path.join(root, raw)))
+        if raw.startswith('demo/music/'):
+            candidates.append(os.path.normpath(os.path.join(root, raw[len('demo/music/'):])))
+        data_root = os.path.dirname(root)
+        candidates.append(os.path.normpath(os.path.join(data_root, raw)))
+    for abs_path in candidates:
+        if abs_path.startswith(root) and os.path.isfile(abs_path):
+            return abs_path
+    return None
 
 
 def _resolve_library_path(path, title=None, artist=None):
@@ -8632,12 +9784,12 @@ def _resolve_library_path(path, title=None, artist=None):
     """
     if not path or not str(path).strip():
         return None
+    resolved = _path_under_music_root(path)
+    if resolved:
+        return resolved
     raw = str(path).strip()
-    abs_path = os.path.abspath(raw if raw.startswith('/') else '/' + raw)
     root = _music_root_abs()
-    if abs_path.startswith(root) and os.path.isfile(abs_path):
-        return abs_path
-    base = os.path.basename(abs_path)
+    base = os.path.basename(raw)
     if not base:
         return None
     rows = db_query(
@@ -8650,29 +9802,29 @@ def _resolve_library_path(path, title=None, artist=None):
             if (row.get('title') or '').strip().lower() == tl:
                 p = row.get('path')
                 if p:
-                    ap = os.path.abspath(p)
-                    if ap.startswith(root) and os.path.isfile(ap):
-                        return ap
+                    hit = _path_under_music_root(p)
+                    if hit:
+                        return hit
     if artist:
         al = str(artist).strip().lower()
         for row in rows:
             if (row.get('artist') or '').strip().lower() == al:
                 p = row.get('path')
                 if p:
-                    ap = os.path.abspath(p)
-                    if ap.startswith(root) and os.path.isfile(ap):
-                        return ap
+                    hit = _path_under_music_root(p)
+                    if hit:
+                        return hit
     for row in rows:
         p = row.get('path')
         if p:
-            ap = os.path.abspath(p)
-            if ap.startswith(root) and os.path.isfile(ap):
-                return ap
+            hit = _path_under_music_root(p)
+            if hit:
+                return hit
     return None
 
 
-def _enrich_track_paths(paths):
-    """Attach title/artist/album from songs_cache (batched IN queries, not one per row)."""
+def _enrich_track_paths(paths, probe=True):
+    """Attach title/artist/album/duration from songs_cache (batched IN queries, not one per row)."""
     if not paths:
         return []
     by_path = {}
@@ -8683,7 +9835,7 @@ def _enrich_track_paths(paths):
             continue
         ph = ','.join('?' * len(chunk))
         rows = db_query(
-            f'SELECT path, title, artist, album, duration_seconds FROM songs_cache WHERE path IN ({ph})',
+            f'SELECT path, title, artist, album, duration_seconds, year FROM songs_cache WHERE path IN ({ph})',
             chunk,
         ) or []
         for row in rows:
@@ -8697,14 +9849,69 @@ def _enrich_track_paths(paths):
         title = row.get('title') or fname
         artist = row.get('artist') or ''
         canonical = _resolve_library_path(path, title=title, artist=artist) or path
+        track_year = _year_for_path(canonical)
+        if track_year is None:
+            raw_year = row.get('year')
+            if raw_year is not None:
+                try:
+                    track_year = int(float(str(raw_year).strip()[:4]))
+                except (TypeError, ValueError):
+                    track_year = None
         out.append({
             'path': canonical,
             'title': title,
             'artist': artist,
             'album': row.get('album') or '',
             'duration_seconds': row.get('duration_seconds') or 0,
+            'year': track_year,
         })
-    return out
+    return _apply_song_durations(out, probe=True)
+
+
+def _paths_total_duration_seconds(paths, probe=True):
+    """Sum track lengths for a path list (DB first, optional file probe + backfill)."""
+    if not paths:
+        return 0
+    by_path = {}
+    chunk_size = 400
+    for i in range(0, len(paths), chunk_size):
+        chunk = [p for p in paths[i:i + chunk_size] if p]
+        if not chunk:
+            continue
+        ph = ','.join('?' * len(chunk))
+        rows = db_query(
+            f'SELECT path, duration_seconds FROM songs_cache WHERE path IN ({ph})',
+            chunk,
+        ) or []
+        for row in rows:
+            by_path[row['path']] = row
+    total = 0
+    updates = []
+    for path in paths:
+        if not path:
+            continue
+        try:
+            db_dur = int(float((by_path.get(path) or {}).get('duration_seconds') or 0))
+        except (TypeError, ValueError):
+            db_dur = 0
+        if probe and db_dur <= 0:
+            dur = _song_duration_seconds(path, db_dur)
+            if dur > 0 and db_dur <= 0:
+                updates.append((dur, path))
+        else:
+            dur = db_dur
+        total += max(0, dur)
+    if updates:
+        try:
+            conn = get_db_rw()
+            conn.executemany(
+                'UPDATE songs_cache SET duration_seconds = ? WHERE path = ?',
+                updates,
+            )
+            conn.commit()
+        except Exception:
+            pass
+    return total
 
 
 def _m3u_path_for_bock(pid, name):
@@ -8758,6 +9965,7 @@ def _update_playlist_key(key, name, m3u_path, track_count):
 
 def _persist_playlist(pid, name, track_paths, *, create=False):
     """Write ServerPlaylists.xml entry first, then .m3u (crash-safe ordering)."""
+    import bock_playlists
     paths = [p for p in track_paths if p and os.path.isfile(p)]
     m3u_path = _m3u_path_for_bock(pid, name)
     tree = _load_playlists_tree()
@@ -8771,8 +9979,19 @@ def _persist_playlist(pid, name, track_paths, *, create=False):
         _update_playlist_key(key, name, m3u_path, len(paths))
     _save_playlists_tree(tree)
     _write_m3u_file(m3u_path, paths)
+    bock_playlists.upsert_source(
+        get_db_rw,
+        playlist_id=pid,
+        name=name,
+        source_kind='bockmedia',
+        storage='sql',
+        m3u_path=m3u_path,
+        track_count=len(paths),
+    )
+    bock_playlists.replace_tracks(get_db_rw, pid, paths)
     _invalidate_playlist_cover(pid)
     _save_playlist_cover_cache()
+    _PLAYLIST_TRACKS_CACHE.pop(pid, None)
     return {'id': pid, 'name': name, 'source': m3u_path, 'trackCount': len(paths)}
 
 
@@ -8880,20 +10099,78 @@ def _call_claude_pick_tracks(prompt, candidates, max_tracks):
     return name, paths
 
 
-def _playlist_paths_cached(playlist_id, source):
-    """Parse .m3u once per file mtime."""
+def _sync_playlist_sql(playlist_id, name, m3u_path, paths, *, source_kind):
+    """Mirror playlist membership into playlist_tracks (idempotent)."""
+    import bock_playlists
+    pid = (playlist_id or '').strip()
+    if not pid:
+        return
+    bock_playlists.import_from_m3u(
+        get_db_rw, pid, name or pid, m3u_path, paths, source_kind=source_kind,
+    )
+
+
+def _migrate_playlists_to_sql():
+    """Import catalog playlists from m3u into playlist_tracks (bockmedia + plex)."""
+    import bock_playlists
+    bock_playlists.ensure_schema(get_db_rw)
+    migrated = 0
+    try:
+        tree = _load_playlists_tree()
+    except Exception as e:
+        print(f'[playlist-sql] catalog load failed: {e}', flush=True)
+        return 0
+    for entry in tree.getroot().findall('Entry'):
+        key = entry.find('Key')
+        if key is None:
+            continue
+        source_kind = xml_text(key, 'SourceName').lower()
+        if source_kind not in ('bockmedia', 'plex'):
+            continue
+        pid = xml_text(key, 'ID')
+        if not pid or bock_playlists.is_sql_backed(pid, db_one):
+            continue
+        name = xml_text(key, 'Name')
+        m3u = xml_text(key, 'SourceID')
+        if not m3u or not os.path.isfile(m3u):
+            continue
+        paths = parse_m3u(m3u, verify_exists=False)
+        bock_playlists.import_from_m3u(
+            get_db_rw, pid, name, m3u, paths, source_kind=source_kind,
+        )
+        migrated += 1
+    if migrated:
+        print(f'[playlist-sql] migrated {migrated} playlist(s) to SQL', flush=True)
+    return migrated
+
+
+def _migrate_bock_playlists_to_sql():
+    return _migrate_playlists_to_sql()
+
+
+def _playlist_paths_cached(playlist_id, source, *, offset=0, limit=None):
+    """Playlist track paths — SQL when migrated, else parse .m3u once per file mtime."""
+    import bock_playlists
+    pid = (playlist_id or '').strip()
+    if pid and bock_playlists.is_sql_backed(pid, db_one):
+        return bock_playlists.tracks(pid, db_query, offset=offset, limit=limit)
     try:
         mtime = os.path.getmtime(source) if source and os.path.isfile(source) else 0
     except OSError:
         mtime = 0
     ent = _PLAYLIST_TRACKS_CACHE.get(playlist_id)
     if ent and ent.get('mtime') == mtime and ent.get('paths') is not None:
-        return ent['paths']
-    paths = _tracks_from_source(source) if source else []
-    prev = _PLAYLIST_TRACKS_CACHE.get(playlist_id) or {}
-    _PLAYLIST_TRACKS_CACHE[playlist_id] = {
-        'mtime': mtime, 'paths': paths, 'tracks': prev.get('tracks'),
-    }
+        paths = ent['paths']
+    else:
+        paths = _tracks_from_source(source) if source else []
+        prev = _PLAYLIST_TRACKS_CACHE.get(playlist_id) or {}
+        _PLAYLIST_TRACKS_CACHE[playlist_id] = {
+            'mtime': mtime, 'paths': paths, 'tracks': prev.get('tracks'),
+        }
+    if offset or limit is not None:
+        start = max(0, int(offset or 0))
+        end = start + int(limit) if limit is not None else None
+        return paths[start:end]
     return paths
 
 
@@ -9162,14 +10439,20 @@ def playlist_covers_batch():
 
 @app.route('/api/playlists/<playlist_id>')
 def playlist_detail(playlist_id):
+    import bock_uitest
+    injected = bock_uitest.uitest_fail_response('playlist')
+    if injected is not None:
+        return injected
     page = max(1, int(request.args.get('page', 1)))
     limit = min(max(int(request.args.get('limit', 100)), 1), 500)
-    sort_by = (request.args.get('sortBy') or 'title').strip().lower()
+    sort_by = (request.args.get('sortBy') or 'original').strip().lower()
     order = (request.args.get('order') or 'asc').strip().lower()
     if sort_by in ('track',):
         sort_by = 'title'
-    if sort_by not in ('title', 'artist', 'album', 'path', 'updated'):
-        sort_by = 'title'
+    elif sort_by in ('catalog', 'order', 'original'):
+        sort_by = 'original'
+    elif sort_by not in ('title', 'artist', 'album', 'path', 'updated'):
+        sort_by = 'original'
     if order not in ('asc', 'desc'):
         order = 'asc'
     q = (request.args.get('q') or '').strip()
@@ -9183,40 +10466,66 @@ def playlist_detail(playlist_id):
         )
         paths = [t['path'] for t in detail['tracks'] if t.get('path')]
         detail['tracks'] = _enrich_track_paths(paths)
+        detail['totalDurationSeconds'] = _paths_total_duration_seconds(paths, probe=True)
         return jsonify(detail)
 
-    if sort_by not in ('title', 'artist', 'album', 'path'):
-        sort_by = 'title'
+    if sort_by not in ('title', 'artist', 'album', 'path', 'original'):
+        sort_by = 'original'
 
-    key, _entry = _find_playlist_key(_load_playlists_tree().getroot(), playlist_id)
-    if key is None:
-        return jsonify({'error': 'not_found'}), 404
-    meta = _playlist_meta_from_key(key)
+    meta = _playlist_meta_by_id(playlist_id)
+    if meta is None:
+        key, _entry = _find_playlist_key(_load_playlists_tree().getroot(), playlist_id)
+        if key is None:
+            return jsonify({'error': 'not_found'}), 404
+        meta = _playlist_meta_from_key(key)
     source = meta.get('source') or ''
-    paths = _playlist_paths_cached(playlist_id, source)
+    import bock_playlists
+    sql_backed = bock_playlists.is_sql_backed(playlist_id, db_one)
+    q_lower = q.lower() if q else ''
 
-    if sort_by == 'title':
-        ordered_paths = _sort_paths_by_field(paths, 'title', order)
+    if sql_backed and sort_by in ('original', 'title', 'artist', 'album', 'path'):
+        start = (page - 1) * limit
+        page_paths, total = bock_playlists.tracks_page(
+            playlist_id, db_query, db_one=db_one,
+            sort_by=sort_by, order=order, offset=start, limit=limit, q=q_lower,
+        )
+        probe_durations = request.args.get('probe', '0') == '1'
+        tracks = _enrich_track_paths(page_paths, probe=probe_durations)
+        total_duration_seconds = (
+            _paths_total_duration_seconds(page_paths, probe=True)
+            if probe_durations
+            else bock_playlists.total_duration_db(playlist_id, db_query)
+        )
     else:
-        ordered_paths = [t['path'] for t in _sort_track_dicts(
-            _playlist_all_tracks_enriched(playlist_id, source), sort_by, order)]
+        paths = _playlist_paths_cached(playlist_id, source)
 
-    q = (request.args.get('q') or '').strip().lower()
-    if q:
-        enriched = _playlist_all_tracks_enriched(playlist_id, source)
-        meta_by_path = {t['path']: t for t in enriched if t.get('path')}
-        ordered_paths = [
-            p for p in ordered_paths
-            if q in (meta_by_path.get(p, {}).get('title') or '').lower()
-            or q in (meta_by_path.get(p, {}).get('artist') or '').lower()
-            or q in (meta_by_path.get(p, {}).get('album') or '').lower()
-            or q in os.path.basename(p).lower()
-            or q in os.path.splitext(os.path.basename(p))[0].lower()
-        ]
-    total = len(ordered_paths)
-    start = (page - 1) * limit
-    page_paths = ordered_paths[start:start + limit]
-    tracks = _enrich_track_paths(page_paths)
+        if sort_by == 'original':
+            ordered_paths = list(reversed(paths)) if order == 'desc' else paths
+        elif sort_by == 'title':
+            ordered_paths = _sort_paths_by_field(paths, 'title', order)
+        else:
+            ordered_paths = [t['path'] for t in _sort_track_dicts(
+                _playlist_all_tracks_enriched(playlist_id, source), sort_by, order)]
+
+        if q_lower:
+            enriched = _playlist_all_tracks_enriched(playlist_id, source)
+            meta_by_path = {t['path']: t for t in enriched if t.get('path')}
+            ordered_paths = [
+                p for p in ordered_paths
+                if q_lower in (meta_by_path.get(p, {}).get('title') or '').lower()
+                or q_lower in (meta_by_path.get(p, {}).get('artist') or '').lower()
+                or q_lower in (meta_by_path.get(p, {}).get('album') or '').lower()
+                or q_lower in os.path.basename(p).lower()
+                or q_lower in os.path.splitext(os.path.basename(p))[0].lower()
+            ]
+        total = len(ordered_paths)
+        start = (page - 1) * limit
+        page_paths = ordered_paths[start:start + limit]
+        tracks = _enrich_track_paths(page_paths)
+        probe_durations = request.args.get('probe', '0') == '1'
+        total_duration_seconds = _paths_total_duration_seconds(
+            ordered_paths, probe=probe_durations,
+        )
 
     ext_meta = _load_playlist_meta().get(playlist_id) or {}
     household = _load_household()
@@ -9225,6 +10534,7 @@ def playlist_detail(playlist_id):
         **meta,
         'tracks': tracks,
         'total': total,
+        'totalDurationSeconds': total_duration_seconds,
         'page': page,
         'limit': limit,
         'sortBy': sort_by,
@@ -9246,6 +10556,9 @@ def _tracks_for_playlist(playlist_id, source, member_id=''):
     rated = _resolve_rated_playlist(playlist_id, member_id)
     if rated:
         return rated[1]
+    import bock_playlists
+    if playlist_id and bock_playlists.is_sql_backed(playlist_id, db_one):
+        return bock_playlists.tracks(playlist_id, db_query)
     if playlist_id and source:
         return _playlist_paths_cached(playlist_id, source)
     return _tracks_from_source(source)
@@ -9335,10 +10648,47 @@ def update_playlist(playlist_id):
         _update_playlist_key(key, name, source, count)
         _save_playlists_tree(tree)
         _write_m3u_file(source, track_paths)
+        _sync_playlist_sql(playlist_id, name, source, track_paths, source_kind='plex')
         _PLAYLIST_TRACKS_CACHE.pop(playlist_id, None)
         _invalidate_playlist_cover(playlist_id)
         return jsonify({'id': playlist_id, 'name': name, 'trackCount': len(track_paths)})
     result = _persist_playlist(playlist_id, name, track_paths, create=False)
+    _PLAYLIST_TRACKS_CACHE.pop(playlist_id, None)
+    _invalidate_playlist_cover(playlist_id)
+    return jsonify(result)
+
+
+@app.route('/api/playlists/<playlist_id>/tracks/add', methods=['POST'])
+def add_playlist_track(playlist_id):
+    body = request.get_json(silent=True) or {}
+    path = (body.get('path') or '').strip()
+    if not path:
+        return jsonify({'error': 'path required'}), 400
+    tree = _load_playlists_tree()
+    key, _ = _find_playlist_key(tree.getroot(), playlist_id)
+    if key is None:
+        return jsonify({'error': 'not_found'}), 404
+    meta = _playlist_meta_from_key(key)
+    if meta.get('sourceName') != BOCK_SOURCE_NAME:
+        return jsonify({'error': 'not_editable'}), 403
+    import bock_playlists
+    if not bock_playlists.is_sql_backed(playlist_id, db_one):
+        paths = _playlist_paths_cached(playlist_id, meta.get('source') or '')
+        if path not in paths:
+            paths.append(path)
+        result = _persist_playlist(playlist_id, meta.get('name'), paths, create=False)
+    else:
+        added = bock_playlists.append_track(get_db_rw, db_one, playlist_id, path)
+        if not added:
+            return jsonify({'error': 'duplicate_or_invalid'}), 409
+        paths = bock_playlists.tracks(playlist_id, db_query)
+        _write_m3u_file(meta.get('source'), paths)
+        result = {
+            'id': playlist_id,
+            'name': meta.get('name'),
+            'trackCount': len(paths),
+            'added': True,
+        }
     _PLAYLIST_TRACKS_CACHE.pop(playlist_id, None)
     _invalidate_playlist_cover(playlist_id)
     return jsonify(result)
@@ -9384,13 +10734,34 @@ def remove_playlist_track(playlist_id):
         return jsonify({'error': 'not_found'}), 404
     meta = _playlist_meta_from_key(key)
     source = meta.get('source') or ''
-    paths = [p for p in _playlist_paths_cached(playlist_id, source) if p != path]
-    if meta.get('sourceName') == BOCK_SOURCE_NAME:
-        _persist_playlist(playlist_id, meta.get('name'), paths, create=False)
-    elif source:
-        _update_playlist_key(key, meta.get('name'), source, len(paths))
-        _save_playlists_tree(tree)
-        _write_m3u_file(source, paths)
+    import bock_playlists
+    if bock_playlists.is_sql_backed(playlist_id, db_one):
+        removed = bock_playlists.remove_track(get_db_rw, db_query, db_one, playlist_id, path)
+        if not removed:
+            return jsonify({'error': 'track_not_in_playlist'}), 404
+        paths = bock_playlists.tracks(playlist_id, db_query)
+        if meta.get('sourceName') == BOCK_SOURCE_NAME:
+            _persist_playlist(playlist_id, meta.get('name'), paths, create=False)
+        elif source:
+            _update_playlist_key(key, meta.get('name'), source, len(paths))
+            _save_playlists_tree(tree)
+            _write_m3u_file(source, paths)
+            _sync_playlist_sql(
+                playlist_id, meta.get('name'), source, paths,
+                source_kind=(meta.get('sourceName') or 'plex').lower(),
+            )
+    else:
+        paths = [p for p in _playlist_paths_cached(playlist_id, source) if p != path]
+        if meta.get('sourceName') == BOCK_SOURCE_NAME:
+            _persist_playlist(playlist_id, meta.get('name'), paths, create=False)
+        elif source:
+            _update_playlist_key(key, meta.get('name'), source, len(paths))
+            _save_playlists_tree(tree)
+            _write_m3u_file(source, paths)
+            _sync_playlist_sql(
+                playlist_id, meta.get('name'), source, paths,
+                source_kind=(meta.get('sourceName') or 'plex').lower(),
+            )
     _PLAYLIST_TRACKS_CACHE.pop(playlist_id, None)
     _invalidate_playlist_cover(playlist_id)
     return jsonify({'ok': True, 'trackCount': len(paths)})
@@ -9413,6 +10784,30 @@ def move_playlist_track(playlist_id):
         return jsonify({'error': 'not_found'}), 404
     meta = _playlist_meta_from_key(key)
     source = meta.get('source') or ''
+    import bock_playlists
+    if bock_playlists.is_sql_backed(playlist_id, db_one):
+        paths = bock_playlists.tracks(playlist_id, db_query)
+        if path not in paths:
+            return jsonify({'error': 'track_not_in_playlist'}), 404
+        from_index = paths.index(path)
+        if not bock_playlists.move_track(get_db_rw, db_query, db_one, playlist_id, path, to_index):
+            return jsonify({'error': 'move_failed'}), 400
+        paths = bock_playlists.tracks(playlist_id, db_query)
+        if meta.get('sourceName') == BOCK_SOURCE_NAME:
+            _persist_playlist(playlist_id, meta.get('name'), paths, create=False)
+        elif source:
+            _update_playlist_key(key, meta.get('name'), source, len(paths))
+            _save_playlists_tree(tree)
+            _write_m3u_file(source, paths)
+            _sync_playlist_sql(
+                playlist_id, meta.get('name'), source, paths,
+                source_kind=(meta.get('sourceName') or 'plex').lower(),
+            )
+        else:
+            return jsonify({'error': 'not_editable'}), 403
+        _PLAYLIST_TRACKS_CACHE.pop(playlist_id, None)
+        _invalidate_playlist_cover(playlist_id)
+        return jsonify({'ok': True, 'fromIndex': from_index, 'toIndex': to_index, 'trackCount': len(paths)})
     paths = list(_playlist_paths_cached(playlist_id, source))
     if path not in paths:
         return jsonify({'error': 'track_not_in_playlist'}), 404
@@ -9434,7 +10829,7 @@ def move_playlist_track(playlist_id):
     return jsonify({'ok': True, 'fromIndex': from_index, 'toIndex': to_index, 'trackCount': len(paths)})
 
 
-def _continue_after_queue_mode():
+def _household_continue_after_queue_mode():
     try:
         tree = ET.parse(os.path.join(DATA_DIR, 'Preferences.xml'))
         root = tree.getroot()
@@ -9444,9 +10839,47 @@ def _continue_after_queue_mode():
         return 'off'
 
 
-def _continue_after_queue_paths(data, tracks, current_idx):
+def _device_id_for_queue_context(data):
+    """Best-effort device id for per-member continue-after-queue resolution."""
+    try:
+        did = getattr(g, 'device_id', None)
+    except RuntimeError:
+        did = None
+    if did and str(did).strip() and str(did) != 'default':
+        return str(did).strip()
+    qid = (data or {}).get('qid')
+    if not qid:
+        return None
+    payload = _read_all_np() or {}
+    for dev_id, st in (payload.get('devices') or {}).items():
+        tok = (st.get('token') or '')
+        if tok.startswith(f'{qid}:'):
+            return dev_id
+    return None
+
+
+def _continue_after_queue_mode(device_id=None):
+    """Household XML default, overridden by per-member client prefs when set."""
+    if device_id:
+        st = read_np_state_for_device(device_id) or {}
+        member_id = (st.get('memberId') or '').strip()
+        if member_id:
+            try:
+                merged = bock_client_prefs.get_prefs(
+                    CLIENT_PREFS_PATH, member_id=member_id).get('merged') or {}
+                raw = merged.get('continueAfterQueue')
+                if raw is not None and str(raw).strip():
+                    return str(raw).strip().lower()
+            except Exception:
+                pass
+    return _household_continue_after_queue_mode()
+
+
+def _continue_after_queue_paths(data, tracks, current_idx, device_id=None):
     """Return extra track paths to append when a queue ends, or None."""
-    mode = _continue_after_queue_mode()
+    if device_id is None:
+        device_id = _device_id_for_queue_context(data)
+    mode = _continue_after_queue_mode(device_id)
     if mode in ('', 'off', 'false', '0', 'none'):
         return None
     if not tracks or current_idx < 0 or current_idx >= len(tracks):
@@ -9485,8 +10918,10 @@ def _continue_after_queue_paths(data, tracks, current_idx):
     return extra[:30] or None
 
 
-def _try_continue_queue(data, tracks, idx):
-    extra = _continue_after_queue_paths(data, tracks, idx)
+def _try_continue_queue(data, tracks, idx, device_id=None):
+    if device_id is None:
+        device_id = _device_id_for_queue_context(data)
+    extra = _continue_after_queue_paths(data, tracks, idx, device_id=device_id)
     if not extra:
         return None
     new_tracks = (tracks + extra)[:_QUEUE_TRACK_LIMIT]
@@ -9854,7 +11289,9 @@ def ai_playlist():
     try:
         import bock_mix_muse
         candidates = bock_mix_muse.candidates_for_prompt(db_query, prompt, limit=400)
-        ai_name, paths = bock_mix_muse.pick_tracks(prompt, candidates, max_tracks, load_config)
+        ai_name, paths, mode = bock_mix_muse.curate_playlist(
+            prompt, candidates, max_tracks, load_config, db_query=db_query,
+        )
     except ValueError as e:
         code = str(e)
         status = 503 if 'not_configured' in code else 400
@@ -9864,7 +11301,7 @@ def ai_playlist():
         return jsonify({'error': 'claude_request_failed', 'detail': str(e)}), 502
     name = (body.get('name') or '').strip() or ai_name
     tracks = _enrich_track_paths(paths)
-    out = {'name': name, 'tracks': tracks, 'trackCount': len(tracks)}
+    out = {'name': name, 'tracks': tracks, 'trackCount': len(tracks), 'mode': mode, 'source': f'mix-muse-{mode}'}
     if save:
         pid = str(uuid.uuid4())
         saved = _persist_playlist(pid, name, paths, create=True)
@@ -9931,6 +11368,14 @@ def _score_playlist(query, name):
 
 def _load_playlist_entries():
     """[(id, name, source), …] from ServerPlaylists.xml."""
+    global _PLAYLIST_ENTRIES_CACHE
+    try:
+        mtime = os.path.getmtime(PLAYLISTS_XML)
+    except OSError:
+        mtime = 0
+    cached = _PLAYLIST_ENTRIES_CACHE
+    if cached.get('mtime') == mtime and cached.get('entries'):
+        return list(cached['entries'])
     entries = []
     try:
         tree = _load_playlists_tree()
@@ -9943,6 +11388,7 @@ def _load_playlist_entries():
                 entries.append((key.findtext('ID') or '', name, xml_text(key, 'SourceID')))
     except Exception as e:
         print(f'Playlist load error: {e}')
+    _PLAYLIST_ENTRIES_CACHE = {'mtime': mtime, 'entries': tuple(entries)}
     return entries
 
 def best_playlist_entry(query, cutoff=0.5):
@@ -10141,8 +11587,7 @@ def general_search_tracks(query, limit=300):
     artist = fuzzy_find_artist(query)
     if artist:
         rows = db_query(
-            "SELECT path FROM songs_cache WHERE artist = ? AND path IS NOT NULL "
-            "AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac') ORDER BY RANDOM() LIMIT ?",
+            f"SELECT path FROM songs_cache WHERE artist = ? AND path IS NOT NULL {_streamable_ext_sql()} ORDER BY RANDOM() LIMIT ?",
             [artist, limit]
         )
         tracks = [r['path'] for r in rows]
@@ -10151,8 +11596,7 @@ def general_search_tracks(query, limit=300):
     album = fuzzy_find_album(query)
     if album:
         rows = db_query(
-            "SELECT path FROM songs_cache WHERE album = ? AND path IS NOT NULL "
-            "AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac') ORDER BY CAST(track_number AS INTEGER), title LIMIT 50",
+            f"SELECT path FROM songs_cache WHERE album = ? AND path IS NOT NULL {_streamable_ext_sql()} ORDER BY CAST(track_number AS INTEGER), title LIMIT 50",
             [album]
         )
         tracks = [r['path'] for r in rows]
@@ -10662,6 +12106,7 @@ def nowplaying_devices():
             'paused':     paused,
             'stopped':    not playing and not paused,
             'shuffle':    bool(token_data.get('shuffle')),
+            'loop':       bool(token_data.get('loop')),
             'sleep':      _sleep_info_for_token(token),
             'upcoming':   _upcoming_tracks_for_token(token, limit=5),
             'playlist': src.get('playlist'),
@@ -10706,7 +12151,7 @@ def read_selected():
     try:
         with open(SELECTED_PATH) as f:
             return json.load(f)
-    except:
+    except (OSError, json.JSONDecodeError):
         return None
 
 def write_selected(data):
@@ -10728,7 +12173,7 @@ def get_ignored():
     try:
         with open(IGNORE_PATH) as f:
             return json.load(f)
-    except:
+    except (OSError, json.JSONDecodeError):
         return []
 
 def _save_ignored(ignored):
@@ -10874,8 +12319,27 @@ def _np_play_path(path, token, *, offset_ms=0, previous_token=None,
                       title=title, subtitle=subtitle, artwork_url=artwork_url,
                       filepath=path)
 
-def _np_eager_track_state(path, token, prev_state=None):
+def _np_eager_track_state(path, token, prev_state=None, device_id=None):
     """Refresh Now Playing metadata when issuing the next/prev track (before PlaybackStarted)."""
+    if device_id:
+        state = dict(prev_state or read_np_state_for_device(device_id) or {})
+        title, artist, album, _ = track_metadata_fast(path)
+        src = _np_source_fields(token, device_id)
+        write_np_state_for_device(device_id, {
+            **state,
+            'track': title,
+            'artist': artist,
+            'album': album,
+            'filepath': path,
+            'token': token,
+            'playing': True,
+            'paused': False,
+            'timestamp': time.time(),
+            'duration_ms': _duration_ms_for_path(path),
+            'offset_ms': 0,
+            **src,
+        })
+        return
     state = dict(prev_state or read_np_state() or {})
     title, artist, album, _ = track_metadata_fast(path)
     src = _np_source_fields(token, _np_device_id())
@@ -11134,6 +12598,47 @@ def _song_duration_seconds(path, db_seconds=None):
     ms = _duration_ms_for_path(path)
     return max(0, ms // 1000)
 
+
+def _apply_song_durations(items, probe=False):
+    """Normalize duration_seconds on API song rows; optionally probe files and backfill DB."""
+    if not items:
+        return items
+    updates = []
+    for row in items:
+        path = row.get('path') or ''
+        try:
+            db_dur = int(float(row.get('duration_seconds') or 0))
+        except (TypeError, ValueError):
+            db_dur = 0
+        if probe and path and db_dur <= 0:
+            dur = _song_duration_seconds(path, db_dur)
+        else:
+            dur = db_dur
+        row['duration_seconds'] = dur
+        if probe and dur > 0 and db_dur <= 0 and path:
+            updates.append((dur, path))
+    if updates:
+        try:
+            conn = get_db_rw()
+            conn.executemany(
+                'UPDATE songs_cache SET duration_seconds = ? WHERE path = ?',
+                updates,
+            )
+            conn.commit()
+        except Exception:
+            pass
+    return items
+
+
+def _cached_songs_usable(cached, album_filter):
+    """Skip stale cache entries that still have all-zero durations on album pages."""
+    if not cached or not album_filter:
+        return True
+    items = cached.get('items') or []
+    if not items:
+        return True
+    return any(int(i.get('duration_seconds') or 0) > 0 for i in items)
+
 def _year_for_path(path):
     """Release year (int) for a file path from songs_cache, else None."""
     if not path:
@@ -11177,11 +12682,13 @@ def _filter_ignored_queue(queue):
     return filtered if filtered else queue
 
 def start_playing(tracks, shuffle=False, speech=None, loop=False,
-                  playlist=None, playlist_id=None, context=None, source=None):
+                  playlist=None, playlist_id=None, context=None, source=None,
+                  start_idx=0):
     try:
         return _start_playing_impl(
             tracks, shuffle=shuffle, speech=speech, loop=loop,
             playlist=playlist, playlist_id=playlist_id, context=context, source=source,
+            start_idx=start_idx,
         )
     except Exception as ex:
         import traceback
@@ -11190,9 +12697,14 @@ def start_playing(tracks, shuffle=False, speech=None, loop=False,
 
 
 def _start_playing_impl(tracks, shuffle=False, speech=None, loop=False,
-                        playlist=None, playlist_id=None, context=None, source=None):
+                        playlist=None, playlist_id=None, context=None, source=None,
+                        start_idx=0):
     t0 = time.time()
     shuffle_seed = None
+    try:
+        start_idx = max(0, int(start_idx or 0))
+    except (TypeError, ValueError):
+        start_idx = 0
     if playlist_id and not source:
         _, source = _msp_playlist_by_id(playlist_id)
     use_lazy = bool(playlist_id and source)
@@ -11208,21 +12720,23 @@ def _start_playing_impl(tracks, shuffle=False, speech=None, loop=False,
         queue = queue[:_QUEUE_TRACK_LIMIT]
         if not queue:
             return alexa_speak("Sorry, I couldn't find any tracks to play.")
-        first = queue[0]
+        start_idx = min(start_idx, len(queue) - 1)
+        first = queue[start_idx]
         qid = _store_queue(
             queue, shuffle=shuffle, loop=loop,
             playlist=playlist, playlist_id=playlist_id, context=context,
         )
-        token = f"{qid}:0"
+        token = f"{qid}:{start_idx}"
     else:
         queue = _filter_ignored_queue(normalize_track_queue(tracks or []))
         if not queue:
             return alexa_speak("Sorry, I couldn't find any tracks to play.")
         if shuffle:
             random.shuffle(queue)
-        first = queue[0]
+        start_idx = min(start_idx, len(queue) - 1)
+        first = queue[start_idx]
         token_data = {
-            'tracks': queue[:_QUEUE_TRACK_LIMIT], 'idx': 0, 'shuffle': shuffle, 'loop': loop,
+            'tracks': queue[:_QUEUE_TRACK_LIMIT], 'idx': start_idx, 'shuffle': shuffle, 'loop': loop,
             'playlist': playlist, 'playlist_id': playlist_id, 'context': context,
         }
         token = encode_token(token_data)
@@ -11255,6 +12769,10 @@ def _msp_cfg():
 
 @app.route('/oauth/authorize', methods=['GET', 'POST'])
 def oauth_authorize():
+    if not _basic_auth_ok() and not _mobile_api_token_ok():
+        if _credentials_configured():
+            return _auth_required()
+        return _forbidden('OAuth requires admin authentication')
     cfg = _msp_cfg()
     src = request.form if request.method == 'POST' else request.args
     client_id    = src.get('client_id', '')
@@ -11277,9 +12795,9 @@ def oauth_authorize():
             '<h2>Link Bock Media to Alexa</h2>'
             '<p>Authorize Alexa to access your local music library?</p>'
             '<form method="POST" action="/oauth/authorize">'
-            f'<input type="hidden" name="client_id" value="{client_id}">'
-            f'<input type="hidden" name="redirect_uri" value="{redirect_uri}">'
-            f'<input type="hidden" name="state" value="{state}">'
+            f'<input type="hidden" name="client_id" value="{html.escape(client_id)}">'
+            f'<input type="hidden" name="redirect_uri" value="{html.escape(redirect_uri)}">'
+            f'<input type="hidden" name="state" value="{html.escape(state)}">'
             f'<input type="hidden" name="response_type" value="{response_type}">'
             '<button type="submit" style="padding:12px 24px;font-size:16px">Authorize</button>'
             '</form></body></html>'
@@ -11300,6 +12818,10 @@ def oauth_authorize():
 
 @app.route('/oauth/token', methods=['POST'])
 def oauth_token():
+    if not _basic_auth_ok() and not _mobile_api_token_ok():
+        if _credentials_configured():
+            return _auth_required()
+        return _forbidden('OAuth requires admin authentication')
     cfg = _msp_cfg()
     grant = request.form.get('grant_type', '')
 
@@ -11670,7 +13192,8 @@ def music_skill():
         if not token:
             token = ((payload.get('requestContext') or {}).get('user') or {}).get('accessToken', '') or ''
 
-    if token != cfg.get('accessToken'):
+    expected = (cfg.get('accessToken') or '')
+    if not expected or not hmac.compare_digest(token or '', expected):
         kind = body.get('request', {}).get('type', '') if is_event else \
                f"{(body.get('directive') or body).get('header',{}).get('namespace','')}." \
                f"{(body.get('directive') or body).get('header',{}).get('name','')}"
@@ -11837,6 +13360,8 @@ def alexa_skill():
                                      play_behavior='REPLACE_ALL')
             if advanced is not None:
                 return advanced
+        elif event_token and state.get('token') and event_token != state.get('token'):
+            return alexa_empty()
         state['playing'] = False
         write_np_state(state)
         return alexa_empty()
@@ -11959,7 +13484,7 @@ def _alexa_intent_request(req):
     iname  = intent.get('name', '')
     slots  = intent.get('slots', {})
     def sv(name): return normalize_spoken_value((slots.get(name, {}).get('value') or '').strip())
-    print(f'[ALEXA DEBUG] intent={iname} slots={json.dumps({k: slots[k].get("value") for k in slots})}', flush=True)
+    _alexa_debug(f'[ALEXA DEBUG] intent={iname} slots={json.dumps({k: slots[k].get("value") for k in slots})}')
 
     # ── Play playlist ──────────────────────────────────────────────────
     if iname == 'PlayPlaylistIntent':
@@ -11985,7 +13510,7 @@ def _alexa_intent_request(req):
         name = entry[1] if entry else None
         source = entry[2] if entry else None
         pid = entry[0] if entry else None
-        print(f'[ALEXA DEBUG] PlayPlaylistIntent query={repr(query)} -> name={repr(name)} source={repr(source)}', flush=True)
+        _alexa_debug(f'[ALEXA DEBUG] PlayPlaylistIntent query={repr(query)} -> name={repr(name)} source={repr(source)}')
         if not name:
             if 'token' in query.lower():
                 return alexa_speak("Sorry, that play request expired. Please try again from the app.")
@@ -12009,7 +13534,7 @@ def _alexa_intent_request(req):
         name = entry[1] if entry else None
         source = entry[2] if entry else None
         pid = entry[0] if entry else None
-        print(f'[ALEXA DEBUG] ShufflePlaylistIntent query={repr(query)} -> name={repr(name)} source={repr(source)}', flush=True)
+        _alexa_debug(f'[ALEXA DEBUG] ShufflePlaylistIntent query={repr(query)} -> name={repr(name)} source={repr(source)}')
         if not name:
             return alexa_speak(f"Sorry, I couldn't find a playlist called {query}.")
         return start_playing(None, shuffle=True, speech=f"Shuffling {name}.",
@@ -12036,8 +13561,7 @@ def _alexa_intent_request(req):
         if not artist:
             return alexa_speak(f"Sorry, I couldn't find any music by {query}.")
         rows = db_query(
-            "SELECT path FROM songs_cache WHERE artist = ? AND path IS NOT NULL "
-            "AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac') ORDER BY RANDOM() LIMIT 300",
+            f"SELECT path FROM songs_cache WHERE artist = ? AND path IS NOT NULL {_streamable_ext_sql()} ORDER BY RANDOM() LIMIT 300",
             [artist]
         )
         tracks = [r['path'] for r in rows]
@@ -12067,8 +13591,7 @@ def _alexa_intent_request(req):
         if not artist:
             return alexa_speak(f"Sorry, I couldn't find any music by {query}.")
         rows = db_query(
-            "SELECT path FROM songs_cache WHERE artist = ? AND path IS NOT NULL "
-            "AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac') ORDER BY RANDOM() LIMIT 300",
+            f"SELECT path FROM songs_cache WHERE artist = ? AND path IS NOT NULL {_streamable_ext_sql()} ORDER BY RANDOM() LIMIT 300",
             [artist]
         )
         tracks = [r['path'] for r in rows]
@@ -12206,8 +13729,7 @@ def _alexa_intent_request(req):
         genre = fuzzy_find_genre(query)
         if genre:
             rows = db_query(
-                "SELECT path FROM songs_cache WHERE genre = ? AND path IS NOT NULL "
-                "AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac') ORDER BY RANDOM() LIMIT 300",
+                f"SELECT path FROM songs_cache WHERE genre = ? AND path IS NOT NULL {_streamable_ext_sql()} ORDER BY RANDOM() LIMIT 300",
                 [genre]
             )
             tracks = [r['path'] for r in rows]
@@ -12230,8 +13752,7 @@ def _alexa_intent_request(req):
         genre = fuzzy_find_genre(query)
         if genre:
             rows = db_query(
-                "SELECT path FROM songs_cache WHERE genre = ? AND path IS NOT NULL "
-                "AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac') ORDER BY RANDOM() LIMIT 300",
+                f"SELECT path FROM songs_cache WHERE genre = ? AND path IS NOT NULL {_streamable_ext_sql()} ORDER BY RANDOM() LIMIT 300",
                 [genre]
             )
             tracks = [r['path'] for r in rows]
@@ -12267,8 +13788,7 @@ def _alexa_intent_request(req):
             album = fuzzy_find_album(query)
             if album:
                 rows = db_query(
-                    "SELECT path FROM songs_cache WHERE album = ? AND path IS NOT NULL "
-                    "AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac') ORDER BY CAST(track_number AS INTEGER), title LIMIT 100",
+                    f"SELECT path FROM songs_cache WHERE album = ? AND path IS NOT NULL {_streamable_ext_sql()} ORDER BY CAST(track_number AS INTEGER), title LIMIT 100",
                     [album]
                 )
                 tracks = [r['path'] for r in rows]
@@ -12300,8 +13820,7 @@ def _alexa_intent_request(req):
                 return start_playing([path], speech=f"Playing {query}.", context=f'Song · {query}')
         elif sel_type == 'album':
             rows = db_query(
-                "SELECT path FROM songs_cache WHERE album = ? AND path IS NOT NULL "
-                "AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac') ORDER BY CAST(track_number AS INTEGER), title LIMIT 50",
+                f"SELECT path FROM songs_cache WHERE album = ? AND path IS NOT NULL {_streamable_ext_sql()} ORDER BY CAST(track_number AS INTEGER), title LIMIT 50",
                 [query]
             )
             tracks = [r['path'] for r in rows]
@@ -12310,8 +13829,7 @@ def _alexa_intent_request(req):
                                     context=f'Album · {query}')
         elif sel_type == 'artist':
             rows = db_query(
-                "SELECT path FROM songs_cache WHERE artist = ? AND path IS NOT NULL "
-                "AND LOWER(SUBSTR(path,-4)) IN ('.mp3', '.m4a', '.aac') ORDER BY RANDOM() LIMIT 300",
+                f"SELECT path FROM songs_cache WHERE artist = ? AND path IS NOT NULL {_streamable_ext_sql()} ORDER BY RANDOM() LIMIT 300",
                 [query]
             )
             tracks = [r['path'] for r in rows]
@@ -12350,6 +13868,8 @@ def _alexa_intent_request(req):
         playlist_q = sv('PlaylistName')
         state = read_np_state() or {}
         current_path = state.get('filepath')
+        if current_path:
+            current_path = _path_under_music_root(current_path) or current_path
         if not current_path or not os.path.isfile(current_path):
             return alexa_speak("Nothing is currently playing to add.")
         if not playlist_q:
@@ -12508,12 +14028,20 @@ def _alexa_intent_request(req):
         token = state.get('token', '')
         if token:
             data = decode_token(token) or {}
-            # Reshuffle remaining tracks from current position and persist
-            idx = data.get('idx', 0)
-            remaining = data.get('tracks', [])[idx:]
-            random.shuffle(remaining)
-            new_tracks = data.get('tracks', [])[:idx] + remaining
-            _update_queue_flags(data.get('qid'), shuffle=True, tracks=new_tracks)
+            qid = data.get('qid')
+            idx = int(data.get('idx', 0) or 0)
+            if not qid:
+                return alexa_speak("Nothing is playing to shuffle.")
+            seed = random.randint(0, 2**31 - 1)
+            entry = _load_queues().get(qid) or {}
+            if entry.get('lazy'):
+                _update_queue_flags(qid, shuffle=True, shuffle_seed=seed, tracks=None)
+            else:
+                tracks = data.get('tracks') or []
+                remaining = list(tracks[idx:])
+                random.shuffle(remaining)
+                new_tracks = tracks[:idx] + remaining
+                _update_queue_flags(qid, shuffle=True, shuffle_seed=seed, tracks=new_tracks)
             return alexa_speak("Shuffle on.")
         return alexa_speak("Nothing is playing to shuffle.")
 
@@ -12541,10 +14069,45 @@ def _alexa_intent_request(req):
 
 # ── Run ──────────────────────────────────────────────────────────────────────
 
+def _ensure_songs_cache_indexes():
+    """Prefix/search indexes so library + search avoid full table scans."""
+    stmts = (
+        'CREATE INDEX IF NOT EXISTS idx_songs_title ON songs_cache(title COLLATE NOCASE)',
+        'CREATE INDEX IF NOT EXISTS idx_songs_artist ON songs_cache(artist COLLATE NOCASE)',
+        'CREATE INDEX IF NOT EXISTS idx_songs_album ON songs_cache(album COLLATE NOCASE)',
+        'CREATE INDEX IF NOT EXISTS idx_songs_album_artist ON songs_cache(album_artist COLLATE NOCASE)',
+        'CREATE INDEX IF NOT EXISTS idx_songs_genre ON songs_cache(genre COLLATE NOCASE)',
+        'CREATE INDEX IF NOT EXISTS idx_songs_first_seen_at ON songs_cache(first_seen_at)',
+    )
+    conn = get_db_rw()
+    try:
+        for sql in stmts:
+            try:
+                conn.execute(sql)
+            except Exception as e:
+                print(f'[startup] index skip: {e}', flush=True)
+        conn.commit()
+    finally:
+        conn.close()
+
+
 try:
     bock_loudness.ensure_songs_cache_columns(get_db_rw, db_query)
+    _ensure_songs_cache_indexes()
     import bock_search_ext
-    bock_search_ext.ensure_fts(get_db_rw, db_query)
+    if bock_search_ext.needs_full_build(db_query):
+        # First build or schema migration — index in background so gunicorn
+        # worker boot never blocks on a full FTS rebuild (search LIKE-falls-back
+        # until ready).
+        threading.Thread(
+            target=bock_search_ext.ensure_fts, args=(get_db_rw, db_query, db_one),
+            daemon=True, name='fts-init',
+        ).start()
+    else:
+        bock_search_ext.ensure_fts(get_db_rw, db_query, db_one)
+    import bock_playlists
+    bock_playlists.ensure_schema(get_db_rw)
+    _migrate_playlists_to_sql()
     # Backfill first_seen_at from file mtime where missing.
     rows = db_query(
         'SELECT path FROM songs_cache WHERE first_seen_at IS NULL AND path IS NOT NULL LIMIT 5000'
@@ -12565,27 +14128,92 @@ except Exception as e:
 
 register_bock_routes(app, globals())
 
+
+def _search_index_maintenance_loop():
+    """Keep songs_fts and the agg tables in sync off the request path.
+
+    Every 60s: incremental FTS sync, plus an aggregate rebuild whenever
+    songs_cache changed (watch-folder scans and metadata backfills happen in
+    other processes, so this drift check is what picks them up)."""
+    import bock_search_ext
+    last_snapshot = None
+    while True:
+        time.sleep(60)
+        try:
+            bock_search_ext.ensure_fts(get_db_rw, db_query, db_one)
+        except Exception as e:
+            print(f'[search-maint] fts: {e}', flush=True)
+        try:
+            snap = db_one(
+                'SELECT COUNT(*) AS n, COALESCE(MAX(rowid), 0) AS mx, '
+                "SUM(CASE WHEN genre IS NOT NULL AND TRIM(genre) != '' THEN 1 ELSE 0 END) AS g "
+                'FROM songs_cache'
+            ) or {}
+            key = (snap.get('n'), snap.get('mx'), snap.get('g'))
+            if last_snapshot is not None and key != last_snapshot and _albums_agg_exists():
+                print('[search-maint] songs_cache changed — refreshing aggregates', flush=True)
+                refresh_albums_agg()
+                _LIBRARY_STATS_CACHE['ts'] = 0.0
+            last_snapshot = key
+        except Exception as e:
+            print(f'[search-maint] agg: {e}', flush=True)
+
+
+def _start_search_index_maintenance():
+    threading.Thread(
+        target=_search_index_maintenance_loop, daemon=True, name='search-maint',
+    ).start()
+
+
 _start_automation_scheduler()
 _start_device_discovery_scheduler()
 _start_daily_scheduler()
 _start_playlist_cover_warm()
+_start_search_index_maintenance()
+
+def _security_audit_summary():
+    import bock_security
+    cfg = load_config()
+    ar = cfg.get('alexaRemote') or {}
+    result = bock_security.audit(
+        cfg,
+        credentials_configured=_credentials_configured(),
+        allow_open_lan_api=_cfg_flag('mobileApi', 'allowOpenLanApi'),
+        allow_open_lan_media=_cfg_flag('mobileApi', 'allowOpenLanMedia'),
+        allow_external_access=_cfg_flag('mobileApi', 'allowExternalAccess'),
+        allow_tunnel_api=_cfg_flag('mobileApi', 'allowTunnelApi'),
+        alexa_password_in_config=bool((ar.get('password') or '').strip()),
+    )
+    return {
+        'insecureConfig': result.get('insecureConfig', False),
+        'securityWarnings': result.get('warnings') or [],
+    }
+
 
 def _warn_insecure_lan_config():
-    """Log once at startup when LAN is fully open with no credentials."""
+    """Log security posture once at startup; refuse insecure external exposure."""
     try:
-        if _credentials_configured():
-            return
-        if _allow_open_lan_api() and _allow_open_lan_media():
+        import bock_security
+        summary = _security_audit_summary()
+        bock_security.log_startup_warnings({'warnings': summary.get('securityWarnings') or []})
+        if (not _credentials_configured()
+                and _cfg_flag('mobileApi', 'allowExternalAccess')
+                and not os.environ.get('OURMEDIA_ALLOW_INSECURE_EXTERNAL')):
             print(
-                'SECURITY: LAN API and media are open with no WebPassword or mobileApi.token — '
-                'any device on your Wi-Fi can read the library and trigger playback. '
-                'Set credentials in Settings or disable allowOpenLanApi/allowOpenLanMedia in config.json.',
+                'FATAL: mobileApi.allowExternalAccess is enabled without WebPassword '
+                'or mobileApi.token — set credentials or disable external access.',
                 flush=True,
             )
+            if not os.environ.get('PYTEST_CURRENT_TEST'):
+                raise SystemExit(1)
+    except SystemExit:
+        raise
     except Exception:
         pass
 
+
 _warn_insecure_lan_config()
+_start_youtube_cookies_monitor()
 
 if __name__ == '__main__':
     apply_logging()

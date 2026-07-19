@@ -18,8 +18,9 @@
     ],
     "createdAt": 1781660729.088022,
     "updatedAt": 1782697529.088022,
-    "lastRunAt": 1782695729.088022,
-    "lastRunStatus": "ok start"
+    "lastRunAt": 1782736204.531808,
+    "lastRunStatus": "G2A0...K1TC: No module named 'alexapy'",
+    "lastFiredAt": "2026-06-29 07:30"
   },
   {
     "id": "edece9af-7def-4c18-bbff-efa150b48ef4",
@@ -37,8 +38,9 @@
     ],
     "createdAt": 1781660729.088022,
     "updatedAt": 1782697529.088022,
-    "lastRunAt": 1782695729.088022,
-    "lastRunStatus": "ok mix"
+    "lastRunAt": 1783288815.113177,
+    "lastRunStatus": "G091...LVRM: No module named 'alexapy'",
+    "lastFiredAt": "2026-07-05 17:00"
   },
   {
     "id": "7e0b4929-6cb0-4aa1-8bf9-dadcb4071c7b",

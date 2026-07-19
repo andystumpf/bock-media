@@ -25,6 +25,9 @@ test('dashboard route includes home greeting and Android-style sections', async 
   await window.routes.dashboard('');
   const html = document.getElementById('main-content').innerHTML;
   assert.match(html, /home-page/);
+  assert.match(html, /home-greeting/);
+  assert.match(html, /Good (morning|afternoon|evening)/);
+  assert.doesNotMatch(html, /spotify-play-fab|spotify-download-fab/);
   assert.match(html, /home-filter|home-quick-grid/);
   assert.match(html, /Jump back in|Your top mixes|Recent playlists|Dinner &amp; entertaining/);
   assert.match(html, /spotify-home-section|spotify-section/);

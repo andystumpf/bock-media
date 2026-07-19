@@ -113,6 +113,7 @@ struct DrivingModeView: View {
                 .padding(.bottom, 12)
             }
         }
+        .accessibilityIdentifier(BockTestTags.drivingBody)
         .task(id: track?.path) {
             guard let path = track?.path, !path.isEmpty else {
                 artURL = nil

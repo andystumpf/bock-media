@@ -21,6 +21,19 @@ fun httpErrorMessage(e: Throwable, fallback: String = "Request failed"): String 
     return e.message?.takeIf { it.isNotBlank() } ?: fallback
 }
 
+fun isServerConnectionError(message: String?): Boolean {
+    val m = message?.lowercase().orEmpty()
+    if (m.isBlank()) return false
+    return m.contains("failed to connect") ||
+        m.contains("timeout") ||
+        m.contains("timed out") ||
+        m.contains("unable to resolve host") ||
+        m.contains("network is unreachable")
+}
+
+fun isServerConnectionError(e: Throwable): Boolean =
+    isServerConnectionError(e.message) || (e.cause?.let { isServerConnectionError(it.message) } == true)
+
 private fun friendlyApiError(error: String?, code: String?): String? {
     when (code?.takeIf { it.isNotBlank() } ?: error?.takeIf { it.isNotBlank() }) {
         "not_authenticated" -> return "Alexa not signed in — open Settings → Start browser login"

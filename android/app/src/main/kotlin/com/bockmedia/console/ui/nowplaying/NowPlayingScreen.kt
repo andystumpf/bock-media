@@ -2,9 +2,13 @@ package com.bockmedia.console.ui.nowplaying
 
 import android.os.Build
 import com.bockmedia.console.ui.theme.BockGreen
+import androidx.compose.ui.platform.testTag
+import com.bockmedia.console.ui.testing.BockTestTags
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.VerticalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -17,8 +21,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
@@ -28,11 +37,22 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import com.bockmedia.console.data.network.NetworkReachability
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import coil.compose.SubcomposeAsyncImage
 import coil.compose.SubcomposeAsyncImageContent
 import com.bockmedia.console.BockMediaApp
@@ -42,6 +62,7 @@ import com.bockmedia.console.domain.model.PlaybackFocus
 import com.bockmedia.console.domain.model.computeNowPlayingProgress
 import com.bockmedia.console.domain.model.formatPlaybackTime
 import com.bockmedia.console.media.LocalPlaybackController
+import com.bockmedia.console.media.NowPlayingPollService
 import com.bockmedia.console.media.isLocalPhoneDevice
 import com.bockmedia.console.local.ActiveProfileStore
 import com.bockmedia.console.local.ClientPrefsSync
@@ -59,6 +80,7 @@ import com.bockmedia.console.ui.components.RoomRequestsSheet
 import com.bockmedia.console.ui.components.UpNextSheet
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 import retrofit2.HttpException
 
 private fun controlErrorMessage(e: Throwable): String {
@@ -90,6 +112,8 @@ fun NowPlayingScreen(
     repository: BockMediaRepository,
     snackbarHostState: SnackbarHostState,
     onBack: () -> Unit,
+    onOpenArtist: (String) -> Unit = {},
+    onOpenAlbum: (String, String?) -> Unit = { _, _ -> },
     playbackFocusGeneration: Int = 0,
 ) {
     val context = LocalContext.current
@@ -109,9 +133,21 @@ fun NowPlayingScreen(
     var showHistory by remember { mutableStateOf(false) }
     val volumes = remember { mutableStateMapOf<String, Int?>() }
     val shuffleOn = remember { mutableStateMapOf<String, Boolean>() }
-    val volumeTimers = remember { mutableStateMapOf<String, kotlinx.coroutines.Job?>() }
+    val loopOn = remember { mutableStateMapOf<String, Boolean>() }
+
+    DisposableEffect(repository) {
+        NowPlayingPollService.configure(repository)
+        NowPlayingPollService.addSubscriber()
+        onDispose {
+            NowPlayingPollService.removeSubscriber()
+        }
+    }
+    val polledItems by NowPlayingPollService.items.collectAsState()
+    val polledControls by NowPlayingPollService.controlsAvailable.collectAsState()
+    val polledAlexa by NowPlayingPollService.alexaDevices.collectAsState()
 
     suspend fun refreshLive() {
+        NowPlayingPollService.refreshNow()
         val np = repository.nowPlayingDevices()
         items = np.items.filter { !it.deviceId.startsWith("client-") }
         controlsAvailable = np.controlsAvailable
@@ -123,9 +159,20 @@ fun NowPlayingScreen(
         for (dev in np.items) {
             if (!canControlDevice(dev, alexaDevices, controlsAvailable, remoteOk)) continue
             shuffleOn[dev.deviceId] = dev.shuffle
+            loopOn[dev.deviceId] = dev.loop
             if (volumes.containsKey(dev.deviceId)) continue
             val serial = resolveSerial(dev, alexaDevices) ?: continue
             runCatching { volumes[dev.deviceId] = repository.getVolume(serial).volume }
+        }
+    }
+
+    LaunchedEffect(polledItems, polledControls, polledAlexa) {
+        if (polledItems.isNotEmpty()) items = polledItems
+        controlsAvailable = polledControls
+        if (polledAlexa.isNotEmpty()) alexaDevices = polledAlexa
+        for (dev in polledItems) {
+            shuffleOn[dev.deviceId] = dev.shuffle
+            loopOn[dev.deviceId] = dev.loop
         }
     }
 
@@ -158,6 +205,9 @@ fun NowPlayingScreen(
             }
             return
         }
+        if (action == "loop") {
+            loopOn[dev.deviceId] = !(loopOn[dev.deviceId] == true)
+        }
         val serial = resolveSerial(dev, alexaDevices)
         runCatching {
             repository.deviceControl(dev.deviceId, dev.deviceName ?: "", serial, action)
@@ -175,12 +225,6 @@ fun NowPlayingScreen(
     }
     LaunchedEffect(playbackFocusGeneration) {
         if (playbackFocusGeneration > 0) {
-            runCatching { refreshLive() }
-        }
-    }
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(5_000)
             runCatching { refreshLive() }
         }
     }
@@ -271,6 +315,7 @@ fun NowPlayingScreen(
         )
     }
 
+    Box(Modifier.fillMaxSize().testTag(BockTestTags.NOW_PLAYING_BODY)) {
     when {
         loading && items.isEmpty() && history.isEmpty() && !localState.active -> LoadingBox()
         error != null && items.isEmpty() && history.isEmpty() && !localState.active -> ErrorText(error!!) { scope.launch { loadAll() } }
@@ -337,7 +382,7 @@ fun NowPlayingScreen(
                             repository = repository,
                             volumes = volumes,
                             shuffleOn = shuffleOn,
-                            volumeTimers = volumeTimers,
+                            loopOn = loopOn,
                             scope = scope,
                             snackbarHostState = snackbarHostState,
                             pagerDotsVisible = pagerDotsVisible,
@@ -346,6 +391,8 @@ fun NowPlayingScreen(
                             onControl = { d, action -> scope.launch { runControl(d, action) } },
                             onSleep = { sleepDevice = it },
                             onRefresh = { scope.launch { runCatching { refreshLive() } } },
+                            onOpenArtist = onOpenArtist,
+                            onOpenAlbum = onOpenAlbum,
                         )
                     }
                     if (pagerDotsVisible) {
@@ -361,6 +408,7 @@ fun NowPlayingScreen(
                 }
             }
         }
+    }
     }
 }
 
@@ -524,7 +572,7 @@ private fun SpotifyNowPlayingPage(
     repository: BockMediaRepository,
     volumes: MutableMap<String, Int?>,
     shuffleOn: MutableMap<String, Boolean>,
-    volumeTimers: MutableMap<String, kotlinx.coroutines.Job?>,
+    loopOn: MutableMap<String, Boolean>,
     scope: kotlinx.coroutines.CoroutineScope,
     snackbarHostState: SnackbarHostState,
     pagerDotsVisible: Boolean = false,
@@ -533,6 +581,8 @@ private fun SpotifyNowPlayingPage(
     onControl: (NowPlayingDeviceItem, String) -> Unit,
     onSleep: (NowPlayingDeviceItem) -> Unit,
     onRefresh: () -> Unit,
+    onOpenArtist: (String) -> Unit = {},
+    onOpenAlbum: (String, String?) -> Unit = { _, _ -> },
 ) {
     val isLocal = isLocalPhoneDevice(dev.deviceId)
     val liveLocal by LocalPlaybackController.state.collectAsState()
@@ -566,6 +616,14 @@ private fun SpotifyNowPlayingPage(
     var videoLoading by remember { mutableStateOf(false) }
     var videoPlayUrl by remember { mutableStateOf<String?>(null) }
     var videoStreamError by remember { mutableStateOf<String?>(null) }
+    var prefetchedVideoId by remember { mutableStateOf<String?>(null) }
+    var prefetchedPlayUrl by remember { mutableStateOf<String?>(null) }
+    var prefetchedStreamError by remember { mutableStateOf<String?>(null) }
+    var prefetchTrackKey by remember { mutableStateOf("") }
+    var prefetchInProgress by remember { mutableStateOf(false) }
+    // Track whose video is currently on screen — used to drop it instantly on skip.
+    var activeVideoTrackKey by remember { mutableStateOf("") }
+    var musicVideoCookiesStale by remember { mutableStateOf(false) }
     var playbackHttpClient by remember { mutableStateOf<OkHttpClient?>(null) }
     var lyricsOffsetMs by remember { mutableIntStateOf(0) }
     var lyricsPositionMs by remember { mutableLongStateOf(0L) }
@@ -593,13 +651,15 @@ private fun SpotifyNowPlayingPage(
             .getOrDefault(emptyList())
             .any { it.id == me && it.role == "parent" }
     }
-    var year by remember(displayDev.filepath) { mutableStateOf(displayDev.year) }
+    var year by remember(displayDev.filepath) { mutableStateOf<Int?>(null) }
     LaunchedEffect(displayDev.filepath, displayDev.year) {
-        year = displayDev.year
-        val fp = displayDev.filepath
-        if (year == null && !fp.isNullOrBlank()) {
-            year = repository.trackYear(fp)
+        val fp = displayDev.filepath?.takeIf { it.isNotBlank() }
+        val fromDevice = displayDev.year?.takeIf { it > 0 }
+        if (fp == null) {
+            year = fromDevice
+            return@LaunchedEffect
         }
+        year = fromDevice ?: repository.trackYear(fp)
     }
 
     LaunchedEffect(displayDev.filepath) {
@@ -613,36 +673,183 @@ private fun SpotifyNowPlayingPage(
         if (showVideo) showLyrics = false
     }
 
-    val serverBaseUrl = remember(repository.baseUrlEpoch) { repository.peekBaseUrl() }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var appInForeground by remember { mutableStateOf(true) }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            appInForeground = when (event) {
+                Lifecycle.Event.ON_STOP -> false
+                Lifecycle.Event.ON_START -> true
+                else -> appInForeground
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    var networkTick by remember { mutableIntStateOf(0) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            runCatching {
+                musicVideoCookiesStale = repository.health().musicVideo?.cookiesStale == true
+            }
+            delay(60_000)
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        var lastWifi = NetworkReachability.onWifi
+        while (true) {
+            NetworkReachability.update(context)
+            if (NetworkReachability.onWifi != lastWifi) {
+                lastWifi = NetworkReachability.onWifi
+                networkTick++
+            }
+            delay(5_000)
+        }
+    }
 
     LaunchedEffect(Unit) {
         playbackHttpClient = BockMediaApp.get(context).buildPlaybackHttpClient()
     }
 
-    LaunchedEffect(displayDev.track, displayDev.artist, durationSec, serverBaseUrl) {
-        videoId = null
-        videoPlayUrl = null
-        videoStreamError = null
+    // durationSec is intentionally excluded — it loads late (0 → real) and would
+    // otherwise restart prefetch/player mid-buffer, stalling the video.
+    fun videoTrackKey(title: String) =
+        "${displayDev.artist.orEmpty().trim().lowercase()}|${title.lowercase()}"
+
+    // Prefetch video id + stream via NAS proxy (never the YouTube WebView — bot-checked).
+    LaunchedEffect(showVideo, appInForeground, networkTick, displayDev.track, displayDev.artist) {
+        prefetchedVideoId = null
+        prefetchedPlayUrl = null
+        prefetchedStreamError = null
+        prefetchTrackKey = ""
+        prefetchInProgress = false
+        if (!showVideo || !appInForeground) return@LaunchedEffect
+        val title = displayDev.track?.trim().orEmpty()
+        if (title.isEmpty()) return@LaunchedEffect
+        val trackKey = videoTrackKey(title)
+        if (activeVideoTrackKey.isNotEmpty() && trackKey != activeVideoTrackKey) {
+            // Skipped to a different song — stop the old video right away and show
+            // the album art until the new one is ready.
+            videoId = null
+            videoPlayUrl = null
+            videoStreamError = null
+            videoLoading = true
+            activeVideoTrackKey = ""
+        }
+        prefetchTrackKey = trackKey
+        prefetchInProgress = true
+        val app = BockMediaApp.get(context)
+        val base = MusicVideoNetwork.resolveServerBase(context, app, repository, forceRefresh = networkTick > 0)
+        if (base == null) {
+            prefetchInProgress = false
+            return@LaunchedEffect
+        }
+        val lowBandwidth = MusicVideoNetwork.onCellular
+        val prepared = runCatching {
+            repository.prepareMusicVideoForTrack(
+                title = title,
+                artist = displayDev.artist,
+                durationSec = durationSec.takeIf { it > 0 }?.toInt(),
+                baseUrl = base,
+                lowBandwidth = lowBandwidth,
+                skipStreamWait = false,
+            )
+        }.getOrElse {
+            MusicVideoPrepareResult(null, null, "Could not prepare video stream")
+        }
+        if (prefetchTrackKey != trackKey) return@LaunchedEffect
+        prefetchedVideoId = prepared.videoId
+        prefetchedPlayUrl = prepared.playUrl
+        prefetchedStreamError = prepared.error
+        prefetchInProgress = false
+    }
+
+    // Warm the NEXT track's video on the server while the current one plays.
+    // The lookup call triggers a background yt-dlp resolve on the NAS, so by the
+    // time the user skips, the stream URL is cached and starts almost instantly.
+    val nextUp = displayDev.upcoming.firstOrNull()
+    LaunchedEffect(showVideo, appInForeground, nextUp?.title, nextUp?.artist) {
+        if (!showVideo || !appInForeground) return@LaunchedEffect
+        val nextTitle = nextUp?.title?.trim().orEmpty()
+        if (nextTitle.isEmpty()) return@LaunchedEffect
+        // Let the current track's own resolve win the yt-dlp slot first.
+        delay(6_000)
+        runCatching {
+            repository.musicVideo(
+                title = nextTitle,
+                artist = nextUp?.artist,
+                lowBandwidth = MusicVideoNetwork.onCellular,
+            )
+        }
+    }
+
+    LaunchedEffect(
+        showVideo,
+        appInForeground,
+        prefetchTrackKey,
+        prefetchedVideoId,
+        prefetchedPlayUrl,
+        prefetchedStreamError,
+        prefetchInProgress,
+        displayDev.track,
+        displayDev.artist,
+        networkTick,
+    ) {
+        if (!showVideo || !appInForeground) {
+            videoLoading = false
+            return@LaunchedEffect
+        }
         val title = displayDev.track?.trim().orEmpty()
         if (title.isEmpty()) {
             videoLoading = false
             return@LaunchedEffect
         }
+        val trackKey = videoTrackKey(title)
+
+        if (prefetchTrackKey == trackKey) {
+            if (prefetchInProgress && prefetchedVideoId.isNullOrBlank()) {
+                videoLoading = true
+                while (prefetchInProgress && prefetchedVideoId.isNullOrBlank()) {
+                    delay(100)
+                }
+            }
+            videoId = prefetchedVideoId
+            videoPlayUrl = prefetchedPlayUrl
+            videoStreamError = prefetchedStreamError
+            videoLoading = false
+            if (!prefetchedVideoId.isNullOrBlank()) activeVideoTrackKey = trackKey
+            return@LaunchedEffect
+        }
+
         videoLoading = true
-        val id = runCatching {
-            repository.musicVideo(
+        val app = BockMediaApp.get(context)
+        val base = MusicVideoNetwork.resolveServerBase(context, app, repository, forceRefresh = networkTick > 0)
+        if (base == null) {
+            videoStreamError = "Could not reach the server"
+            videoLoading = false
+            return@LaunchedEffect
+        }
+        val lowBandwidth = MusicVideoNetwork.onCellular
+        val prepared = runCatching {
+            repository.prepareMusicVideoForTrack(
                 title = title,
                 artist = displayDev.artist,
                 durationSec = durationSec.takeIf { it > 0 }?.toInt(),
-            )?.videoId
-        }.getOrNull()?.takeIf { it.isNotBlank() }
-        videoId = id
-        videoLoading = false
-        val base = serverBaseUrl?.takeIf { it.isNotBlank() }
-        if (!id.isNullOrBlank() && base != null) {
-            videoPlayUrl = repository.musicVideoProxyPlayUrl(base, id)
+                baseUrl = base,
+                lowBandwidth = lowBandwidth,
+                skipStreamWait = false,
+            )
+        }.getOrElse {
+            MusicVideoPrepareResult(null, null, "Could not prepare video stream")
         }
+        videoId = prepared.videoId
+        videoPlayUrl = prepared.playUrl
+        videoStreamError = prepared.error
+        videoLoading = false
+        if (!prepared.videoId.isNullOrBlank()) activeVideoTrackKey = trackKey
     }
+
 
     LaunchedEffect(displayDev.filepath, displayDev.track, displayDev.artist, displayDev.album, durationSec) {
         val path = displayDev.filepath?.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
@@ -661,6 +868,37 @@ private fun SpotifyNowPlayingPage(
         lyricsLoading = false
         if (fetched == null || (fetched.lines.isEmpty() && fetched.plain.isBlank())) {
             if (showLyrics) lyricsError = "No lyrics found for this track"
+        }
+    }
+
+    var videoPositionMs by remember { mutableLongStateOf(0L) }
+
+    LaunchedEffect(showVideo, isLocal, liveLocal.isPlaying, liveLocal.positionMs, displayDev.paused, dev.timestamp, dev.offset_ms, dev.duration_ms) {
+        if (!showVideo) return@LaunchedEffect
+        var anchorPos = if (isLocal) liveLocal.positionMs else dev.offset_ms
+        var anchorAt = System.currentTimeMillis()
+        while (true) {
+            videoPositionMs = if (isLocal) {
+                val s = LocalPlaybackController.state.value
+                if (s.positionMs != anchorPos) {
+                    anchorPos = s.positionMs
+                    anchorAt = System.currentTimeMillis()
+                }
+                val cap = s.durationMs.takeIf { it > 0 }
+                if (s.isPlaying && !displayDev.paused) {
+                    val live = anchorPos + (System.currentTimeMillis() - anchorAt)
+                    if (cap != null) live.coerceAtMost(cap) else live
+                } else {
+                    s.positionMs
+                }
+            } else if (displayDev.paused) {
+                dev.offset_ms
+            } else {
+                computeNowPlayingProgress(
+                    dev.timestamp, dev.duration_ms, dev.offset_ms, false,
+                ).elapsedMs
+            }
+            delay(50)
         }
     }
 
@@ -697,15 +935,37 @@ private fun SpotifyNowPlayingPage(
     val compact = config.screenHeightDp < 640
     val artCorner = if (compact) 6.dp else 8.dp
 
+    val trackPlaying = if (isLocal) liveLocal.isPlaying else !displayDev.paused
+
+    val effectiveVideoId = videoId?.takeIf { it.isNotBlank() }
+        ?: prefetchedVideoId?.takeIf { it.isNotBlank() }
+
     Box(Modifier.fillMaxSize().background(Color.Black).clipToBounds()) {
         when {
-            showVideo && !videoId.isNullOrBlank() ->
+            // Direct/proxied stream available — native muted ExoPlayer (best path).
+            showVideo && appInForeground && (effectiveVideoId != null || !videoPlayUrl.isNullOrBlank()) ->
                 MusicVideoPlayer(
                     playUrl = videoPlayUrl,
-                    videoId = videoId!!,
+                    videoId = effectiveVideoId ?: "placeholder",
+                    artUrl = artUrl,
                     loading = videoLoading,
                     error = videoStreamError,
                     httpClient = playbackHttpClient,
+                    playing = trackPlaying,
+                    positionMs = videoPositionMs,
+                    onPlaybackFailed = { videoStreamError = "Video stream unavailable" },
+                    modifier = Modifier.fillMaxSize(),
+                )
+            showVideo && appInForeground && videoLoading ->
+                MusicVideoPlayer(
+                    playUrl = null,
+                    videoId = effectiveVideoId ?: "placeholder",
+                    artUrl = artUrl,
+                    loading = true,
+                    error = null,
+                    httpClient = playbackHttpClient,
+                    playing = trackPlaying,
+                    positionMs = videoPositionMs,
                     modifier = Modifier.fillMaxSize(),
                 )
             else -> ArtBackdrop(artUrl = artUrl)
@@ -725,7 +985,7 @@ private fun SpotifyNowPlayingPage(
             SpotifyPlayerTopBar(
                 deviceName = displayDev.deviceName,
                 isLocal = isLocal,
-                playContext = (displayDev.sourceLabel ?: displayDev.playlist)?.takeIf { isLocal },
+                playContext = displayDev.sourceLabel ?: displayDev.playlist,
                 onBack = onBack,
                 onHistory = onHistory,
             )
@@ -784,10 +1044,14 @@ private fun SpotifyNowPlayingPage(
                         dev = displayDev,
                         year = year,
                         repository = repository,
+                        artUrl = artUrl,
+                        compactVideo = showVideo,
+                        onOpenArtist = onOpenArtist,
+                        onOpenAlbum = onOpenAlbum,
                         modifier = Modifier.padding(horizontal = 24.dp),
                     )
 
-                    if (displayDev.sleep != null) {
+                    if (displayDev.sleep != null && !showVideo) {
                         SpotifyStatusChips(
                             dev = displayDev,
                             onSleep = onSleep,
@@ -809,29 +1073,29 @@ private fun SpotifyNowPlayingPage(
                     SpotifyTransportControls(
                         dev = displayDev,
                         shuffleOn = shuffleOn,
+                        loopOn = loopOn,
                         onControl = onControl,
                         onSleep = onSleep,
                         showShuffle = true,
+                        showLoop = !isLocal,
                         showSleep = !isLocal,
+                        showVolume = canControl && !isLocal && resolveSerial(displayDev, alexaDevices) != null,
+                        volume = volumes[dev.deviceId] ?: 50,
+                        onVolumePreview = { volumes[dev.deviceId] = it },
+                        onVolumeCommit = { vol ->
+                            val serial = resolveSerial(displayDev, alexaDevices) ?: return@SpotifyTransportControls
+                            scope.launch {
+                                runCatching {
+                                    repository.setVolume(serial, displayDev.deviceName ?: "", vol)
+                                }.onFailure {
+                                    snackbarHostState.showSnackbar("Volume failed")
+                                }
+                            }
+                        },
                         enabled = canControl,
                         modifier = Modifier.padding(top = 4.dp),
                     )
-                    if (canControl) {
-                        val serial = if (isLocal) null else resolveSerial(displayDev, alexaDevices)
-                        if (serial != null) {
-                            SpotifyVolumeRow(
-                                dev = displayDev,
-                                serial = serial,
-                                volume = volumes[dev.deviceId],
-                                repository = repository,
-                                volumes = volumes,
-                                volumeTimers = volumeTimers,
-                                scope = scope,
-                                snackbarHostState = snackbarHostState,
-                                modifier = Modifier.padding(horizontal = 8.dp).padding(top = 4.dp, bottom = 8.dp),
-                            )
-                        }
-                    } else if (!isLocal) {
+                    if (!canControl && !isLocal) {
                         val reason = when {
                             !controlsAvailable -> "Playback controls aren't enabled on the server."
                             !remoteOk -> "Alexa session expired — re-login in Settings to control this device."
@@ -850,7 +1114,7 @@ private fun SpotifyNowPlayingPage(
                         )
                     }
 
-                    if (displayDev.upNext.isNotEmpty()) {
+                    if (displayDev.upNext.isNotEmpty() && !showVideo) {
                         Column(
                             Modifier
                                 .padding(horizontal = 24.dp)
@@ -876,7 +1140,7 @@ private fun SpotifyNowPlayingPage(
                             }
                         }
                     }
-                    if (remoteOk && !displayDev.filepath.isNullOrBlank() && !isLocal) {
+                    if (remoteOk && !displayDev.filepath.isNullOrBlank() && !isLocal && !showVideo) {
                         TextButton(onClick = { showAddToRoom = true }) {
                             Text("Add to another room", color = Color.White.copy(alpha = 0.75f))
                         }
@@ -921,19 +1185,17 @@ private fun SpotifyNowPlayingPage(
                     },
                 )
             }
-            if (videoId != null || videoLoading) {
+            if (!displayDev.track.isNullOrBlank()) {
                 VideoModeTogglePill(
                     showingVideo = showVideo,
-                    loading = videoLoading,
-                    enabled = videoId != null,
+                    loading = showVideo && (videoLoading || prefetchInProgress),
+                    enabled = true,
                     onClick = {
-                        if (videoId != null) {
-                            val next = !showVideo
-                            if (next) showLyrics = false
-                            scope.launch {
-                                app.preferences.setNowPlayingVideo(next)
-                                ClientPrefsSync.schedulePush(context)
-                            }
+                        val next = !showVideo
+                        if (next) showLyrics = false
+                        scope.launch {
+                            app.preferences.setNowPlayingVideo(next)
+                            ClientPrefsSync.schedulePush(context)
                         }
                     },
                 )
@@ -954,11 +1216,24 @@ private fun SpotifyNowPlayingPage(
                     }
                     showUpNext = false
                 },
-                onAlexaUnsupported = {
+                onPlayNowAlexa = { upNextIndex ->
                     scope.launch {
-                        snackbarHostState.showSnackbar("Skip from Up Next not supported on Alexa yet")
+                        val serial = resolveSerial(displayDev, alexaDevices)
+                        runCatching {
+                            repository.seekQueueIndex(
+                                displayDev.deviceId,
+                                displayDev.deviceName ?: "",
+                                serial,
+                                upNextIndex,
+                            )
+                            onRefresh()
+                            showUpNext = false
+                        }.onFailure {
+                            snackbarHostState.showSnackbar(controlErrorMessage(it))
+                        }
                     }
                 },
+                onAlexaUnsupported = {},
                 onDismiss = { showUpNext = false },
             )
         }
@@ -1065,7 +1340,7 @@ private fun SpotifyPlayerTopBar(
             )
             Text(
                 when {
-                    isLocal && !playContext.isNullOrBlank() -> playContext
+                    !playContext.isNullOrBlank() -> playContext
                     isLocal -> "This phone"
                     else -> "Alexa"
                 },
@@ -1083,14 +1358,60 @@ private fun SpotifyPlayerTopBar(
 
 
 @Composable
+private fun NowPlayingGlowText(
+    text: String,
+    style: TextStyle,
+    color: Color,
+    modifier: Modifier = Modifier,
+    maxLines: Int = Int.MAX_VALUE,
+    overflow: TextOverflow = TextOverflow.Clip,
+) {
+    Box(modifier) {
+        Text(
+            text = text,
+            style = style.merge(
+                TextStyle(shadow = Shadow(Color(0xFFB0B0B0).copy(alpha = 0.45f), Offset.Zero, 12f)),
+            ),
+            color = Color(0xFFCACACA).copy(alpha = 0.4f),
+            maxLines = maxLines,
+            overflow = overflow,
+        )
+        Text(
+            text = text,
+            style = style.merge(
+                TextStyle(shadow = Shadow(Color(0xFFD8D8D8).copy(alpha = 0.65f), Offset.Zero, 5f)),
+            ),
+            color = Color(0xFFDDDDDD).copy(alpha = 0.55f),
+            maxLines = maxLines,
+            overflow = overflow,
+        )
+        Text(
+            text = text,
+            style = style,
+            color = color,
+            maxLines = maxLines,
+            overflow = overflow,
+        )
+    }
+}
+
+@Composable
 private fun SpotifyTrackInfoRow(
     dev: NowPlayingDeviceItem,
     year: Int?,
     repository: BockMediaRepository,
+    artUrl: String? = null,
+    compactVideo: Boolean = false,
+    onOpenArtist: (String) -> Unit = {},
+    onOpenAlbum: (String, String?) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
     val path = dev.filepath
+    val albumName = dev.album?.takeIf { it.isNotBlank() }
+    val openAlbum: () -> Unit = {
+        albumName?.let { onOpenAlbum(it, dev.artist) }
+    }
     var stars by remember(path) { mutableIntStateOf(0) }
     var loadingRating by remember(path) { mutableStateOf(path != null) }
 
@@ -1109,39 +1430,59 @@ private fun SpotifyTrackInfoRow(
         modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(Modifier.weight(1f)) {
-            Text(
-                dev.track ?: "—",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-                color = Color.White,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
+        if (compactVideo) {
+            BockArtwork(
+                model = artUrl,
+                title = dev.track ?: "Now playing",
+                modifier = Modifier.size(48.dp),
+                shape = RoundedCornerShape(4.dp),
+                fallbackFontSize = 18.sp,
             )
-            val artistLine = listOfNotNull(
-                dev.artist?.takeIf { it.isNotBlank() },
-                year?.takeIf { it > 0 }?.toString(),
-            ).joinToString(" · ")
-            if (artistLine.isNotBlank()) {
-                Text(
-                    artistLine,
+            Spacer(Modifier.width(12.dp))
+        }
+        Column(Modifier.weight(1f)) {
+            NowPlayingGlowText(
+                text = dev.track ?: "—",
+                style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+                color = Color.White,
+                modifier = if (albumName != null) Modifier.clickable(onClick = openAlbum) else Modifier,
+            )
+            albumName?.let { name ->
+                NowPlayingGlowText(
+                    text = name,
                     style = MaterialTheme.typography.titleMedium,
-                    color = Color.White.copy(alpha = 0.78f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                    color = Color.White.copy(alpha = 0.88f),
+                    modifier = Modifier
+                        .padding(top = 2.dp)
+                        .clickable(onClick = openAlbum),
                 )
             }
-            (dev.sourceLabel ?: dev.playlist)?.let {
-                Text(
-                    it,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = Color.White.copy(alpha = 0.55f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+            val artistName = dev.artist?.takeIf { it.isNotBlank() }
+            if (artistName != null || year != null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    artistName?.let { name ->
+                        NowPlayingGlowText(
+                            text = name,
+                            style = MaterialTheme.typography.titleMedium,
+                            color = Color.White.copy(alpha = 0.78f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.clickable { onOpenArtist(name) },
+                        )
+                    }
+                    year?.takeIf { it > 0 }?.let { y ->
+                        NowPlayingGlowText(
+                            text = if (artistName != null) " · $y" else y.toString(),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = Color.White.copy(alpha = 0.78f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
             }
         }
-        if (path != null) {
+        if (path != null && !compactVideo) {
             CompactStarRatingBar(
                 stars = stars,
                 loading = loadingRating,
@@ -1196,17 +1537,28 @@ private fun NowPlayingBottomFade(modifier: Modifier = Modifier, deep: Boolean = 
     Box(
         modifier
             .fillMaxWidth()
-            .fillMaxHeight(if (deep) 0.62f else 0.56f)
+            .fillMaxHeight(if (deep) 0.55f else 0.56f)
             .background(
                 Brush.verticalGradient(
-                    colorStops = arrayOf(
-                        0f to Color.Transparent,
-                        0.22f to Color.Black.copy(alpha = if (deep) 0.35f else 0.22f),
-                        0.48f to Color.Black.copy(alpha = if (deep) 0.62f else 0.48f),
-                        0.72f to Color.Black.copy(alpha = 0.85f),
-                        0.9f to Color.Black.copy(alpha = 0.96f),
-                        1f to Color.Black,
-                    ),
+                    colorStops = if (deep) {
+                        arrayOf(
+                            0f to Color.Transparent,
+                            0.35f to Color.Black.copy(alpha = 0.08f),
+                            0.55f to Color.Black.copy(alpha = 0.28f),
+                            0.72f to Color.Black.copy(alpha = 0.52f),
+                            0.88f to Color.Black.copy(alpha = 0.72f),
+                            1f to Color.Black.copy(alpha = 0.82f),
+                        )
+                    } else {
+                        arrayOf(
+                            0f to Color.Transparent,
+                            0.22f to Color.Black.copy(alpha = 0.22f),
+                            0.48f to Color.Black.copy(alpha = 0.48f),
+                            0.72f to Color.Black.copy(alpha = 0.85f),
+                            0.9f to Color.Black.copy(alpha = 0.96f),
+                            1f to Color.Black,
+                        )
+                    },
                 ),
             ),
     )
@@ -1220,16 +1572,6 @@ private fun SpotifyUpNext(
     Column(
         modifier
             .fillMaxWidth()
-            .background(
-                Brush.verticalGradient(
-                    colorStops = arrayOf(
-                        0f to Color.Transparent,
-                        0.3f to Color.Black.copy(alpha = 0.5f),
-                        0.65f to Color.Black.copy(alpha = 0.82f),
-                        1f to Color.Black,
-                    ),
-                ),
-            )
             .padding(top = 20.dp, bottom = 12.dp)
             .padding(horizontal = 24.dp),
     ) {
@@ -1305,14 +1647,21 @@ private fun SpotifyProgressBar(
 private fun SpotifyTransportControls(
     dev: NowPlayingDeviceItem,
     shuffleOn: MutableMap<String, Boolean>,
+    loopOn: MutableMap<String, Boolean>,
     onControl: (NowPlayingDeviceItem, String) -> Unit,
     onSleep: (NowPlayingDeviceItem) -> Unit,
     showShuffle: Boolean = true,
+    showLoop: Boolean = false,
     showSleep: Boolean = true,
+    showVolume: Boolean = false,
+    volume: Int = 50,
+    onVolumePreview: (Int) -> Unit = {},
+    onVolumeCommit: (Int) -> Unit = {},
     enabled: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     val shuffled = shuffleOn[dev.deviceId] == true
+    val looped = loopOn[dev.deviceId] == true
     val iconTint = if (enabled) Color.White else Color.White.copy(alpha = 0.3f)
     Row(
         modifier
@@ -1341,6 +1690,21 @@ private fun SpotifyTransportControls(
             }
         } else {
             Spacer(Modifier.size(48.dp))
+        }
+        if (showLoop) {
+            IconButton(
+                onClick = { onControl(dev, "loop") },
+                enabled = enabled,
+                modifier = Modifier.size(48.dp),
+            ) {
+                Icon(
+                    Icons.Default.Repeat,
+                    contentDescription = "Loop",
+                    tint = if (!enabled) iconTint
+                        else if (looped) MaterialTheme.colorScheme.secondary
+                        else Color.White.copy(alpha = 0.85f),
+                )
+            }
         }
         IconButton(
             onClick = { onControl(dev, "previous") },
@@ -1399,49 +1763,131 @@ private fun SpotifyTransportControls(
         } else {
             Spacer(Modifier.size(48.dp))
         }
+        if (showVolume) {
+            AlexaVolumeHoldButton(
+                volume = volume,
+                enabled = enabled,
+                onPreview = onVolumePreview,
+                onCommit = onVolumeCommit,
+            )
+        }
     }
 }
 
 @Composable
-private fun SpotifyVolumeRow(
-    dev: NowPlayingDeviceItem,
-    serial: String,
-    volume: Int?,
-    repository: BockMediaRepository,
-    volumes: MutableMap<String, Int?>,
-    volumeTimers: MutableMap<String, kotlinx.coroutines.Job?>,
-    scope: kotlinx.coroutines.CoroutineScope,
-    snackbarHostState: SnackbarHostState,
+private fun VerticalVolumeSliderTrack(
+    value: Int,
+    modifier: Modifier = Modifier,
+    borderInset: Dp = 2.dp,
+) {
+    val fraction = (value.coerceIn(0, 100) / 100f)
+    BoxWithConstraints(
+        modifier.clip(RoundedCornerShape(8.dp)),
+    ) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color(0xFF282828).copy(alpha = 0.92f)),
+        )
+        val innerHeight = maxHeight - borderInset * 2
+        Box(
+            Modifier
+                .padding(horizontal = borderInset)
+                .padding(bottom = borderInset)
+                .fillMaxWidth()
+                .height((innerHeight * fraction).coerceAtLeast(0.dp))
+                .align(Alignment.BottomCenter)
+                .clip(RoundedCornerShape(6.dp))
+                .background(BockGreen),
+        )
+    }
+}
+
+@Composable
+private fun AlexaVolumeHoldButton(
+    volume: Int,
+    enabled: Boolean,
+    onPreview: (Int) -> Unit,
+    onCommit: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Row(
-        modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(Icons.Default.VolumeDown, null, Modifier.size(20.dp), tint = Color.White.copy(alpha = 0.65f))
-        Slider(
-            value = (volume ?: 50).toFloat(),
-            onValueChange = { v ->
-                val intVol = v.toInt().coerceIn(0, 100)
-                volumes[dev.deviceId] = intVol
-                volumeTimers[dev.deviceId]?.cancel()
-                volumeTimers[dev.deviceId] = scope.launch {
-                    delay(350)
-                    runCatching {
-                        repository.setVolume(serial, dev.deviceName ?: "", intVol)
-                    }.onFailure {
-                        snackbarHostState.showSnackbar("Volume failed")
+    var showSlider by remember { mutableStateOf(false) }
+    var previewVolume by remember { mutableIntStateOf(volume) }
+    val currentOnPreview by rememberUpdatedState(onPreview)
+    val currentOnCommit by rememberUpdatedState(onCommit)
+    val currentVolume by rememberUpdatedState(volume)
+    val config = LocalConfiguration.current
+    val density = LocalDensity.current
+    val sliderTrackWidth = 14.dp
+    val sliderTrackHeight = minOf(320.dp, (config.screenHeightDp * 0.32f).dp)
+    val gapAboveButton = 8.dp
+    val popupOffsetY = with(density) {
+        (sliderTrackHeight + gapAboveButton).roundToPx()
+    }
+
+    LaunchedEffect(volume) {
+        if (!showSlider) previewVolume = volume
+    }
+
+    val iconTint = if (enabled) Color.White.copy(alpha = 0.85f) else Color.White.copy(alpha = 0.3f)
+
+    Box(
+        modifier = modifier
+            .size(48.dp)
+            .zIndex(if (showSlider) 10f else 0f)
+            .then(
+                if (enabled) {
+                    Modifier.pointerInput(Unit) {
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            showSlider = true
+                            var current = currentVolume.coerceIn(0, 100)
+                            previewVolume = current
+                            val pointerId = down.id
+                            do {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.id == pointerId } ?: break
+                                if (!change.pressed) break
+                                val deltaY = change.positionChange().y
+                                current = (current - deltaY * 0.35f).roundToInt().coerceIn(0, 100)
+                                previewVolume = current
+                                currentOnPreview(current)
+                                change.consume()
+                            } while (true)
+                            showSlider = false
+                            currentOnCommit(previewVolume)
+                        }
                     }
-                }
-            },
-            valueRange = 0f..100f,
-            modifier = Modifier.weight(1f).padding(horizontal = 4.dp),
-            colors = SliderDefaults.colors(
-                thumbColor = Color.White,
-                activeTrackColor = Color.White,
-                inactiveTrackColor = Color.White.copy(alpha = 0.28f),
+                } else {
+                    Modifier
+                },
             ),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (showSlider) {
+            Popup(
+                alignment = Alignment.TopCenter,
+                offset = IntOffset(0, -popupOffsetY),
+                onDismissRequest = {},
+                properties = PopupProperties(
+                    focusable = false,
+                    dismissOnBackPress = false,
+                    dismissOnClickOutside = false,
+                ),
+            ) {
+                VerticalVolumeSliderTrack(
+                    value = previewVolume,
+                    modifier = Modifier
+                        .width(sliderTrackWidth)
+                        .height(sliderTrackHeight),
+                )
+            }
+        }
+        Icon(
+            Icons.Default.VolumeUp,
+            contentDescription = "Volume",
+            tint = if (showSlider) BockGreen else iconTint,
+            modifier = Modifier.size(24.dp),
         )
-        Icon(Icons.Default.VolumeUp, null, Modifier.size(20.dp), tint = Color.White.copy(alpha = 0.65f))
     }
 }

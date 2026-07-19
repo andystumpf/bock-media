@@ -5,6 +5,7 @@ enum LibraryFilter: String, CaseIterable, Identifiable {
     case playlists = "Playlists"
     case artists = "Artists"
     case albums = "Albums"
+    case tracks = "Tracks"
     case downloaded = "Downloaded"
 
     var id: String { rawValue }
@@ -15,7 +16,7 @@ enum LibraryViewMode { case list, grid }
 
 enum LibrarySort { case recents, name }
 
-enum LibraryItemKind { case playlist, artist, album, downloaded }
+enum LibraryItemKind { case playlist, artist, album, track, downloaded }
 
 struct LibraryItem: Identifiable, Hashable {
     let id: String
@@ -69,6 +70,7 @@ struct LibraryData {
         case .playlists: return playlists
         case .artists: return artists
         case .albums: return albums
+        case .tracks: return []
         case .downloaded: return offline
         }
     }
@@ -94,6 +96,10 @@ enum LibraryLoader {
         )
     }
 
+    static func unifiedSearch(repository: BockMediaRepository, query: String, source: String? = nil) async throws -> SearchResponse {
+        try await UnifiedSearchCoordinator.fetch(repository: repository, query: query, source: source)
+    }
+
     static func search(
         repository: BockMediaRepository,
         filter: LibraryFilter,
@@ -102,12 +108,16 @@ enum LibraryLoader {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return [] }
         switch filter {
-        case .playlists, .all:
+        case .playlists:
             return await loadPlaylists(repository: repository, search: q, limit: searchLimit)
+        case .all:
+            return []
         case .artists:
-            return await loadArtists(repository: repository, search: q, limit: searchLimit)
+            return await loadArtists(repository: repository, search: q, limit: searchLimit, page: 1)
         case .albums:
-            return await loadAlbums(repository: repository, search: q, limit: searchLimit)
+            return await loadAlbums(repository: repository, search: q, limit: searchLimit, page: 1)
+        case .tracks:
+            return await loadTracks(repository: repository, search: q, limit: searchLimit, page: 1)
         case .downloaded:
             await OfflineDownloadManager.shared.refresh()
             return OfflineDownloadStore().listManifests()
@@ -116,8 +126,55 @@ enum LibraryLoader {
         }
     }
 
+    static func loadPage(
+        repository: BockMediaRepository,
+        filter: LibraryFilter,
+        search: String,
+        page: Int,
+        limit: Int = 60
+    ) async -> (items: [LibraryItem], total: Int) {
+        switch filter {
+        case .artists:
+            let resp = try? await repository.artists(page: page, limit: limit, search: search)
+            let items = resp?.items.map { artist in
+                LibraryItem(
+                    id: "ar-\(artist.name.hashValue)",
+                    title: artist.name,
+                    subtitle: "\(artist.albums) albums · \(artist.tracks) songs",
+                    kind: .artist,
+                    playTarget: .artist(name: artist.name),
+                    artPath: artist.artPath,
+                    artistName: artist.name
+                )
+            } ?? []
+            return (items, resp?.total ?? items.count)
+        case .albums:
+            let resp = try? await repository.albums(page: page, limit: limit, search: search)
+            let items = resp?.items.map { album in
+                LibraryItem(
+                    id: "al-\(album.name.hashValue)-\((album.artist ?? "").hashValue)",
+                    title: album.name,
+                    subtitle: [album.artist, album.year.map(String.init)].compactMap { $0 }.joined(separator: " · "),
+                    kind: .album,
+                    playTarget: .album(name: album.name, artist: album.artist),
+                    artPath: album.artPath,
+                    artistName: album.artist,
+                    albumName: album.name,
+                    unplayed: album.unplayed
+                )
+            } ?? []
+            return (items, resp?.total ?? items.count)
+        case .tracks:
+            let resp = try? await repository.songs(page: page, limit: limit, search: search)
+            let items = await loadTracks(repository: repository, search: search, limit: limit, page: page)
+            return (items, resp?.total ?? items.count)
+        default:
+            return ([], 0)
+        }
+    }
+
     private static func loadPlaylists(repository: BockMediaRepository, search: String, limit: Int) async -> [LibraryItem] {
-        let items = (try? await repository.playlists(search: search, limit: limit))?.items ?? []
+        let items = (try? await repository.playlists(search: search, limit: limit, memberScoped: true))?.items ?? []
         await repository.prefetchPlaylistCoverPaths(ids: items.map(\.id))
         return items.map { pl in
             LibraryItem(
@@ -125,15 +182,15 @@ enum LibraryLoader {
                 title: pl.name,
                 subtitle: "\(pl.tracks) songs",
                 kind: .playlist,
-                artPath: pl.artPath,
                 playTarget: .playlist(id: pl.id, name: pl.name),
+                artPath: pl.artPath,
                 playlistId: pl.id
             )
         }
     }
 
-    private static func loadArtists(repository: BockMediaRepository, search: String, limit: Int) async -> [LibraryItem] {
-        (try? await repository.artists(page: 1, limit: limit, search: search))?.items.map { artist in
+    private static func loadArtists(repository: BockMediaRepository, search: String, limit: Int, page: Int = 1) async -> [LibraryItem] {
+        (try? await repository.artists(page: page, limit: limit, search: search))?.items.map { artist in
             LibraryItem(
                 id: "ar-\(artist.name.hashValue)",
                 title: artist.name,
@@ -146,8 +203,8 @@ enum LibraryLoader {
         } ?? []
     }
 
-    private static func loadAlbums(repository: BockMediaRepository, search: String, limit: Int) async -> [LibraryItem] {
-        (try? await repository.albums(page: 1, limit: limit, search: search))?.items.map { album in
+    private static func loadAlbums(repository: BockMediaRepository, search: String, limit: Int, page: Int = 1) async -> [LibraryItem] {
+        (try? await repository.albums(page: page, limit: limit, search: search))?.items.map { album in
             LibraryItem(
                 id: "al-\(album.name.hashValue)-\((album.artist ?? "").hashValue)",
                 title: album.name,
@@ -158,6 +215,26 @@ enum LibraryLoader {
                 artistName: album.artist,
                 albumName: album.name,
                 unplayed: album.unplayed
+            )
+        } ?? []
+    }
+
+    static func loadTracks(repository: BockMediaRepository, search: String, limit: Int, page: Int = 1) async -> [LibraryItem] {
+        (try? await repository.songs(page: page, limit: limit, search: search))?.items.compactMap { song in
+            guard let path = song.path?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank,
+                  let title = song.title?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank else {
+                return nil
+            }
+            let subtitle = [song.artist, song.album].compactMap { $0?.nilIfBlank }.joined(separator: " · ")
+            return LibraryItem(
+                id: "tr-\(path)",
+                title: title,
+                subtitle: subtitle.isEmpty ? "Track" : subtitle,
+                kind: .track,
+                playTarget: .song(path: path, title: title),
+                artPath: path,
+                artistName: song.artist,
+                albumName: song.album
             )
         } ?? []
     }
@@ -180,5 +257,12 @@ enum LibraryLoader {
             playlistId: manifest.sourcePlaylistId ?? manifest.legacyPlaylistId,
             sortDate: manifest.lastSyncedAtMs > 0 ? manifest.lastSyncedAtMs : manifest.downloadedAtMs
         )
+    }
+}
+
+private extension String {
+    var nilIfBlank: String? {
+        let t = trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.isEmpty ? nil : t
     }
 }

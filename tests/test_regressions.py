@@ -21,8 +21,13 @@ def _register(client, post_alexa, device_id, name=None):
                     content_type='application/json')
 
 
+def _playable(path):
+    return server._path_under_music_root(path) or path
+
+
 def _seed_playing(post_alexa, sample_track, device_id):
-    token = server.encode_token({'tracks': [sample_track['path']], 'idx': 0})
+    path = _playable(sample_track['path'])
+    token = server.encode_token({'tracks': [path], 'idx': 0})
     post_alexa('AudioPlayer.PlaybackStarted', token=token, device_id=device_id)
     return token
 
@@ -64,8 +69,8 @@ class TestStuckNowPlaying:
         """Regression: Finished for track N must not clear playing on track N+1."""
         did = 'amzn1.ask.device.FINISHSTALE'
         _register(client, post_alexa, did, 'Office Show')
-        t0 = server.encode_token({'tracks': [sample_track['path'], sample_track['path']], 'idx': 0})
-        t1 = server.encode_token({'tracks': [sample_track['path'], sample_track['path']], 'idx': 1})
+        t0 = server.encode_token({'tracks': [_playable(sample_track['path']), _playable(sample_track['path'])], 'idx': 0})
+        t1 = server.encode_token({'tracks': [_playable(sample_track['path']), _playable(sample_track['path'])], 'idx': 1})
         post_alexa('AudioPlayer.PlaybackStarted', token=t1, device_id=did)
         post_alexa('AudioPlayer.PlaybackFinished', token=t0, device_id=did)
         st = server.read_np_state_for_device(did)
@@ -117,7 +122,7 @@ class TestStuckNowPlaying:
         """Stop-after-N must apply to SkipIntent, not only natural track boundaries."""
         did = 'amzn1.ask.device.STOPAFTERSKIP'
         _register(client, post_alexa, did, 'Kitchen')
-        tracks = [sample_track['path'], sample_track['path']]
+        tracks = [_playable(sample_track['path']), _playable(sample_track['path'])]
         token = server.encode_token({'tracks': tracks, 'idx': 0, 'stopAfterIdx': 0})
         post_alexa('AudioPlayer.PlaybackStarted', token=token, device_id=did)
         post_alexa('IntentRequest', 'SkipIntent', device_id=did)
@@ -142,6 +147,37 @@ class TestStuckNowPlaying:
         post_alexa('AudioPlayer.PlaybackStarted', token=token, device_id=did)
         post_alexa('IntentRequest', 'SkipIntent', device_id=did)
         assert server.read_np_state_for_device(did) is None
+
+
+class TestQueueSeek:
+    """Queue panel seek must resume the full playlist, not a one-track play."""
+
+    def test_start_playing_honors_start_idx(self, sample_track, monkeypatch):
+        paths = [_playable(sample_track['path']), _playable(sample_track['path'])]
+        captured = {}
+
+        def fake_play_path(path, token, **kw):
+            captured['path'] = path
+            captured['token'] = token
+            return None
+
+        monkeypatch.setattr(server, '_np_play_path', fake_play_path)
+        monkeypatch.setattr(server, 'write_np_state', lambda *a, **k: None)
+        server._start_playing_impl(paths, start_idx=1)
+        assert captured['path'] == paths[1]
+        data = server.decode_token(captured['token'])
+        assert data['idx'] == 1
+        assert len(data['tracks']) == 2
+
+    def test_register_queue_seek_token(self, sample_track):
+        paths = [_playable(sample_track['path']), _playable(sample_track['path'])]
+        data = {'tracks': paths, 'playlist': 'Test List', 'shuffle': False, 'loop': False}
+        tok = server._register_play_queue_seek_token(data, 1)
+        assert tok
+        entry = server._consume_play_playlist_token(tok)
+        assert entry['kind'] == 'queue_seek'
+        assert entry['start_idx'] == 1
+        assert len(entry['tracks']) == 2
 
 
 # ─────────────────────────── device correlation ──────────────────────────────
@@ -465,15 +501,17 @@ class TestAddToPlaylistWriteBack:
                             lambda rk, path: calls.setdefault('args', (rk, path)) or True)
         # Set up a now-playing track on the request device.
         did = 'amzn1.ask.device.ADDDEV'
-        token = server.encode_token({'tracks': [sample_track['path']], 'idx': 0})
-        server.write_np_state_for_device(did, {'filepath': sample_track['path'],
+        path = _playable(sample_track['path'])
+        server.register_device(did)
+        token = server.encode_token({'tracks': [path], 'idx': 0})
+        server.write_np_state_for_device(did, {'filepath': path,
                                                'track': 'X', 'token': token, 'playing': True})
         post_alexa('IntentRequest', 'AddToPlaylistIntent',
                    slots={'PlaylistName': 'my list'},
                    device_id=did)
-        assert calls.get('args') == ('987', sample_track['path'])
+        assert calls.get('args') == ('987', path)
         # Local .m3u also appended (instant reflection)
-        assert sample_track['path'] in m3u.read_text()
+        assert path in m3u.read_text()
 
 
 # ─────────────────────────── ignore / never play again ─────────────────────────

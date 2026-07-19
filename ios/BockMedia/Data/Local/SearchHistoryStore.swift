@@ -82,7 +82,7 @@ enum SearchHistoryStore {
         var current = selections().filter { $0.selectionKey != selection.selectionKey }
         current.insert(selection, at: 0)
         saveSelections(Array(current.prefix(maxItems)))
-        ClientPrefsSync.schedulePush()
+        Task { @MainActor in ClientPrefsSync.schedulePush() }
     }
 
     static func removeSelection(_ selection: SearchRecentSelection) {

@@ -56,6 +56,16 @@ enum HomeArtworkCache {
         cachedAt = nil
     }
 
+    static func allPlaylistPaths() -> [String: String] {
+        isFresh ? playlistPaths : [:]
+    }
+
+    static func restore(playlistPaths paths: [String: String]) {
+        guard !paths.isEmpty else { return }
+        touch()
+        playlistPaths = paths
+    }
+
     private static func touch() {
         if cachedAt == nil { cachedAt = Date() }
     }

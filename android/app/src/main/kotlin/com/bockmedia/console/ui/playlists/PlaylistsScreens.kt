@@ -42,6 +42,8 @@ import com.bockmedia.console.local.DownloadState
 import com.bockmedia.console.local.OfflineDownloadManager
 import com.bockmedia.console.local.downloadId
 import com.bockmedia.console.ui.components.*
+import com.bockmedia.console.ui.testing.BockTestTags
+import androidx.compose.ui.platform.testTag
 import com.bockmedia.console.ui.discovery.AcquireIdeasDialog
 import com.bockmedia.console.ui.discovery.DiscoveryActionsDialog
 import com.bockmedia.console.ui.discovery.DiscoverySeed
@@ -139,7 +141,7 @@ fun PlaylistsScreen(
         onDismiss = { showAi = false; scope.launch { load() } },
     )
 
-    Column(Modifier.fillMaxSize()) {
+    Column(Modifier.fillMaxSize().testTag(BockTestTags.PLAYLISTS_LIST_BODY)) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
             SearchField(search, { search = it }, "Search playlists")
             Spacer(Modifier.height(8.dp))

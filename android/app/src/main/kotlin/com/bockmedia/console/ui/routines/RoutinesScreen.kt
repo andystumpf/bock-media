@@ -9,8 +9,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.bockmedia.console.data.api.dto.PlaylistSummary
+import com.bockmedia.console.ui.testing.BockTestTags
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.buildRoutinePhrase
 import kotlinx.coroutines.launch
@@ -45,6 +47,7 @@ fun RoutinesScreen(repository: BockMediaRepository) {
     Column(
         Modifier
             .fillMaxSize()
+            .testTag(BockTestTags.ROUTINES_BODY)
             .bockVerticalScroll()
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -59,24 +62,27 @@ fun RoutinesScreen(repository: BockMediaRepository) {
             return@Column
         }
         BockTextField(trigger, { trigger = it }, "Routine trigger phrase (for your notes)")
-        var expanded by remember { mutableStateOf(false) }
-        ExposedDropdownMenuBox(expanded, { expanded = !expanded }) {
-            BockTextField(
-                selectedName.ifBlank { "Select playlist" },
-                {},
-                "Playlist",
-                readOnly = true,
-                modifier = Modifier.menuAnchor().fillMaxWidth(),
-            )
-            ExposedDropdownMenu(expanded, { expanded = false }) {
-                playlists.forEach { pl ->
-                    DropdownMenuItem(
-                        text = { Text(pl.name) },
-                        onClick = { selectedId = pl.id; expanded = false },
-                    )
-                }
-            }
+        var playlistSearch by remember { mutableStateOf(selectedName) }
+        LaunchedEffect(selectedName) {
+            if (selectedName.isNotBlank()) playlistSearch = selectedName
         }
+        PlaylistSelectField(
+            playlists = playlists,
+            selectedId = selectedId.takeIf { it.isNotBlank() },
+            selectedName = selectedName.takeIf { it.isNotBlank() },
+            onSelect = { pl ->
+                selectedId = pl.id
+                playlistSearch = pl.name
+            },
+            onClear = {
+                selectedId = ""
+                playlistSearch = ""
+            },
+            searchQuery = playlistSearch,
+            onSearchQueryChange = { playlistSearch = it },
+            loading = loading,
+            placeholder = "Search or select playlist…",
+        )
         Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
             Checkbox(shuffle, { shuffle = it })
             Text("Shuffle (mix)")

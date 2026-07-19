@@ -1,8 +1,6 @@
 package com.bockmedia.console.ui.components
 
-import android.net.Uri
 import com.bockmedia.console.ui.theme.BockGreen
-import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
@@ -11,13 +9,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.bockmedia.console.ui.alexaRemotePlayMessage
-import com.bockmedia.console.ui.effectiveLoginError
 import com.bockmedia.console.ui.effectiveLoginStatus
-import com.bockmedia.console.ui.effectiveLoginUrl
 import com.bockmedia.console.data.api.dto.HealthResponse
 import com.bockmedia.console.data.api.dto.PlexSyncStatusResponse
 import com.bockmedia.console.data.api.dto.AlexaRemoteStatus
@@ -35,7 +29,6 @@ fun HealthStatusCard(
     repository: BockMediaRepository,
     onMessage: (String) -> Unit = {},
 ) {
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var health by remember { mutableStateOf<HealthResponse?>(null) }
     var plex by remember { mutableStateOf<PlexSyncStatusResponse?>(null) }
@@ -106,45 +99,20 @@ fun HealthStatusCard(
                     }
                 }
                 loadError != null -> Text(loadError!!, color = MaterialTheme.colorScheme.error)
-                health != null -> HealthDetails(health!!, plex)
+                health != null -> {
+                    SecurityWarningsSection(health!!)
+                    HealthDetails(health!!, plex)
+                }
             }
 
             alexaRemote?.let { status ->
-                AlexaRemoteSection(
-                    remote = status,
-                    onStartLogin = {
-                        scope.launch {
-                            runCatching {
-                                alexaRemote = repository.alexaLoginStart()
-                                for (i in 0 until 20) {
-                                    val st = alexaRemote?.effectiveLoginStatus()
-                                    if (st == "error" || st == "stopped") break
-                                    if (alexaRemote?.portReady == true || st == "waiting") break
-                                    delay(500)
-                                    alexaRemote = repository.alexaLoginState()
-                                }
-                                val url = alexaRemote?.effectiveLoginUrl()
-                                if (url != null && alexaRemote?.effectiveLoginStatus() !in setOf("error", "stopped")) {
-                                    CustomTabsIntent.Builder().build().launchUrl(context, Uri.parse(url))
-                                    onMessage("Sign in to Amazon in the browser, then return here.")
-                                } else {
-                                    onMessage(
-                                        alexaRemote?.effectiveLoginError()
-                                            ?: "Login page did not start. Check port 3005 on the server.",
-                                    )
-                                }
-                            }.onFailure {
-                                onMessage(it.message ?: "Could not start Alexa login")
-                            }
-                        }
-                    },
-                    onCancelLogin = {
-                        scope.launch {
-                            repository.alexaLoginStop()
-                            load()
-                        }
-                    },
-                )
+                if (status.authenticated != true) {
+                    Text(
+                        "Alexa sign-in is in the Alexa remote card at the top of Settings.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
 
             TextButton(onClick = {
@@ -155,6 +123,31 @@ fun HealthStatusCard(
                 }
             }) {
                 Text("Clear server artwork cache")
+            }
+        }
+    }
+}
+
+@Composable
+private fun SecurityWarningsSection(health: HealthResponse) {
+    val warnings = health.securityWarnings.orEmpty()
+    if (warnings.isEmpty()) return
+    val border = if (health.insecureConfig == true) ErrRed else WarnAmber
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(bottom = 8.dp),
+    ) {
+        Text("Security", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+        warnings.forEach { w ->
+            Text(
+                "${w.severity?.uppercase() ?: "INFO"}: ${w.message.orEmpty()}",
+                style = MaterialTheme.typography.bodySmall,
+                color = border,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+            w.action?.let {
+                Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
@@ -210,48 +203,6 @@ private fun HealthDetails(health: HealthResponse, plex: PlexSyncStatusResponse?)
                 style = MaterialTheme.typography.bodySmall,
                 fontWeight = FontWeight.Medium,
             )
-        }
-    }
-}
-
-@Composable
-private fun AlexaRemoteSection(
-    remote: AlexaRemoteStatus,
-    onStartLogin: () -> Unit,
-    onCancelLogin: () -> Unit,
-) {
-    HorizontalDivider(Modifier.padding(vertical = 4.dp))
-    Text("Alexa remote", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-    when {
-        remote.authenticated == true -> Text("Connected — Play on device and volume controls available", color = BockGreen)
-        remote.configured != true -> Text(
-            "Not configured on server — add alexaRemote.email to config.json on the server.",
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        else -> {
-            val status = remote.effectiveLoginStatus() ?: "needs login"
-            Text("Status: $status", color = WarnAmber)
-            remote.effectiveLoginError()?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-            }
-            remote.effectiveLoginUrl()?.let { url ->
-                Text(
-                    "Login page: $url",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Text(
-                "You must reach the login page on the same network as the server (home Wi‑Fi), or forward port ${remote.loginProxyPort ?: remote.port ?: 3005} on your router.",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = onStartLogin) { Text("Start browser login") }
-                if (status == "waiting" || status == "starting") {
-                    TextButton(onClick = onCancelLogin) { Text("Cancel") }
-                }
-            }
         }
     }
 }

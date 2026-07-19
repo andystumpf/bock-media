@@ -2,10 +2,13 @@ package com.bockmedia.console.data.repository
 
 import com.bockmedia.console.BuildConfig
 import com.bockmedia.console.data.api.BockMediaApi
+import com.bockmedia.console.data.api.bockJson
+import com.bockmedia.console.data.api.httpErrorMessage
 import com.bockmedia.console.data.api.dto.*
 import com.bockmedia.console.data.local.AppPreferences
 import com.bockmedia.console.data.network.NetworkReachability
 import com.bockmedia.console.domain.model.ArtworkPaths
+import com.bockmedia.console.domain.model.SessionDataStore
 import com.bockmedia.console.domain.model.HomeArtworkCache
 import com.bockmedia.console.domain.model.HomeFeedRules
 import com.bockmedia.console.domain.model.PlayTarget
@@ -25,6 +28,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import okhttp3.ResponseBody
+import retrofit2.HttpException
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.sync.withLock
 
@@ -44,6 +48,8 @@ class BockMediaRepository(
     private val artistPortraitPathCache = ConcurrentHashMap<String, String>()
     private val artistPortraitMissCache = ConcurrentHashMap.newKeySet<String>()
     private val ratingsCache = ConcurrentHashMap<String, Int>()
+    @Volatile private var ratedSongMapCache: Pair<Long, Map<String, Int>>? = null
+    private val ratedSongMapTtlMs = 120_000L
     private val albumCoverPathCache = ConcurrentHashMap<String, String>()
     @Volatile private var cachedBaseUrl: String? = null
 
@@ -57,18 +63,41 @@ class BockMediaRepository(
     @Volatile private var playlistsListCache: Pair<Long, PlaylistsResponse>? = null
     private val playlistsListTtlMs = 60_000L
 
-    private suspend fun baseUrl(): String =
-        cachedBaseUrl ?: baseUrlProvider().also { cachedBaseUrl = it }
+    private suspend fun baseUrl(): String {
+        val cached = cachedBaseUrl
+        val local = preferences.getLocalServerUrlSync()
+        val external = preferences.getExternalServerUrlSync()
+        if (cached != null &&
+            !(!NetworkReachability.onWifi && AppPreferences.isLanHost(cached, local, external))
+        ) {
+            return cached
+        }
+        cachedBaseUrl = null
+        return baseUrlProvider().also { cachedBaseUrl = it }
+    }
 
     /** Best-effort base URL for sync artwork URL building (no network). */
     fun peekBaseUrl(): String? {
         val cached = cachedBaseUrl
-        val local = BuildConfig.DEFAULT_LOCAL_SERVER_URL.takeIf { it.isNotBlank() }
-        val external = BuildConfig.DEFAULT_EXTERNAL_SERVER_URL.takeIf { it.isNotBlank() }
-        if (cached != null && AppPreferences.isLanHost(cached, local, external) && !NetworkReachability.onWifi) {
-            return external ?: cached
+        val local = preferences.localServerUrlNow()
+            ?: BuildConfig.DEFAULT_LOCAL_SERVER_URL.takeIf { it.isNotBlank() }
+        val external = preferences.externalServerUrlNow()
+            ?: BuildConfig.DEFAULT_EXTERNAL_SERVER_URL.takeIf { it.isNotBlank() }
+        val localNorm = local?.let { AppPreferences.normalizeUrl(it) }
+        val externalNorm = external?.let { AppPreferences.normalizeUrl(it) }
+        if (!NetworkReachability.onWifi) {
+            // Cellular: never use a LAN-only cached host.
+            if (cached != null && AppPreferences.isLanHost(cached, localNorm, externalNorm)) {
+                return externalNorm ?: cached
+            }
+            return externalNorm ?: cached ?: localNorm
         }
-        return cached ?: external ?: local
+        // Wi‑Fi: prefer LAN. A stale external cache from cellular must not wedge streams.
+        if (cached != null && AppPreferences.isLanHost(cached, localNorm, externalNorm)) {
+            return cached
+        }
+        return localNorm
+            ?: cached?.takeIf { AppPreferences.isLanHost(it, localNorm, externalNorm) }
     }
 
     fun primeBaseUrl(url: String?) {
@@ -252,9 +281,13 @@ class BockMediaRepository(
         }
     }
 
-    fun clearCaches() {
+    fun clearBaseUrlCache() {
         cachedBaseUrl = null
         baseUrlEpoch++
+    }
+
+    fun clearCaches() {
+        clearBaseUrlCache()
         playlistTrackPathsCache.clear()
         artistCoverPathsCache.clear()
         artistPortraitPathCache.clear()
@@ -269,14 +302,39 @@ class BockMediaRepository(
     suspend fun summary() = api().summary()
     suspend fun health() = api().health()
     suspend fun plexSyncStatus() = api().plexSyncStatus()
-    suspend fun dashboardQuick() = api().dashboardQuick()
+    suspend fun dashboardQuick(): DashboardQuickResponse {
+        SessionDataStore.peekDashboard()?.let { return it }
+        return api().dashboardQuick().also { SessionDataStore.putDashboard(it) }
+    }
+
+    suspend fun home(
+        deferred: Boolean = true,
+        includeRatings: Boolean = false,
+        playlistLimit: Int = 500,
+        genreLimit: Int = 40,
+        historyLimit: Int = 150,
+    ): HomeResponse = api().home(
+        deferred = if (deferred) "1" else "0",
+        includeRatings = if (includeRatings) "1" else null,
+        member = scopedMember(null),
+        clientId = clientIdProvider().trim().ifBlank { null },
+        playlistLimit = playlistLimit,
+        genreLimit = genreLimit,
+        historyLimit = historyLimit,
+    )
+
+    suspend fun streamHistory(page: Int, limit: Int): StreamHistoryResponse {
+        if (page == 1) SessionDataStore.peekHistory()?.let { return it }
+        return api().streamHistory(page, limit).also {
+            if (page == 1) SessionDataStore.putHistory(it)
+        }
+    }
     suspend fun playbackStatus() = api().playbackStatus()
     suspend fun recent(page: Int, limit: Int) = api().recent(page, limit)
     suspend fun nowPlayingDevices(): NowPlayingDevicesResponse {
         val viewer = clientIdProvider().trim().ifBlank { null }
         return api().nowPlayingDevices(viewerClientId = viewer)
     }
-    suspend fun streamHistory(page: Int, limit: Int) = api().streamHistory(page, limit)
     suspend fun rooms() = api().rooms()
     suspend fun search(
         q: String,
@@ -284,8 +342,20 @@ class BockMediaRepository(
         preview: Int = 5,
         section: String? = null,
         source: String? = null,
+        fast: Boolean = section == null,
+        includeResonance: Boolean = section == "similar",
+        includeRooms: Boolean = false,
     ): SearchResponse {
-        val response = api().search(q, limit = limit, preview = preview, section = section, source = source)
+        val response = api().search(
+            q = q,
+            limit = limit,
+            preview = preview,
+            section = section,
+            source = source,
+            fast = if (fast) "1" else "0",
+            includeResonance = if (includeResonance) "1" else "0",
+            includeRooms = if (includeRooms) "1" else "0",
+        )
         val filtered = response.copy(songs = filterSearchSongHits(q, response.songs))
         filtered.artists.forEach { hit ->
             val name = hit.name ?: return@forEach
@@ -296,6 +366,11 @@ class BockMediaRepository(
             hit.path?.let { cacheArtPath(name, hit.artist, it) }
         }
         return filtered
+    }
+
+    suspend fun searchSuggest(q: String): SearchResponse {
+        val response = api().searchSuggest(q)
+        return response.copy(songs = filterSearchSongHits(q, response.songs))
     }
 
     suspend fun searchPins(): List<SearchPin> = runCatching {
@@ -326,8 +401,6 @@ class BockMediaRepository(
         )
     }.isSuccess
 
-    suspend fun searchSuggest(q: String): SearchResponse = api().searchSuggest(q)
-
     suspend fun continueListening(member: String? = null): ContinueResponse =
         api().continueListening(scopedMember(member))
 
@@ -336,7 +409,16 @@ class BockMediaRepository(
         explicit?.trim()?.takeIf { it.isNotBlank() }
             ?: memberIdProvider()?.trim()?.takeIf { it.isNotBlank() }
 
-    suspend fun libraryNew(since: String = "7d"): LibraryNewResponse = api().libraryNew(since = since)
+    suspend fun libraryNew(since: String = "7d", followed: Boolean = false, after: String? = null): LibraryNewResponse =
+        api().libraryNew(
+            since = since,
+            limit = if (followed) 24 else 50,
+            followed = if (followed) 1 else null,
+            after = after,
+        )
+
+    suspend fun followedNotifications(since: String = "30d", after: String? = null): FollowedNotificationsResponse =
+        api().followedNotifications(since = since, after = after)
 
     suspend fun discoverWeekly(member: String? = null): DiscoverWeeklyResponse =
         api().discoverWeekly(scopedMember(member))
@@ -352,28 +434,46 @@ class BockMediaRepository(
         })
 
     suspend fun playlists(search: String = "", page: Int = 1, limit: Int = 500, memberScoped: Boolean = false): PlaylistsResponse {
-        // Only the default full listing (no search, first page) is shared — that's the
-        // payload Home/Library/Search all request. Searches/paging always hit the API.
-        val shareable = search.isBlank() && page == 1 && !memberScoped
         val member = if (memberScoped) scopedMember(null) else null
-        if (shareable) {
+        val cacheKey = member.orEmpty()
+        if (search.isBlank() && page == 1) {
+            SessionDataStore.peekPlaylists(cacheKey)?.let { return it }
             playlistsListCache?.let { (ts, cached) ->
                 if (System.currentTimeMillis() - ts < playlistsListTtlMs) return cached
             }
             return playlistsListMutex.withLock {
+                SessionDataStore.peekPlaylists(cacheKey)?.let { return@withLock it }
                 playlistsListCache?.let { (ts, cached) ->
                     if (System.currentTimeMillis() - ts < playlistsListTtlMs) return@withLock cached
                 }
-                val fresh = api().playlists(page = page, limit = limit, search = search, member = member)
+                val fresh = api().playlists(
+                    page = page,
+                    limit = limit,
+                    search = search,
+                    sortBy = "catalog",
+                    member = member,
+                    fields = if (search.isBlank()) "summary" else null,
+                    inlineCovers = if (search.isBlank()) "0" else null,
+                )
+                SessionDataStore.putPlaylists(cacheKey, fresh)
                 playlistsListCache = System.currentTimeMillis() to fresh
                 fresh
             }
         }
-        return api().playlists(page = page, limit = limit, search = search, member = member)
+        return api().playlists(
+            page = page,
+            limit = limit,
+            search = search,
+            sortBy = "catalog",
+            member = member,
+            fields = if (search.isBlank()) "summary" else null,
+            inlineCovers = if (search.isBlank()) "0" else null,
+        )
     }
 
     fun invalidatePlaylistsCache() {
         playlistsListCache = null
+        SessionDataStore.invalidatePlaylists()
     }
 
     suspend fun resolvePlaylistId(name: String): String? {
@@ -412,7 +512,7 @@ class BockMediaRepository(
         page: Int = 1,
         limit: Int = 50,
         q: String? = null,
-        sortBy: String? = null,
+        sortBy: String? = "original",
         order: String? = null,
     ): PlaylistDetailResponse {
         val (memberId, clientId) = ratingsScope()
@@ -431,6 +531,13 @@ class BockMediaRepository(
     suspend fun smartPlaylists() = api().smartPlaylists()
     suspend fun artists(page: Int, search: String, limit: Int = 50) =
         api().artists(page = page, search = search, limit = limit)
+
+    suspend fun artistDetail(artistName: String) =
+        api().artistDetail(artistName.trim())
+
+    suspend fun musicVideoRelated(artist: String, limit: Int = 12) =
+        api().musicVideoRelated(artist.trim(), limit)
+
     suspend fun albums(page: Int, search: String, artist: String? = null, limit: Int = 50, sort: String? = null) =
         api().albums(page = page, search = search, artist = artist, limit = limit, sort = sort)
 
@@ -534,9 +641,45 @@ class BockMediaRepository(
     }
 
     private val musicVideoCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private val musicVideoStreamUrlCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    private fun musicVideoStreamKey(videoId: String, lowBandwidth: Boolean): String =
+        "${videoId.trim()}|${if (lowBandwidth) "m" else "d"}"
+
+    private fun isMusicVideoStreamUrlValid(url: String, lowBandwidth: Boolean): Boolean {
+        val u = url.trim()
+        if (u.isEmpty()) return false
+        // On cellular the proxy must be reached via the external host, never a LAN IP.
+        if (lowBandwidth) {
+            val host = AppPreferences.hostOf(u)
+            if (host != null && (
+                    host.startsWith("192.168.") ||
+                        host.startsWith("10.") ||
+                        host == "localhost" ||
+                        host == "127.0.0.1"
+                    )
+            ) {
+                return false
+            }
+        }
+        return true
+    }
+
+    /** Drop stale LAN stream URLs when leaving Wi‑Fi (proxy-via-external is kept). */
+    fun invalidateCellularVideoStreamCache() {
+        val drop = musicVideoStreamUrlCache.filter { (_, url) ->
+            !isMusicVideoStreamUrlValid(url, lowBandwidth = true)
+        }.keys
+        drop.forEach { musicVideoStreamUrlCache.remove(it) }
+    }
 
     /** YouTube music-video id for artist/title (cached). Null when none found. */
-    suspend fun musicVideo(title: String, artist: String? = null, durationSec: Int? = null): MusicVideoResponse? {
+    suspend fun musicVideo(
+        title: String,
+        artist: String? = null,
+        durationSec: Int? = null,
+        lowBandwidth: Boolean = false,
+    ): MusicVideoResponse? {
         val t = title.trim()
         if (t.isEmpty()) return null
         val key = "${artist.orEmpty().trim().lowercase()}|${t.lowercase()}|${durationSec ?: 0}"
@@ -546,30 +689,149 @@ class BockMediaRepository(
                 title = t,
                 artist = artist?.trim()?.takeIf { it.isNotBlank() },
                 durationSec = durationSec?.takeIf { it > 0 },
+                mobile = if (lowBandwidth) "1" else null,
             )
         }.getOrNull() ?: return null
         resp.videoId?.takeIf { it.isNotBlank() }?.let { musicVideoCache[key] = it }
         return resp
     }
 
-    suspend fun musicVideoPlay(videoId: String): MusicVideoPlayResponse? {
+    suspend fun musicVideoPlay(videoId: String): MusicVideoPlayResponse? =
+        musicVideoPlayWithReason(videoId)
+
+    private suspend fun musicVideoPlayWithReason(
+        videoId: String,
+        lowBandwidth: Boolean = false,
+        waitSec: Int? = null,
+    ): MusicVideoPlayResponse? {
         val id = videoId.trim()
         if (id.isEmpty()) return null
-        return runCatching { api().musicVideoPlay(id) }.getOrNull()
+        return try {
+            api().musicVideoPlay(
+                id,
+                mobile = if (lowBandwidth) "1" else null,
+                waitSec = waitSec,
+            )
+        } catch (e: HttpException) {
+            val body = e.response()?.errorBody()?.string().orEmpty()
+            runCatching { bockJson.decodeFromString<MusicVideoPlayResponse>(body) }.getOrNull()
+                ?: MusicVideoPlayResponse(ready = false, reason = httpErrorMessage(e, "Video unavailable"))
+        }
+    }
+
+    /** NAS proxy path — ExoPlayer plays this; avoids YouTube WebView bot-check embeds. */
+    private fun musicVideoResult(
+        videoId: String,
+        baseUrl: String,
+        playUrl: String?,
+        lowBandwidth: Boolean,
+        error: String? = null,
+    ): MusicVideoPrepareResult {
+        val resolved = playUrl?.takeIf { it.isNotBlank() }
+            ?: musicVideoProxyPlayUrl(baseUrl, videoId, lowBandwidth)
+        return MusicVideoPrepareResult(videoId, resolved, error?.takeIf { resolved.isNullOrBlank() })
+    }
+
+    /** One-shot lookup + stream prepare (single API round trip when wait > 0). */
+    suspend fun prepareMusicVideoForTrack(
+        title: String,
+        artist: String? = null,
+        durationSec: Int? = null,
+        baseUrl: String,
+        lowBandwidth: Boolean = false,
+        skipStreamWait: Boolean = false,
+    ): MusicVideoPrepareResult {
+        val t = title.trim()
+        if (t.isEmpty()) return MusicVideoPrepareResult(null, null, "Missing track title")
+        val key = "${artist.orEmpty().trim().lowercase()}|${t.lowercase()}|${durationSec ?: 0}"
+        val cachedId = musicVideoCache[key]
+        if (cachedId != null) {
+            musicVideoStreamUrlCache[musicVideoStreamKey(cachedId, lowBandwidth)]?.let { url ->
+                if (isMusicVideoStreamUrlValid(url, lowBandwidth)) {
+                    return MusicVideoPrepareResult(cachedId, url, null)
+                }
+                musicVideoStreamUrlCache.remove(musicVideoStreamKey(cachedId, lowBandwidth))
+            }
+            return musicVideoResult(cachedId, baseUrl, null, lowBandwidth)
+        }
+        val wait = if (skipStreamWait) 0 else if (lowBandwidth) 25 else 8
+        val resp = runCatching {
+            api().musicVideo(
+                title = t,
+                artist = artist?.trim()?.takeIf { it.isNotBlank() },
+                durationSec = durationSec?.takeIf { it > 0 },
+                mobile = if (lowBandwidth) "1" else null,
+                waitSec = wait.takeIf { it > 0 },
+            )
+        }.getOrNull() ?: return MusicVideoPrepareResult(null, null, "Could not reach the server")
+        val id = resp.videoId?.trim()?.takeIf { it.isNotBlank() }
+        if (id.isNullOrBlank()) {
+            return MusicVideoPrepareResult(null, null, "No music video found for this track")
+        }
+        musicVideoCache[key] = id
+        if (resp.streamReady == true) {
+            val url = resolveMusicVideoPlayUrlFromPath(baseUrl, resp.playUrl)
+                ?: musicVideoProxyPlayUrl(baseUrl, id, lowBandwidth)
+            if (!url.isNullOrBlank()) {
+                musicVideoStreamUrlCache[musicVideoStreamKey(id, lowBandwidth)] = url
+                return MusicVideoPrepareResult(id, url, null)
+            }
+        }
+        if (skipStreamWait) {
+            return musicVideoResult(id, baseUrl, null, lowBandwidth, resp.streamReason)
+        }
+        val (url, err) = prepareMusicVideoStream(id, baseUrl, lowBandwidth)
+        return musicVideoResult(id, baseUrl, url, lowBandwidth, err)
+    }
+
+    /** Returns play URL or a user-facing error (never both). Waits for server yt-dlp on cache miss. */
+    suspend fun prepareMusicVideoStream(
+        videoId: String,
+        baseUrl: String,
+        lowBandwidth: Boolean = false,
+    ): Pair<String?, String?> {
+        val id = videoId.trim()
+        if (id.isEmpty()) return null to "Missing video id"
+        musicVideoStreamUrlCache[musicVideoStreamKey(id, lowBandwidth)]?.let { cached ->
+            if (isMusicVideoStreamUrlValid(cached, lowBandwidth)) return cached to null
+            musicVideoStreamUrlCache.remove(musicVideoStreamKey(id, lowBandwidth))
+        }
+        val wait = if (lowBandwidth) 25 else 8
+        val play = musicVideoPlayWithReason(id, lowBandwidth = lowBandwidth, waitSec = wait)
+            ?: return null to "Could not reach the server"
+        if (!play.ready) {
+            val proxy = musicVideoProxyPlayUrl(baseUrl, id, lowBandwidth)
+            if (!proxy.isNullOrBlank()) return proxy to null
+            return null to (play.reason?.takeIf { it.isNotBlank() } ?: "Video stream not ready on server")
+        }
+        val url = resolveMusicVideoPlayUrl(baseUrl, play)
+            ?: musicVideoProxyPlayUrl(baseUrl, id, lowBandwidth)
+        if (!url.isNullOrBlank()) {
+            musicVideoStreamUrlCache[musicVideoStreamKey(id, lowBandwidth)] = url
+        }
+        return if (url.isNullOrBlank()) null to "Missing video stream URL" else url to null
     }
 
     fun resolveMusicVideoPlayUrl(base: String, resp: MusicVideoPlayResponse): String? {
-        val url = resp.playUrl?.trim()?.takeIf { it.isNotBlank() } ?: return null
+        return resolveMusicVideoPlayUrlFromPath(base, resp.playUrl)
+    }
+
+    fun resolveMusicVideoPlayUrlFromPath(base: String, playUrl: String?): String? {
+        val url = playUrl?.trim()?.takeIf { it.isNotBlank() } ?: return null
         if (url.startsWith("http://") || url.startsWith("https://")) return url
         return base.trimEnd('/') + url
     }
 
-    /** LAN proxy path — no /play round trip; server resolves the googlevideo URL on first byte. */
-    fun musicVideoProxyPlayUrl(base: String, videoId: String): String? {
+    /** LAN proxy path — no /play round trip; server resolves googlevideo on first byte. */
+    fun musicVideoProxyPlayUrl(base: String, videoId: String, lowBandwidth: Boolean = false): String? {
         val id = videoId.trim()
         val root = base.trim().trimEnd('/')
         if (id.isEmpty() || root.isEmpty()) return null
-        return "$root/api/music-video/$id/proxy"
+        return if (lowBandwidth) {
+            "$root/api/music-video/$id/proxy?mobile=1"
+        } else {
+            "$root/api/music-video/$id/proxy"
+        }
     }
 
     suspend fun watchFolders() = api().watchFolders()
@@ -587,13 +849,22 @@ class BockMediaRepository(
         member: String? = null,
         platform: String? = null,
         householdWide: Boolean = false,
-    ) = api().analytics(
-        from,
-        to,
-        deviceId,
-        if (householdWide) null else scopedMember(member),
-        platform,
-    )
+    ): AnalyticsResponse {
+        if (from == null && to == null && deviceId == null && platform == null) {
+            SessionDataStore.peekAnalytics()?.let { return it }
+        }
+        return api().analytics(
+            from,
+            to,
+            deviceId,
+            if (householdWide) null else scopedMember(member),
+            platform,
+        ).also {
+            if (from == null && to == null && deviceId == null && platform == null) {
+                SessionDataStore.putAnalytics(it)
+            }
+        }
+    }
 
     // ── Household / Family ──────────────────────────────────────────────────
     suspend fun household() = api().household()
@@ -771,6 +1042,23 @@ class BockMediaRepository(
         return api().alexaRemoteControl(body)
     }
 
+    suspend fun seekQueueIndex(
+        deviceId: String,
+        deviceName: String,
+        serial: String?,
+        relativeIndex: Int,
+    ): PlayResponse {
+        val body = buildJsonObject {
+            put("deviceId", deviceId)
+            put("device", deviceName)
+            serial?.let { put("serial", it) }
+            put("action", "seek_queue_index")
+            put("index", relativeIndex)
+            put("relative", true)
+        }
+        return api().alexaRemoteControl(body)
+    }
+
     suspend fun setVolume(serial: String, deviceName: String, volume: Int) {
         api().setVolume(buildJsonObject {
             put("serial", serial)
@@ -801,11 +1089,19 @@ class BockMediaRepository(
             clientId = clientIdProvider().trim().takeIf { it.isNotBlank() },
         ).items.count { it.kind == RatingKind.Song.apiValue && it.stars > 0 }
 
-    suspend fun ratedSongMap(): Map<String, Int> =
-        ratedSongs().associate { it.id to it.stars }
+    suspend fun ratedSongMap(): Map<String, Int> {
+        val cached = ratedSongMapCache
+        if (cached != null && System.currentTimeMillis() - cached.first < ratedSongMapTtlMs) {
+            return cached.second
+        }
+        val map = ratedSongs().associate { it.id to it.stars }
+        ratedSongMapCache = System.currentTimeMillis() to map
+        return map
+    }
 
     fun clearRatingsCache() {
         ratingsCache.clear()
+        ratedSongMapCache = null
     }
 
     private fun ratingsScope(): Pair<String?, String?> {
@@ -950,6 +1246,26 @@ class BockMediaRepository(
             put("save", save)
         })
 
+    suspend fun listenAgentStatus() = api().listenAgentStatus()
+
+    suspend fun listenAgentPlay(prompt: String) = api().listenAgentPlay(buildJsonObject {
+        put("prompt", prompt)
+    })
+
+    suspend fun mixMuseStatus() = api().mixMuseStatus()
+
+    suspend fun mixMusePlaylist(
+        prompt: String,
+        name: String = "",
+        maxTracks: Int = 25,
+        save: Boolean = true,
+    ) = api().mixMusePlaylist(buildJsonObject {
+        put("prompt", prompt)
+        if (name.isNotBlank()) put("name", name)
+        put("maxTracks", maxTracks)
+        put("save", save)
+    })
+
     suspend fun mixMuseSimilar(
         seedKind: String,
         path: String? = null,
@@ -1068,7 +1384,7 @@ class BockMediaRepository(
         val tracks = mutableListOf<String>()
         var page = 1
         while (true) {
-            val detail = playlistDetail(playlistId, page = page, limit = 500)
+            val detail = playlistDetail(playlistId, page = page, limit = 500, sortBy = "original")
             tracks.addAll(detail.tracks.mapNotNull { it.path })
             if (detail.tracks.size < 500 || tracks.size >= detail.total) break
             page++
@@ -1165,14 +1481,17 @@ class BockMediaRepository(
             runCatching { api().alexaLoginStop() }
         }
         val body = buildJsonObject {
-            val active = runCatching { baseUrl() }.getOrNull()
+            val status = runCatching { api().alexaRemoteStatus() }.getOrNull()
+            val lanFromServer = status?.loginProxyHost?.takeIf { it.isNotBlank() }
+                ?: status?.host?.takeIf { it.isNotBlank() }
             val local = preferences.getLocalServerUrlSync()?.let { AppPreferences.normalizeUrl(it) }
-            val host = when {
-                local != null && active != null && active.startsWith(local) ->
-                    AppPreferences.hostOf(local)
-                else ->
-                    active?.let { AppPreferences.hostOf(it) }
-            }
+            val active = runCatching { baseUrl() }.getOrNull()
+            val host = lanFromServer
+                ?: when {
+                    local != null && active != null && active.startsWith(local) ->
+                        AppPreferences.hostOf(local)
+                    else -> local?.let { AppPreferences.hostOf(it) }
+                }
             host?.takeIf { it.isNotBlank() }?.let { put("host", it) }
         }
         return api().alexaLoginStart(body)

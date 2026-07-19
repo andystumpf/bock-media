@@ -33,10 +33,14 @@ struct BockArtwork: View {
     }
 
     private var artPlaceholder: some View {
-        LinearGradient(
-            colors: [BockColors.navy, BockColors.surfaceVariant],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
+        ZStack {
+            LinearGradient(
+                colors: [BockColors.navy, BockColors.surfaceVariant],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            BockIcon(icon: .album, size: max(20, size * 0.32))
+                .foregroundStyle(BockColors.muted.opacity(0.55))
+        }
     }
 }

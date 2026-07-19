@@ -41,7 +41,7 @@ struct SetupView: View {
                 } label: {
                     Group {
                         if loading {
-                            ProgressView()
+                            BockProgressIndicator(size: 24)
                         } else {
                             Text("Sign in").frame(maxWidth: .infinity)
                         }

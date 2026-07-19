@@ -4,6 +4,7 @@ import android.content.Context
 import com.bockmedia.console.data.api.BockMediaApi
 import com.bockmedia.console.data.api.bockJson
 import com.bockmedia.console.data.auth.BockAuthInterceptor
+import com.bockmedia.console.data.auth.UITestFailInterceptor
 import com.bockmedia.console.data.local.AppPreferences
 import com.bockmedia.console.BuildConfig
 import com.bockmedia.console.data.network.NetworkReachability
@@ -18,11 +19,15 @@ import com.bockmedia.console.domain.model.HomeFeedCache
 import com.bockmedia.console.domain.model.LibraryCachePersistence
 import com.bockmedia.console.domain.model.LibrarySessionCache
 import com.bockmedia.console.domain.model.SearchBrowseSessionCache
+import com.bockmedia.console.domain.model.SearchQueryCache
 import com.bockmedia.console.domain.model.HomeTileEngagement
 import com.bockmedia.console.ui.components.BockImageLoader
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -35,6 +40,7 @@ class BockMediaApp(private val appContext: Context) {
 
     init {
         HomeTileEngagement.init(appContext.applicationContext)
+        com.bockmedia.console.local.HomeSectionPinsStore.init(appContext.applicationContext)
         ActiveProfileStore.hydrate(appContext)
     }
 
@@ -55,6 +61,7 @@ class BockMediaApp(private val appContext: Context) {
     }
 
     @Volatile private var endpointPrimed = false
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     suspend fun resolveBaseUrl(forceRefresh: Boolean = false): String {
         NetworkReachability.update(appContext)
@@ -96,7 +103,8 @@ class BockMediaApp(private val appContext: Context) {
     fun onCellularNetwork() {
         invalidateEndpoint()
         endpointPrimed = false
-        runBlocking(Dispatchers.IO) {
+        repository.invalidateCellularVideoStreamCache()
+        appScope.launch {
             configuredEndpointUrl()?.let { url ->
                 ServerEndpointResolver.prime(url)
                 repository.primeBaseUrl(url)
@@ -106,17 +114,18 @@ class BockMediaApp(private val appContext: Context) {
     }
 
     suspend fun api(): BockMediaApi {
-        val base = resolveBaseUrl()
         val user = preferences.adminUser.first()
         val pass = preferences.adminPass.first()
         val token = preferences.mobileToken.first()
         val local = preferences.getLocalServerUrlSync()
         val external = preferences.getExternalServerUrlSync()
-        if (cachedApi != null && cachedBaseUrl == base &&
+        val peekBase = cachedBaseUrl ?: repository.peekBaseUrl()
+        if (cachedApi != null && peekBase != null && cachedBaseUrl == peekBase &&
             cachedAdminUser == user && cachedAdminPass == pass && cachedMobileToken == token
         ) {
             return cachedApi!!
         }
+        val base = resolveBaseUrl()
         cachedBaseUrl = base
         cachedAdminUser = user
         cachedAdminPass = pass
@@ -146,6 +155,7 @@ class BockMediaApp(private val appContext: Context) {
         LibraryCachePersistence.clear(appContext)
         AutomationSessionCache.invalidate()
         SearchBrowseSessionCache.invalidate()
+        SearchQueryCache.invalidate()
         BockImageLoader.reinstall(appContext, this)
     }
 
@@ -157,7 +167,19 @@ class BockMediaApp(private val appContext: Context) {
     fun invalidateEndpoint() {
         cachedApi = null
         cachedBaseUrl = null
+        repository.clearBaseUrlCache()
         ServerEndpointResolver.invalidate()
+    }
+
+    /** Drop stale LAN endpoint after a connect timeout — switches to external on cellular. */
+    suspend fun recoverFromConnectionFailure() {
+        NetworkReachability.update(appContext)
+        invalidateEndpoint()
+        endpointPrimed = false
+        if (!NetworkReachability.onWifi) {
+            onCellularNetwork()
+        }
+        resolveBaseUrl(forceRefresh = true)
     }
 
     suspend fun buildAuthenticatedHttpClient(): OkHttpClient = buildLiveAuthHttpClient()
@@ -173,15 +195,36 @@ class BockMediaApp(private val appContext: Context) {
             readTimeoutSec = readTimeoutSec,
         )
 
-    /** Longer read timeout for ExoPlayer streaming — default 30s gaps cause false skips. */
-    suspend fun buildPlaybackHttpClient(): OkHttpClient {
-        val user = preferences.adminUser.first()
-        val pass = preferences.adminPass.first()
-        val token = preferences.mobileToken.first()
-        val local = preferences.getLocalServerUrlSync()
-        val external = preferences.getExternalServerUrlSync()
-        return buildHttpClient(user, pass, token, local, external, readTimeoutSec = 120)
+    /** Auth headers for the NAS proxy (mirrors BockAuthInterceptor) — used by
+     * ExoPlayer's DefaultHttpDataSource which can't run OkHttp interceptors. */
+    fun musicVideoAuthHeaders(): Map<String, String> {
+        val token = preferences.mobileTokenNow()?.trim()?.takeIf { it.isNotEmpty() }
+        val user = preferences.adminUserNow()?.trim()?.takeIf { it.isNotEmpty() }
+        val pass = preferences.adminPassNow()?.trim()?.takeIf { it.isNotEmpty() }
+        val headers = mutableMapOf<String, String>()
+        when {
+            token != null && user != null && pass != null -> {
+                headers["Authorization"] = okhttp3.Credentials.basic(user, pass)
+                headers["X-BockMedia-Token"] = token
+            }
+            token != null -> headers["Authorization"] = "Bearer $token"
+            user != null && pass != null -> headers["Authorization"] = okhttp3.Credentials.basic(user, pass)
+        }
+        return headers
     }
+
+    /** Plain client for YouTube CDN — no Bock auth headers on googlevideo requests. */
+    fun buildCdnHttpClient(): OkHttpClient =
+        OkHttpClient.Builder()
+            .connectTimeout(20, TimeUnit.SECONDS)
+            .readTimeout(120, TimeUnit.SECONDS)
+            .followRedirects(true)
+            .followSslRedirects(true)
+            .build()
+
+    /** Longer read timeout for ExoPlayer streaming — default 30s gaps cause false skips. */
+    suspend fun buildPlaybackHttpClient(): OkHttpClient =
+        buildLiveAuthHttpClient(readTimeoutSec = 120)
 
     private fun buildPlainHttpClient(): OkHttpClient {
         return OkHttpClient.Builder()
@@ -203,7 +246,7 @@ class BockMediaApp(private val appContext: Context) {
         token: String?,
         localUrl: String?,
         externalUrl: String?,
-        readTimeoutSec: Long = 30,
+        readTimeoutSec: Long = 45,
     ): OkHttpClient = buildHttpClient(
         userProvider = { user?.trim()?.takeIf { it.isNotEmpty() } },
         passProvider = { pass?.trim()?.takeIf { it.isNotEmpty() } },
@@ -219,7 +262,7 @@ class BockMediaApp(private val appContext: Context) {
         tokenProvider: () -> String?,
         localUrlProvider: () -> String?,
         externalUrlProvider: () -> String?,
-        readTimeoutSec: Long = 30,
+        readTimeoutSec: Long = 45,
     ): OkHttpClient {
         return OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
@@ -238,6 +281,11 @@ class BockMediaApp(private val appContext: Context) {
                     tokenProvider,
                 ),
             )
+            .apply {
+                if (BuildConfig.DEBUG) {
+                    addInterceptor(UITestFailInterceptor())
+                }
+            }
             .apply {
                 if (BuildConfig.DEBUG) {
                     addInterceptor(HttpLoggingInterceptor().apply {

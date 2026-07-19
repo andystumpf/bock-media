@@ -2,7 +2,7 @@
 """Find and restore ratings.json / legacy favorites.json backups (run on the NAS).
 
 Usage:
-  cd ~/Documents/github/ourMedia
+  cd ~/~/bock-media
   python3 scripts/restore_ratings_backup.py --dry-run
   python3 scripts/restore_ratings_backup.py --member p-andy --apply
 """

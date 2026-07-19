@@ -66,6 +66,7 @@ class LibraryPrefsStore(private val context: Context) {
             LibraryFilter.Playlists -> "playlists"
             LibraryFilter.Artists -> "artists"
             LibraryFilter.Albums -> "albums"
+            LibraryFilter.Tracks -> "tracks"
             LibraryFilter.Downloaded -> "downloaded"
         }
 
@@ -76,6 +77,7 @@ class LibraryPrefsStore(private val context: Context) {
             "playlists" -> LibraryFilter.Playlists
             "artists" -> LibraryFilter.Artists
             "albums" -> LibraryFilter.Albums
+            "tracks", "songs" -> LibraryFilter.Tracks
             "downloaded", "downloads" -> LibraryFilter.Downloaded
             else -> null
         }

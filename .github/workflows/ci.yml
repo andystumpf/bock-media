@@ -34,8 +34,42 @@ jobs:
         working-directory: tests/ui
         run: node --test test_*.mjs
 
+  api-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Verify client paths vs server + OpenAPI
+        run: python3 scripts/check_api_contract.py
+
+  android-unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Run Android unit tests
+        working-directory: android
+        run: ./gradlew testDebugUnitTest
+
+  mobile-ui-catalog:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Validate mobile UI workflow catalog
+        run: python3 scripts/validate_ui_workflow_catalog.py
+
   ios-tests:
     runs-on: macos-15
+    env:
+      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
       - name: Install XcodeGen
@@ -46,11 +80,46 @@ jobs:
       - name: Generate Xcode project
         working-directory: ios
         run: xcodegen generate
+      - name: Prepare iOS Simulator
+        run: xcodebuild -downloadPlatform iOS
       - name: Build and test
         working-directory: ios
         run: |
+          DESTINATION="$(
+            python3 <<'PY'
+          import json, subprocess, sys
+          out = subprocess.check_output(
+              ["xcrun", "simctl", "list", "devices", "available", "-j"], text=True
+          )
+          devices = json.loads(out)["devices"]
+          candidates = []
+          for runtime in sorted(devices.keys(), reverse=True):
+              for d in devices[runtime]:
+                  if not d.get("isAvailable", True):
+                      continue
+                  name = d.get("name", "")
+                  if name.startswith("iPhone"):
+                      # Prefer newer iPhone models when several are installed.
+                      rank = 0
+                      if name == "iPhone 17":
+                          rank = 4
+                      elif name == "iPhone 16":
+                          rank = 2
+                      elif name == "iPhone 15":
+                          rank = 1
+                      candidates.append((rank, runtime, name, d["udid"]))
+          if not candidates:
+              print("No iOS Simulator found", file=sys.stderr)
+              sys.exit(1)
+          candidates.sort(reverse=True)
+          _, runtime, name, udid = candidates[0]
+          print(f"platform=iOS Simulator,id={udid}", end="")
+          print(f" # {name} ({runtime})", file=sys.stderr)
+          PY
+          )"
+          echo "Using destination: $DESTINATION"
           xcodebuild test \
             -project BockMedia.xcodeproj \
             -scheme BockMedia \
-            -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' \
+            -destination "$DESTINATION" \
             CODE_SIGNING_ALLOWED=NO

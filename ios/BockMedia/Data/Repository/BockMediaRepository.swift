@@ -8,6 +8,10 @@ final class BockMediaRepository: ObservableObject {
     private var artistPortraitPathCache: [String: String] = [:]
     private var artistPortraitMissCache: Set<String> = []
     private var lyricsCache: [String: LyricsResponse] = [:]
+    private var musicVideoCache: [String: String] = [:]
+    private var musicVideoStreamUrlCache: [String: String] = [:]
+    private var ratingsCache: [String: Int] = [:]
+    private var trackYearCache: [String: Int] = [:]
 
     init(preferences: AppPreferences) {
         self.preferences = preferences
@@ -21,6 +25,26 @@ final class BockMediaRepository: ObservableObject {
         artistPortraitPathCache.removeAll()
         artistPortraitMissCache.removeAll()
         Task { await ServerEndpointResolver.shared.invalidate() }
+    }
+
+    /// Lightweight reset — drops endpoint cache but keeps home/library session caches.
+    func invalidateEndpoint() {
+        resolvedBaseURL = nil
+        api.invalidateBaseURL()
+        Task { await ServerEndpointResolver.shared.invalidate() }
+    }
+
+    func configuredEndpointURL() -> String? {
+        let local = preferences.localServerURL?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        let external = preferences.externalServerURL?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        return external ?? local
+    }
+
+    func primeConfiguredEndpoint() async {
+        guard let url = configuredEndpointURL() else { return }
+        await ServerEndpointResolver.shared.prime(url)
+        resolvedBaseURL = url
+        api.setBaseURL(url)
     }
 
     func resolveBaseURL(forceRefresh: Bool = false) async throws -> String {
@@ -55,6 +79,16 @@ final class BockMediaRepository: ObservableObject {
         return try await api.health()
     }
 
+    func libraryHealth() async throws -> LibraryHealthResponse {
+        try await ensureAPI()
+        return try await api.libraryHealth()
+    }
+
+    func mergeArtists(from: [String], to: String) async throws {
+        try await ensureAPI()
+        _ = try await api.mergeArtists(body: ["from": from, "to": to])
+    }
+
     func summary() async throws -> SummaryResponse {
         try await ensureAPI()
         return try await api.summary()
@@ -62,13 +96,51 @@ final class BockMediaRepository: ObservableObject {
 
     func dashboardQuick() async throws -> DashboardQuickResponse {
         try await ensureAPI()
-        return try await api.dashboardQuick()
+        if let cached = SessionDataStore.peekDashboard() { return cached }
+        let response = try await api.dashboardQuick()
+        SessionDataStore.putDashboard(response)
+        return response
+    }
+
+    func home(
+        deferred: Bool = true,
+        includeRatings: Bool = false,
+        playlistLimit: Int = 500,
+        genreLimit: Int = 40,
+        historyLimit: Int = 150
+    ) async throws -> HomeResponse {
+        try await ensureAPI()
+        let member = scopedMember(nil)
+        let clientId = ClientIdStore.clientId().trimmingCharacters(in: .whitespacesAndNewlines)
+        return try await api.home(
+            deferred: deferred,
+            includeRatings: includeRatings,
+            member: member,
+            clientId: clientId.isEmpty ? nil : clientId,
+            playlistLimit: playlistLimit,
+            genreLimit: genreLimit,
+            historyLimit: historyLimit
+        )
     }
 
     func playlists(search: String = "", limit: Int = 100, memberScoped: Bool = false) async throws -> PlaylistsResponse {
         try await ensureAPI()
         let member = memberScoped ? scopedMember(nil) : nil
-        return try await api.playlists(limit: limit, search: search, member: member)
+        let cacheKey = member ?? ""
+        if search.isEmpty {
+            if let cached = SessionDataStore.peekPlaylists(memberKey: cacheKey) { return cached }
+        }
+        let response = try await api.playlists(
+            limit: limit,
+            search: search,
+            member: member,
+            fields: search.isEmpty ? "summary" : nil,
+            inlineCovers: search.isEmpty ? "0" : nil
+        )
+        if search.isEmpty {
+            SessionDataStore.putPlaylists(memberKey: cacheKey, response: response)
+        }
+        return response
     }
 
     func playlistDetail(
@@ -76,11 +148,21 @@ final class BockMediaRepository: ObservableObject {
         page: Int = 1,
         limit: Int = 100,
         q: String? = nil,
-        sortBy: String? = nil,
+        sortBy: String? = "original",
         order: String? = nil
     ) async throws -> PlaylistDetailResponse {
         try await ensureAPI()
-        return try await api.playlistDetail(id: id, page: page, limit: limit, q: q, sortBy: sortBy, order: order)
+        let (memberId, clientId) = ratingsScope()
+        return try await api.playlistDetail(
+            id: id,
+            page: page,
+            limit: limit,
+            q: q,
+            sortBy: sortBy,
+            order: order,
+            memberId: memberId,
+            clientId: clientId
+        )
     }
 
     func playlistCoverPath(id: String) async throws -> String? {
@@ -105,7 +187,10 @@ final class BockMediaRepository: ObservableObject {
         limit: Int = 30,
         preview: Int = 5,
         section: String? = nil,
-        source: String? = nil
+        source: String? = nil,
+        fast: Bool = true,
+        includeResonance: Bool = false,
+        includeRooms: Bool = false
     ) async throws -> SearchResponse {
         try await ensureAPI()
         var response = try await api.search(
@@ -113,7 +198,10 @@ final class BockMediaRepository: ObservableObject {
             limit: limit,
             preview: preview,
             section: section,
-            source: source
+            source: source,
+            fast: fast,
+            includeResonance: includeResonance,
+            includeRooms: includeRooms
         )
         response.songs = SearchSongFilter.filter(query: q, songs: response.songs)
         return response
@@ -156,15 +244,71 @@ final class BockMediaRepository: ObservableObject {
         ).items
     }
 
+    func ratedSongs() async throws -> [RatingItem] {
+        try await ensureAPI()
+        let (memberId, clientId) = ratingsScope()
+        return try await api.ratings(memberId: memberId, clientId: clientId).items
+            .filter { $0.kind == RatingKind.song.rawValue && $0.stars > 0 }
+    }
+
+    func ratedSongMap() async throws -> [String: Int] {
+        let items = try await ratedSongs()
+        return Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0.stars) })
+    }
+
+    func clearRatingsCache() {
+        ratingsCache.removeAll()
+    }
+
+    func ratingStars(kind: RatingKind, id: String) async throws -> Int {
+        let key = ratingCacheKey(kind: kind, id: id)
+        if key.hasSuffix(":") { return 0 }
+        if let cached = ratingsCache[key] { return cached }
+        let (memberId, clientId) = ratingsScope()
+        let stars = (try? await api.ratingLookup(
+            kind: kind.rawValue,
+            id: id,
+            memberId: memberId,
+            clientId: clientId
+        ).stars) ?? 0
+        ratingsCache[key] = stars
+        return stars
+    }
+
+    func setRating(
+        kind: RatingKind,
+        id: String,
+        stars: Int,
+        title: String? = nil,
+        artist: String? = nil,
+        album: String? = nil
+    ) async throws {
+        try await ensureAPI()
+        let (memberId, clientId) = ratingsScope()
+        var body: [String: Any] = [
+            "kind": kind.rawValue,
+            "id": id,
+            "stars": min(5, max(0, stars)),
+        ]
+        if let title { body["title"] = title }
+        if let artist { body["artist"] = artist }
+        if let album { body["album"] = album }
+        if let memberId { body["memberId"] = memberId }
+        if let clientId { body["clientId"] = clientId }
+        _ = try await api.setRating(body: body)
+        ratingsCache[ratingCacheKey(kind: kind, id: id)] = min(5, max(0, stars))
+    }
+
     func songs(
         page: Int = 1,
         limit: Int = 100,
         search: String = "",
         artist: String? = nil,
-        album: String? = nil
+        album: String? = nil,
+        genre: String? = nil
     ) async throws -> SongsResponse {
         try await ensureAPI()
-        return try await api.songs(page: page, limit: limit, search: search, artist: artist, album: album)
+        return try await api.songs(page: page, limit: limit, search: search, artist: artist, album: album, genre: genre)
     }
 
     func artists(page: Int = 1, limit: Int = 100, search: String = "") async throws -> ArtistsResponse {
@@ -215,7 +359,7 @@ final class BockMediaRepository: ObservableObject {
         var tracks: [String] = []
         var page = 1
         while true {
-            let detail = try await api.playlistDetail(id: playlistId, page: page, limit: 500)
+            let detail = try await api.playlistDetail(id: playlistId, page: page, limit: 500, sortBy: "original")
             tracks.append(contentsOf: detail.tracks.compactMap(\.path))
             if detail.tracks.count < 500 || tracks.count >= detail.total { break }
             page += 1
@@ -227,12 +371,22 @@ final class BockMediaRepository: ObservableObject {
 
     func streamHistory(page: Int = 1, limit: Int = 100) async throws -> StreamHistoryResponse {
         try await ensureAPI()
-        return try await api.streamHistory(page: page, limit: limit)
+        if page == 1, let cached = SessionDataStore.peekHistory() { return cached }
+        let response = try await api.streamHistory(page: page, limit: limit)
+        if page == 1 { SessionDataStore.putHistory(response) }
+        return response
     }
 
     func analytics(from: String? = nil, to: String? = nil, deviceId: String? = nil, member: String? = nil) async throws -> AnalyticsResponse {
         try await ensureAPI()
-        return try await api.analytics(from: from, to: to, deviceId: deviceId, member: scopedMember(member))
+        if from == nil && to == nil && deviceId == nil {
+            if let cached = SessionDataStore.peekAnalytics() { return cached }
+        }
+        let response = try await api.analytics(from: from, to: to, deviceId: deviceId, member: scopedMember(member))
+        if from == nil && to == nil && deviceId == nil {
+            SessionDataStore.putAnalytics(response)
+        }
+        return response
     }
 
     func exportAnalyticsCSV(from: String? = nil, to: String? = nil, deviceId: String? = nil, member: String? = nil) async throws -> URL {
@@ -261,7 +415,9 @@ final class BockMediaRepository: ObservableObject {
 
     func searchSuggest(q: String) async throws -> SearchResponse {
         try await ensureAPI()
-        return try await api.searchSuggest(q: q)
+        var response = try await api.searchSuggest(q: q)
+        response.songs = SearchSongFilter.filter(query: q, songs: response.songs)
+        return response
     }
 
     func continueListening(member: String? = nil) async throws -> ContinueResponse {
@@ -269,9 +425,14 @@ final class BockMediaRepository: ObservableObject {
         return try await api.continueListening(member: scopedMember(member))
     }
 
-    func libraryNew(since: String = "7d") async throws -> LibraryNewResponse {
+    func libraryNew(since: String = "7d", followed: Bool = false, after: String? = nil) async throws -> LibraryNewResponse {
         try await ensureAPI()
-        return try await api.libraryNew(since: since)
+        return try await api.libraryNew(since: since, limit: followed ? 24 : 50, followed: followed, after: after)
+    }
+
+    func followedNotifications(since: String = "30d", after: String? = nil) async throws -> FollowedNotificationsResponse {
+        try await ensureAPI()
+        return try await api.followedNotifications(since: since, after: after)
     }
 
     func discoverWeekly(member: String? = nil) async throws -> DiscoverWeeklyResponse {
@@ -347,7 +508,54 @@ final class BockMediaRepository: ObservableObject {
 
     func household() async throws -> HouseholdResponse {
         try await ensureAPI()
-        return try await api.household()
+        var lastError: Error?
+        for base in apiCandidateBases() {
+            api.setBaseURL(base)
+            resolvedBaseURL = base
+            do {
+                let response = try await api.household()
+                if !response.members.isEmpty {
+                    return response
+                }
+            } catch {
+                lastError = error
+            }
+        }
+        if let lastError { throw lastError }
+        return HouseholdResponse()
+    }
+
+    private func apiCandidateBases() -> [String] {
+        var out: [String] = []
+        func append(_ raw: String?) {
+            guard let raw, !raw.isEmpty else { return }
+            let norm = ServerURL.normalize(raw)
+            if !out.contains(norm) { out.append(norm) }
+        }
+        append(preferences.externalServerURL)
+        if let local = ServerEndpointResolver.effectiveLocalURL(preferences.localServerURL) {
+            append(local)
+        }
+        if let current = api.currentBaseURL {
+            append(current)
+        }
+        return out
+    }
+
+    private func fetchAcrossBases<T>(_ fetch: () async throws -> T) async throws -> T {
+        var lastError: Error?
+        for base in apiCandidateBases() {
+            api.setBaseURL(base)
+            resolvedBaseURL = base
+            do {
+                return try await fetch()
+            } catch {
+                lastError = error
+            }
+        }
+        if let lastError { throw lastError }
+        try await ensureAPI()
+        return try await fetch()
     }
 
     func createMember(name: String, role: String) async throws -> HouseholdMember {
@@ -480,6 +688,19 @@ final class BockMediaRepository: ObservableObject {
         return ServerURL.streamURL(base: base, filepath: path)
     }
 
+    func trackYear(path: String) async -> Int? {
+        guard !path.isEmpty else { return nil }
+        if let cached = trackYearCache[path] { return cached }
+        do {
+            try await ensureAPI()
+            if let year = try await api.trackMeta(path: path).year {
+                trackYearCache[path] = year
+                return year
+            }
+        } catch {}
+        return nil
+    }
+
     func lyrics(
         path: String,
         durationSec: Int? = nil,
@@ -510,6 +731,175 @@ final class BockMediaRepository: ObservableObject {
         }
     }
 
+    private func musicVideoStreamKey(videoId: String, lowBandwidth: Bool) -> String {
+        "\(videoId.trimmingCharacters(in: .whitespacesAndNewlines))|\(lowBandwidth ? "m" : "d")"
+    }
+
+    func musicVideo(
+        title: String,
+        artist: String? = nil,
+        durationSec: Int? = nil,
+        lowBandwidth: Bool = false
+    ) async -> MusicVideoResponse? {
+        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return nil }
+        let key = "\(artist?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "")|\(t.lowercased())|\(durationSec ?? 0)"
+        if let cached = musicVideoCache[key] { return MusicVideoResponse(videoId: cached) }
+        do {
+            try await ensureAPI()
+            let resp = try await api.musicVideo(
+                title: t,
+                artist: artist,
+                durationSec: durationSec,
+                lowBandwidth: lowBandwidth
+            )
+            if let id = resp.videoId?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty {
+                musicVideoCache[key] = id
+            }
+            return resp
+        } catch {
+            return nil
+        }
+    }
+
+    private func musicVideoPlayWithReason(
+        videoId: String,
+        lowBandwidth: Bool = false,
+        waitSec: Int? = nil
+    ) async -> MusicVideoPlayResponse? {
+        let id = videoId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty else { return nil }
+        do {
+            try await ensureAPI()
+            return try await api.musicVideoPlay(videoId: id, mobile: lowBandwidth, waitSec: waitSec)
+        } catch let error as BockAPIError {
+            if case .httpStatus(_, let body) = error,
+               let body,
+               let data = body.data(using: .utf8),
+               let resp = try? JSONCoding.decode(MusicVideoPlayResponse.self, from: data) {
+                return resp
+            }
+            return MusicVideoPlayResponse(ready: false, reason: error.localizedDescription)
+        } catch {
+            return MusicVideoPlayResponse(ready: false, reason: error.localizedDescription)
+        }
+    }
+
+    func prepareMusicVideoForTrack(
+        title: String,
+        artist: String? = nil,
+        durationSec: Int? = nil,
+        baseUrl: String,
+        lowBandwidth: Bool = false
+    ) async -> MusicVideoPrepareResult {
+        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else {
+            return MusicVideoPrepareResult(videoId: nil, playUrl: nil, error: "Missing track title")
+        }
+        let key = "\(artist?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "")|\(t.lowercased())|\(durationSec ?? 0)"
+        if let cachedId = musicVideoCache[key] {
+            let streamKey = musicVideoStreamKey(videoId: cachedId, lowBandwidth: lowBandwidth)
+            if let cachedUrl = musicVideoStreamUrlCache[streamKey], let url = URL(string: cachedUrl) {
+                return MusicVideoPrepareResult(videoId: cachedId, playUrl: url, error: nil)
+            }
+        }
+        let wait = lowBandwidth ? 25 : 8
+        do {
+            try await ensureAPI()
+            let resp = try await api.musicVideo(
+                title: t,
+                artist: artist,
+                durationSec: durationSec,
+                lowBandwidth: lowBandwidth,
+                waitSec: wait
+            )
+            guard let id = resp.videoId?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty else {
+                return MusicVideoPrepareResult(videoId: nil, playUrl: nil, error: "No music video found for this track")
+            }
+            musicVideoCache[key] = id
+            if resp.streamReady == true {
+                let urlString = resolveMusicVideoPlayUrlFromPath(base: baseUrl, playUrl: resp.playUrl)
+                    ?? (lowBandwidth ? nil : musicVideoProxyPlayUrl(base: baseUrl, videoId: id, lowBandwidth: lowBandwidth))
+                if let urlString, let url = URL(string: urlString) {
+                    musicVideoStreamUrlCache[musicVideoStreamKey(videoId: id, lowBandwidth: lowBandwidth)] = urlString
+                    return MusicVideoPrepareResult(videoId: id, playUrl: url, error: nil)
+                }
+                if lowBandwidth {
+                    let reason = resp.streamReason?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    return MusicVideoPrepareResult(
+                        videoId: id,
+                        playUrl: nil,
+                        error: reason?.isEmpty == false ? reason : "Video stream not ready on cellular"
+                    )
+                }
+            }
+            if resp.streamReady == false {
+                let reason = resp.streamReason?.trimmingCharacters(in: .whitespacesAndNewlines)
+                return MusicVideoPrepareResult(
+                    videoId: id,
+                    playUrl: nil,
+                    error: reason?.isEmpty == false ? reason : "Video stream not ready on server"
+                )
+            }
+            let prepared = await prepareMusicVideoStream(videoId: id, baseUrl: baseUrl, lowBandwidth: lowBandwidth)
+            return MusicVideoPrepareResult(videoId: id, playUrl: prepared.url, error: prepared.error)
+        } catch {
+            return MusicVideoPrepareResult(videoId: nil, playUrl: nil, error: "Could not reach the server")
+        }
+    }
+
+    func prepareMusicVideoStream(
+        videoId: String,
+        baseUrl: String,
+        lowBandwidth: Bool = false
+    ) async -> (url: URL?, error: String?) {
+        let id = videoId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty else { return (nil, "Missing video id") }
+        let streamKey = musicVideoStreamKey(videoId: id, lowBandwidth: lowBandwidth)
+        if let cached = musicVideoStreamUrlCache[streamKey], let url = URL(string: cached) {
+            return (url, nil)
+        }
+        let wait = lowBandwidth ? 25 : 8
+        guard let play = await musicVideoPlayWithReason(
+            videoId: id,
+            lowBandwidth: lowBandwidth,
+            waitSec: wait
+        ) else {
+            return (nil, "Could not reach the server")
+        }
+        if !play.ready {
+            let reason = play.reason?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (nil, reason?.isEmpty == false ? reason : "Video stream not ready on server")
+        }
+        let proxyFallback = lowBandwidth ? nil : musicVideoProxyPlayUrl(base: baseUrl, videoId: id, lowBandwidth: lowBandwidth)
+        guard let urlString = resolveMusicVideoPlayUrl(base: baseUrl, resp: play) ?? proxyFallback,
+              let url = URL(string: urlString) else {
+            return (nil, "Missing video stream URL")
+        }
+        musicVideoStreamUrlCache[streamKey] = urlString
+        return (url, nil)
+    }
+
+    func resolveMusicVideoPlayUrl(base: String, resp: MusicVideoPlayResponse) -> String? {
+        resolveMusicVideoPlayUrlFromPath(base: base, playUrl: resp.playUrl)
+    }
+
+    func resolveMusicVideoPlayUrlFromPath(base: String, playUrl: String?) -> String? {
+        guard let raw = playUrl?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
+        if raw.hasPrefix("http://") || raw.hasPrefix("https://") { return raw }
+        return ServerURL.normalize(base) + raw
+    }
+
+    func musicVideoProxyPlayUrl(base: String, videoId: String, lowBandwidth: Bool = false) -> String? {
+        let id = videoId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let root = ServerURL.normalize(base)
+        guard !id.isEmpty, !root.isEmpty else { return nil }
+        if lowBandwidth {
+            return "\(root)/api/music-video/\(id)/proxy?mobile=1"
+        }
+        return "\(root)/api/music-video/\(id)/proxy"
+    }
+
     func playOnDevice(
         device: String,
         kind: String,
@@ -529,8 +919,7 @@ final class BockMediaRepository: ObservableObject {
     }
 
     func automations() async throws -> AutomationsResponse {
-        try await ensureAPI()
-        return try await api.automations()
+        try await fetchAcrossBases { try await api.automations() }
     }
 
     func resolvePlaylistId(_ name: String) async -> String? {
@@ -541,6 +930,19 @@ final class BockMediaRepository: ObservableObject {
     func deviceControl(deviceId: String, deviceName: String, serial: String?, action: String) async throws -> PlayResponse {
         try await ensureAPI()
         var body: [String: Any] = ["deviceId": deviceId, "device": deviceName, "action": action]
+        if let serial { body["serial"] = serial }
+        return try await api.alexaRemoteControl(body: body)
+    }
+
+    func seekQueueIndex(deviceId: String, deviceName: String, serial: String?, relativeIndex: Int) async throws -> PlayResponse {
+        try await ensureAPI()
+        var body: [String: Any] = [
+            "deviceId": deviceId,
+            "device": deviceName,
+            "action": "seek_queue_index",
+            "index": relativeIndex,
+            "relative": true,
+        ]
         if let serial { body["serial"] = serial }
         return try await api.alexaRemoteControl(body: body)
     }
@@ -651,6 +1053,16 @@ final class BockMediaRepository: ObservableObject {
             "maxTracks": maxTracks,
             "save": save,
         ])
+    }
+
+    func listenAgentStatus() async throws -> MixMuseStatusResponse {
+        try await ensureAPI()
+        return try await api.listenAgentStatus()
+    }
+
+    func listenAgentPlay(prompt: String) async throws -> ListenAgentResponse {
+        try await ensureAPI()
+        return try await api.listenAgentPlay(body: ["prompt": prompt])
     }
 
     func mixMuseSimilar(seedKind: String, path: String? = nil, album: String? = nil,
@@ -782,9 +1194,13 @@ final class BockMediaRepository: ObservableObject {
         return try await api.identifyStatus()
     }
 
-    func testDevice(serial: String) async throws {
+    func testDevice(serial: String, name: String? = nil) async throws {
         try await ensureAPI()
-        _ = try await api.testDevice(body: ["serial": serial])
+        var body: [String: Any] = ["serial": serial]
+        if let name, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            body["name"] = name
+        }
+        _ = try await api.testDevice(body: body)
     }
 
     func createDeviceGroup(name: String, serials: [String]) async throws {
@@ -914,6 +1330,16 @@ final class BockMediaRepository: ObservableObject {
         return nil
     }
 
+    func artistDetail(name: String) async throws -> ArtistDetailResponse {
+        try await ensureAPI()
+        return try await api.artistDetail(name: name)
+    }
+
+    func musicVideoRelated(artist: String, limit: Int = 12) async throws -> MusicVideoRelatedResponse {
+        try await ensureAPI()
+        return try await api.musicVideoRelated(artist: artist, limit: limit)
+    }
+
     func resolveLibraryArtUrl(for item: LibraryItem) async -> URL? {
         if let path = item.artPath, let str = await artworkURL(for: path), let url = URL(string: str) {
             return url
@@ -939,6 +1365,15 @@ final class BockMediaRepository: ObservableObject {
                let str = await artworkURL(for: path) {
                 return URL(string: str)
             }
+        case .song(let path, _):
+            if let str = await artworkURL(for: path) {
+                return URL(string: str)
+            }
+        case .playlist(let id, _):
+            if let path = try? await playlistCoverPath(id: id),
+               let str = await artworkURL(for: path) {
+                return URL(string: str)
+            }
         default:
             break
         }
@@ -951,6 +1386,16 @@ final class BockMediaRepository: ObservableObject {
             return explicit
         }
         return ActiveProfileStore.activeMemberId()
+    }
+
+    private func ratingsScope() -> (String?, String?) {
+        let memberId = scopedMember(nil)
+        let clientId = ClientIdStore.clientId().trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank
+        return (memberId, clientId)
+    }
+
+    private func ratingCacheKey(kind: RatingKind, id: String) -> String {
+        "\(kind.rawValue):\(id.trimmingCharacters(in: .whitespacesAndNewlines))"
     }
 }
 

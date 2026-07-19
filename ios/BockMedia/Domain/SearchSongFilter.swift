@@ -4,11 +4,19 @@ enum SearchSongFilter {
     static func filter(query: String, songs: [SearchHit]) -> [SearchHit] {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard q.count >= 2 else { return [] }
-        return songs.filter { matchesSearchSongTitle(q: q, title: $0.title, album: $0.album, artist: $0.artist) }
+        return songs.filter { matchesSearchSongTitle(q: q, title: $0.title, album: $0.album, artist: $0.artist, genre: $0.genre) }
     }
 
-    static func matchesSearchSongTitle(q: String, title: String?, album: String?, artist: String? = nil) -> Bool {
+    static func genreMatchesQuery(q: String, name: String?) -> Bool {
+        if SearchPrefixMatch.fieldMatchesQuery(q: q, text: name) { return true }
+        let qc = SearchPrefixMatch.compact(q)
+        let nc = SearchPrefixMatch.compact(name ?? "")
+        return qc.count >= 2 && nc.contains(qc)
+    }
+
+    static func matchesSearchSongTitle(q: String, title: String?, album: String?, artist: String? = nil, genre: String? = nil) -> Bool {
         if SearchPrefixMatch.fieldMatchesQuery(q: q, text: artist) { return true }
+        if genreMatchesQuery(q: q, name: genre) { return true }
         guard SearchPrefixMatch.fieldMatchesQuery(q: q, text: title) else { return false }
         let tl = title?.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let al = album?.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -54,6 +62,17 @@ enum SearchPrefixMatch {
     }
 
     static func fieldMatchesQuery(q: String, text: String?) -> Bool {
+        if fieldMatchesQueryStrict(q: q, text: text) { return true }
+        let trimmed = q.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard compact(trimmed).count >= 3 else { return false }
+        for back in 1...2 where trimmed.count > back {
+            let shorter = String(trimmed.dropLast(back)).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !shorter.isEmpty, fieldMatchesQueryStrict(q: shorter, text: text) { return true }
+        }
+        return false
+    }
+
+    static func fieldMatchesQueryStrict(q: String, text: String?) -> Bool {
         let qc = compact(q)
         guard !qc.isEmpty, let text, !text.isEmpty else { return false }
         let tc = compact(text)

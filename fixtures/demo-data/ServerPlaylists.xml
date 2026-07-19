@@ -1,2 +1,94 @@
-<?xml version='1.0' encoding='utf-8'?>
-<ArrayOfEntry><Entry><Key><ID>pl-road-trip</ID><Name>Road Trip Demo</Name><SourceID>/Users/andymac/Documents/GitHub/bock-media/fixtures/demo-data/playlists/road-trip.m3u</SourceID></Key></Entry><Entry><Key><ID>pl-daily-mix</ID><Name>Daily Mix Demo</Name><SourceID>/Users/andymac/Documents/GitHub/bock-media/fixtures/demo-data/playlists/daily-mix.m3u</SourceID></Key></Entry><Entry><Key><ID>pl-focus</ID><Name>Focus Playlist</Name><SourceID>/Users/andymac/Documents/GitHub/bock-media/fixtures/demo-data/playlists/focus.m3u</SourceID></Key></Entry></ArrayOfEntry>
+<?xml version="1.0" encoding="utf-8"?>
+<ServerPlaylists>
+<Entry>
+ <Key>
+  <Name>Morning Coffee</Name>
+  <ID>bcafcb26-365a-59a8-b080-7bf6f250c160</ID>
+  <TrackCount>24</TrackCount>
+  <Shuffle>false</Shuffle>
+  <Loop>false</Loop>
+  <CreateDate>2025-12-10T20:45:29.084421</CreateDate>
+  <LastUsed>2026-06-27T20:45:29.084421</LastUsed>
+  <SourceID>demo</SourceID>
+  <IsAudioBook>false</IsAudioBook>
+ </Key>
+</Entry>
+<Entry>
+ <Key>
+  <Name>Road Trip</Name>
+  <ID>a18da95a-c0c3-5bcf-a21c-545799f0ffaa</ID>
+  <TrackCount>58</TrackCount>
+  <Shuffle>true</Shuffle>
+  <Loop>false</Loop>
+  <CreateDate>2025-12-22T20:45:29.084421</CreateDate>
+  <LastUsed>2026-06-26T20:45:29.084421</LastUsed>
+  <SourceID>demo</SourceID>
+  <IsAudioBook>false</IsAudioBook>
+ </Key>
+</Entry>
+<Entry>
+ <Key>
+  <Name>Focus Flow</Name>
+  <ID>717525f3-8c09-544d-97fb-fd97c9bce1b8</ID>
+  <TrackCount>31</TrackCount>
+  <Shuffle>false</Shuffle>
+  <Loop>false</Loop>
+  <CreateDate>2026-01-03T20:45:29.084421</CreateDate>
+  <LastUsed>2026-06-26T20:45:29.084421</LastUsed>
+  <SourceID>demo</SourceID>
+  <IsAudioBook>false</IsAudioBook>
+ </Key>
+</Entry>
+<Entry>
+ <Key>
+  <Name>Late Night Jazz</Name>
+  <ID>97c96cc3-aaa0-5045-a3cf-475377fb269e</ID>
+  <TrackCount>18</TrackCount>
+  <Shuffle>false</Shuffle>
+  <Loop>false</Loop>
+  <CreateDate>2026-01-15T20:45:29.084421</CreateDate>
+  <LastUsed>2026-06-22T20:45:29.084421</LastUsed>
+  <SourceID>demo</SourceID>
+  <IsAudioBook>false</IsAudioBook>
+ </Key>
+</Entry>
+<Entry>
+ <Key>
+  <Name>Workout Energy</Name>
+  <ID>45310cbb-dde5-5d1a-8166-4dbc6de4f96f</ID>
+  <TrackCount>42</TrackCount>
+  <Shuffle>true</Shuffle>
+  <Loop>false</Loop>
+  <CreateDate>2026-01-27T20:45:29.084421</CreateDate>
+  <LastUsed>2026-06-19T20:45:29.084421</LastUsed>
+  <SourceID>demo</SourceID>
+  <IsAudioBook>false</IsAudioBook>
+ </Key>
+</Entry>
+<Entry>
+ <Key>
+  <Name>Sunday Chill</Name>
+  <ID>76e405db-d663-557d-be3e-d8c6f4676482</ID>
+  <TrackCount>27</TrackCount>
+  <Shuffle>false</Shuffle>
+  <Loop>false</Loop>
+  <CreateDate>2026-02-08T20:45:29.084421</CreateDate>
+  <LastUsed>2026-06-27T20:45:29.084421</LastUsed>
+  <SourceID>demo</SourceID>
+  <IsAudioBook>false</IsAudioBook>
+ </Key>
+</Entry>
+<Entry>
+ <Key>
+  <Name>90s Throwback</Name>
+  <ID>0bc959ee-1d96-5bd9-9fcf-d82dcb77d884</ID>
+  <TrackCount>36</TrackCount>
+  <Shuffle>true</Shuffle>
+  <Loop>false</Loop>
+  <CreateDate>2026-02-20T20:45:29.084421</CreateDate>
+  <LastUsed>2026-06-22T20:45:29.084421</LastUsed>
+  <SourceID>demo</SourceID>
+  <IsAudioBook>false</IsAudioBook>
+ </Key>
+</Entry>
+</ServerPlaylists>

@@ -6,7 +6,7 @@ struct ArtistsView: View {
     @State private var loading = true
 
     var body: some View {
-        browseList(loading: loading, empty: "No artists") {
+        browseList(loading: loading, empty: "No artists", bodyTag: BockTestTags.artistsListBody) {
             ForEach(items) { artist in
                 NavigationLink(value: LibraryRoute.albums(artist: artist.name)) {
                     HStack {
@@ -44,7 +44,7 @@ struct AlbumsView: View {
     @State private var acquireSeed: DiscoverySeed?
 
     var body: some View {
-        browseList(loading: loading && items.isEmpty, empty: "No albums") {
+        browseList(loading: loading && items.isEmpty, empty: "No albums", bodyTag: BockTestTags.albumsListBody) {
             ForEach(items) { album in
                 NavigationLink(value: LibraryRoute.songs(artist: album.artist, album: album.name)) {
                     HStack(spacing: 12) {
@@ -74,7 +74,7 @@ struct AlbumsView: View {
                 }
             }
             if loadingMore {
-                HStack { Spacer(); ProgressView(); Spacer() }
+                HStack { Spacer(); BockProgressIndicator(size: 32); Spacer() }
                     .listRowBackground(Color.clear)
             } else if items.count < total {
                 Color.clear
@@ -136,7 +136,7 @@ struct SongsView: View {
     @State private var addToRoom: AddToRoomContext?
 
     var body: some View {
-        browseList(loading: loading && items.isEmpty, empty: "No songs") {
+        browseList(loading: loading && items.isEmpty, empty: "No songs", bodyTag: BockTestTags.songsListBody) {
             ForEach(items) { song in
                 HStack {
                     VStack(alignment: .leading) {
@@ -183,7 +183,7 @@ struct SongsView: View {
                 .listRowBackground(BockColors.surfaceVariant.opacity(0.4))
             }
             if loadingMore {
-                HStack { Spacer(); ProgressView(); Spacer() }
+                HStack { Spacer(); BockProgressIndicator(size: 32); Spacer() }
             } else if items.count < total {
                 Color.clear.frame(height: 1).onAppear { Task { await loadMore() } }
             }
@@ -269,6 +269,7 @@ private struct AlbumRowArt: View {
 private func browseList<Content: View>(
     loading: Bool,
     empty: String,
+    bodyTag: String? = nil,
     @ViewBuilder content: () -> Content
 ) -> some View {
     if loading {
@@ -278,6 +279,7 @@ private func browseList<Content: View>(
         List { content() }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
+            .accessibilityIdentifier(bodyTag ?? "")
     }
 }
 

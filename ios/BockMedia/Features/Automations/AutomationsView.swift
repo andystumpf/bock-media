@@ -3,8 +3,9 @@ import SwiftUI
 struct AutomationsView: View {
     @ObservedObject var appState: AppState
     @State private var items: [AutomationItem] = []
-    @State private var loading = false
+    @State private var loading = AutomationSessionCache.peek() == nil
     @State private var remoteOk = false
+    @State private var loadError: String?
     @State private var showCreate = false
     @State private var editItem: AutomationItem?
 
@@ -12,7 +13,13 @@ struct AutomationsView: View {
         ZStack(alignment: .bottomTrailing) {
             VStack(alignment: .leading, spacing: 0) {
                 TabScreenHeader(title: "Automations")
-                if !remoteOk {
+                if let loadError {
+                    Text(loadError)
+                        .font(.subheadline)
+                        .foregroundStyle(BockColors.muted)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 8)
+                } else if !remoteOk {
                     Text("Alexa remote required. Sign in via Settings → Re-login to Alexa.")
                         .font(.subheadline)
                         .foregroundStyle(BockColors.muted)
@@ -20,11 +27,15 @@ struct AutomationsView: View {
                         .padding(.bottom, 8)
                 }
                 if loading {
-                    LoadingBox(logoSize: 48)
+                    LoadingBox(size: 48)
                         .padding()
                 } else if items.isEmpty {
                     ContentUnavailableView {
                         Label("No automations", icon: .schedule, size: 40)
+                    } description: {
+                        if loadError == nil {
+                            Text("Pull to refresh after adding automations on another device.")
+                        }
                     }
                 } else {
                     List(items) { item in
@@ -48,7 +59,7 @@ struct AutomationsView: View {
                             Button(role: .destructive) {
                                 Task {
                                     try? await appState.repository.deleteAutomation(item.id)
-                                    await load()
+                                    await load(force: true)
                                 }
                             } label: {
                                 Text("Delete")
@@ -60,6 +71,7 @@ struct AutomationsView: View {
                     .scrollContentBackground(.hidden)
                 }
             }
+            .accessibilityIdentifier(BockTestTags.automationsContent)
 
             if remoteOk {
                 Button {
@@ -76,12 +88,15 @@ struct AutomationsView: View {
                 .padding(20)
             }
         }
-        .task { await load() }
-        .refreshable { await load() }
+        .task(id: appState.profileChangeRevision) { await load(force: true) }
+        .onReceive(NotificationCenter.default.publisher(for: ClientPrefsSyncNotifications.prefsApplied)) { _ in
+            Task { await load(force: true) }
+        }
+        .refreshable { await load(force: true) }
         .sheet(isPresented: $showCreate) {
             AutomationFormSheet(appState: appState, onDismiss: { showCreate = false }, onSaved: {
                 showCreate = false
-                Task { await load() }
+                Task { await load(force: true) }
             })
         }
         .sheet(item: $editItem) { item in
@@ -91,17 +106,35 @@ struct AutomationsView: View {
                 onDismiss: { editItem = nil },
                 onSaved: {
                     editItem = nil
-                    Task { await load() }
+                    Task { await load(force: true) }
                 }
             )
         }
     }
 
-    private func load() async {
-        loading = true
+    private func load(force: Bool = false) async {
+        if force {
+            AutomationSessionCache.invalidate()
+        } else if let cached = AutomationSessionCache.getIfFresh() {
+            items = cached.0
+            remoteOk = cached.1
+            loadError = nil
+        }
+        loading = items.isEmpty
         defer { loading = false }
-        items = (try? await appState.repository.automations())?.items ?? []
-        remoteOk = appState.remoteOk
+        async let statusTask = appState.repository.alexaRemoteStatus()
+        do {
+            let loaded = try await appState.repository.automations()
+            items = loaded.items
+            loadError = nil
+            let status = try? await statusTask
+            remoteOk = status.map { $0.configured && ($0.authenticated ?? false) } ?? remoteOk
+            AutomationSessionCache.put(items: loaded.items, remoteOk: remoteOk)
+        } catch {
+            loadError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            if items.isEmpty { remoteOk = false }
+            _ = try? await statusTask
+        }
     }
 
     private func formatDays(_ days: [Int]) -> String {

@@ -15,8 +15,7 @@
   const LIB_SESSION_TTL_MS = 10 * 60 * 1000;
   const PLAYLIST_TTL_MS = 10 * 60 * 1000;
   const SEARCH_BROWSE_TTL_MS = 10 * 60 * 1000;
-  const FEED_LAYOUT_VERSION = 1;
-  const MOOD_SECTION_MIN = 8;
+  const FEED_LAYOUT_VERSION = 2;
 
   let homeMem = null;
   let lastHomeLoadMs = 0;
@@ -24,12 +23,22 @@
   let lastLibLoadMs = 0;
   let playlistsMem = null;
   let searchBrowseMem = null;
+  let sessionPlaylistsByMember = {};
+  let sessionPlaylistsAt = 0;
+  let sessionHistory = null;
+  let sessionHistoryAt = 0;
+  let sessionDashboard = null;
+  let sessionDashboardAt = 0;
+  let sessionAnalytics = null;
+  let sessionAnalyticsAt = 0;
+  let homeRefreshInFlight = false;
 
   function now() { return Date.now(); }
 
   function hasCurrentHomeLayout(feed) {
     if (!feed || !feed.sections || !feed.sections.length) return false;
-    return feed.sections.filter((s) => s.kind === 'Mood').length >= MOOD_SECTION_MIN;
+    return feed.sections.some((s) => s.id === 'recently-created')
+      && feed.sections.some((s) => s.id === 'more-playlists' || s.id === 'browse-genres' || s.id === 'recent-playlists');
   }
 
   function peekHome() {
@@ -52,8 +61,69 @@
   }
 
   function shouldSkipHomeReload() {
-    if (!homeMem || !hasCurrentHomeLayout(homeMem.feed)) return false;
-    return now() - lastHomeLoadMs < HOME_SESSION_TTL_MS;
+    return false;
+  }
+
+  function peekSessionPlaylists(memberKey) {
+    if (!sessionPlaylistsByMember[memberKey || '']) return null;
+    if (now() - sessionPlaylistsAt > PLAYLIST_TTL_MS) return null;
+    return sessionPlaylistsByMember[memberKey || ''];
+  }
+
+  function putSessionPlaylists(memberKey, items) {
+    if (!items || !items.length) return;
+    sessionPlaylistsByMember[memberKey || ''] = items;
+    sessionPlaylistsAt = now();
+    setPlaylists(items);
+  }
+
+  function peekSessionHistory() {
+    if (!sessionHistory || now() - sessionHistoryAt > PLAYLIST_TTL_MS) return null;
+    return sessionHistory;
+  }
+
+  function putSessionHistory(data) {
+    sessionHistory = data;
+    sessionHistoryAt = now();
+  }
+
+  function peekSessionDashboard() {
+    if (!sessionDashboard || now() - sessionDashboardAt > PLAYLIST_TTL_MS) return null;
+    return sessionDashboard;
+  }
+
+  function putSessionDashboard(data) {
+    sessionDashboard = data;
+    sessionDashboardAt = now();
+  }
+
+  function peekSessionAnalytics() {
+    if (!sessionAnalytics || now() - sessionAnalyticsAt > PLAYLIST_TTL_MS) return null;
+    return sessionAnalytics;
+  }
+
+  function putSessionAnalytics(data) {
+    sessionAnalytics = data;
+    sessionAnalyticsAt = now();
+  }
+
+  function invalidateSessionData() {
+    sessionPlaylistsByMember = {};
+    sessionPlaylistsAt = 0;
+    sessionHistory = null;
+    sessionHistoryAt = 0;
+    sessionDashboard = null;
+    sessionDashboardAt = 0;
+    sessionAnalytics = null;
+    sessionAnalyticsAt = 0;
+  }
+
+  function markHomeRefreshInFlight(v) {
+    homeRefreshInFlight = !!v;
+  }
+
+  function isHomeRefreshInFlight() {
+    return homeRefreshInFlight;
   }
 
   function saveHomeToDisk(feed, covers) {
@@ -107,6 +177,7 @@
         smart: data.smart || [],
         folders: data.folders || [],
         genres: data.genres || [],
+        covers: data.covers || {},
       }));
     } catch { /* quota */ }
   }
@@ -117,6 +188,8 @@
 
   function shouldSkipLibraryReload() {
     if (!libMem || !libMem.data) return false;
+    const covers = libMem.data.covers;
+    if (!covers || !Object.keys(covers).length) return false;
     return now() - lastLibLoadMs < LIB_SESSION_TTL_MS;
   }
 
@@ -132,6 +205,7 @@
         smart: dto.smart || [],
         folders: dto.folders || [],
         genres: dto.genres || [],
+        covers: dto.covers || {},
       };
       if (!data.playlists.length) return null;
       libMem = { data, at: now() };
@@ -222,6 +296,17 @@
     loadHomeFromDisk,
     hydrateHomeFromDisk,
     invalidateHome,
+    invalidateSessionData,
+    peekSessionPlaylists,
+    putSessionPlaylists,
+    peekSessionHistory,
+    putSessionHistory,
+    peekSessionDashboard,
+    putSessionDashboard,
+    peekSessionAnalytics,
+    putSessionAnalytics,
+    markHomeRefreshInFlight,
+    isHomeRefreshInFlight,
     peekLibrary,
     putLibrary,
     markLibraryLoaded,

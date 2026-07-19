@@ -178,7 +178,14 @@ class TestVisibility:
 
 # ─────────────────────────── request queue (P3) ──────────────────────────────
 
-class TestRequests:
+class TestHomeProfileScoping:
+    def test_home_accepts_member_query(self, client, isolated_paths):
+        """Home feed accepts memberId without error — household library stays shared."""
+        rv = client.get('/api/home?memberId=p-parent')
+        assert rv.status_code == 200
+        data = rv.get_json()
+        assert isinstance(data, dict)
+
     def test_consume_fifo(self, isolated_paths):
         """approved requests are consumed in order; queued ones are skipped"""
         server._save_requests({'rooms': {'echo-1': {'queue': [

@@ -14,7 +14,7 @@ your `[YEAR] Album Name` album column in the DB).
 ## 1. Build a work queue
 
 ```bash
-cd ~/Documents/github/ourMedia
+cd ~/~/bock-media
 python3 scripts/picard_queue.py --fast    # recommended on large/NFS libraries
 ```
 
@@ -70,7 +70,7 @@ Work in **folders**, not all 46k files at once — Picard and MusicBrainz rate l
 # Example: Flatpak (often newer than apt)
 flatpak install flathub org.musicbrainz.Picard
 flatpak run org.musicbrainz.Picard -e "LOAD /path/to/your/music/SomeArtist" \
-  -e FROM_FILE ~/Documents/github/ourMedia/scripts/picard/commands.txt
+  -e FROM_FILE ~/~/bock-media/scripts/picard/commands.txt
 ```
 
 See `scripts/picard/commands.txt` for the command sequence.
@@ -80,7 +80,7 @@ See `scripts/picard/commands.txt` for the command sequence.
 After each batch (or when done for the day):
 
 ```bash
-cd ~/Documents/github/ourMedia
+cd ~/~/bock-media
 chmod +x scripts/after_picard.sh
 ./scripts/after_picard.sh
 ```

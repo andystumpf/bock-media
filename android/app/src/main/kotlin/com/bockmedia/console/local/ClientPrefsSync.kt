@@ -8,8 +8,11 @@ import com.bockmedia.console.data.local.AppPreferences
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.HomeFeedCache
 import com.bockmedia.console.domain.model.HomeLoadCoordinator
-import com.bockmedia.console.domain.model.HomeSectionKind
+import com.bockmedia.console.domain.model.RESUME_PULL_DEBOUNCE_MS
+import com.bockmedia.console.domain.model.shouldRefreshHomeForProfile
+import com.bockmedia.console.domain.model.shouldSkipResumePull
 import com.bockmedia.console.domain.model.HomeTileEngagement
+import com.bockmedia.console.local.HomeSectionPinsStore
 import com.bockmedia.console.domain.model.LibrarySort
 import com.bockmedia.console.domain.model.LibrarySessionCache
 import com.bockmedia.console.domain.model.LibraryViewMode
@@ -41,6 +44,7 @@ object ClientPrefsSync {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var pushJob: Job? = null
     @Volatile private var pulling = false
+    @Volatile private var lastPullCompletedMs: Long = 0L
 
     private val _profileChangeRevision = MutableStateFlow(0)
     val profileChangeRevision: StateFlow<Int> = _profileChangeRevision.asStateFlow()
@@ -57,6 +61,13 @@ object ClientPrefsSync {
         }
     }
 
+    fun markBootPullCompleted() {
+        lastPullCompletedMs = System.currentTimeMillis()
+    }
+
+    fun shouldSkipResumePull(): Boolean =
+        shouldSkipResumePull(lastPullCompletedMs, System.currentTimeMillis(), RESUME_PULL_DEBOUNCE_MS)
+
     suspend fun pullAndApply(context: Context, profileSwitch: Boolean = false) {
         if (pulling) return
         pulling = true
@@ -65,10 +76,26 @@ object ClientPrefsSync {
             val repository = app.repository
             val prefs = app.preferences
             val clientId = ClientIdStore.clientId(context)
-            rebindFromPhone(context, repository, clientId)
-            val memberId = ActiveProfileStore.activeMemberId(context)
-            val remote = repository.clientPrefs(clientId, memberId)
+            val profileAdjusted = runCatching {
+                syncHouseholdProfile(context, repository, clientId)
+            }.getOrElse { return }
+            var memberId = ActiveProfileStore.activeMemberId(context)
+            val remote = runCatching { repository.clientPrefs(clientId, memberId) }
+                .getOrElse { return }
+            val merged = if (profileSwitch) remote.memberPrefs else remote.merged
+            if (profileAdjusted && memberId.isNullOrBlank() &&
+                !ActiveProfileStore.hasProfileChoice(context)
+            ) {
+                merged["activeMemberId"]?.jsonPrimitive?.content?.trim()?.takeIf { it.isNotBlank() }
+                    ?.let { fromPrefs ->
+                        if (HouseholdStore.memberExists(fromPrefs)) {
+                            ActiveProfileStore.setActiveMember(context, fromPrefs)
+                            memberId = fromPrefs
+                        }
+                    }
+            }
             applyMerged(context, prefs, remote, profileSwitch = profileSwitch)
+            memberId = ActiveProfileStore.activeMemberId(context)
             if (!memberId.isNullOrBlank()) {
                 runCatching {
                     repository.bindClient(
@@ -79,38 +106,90 @@ object ClientPrefsSync {
                 }
             }
             repository.clearRatingsCache()
-            if (profileSwitch || shouldRefreshHomeForProfile(context)) {
+            if (profileSwitch || shouldRefreshHomeForProfile(
+                    !ActiveProfileStore.activeMemberId(context).isNullOrBlank(),
+                    HomeFeedCache.peek(),
+                    HomeFeedCache.peekHasRatedSongs(),
+                )
+            ) {
                 HomeFeedCache.invalidate()
                 HomeLoadCoordinator.resetReloadWindow()
             }
+            lastPullCompletedMs = System.currentTimeMillis()
         } finally {
             pulling = false
         }
+    }
+
+    private suspend fun syncHouseholdProfile(
+        context: Context,
+        repository: BockMediaRepository,
+        clientId: String,
+    ): Boolean {
+        val household = HouseholdStore.refresh(repository)
+        val beforeMember = ActiveProfileStore.activeMemberId(context)
+        rebindFromPhone(context, repository, clientId, household)
+        var changed = reconcileActiveMember(context, household)
+        if (restoreActiveMember(context, household, clientId)) changed = true
+        if (beforeMember != ActiveProfileStore.activeMemberId(context)) changed = true
+        if (changed) bumpProfileRevision()
+        return changed
+    }
+
+    private fun reconcileActiveMember(context: Context, household: com.bockmedia.console.data.api.dto.HouseholdResponse): Boolean {
+        val mid = ActiveProfileStore.activeMemberId(context)?.trim().orEmpty()
+        if (mid.isEmpty() || household.members.any { it.id == mid }) return false
+        ActiveProfileStore.clearStaleMember(context)
+        return true
+    }
+
+    private fun restoreActiveMember(
+        context: Context,
+        household: com.bockmedia.console.data.api.dto.HouseholdResponse,
+        clientId: String,
+    ): Boolean {
+        if (!ActiveProfileStore.activeMemberId(context).isNullOrBlank()) return false
+        val deviceId = clientDeviceId(clientId)
+        val fromBinding = household.clientBindings.firstOrNull { it.clientDeviceId == deviceId }?.memberId
+        if (!fromBinding.isNullOrBlank() && household.members.any { it.id == fromBinding }) {
+            ActiveProfileStore.setActiveMember(context, fromBinding)
+            return true
+        }
+        if (!ActiveProfileStore.hasProfileChoice(context) && household.members.size == 1) {
+            household.members.firstOrNull()?.id?.takeIf { it.isNotBlank() }?.let {
+                ActiveProfileStore.setActiveMember(context, it)
+                return true
+            }
+        }
+        return false
+    }
+
+    private fun clientDeviceId(clientId: String): String {
+        val cid = clientId.trim()
+        return if (cid.isEmpty()) "" else "client-$cid"
     }
 
     private suspend fun rebindFromPhone(
         context: Context,
         repository: BockMediaRepository,
         clientId: String,
+        household: com.bockmedia.console.data.api.dto.HouseholdResponse,
     ) {
         if (!ActiveProfileStore.activeMemberId(context).isNullOrBlank()) return
         val phoneId = InstallIdentity.phoneId(context)
         if (phoneId.isBlank()) return
         val model = android.os.Build.MODEL?.trim().orEmpty()
         val label = if (model.isNotBlank()) "Android · $model" else "This phone"
-        runCatching {
+        val memberId = runCatching {
             repository.connectInstall(phoneId, label, clientId)
+        }.getOrNull()?.trim().orEmpty()
+        if (memberId.isNotBlank() && household.members.any { it.id == memberId }) {
+            ActiveProfileStore.setActiveMember(context, memberId)
         }
     }
 
     /** No-op — profile is chosen explicitly in [ProfilePickerGate] or Family. */
     suspend fun ensureProfileLinked(context: Context): Boolean = false
-
-    private fun shouldRefreshHomeForProfile(context: Context): Boolean {
-        if (ActiveProfileStore.activeMemberId(context).isNullOrBlank()) return false
-        val cached = HomeFeedCache.peek() ?: return false
-        return cached.sections.none { it.kind == HomeSectionKind.RatedSongs }
-    }
 
     suspend fun push(context: Context, memberIdOverride: String? = null) {
         val app = BockMediaApp.get(context)
@@ -171,6 +250,7 @@ object ClientPrefsSync {
         memberId?.let { put("activeMemberId", it) }
         put("searchSelections", encodeSearchSelections(SearchHistoryStore(context).selectionsSync()))
         HomeTileEngagement.exportJson()?.let { put("homeTileEngagement", JsonPrimitive(it)) }
+        HomeSectionPinsStore.exportJson()?.let { put("homeSectionPins", JsonPrimitive(it)) }
         if (!memberId.isNullOrBlank()) {
             LastDeviceStore(context).lastDeviceSync()?.let { put("lastDevice", it) }
             val pinned = PinnedDevicesStore(context).pinnedValuesSync()
@@ -242,6 +322,9 @@ object ClientPrefsSync {
         }
         merged["homeTileEngagement"]?.jsonPrimitive?.content?.let {
             HomeTileEngagement.importJson(it)
+        }
+        merged["homeSectionPins"]?.jsonPrimitive?.content?.let {
+            HomeSectionPinsStore.importJson(it)
         }
         merged["lastDevice"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }?.let {
             LastDeviceStore(context).setLastDevice(it)

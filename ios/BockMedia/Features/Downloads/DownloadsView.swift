@@ -2,6 +2,7 @@ import SwiftUI
 
 struct DownloadsView: View {
     @ObservedObject var appState: AppState
+    var embeddedInTab: Bool = false
     @ObservedObject private var manager = OfflineDownloadManager.shared
     @Environment(\.dismiss) private var dismiss
     @State private var detail: OfflineCollectionStatus?
@@ -9,14 +10,17 @@ struct DownloadsView: View {
     private let store = OfflineDownloadStore()
 
     var body: some View {
-        List {
+        VStack(alignment: .leading, spacing: 0) {
+            if embeddedInTab {
+                TabScreenHeader(title: "Downloads")
+            }
+            List {
             Section {
                 LabeledContent("Storage used", value: formatOfflineBytes(store.bytesOnDisk()))
             }
             let sorted = manager.statuses.values
                 .filter { status in
-                    guard let profileIds = OfflineDownloadSync.visibleCollectionIds() else { return true }
-                    return profileIds.contains(status.manifest.id)
+                    OfflineDownloadSync.visibleCollectionIds().contains(status.manifest.id)
                 }
                 .sorted {
                 if $0.state.sortOrder != $1.state.sortOrder { return $0.state.sortOrder < $1.state.sortOrder }
@@ -39,21 +43,33 @@ struct DownloadsView: View {
                     }
                 }
             }
+            }
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
-        .navigationTitle("Downloads")
+        .navigationTitle(embeddedInTab ? "" : "Downloads")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                Button("Done") { dismiss() }
+            if !embeddedInTab {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
             }
         }
         .onAppear { manager.refresh() }
+        .onChange(of: appState.profileChangeRevision) { _, _ in
+            OfflineDownloadSync.claimOrphansForActiveProfile()
+            manager.refresh()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: ClientPrefsSyncNotifications.prefsApplied)) { _ in
+            OfflineDownloadSync.claimOrphansForActiveProfile()
+            manager.refresh()
+        }
         .refreshable { manager.refresh() }
         .sheet(item: $detail) { status in
             DownloadDetailView(appState: appState, status: status)
         }
+        .accessibilityIdentifier(BockTestTags.downloadsList)
     }
 }
 
@@ -85,7 +101,7 @@ private struct DownloadRow: View {
         case .complete: return "\(count) tracks · \(formatDownloadDate(ms: status.manifest.downloadedAtMs))"
         case .downloading: return "Downloading… \(Int(status.progress * 100))%"
         case .failed: return status.error ?? "Failed"
-        case .idle: return "\(count) tracks"
+        case .idle: return "Queued for download"
         }
     }
 }

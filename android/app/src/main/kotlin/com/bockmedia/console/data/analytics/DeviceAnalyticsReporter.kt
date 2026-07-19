@@ -5,6 +5,7 @@ import android.os.Build
 import com.bockmedia.console.BockMediaApp
 import com.bockmedia.console.domain.model.LocalTrack
 import com.bockmedia.console.media.LocalPlaybackController
+import com.bockmedia.console.local.ActiveProfileStore
 import com.bockmedia.console.local.ClientIdStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -94,6 +95,7 @@ object DeviceAnalyticsReporter {
                     put("platform", "android")
                     put("deviceName", deviceLabel())
                     put("event", event)
+                    ActiveProfileStore.activeMemberId(context)?.let { put("memberId", it) }
                     extra()
                 }
                 app.repository.reportClientEvent(body)

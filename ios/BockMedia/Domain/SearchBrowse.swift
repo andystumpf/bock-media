@@ -33,13 +33,13 @@ enum SearchBrowseLoader {
     private static let historyLimit = 80
 
     static func load(repository: BockMediaRepository) async -> SearchBrowseFeed {
-        async let historyTask = try? await repository.streamHistory(limit: historyLimit)
+        async let historyTask = loadHistory(repository: repository)
         async let analyticsTask = analyticsWithTimeout(repository: repository)
-        async let playlistsTask = try? await repository.playlists(limit: 200)
+        async let playlistsTask = loadPlaylists(repository: repository)
         async let smartTask = try? await repository.smartPlaylists()
         async let genresTask = try? await repository.genres(limit: 16)
         async let newReleasesTask = try? await repository.recentAlbums(limit: 12)
-        async let dashboardTask = try? await repository.dashboardQuick()
+        async let dashboardTask = loadDashboard(repository: repository)
 
         let history = await historyTask?.items ?? []
         let analytics = await analyticsTask
@@ -190,10 +190,12 @@ enum SearchBrowseLoader {
     static func suggestionsFromResponse(_ response: SearchResponse) -> [SearchSuggestion] {
         var out: [SearchSuggestion] = []
         for hit in response.artists.prefix(2) {
-            out.append(SearchSuggestion(kind: .artist, title: hit.name ?? "", subtitle: "Artist", hitId: hit.id, path: hit.path, artist: hit.artist, album: nil))
+            guard let title = hit.displayName, !title.isEmpty else { continue }
+            out.append(SearchSuggestion(kind: .artist, title: title, subtitle: "Artist", hitId: hit.id, path: hit.path, artist: hit.artist, album: nil))
         }
         for hit in response.albums.prefix(2) {
-            out.append(SearchSuggestion(kind: .album, title: hit.name ?? "", subtitle: hit.artist, hitId: hit.id, path: hit.path, artist: hit.artist, album: hit.album))
+            guard let title = hit.displayName, !title.isEmpty else { continue }
+            out.append(SearchSuggestion(kind: .album, title: title, subtitle: hit.artist, hitId: hit.id, path: hit.path, artist: hit.artist, album: hit.album))
         }
         for hit in response.playlists.prefix(2) {
             out.append(SearchSuggestion(kind: .playlist, title: hit.name ?? "", subtitle: "Playlist", hitId: hit.id, path: hit.path, artist: nil, album: nil))
@@ -217,8 +219,25 @@ enum SearchBrowseLoader {
         }
     }
 
+    private static func loadHistory(repository: BockMediaRepository) async -> StreamHistoryResponse? {
+        if let cached = SessionDataStore.peekHistory() { return cached }
+        return try? await repository.streamHistory(limit: historyLimit)
+    }
+
+    private static func loadPlaylists(repository: BockMediaRepository) async -> PlaylistsResponse? {
+        let memberKey = ActiveProfileStore.activeMemberId() ?? ""
+        if let cached = SessionDataStore.peekPlaylists(memberKey: memberKey) { return cached }
+        return try? await repository.playlists(limit: 200)
+    }
+
+    private static func loadDashboard(repository: BockMediaRepository) async -> DashboardQuickResponse? {
+        if let cached = SessionDataStore.peekDashboard() { return cached }
+        return try? await repository.dashboardQuick()
+    }
+
     private static func analyticsWithTimeout(repository: BockMediaRepository) async -> AnalyticsResponse? {
-        await withTaskGroup(of: AnalyticsResponse?.self) { group in
+        if let cached = SessionDataStore.peekAnalytics() { return cached }
+        return await withTaskGroup(of: AnalyticsResponse?.self) { group in
             group.addTask { try? await repository.analytics() }
             group.addTask {
                 try? await Task.sleep(nanoseconds: 4_000_000_000)

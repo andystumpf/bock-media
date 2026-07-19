@@ -32,7 +32,7 @@ struct RoomPolicySheet: View {
         NavigationStack {
             Form {
                 if loading {
-                    ProgressView().tint(BockColors.green)
+                    BockProgressIndicator(size: 32).tint(BockColors.green)
                 } else {
                     Section {
                         Toggle("Enable kid-safe", isOn: $policy.safe)

@@ -37,7 +37,7 @@ enum HomeFeedRules {
         if g.isEmpty { return false }
         if name.localizedCaseInsensitiveContains(g) { return true }
         let tokens = g.split(separator: " ").map(String.init).filter { $0.count > 1 }
-        return tokens.count > 1 && tokens.all { name.localizedCaseInsensitiveContains($0) }
+        return tokens.count > 1 && tokens.allSatisfy { name.localizedCaseInsensitiveContains($0) }
     }
 
     static func bestGenreMixPlaylist(_ all: [PlaylistSummary], genre: String) -> PlaylistSummary? {
@@ -154,6 +154,22 @@ enum HomeFeedRules {
         libraryGenres.first { genreMatchesTheme($0.name, theme: theme) }?.name
     }
 
+    /// Genre label from a synthetic home tile title (e.g. "Classical Era Mix" → "Classical Era").
+    static func mixGenreLabel(_ title: String) -> String? {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasSuffix(" Mix") else { return nil }
+        let genre = String(trimmed.dropLast(" Mix".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        return genre.isEmpty ? nil : genre
+    }
+
+    /// Genre label from a genre-radio tile (e.g. "Jazz Radio" → "Jazz").
+    static func genreRadioLabel(_ displayTitle: String) -> String? {
+        let trimmed = displayTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasSuffix(" Radio") else { return nil }
+        let genre = String(trimmed.dropLast(" Radio".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        return genre.isEmpty ? nil : genre
+    }
+
     static func matchingLibraryGenreForLabel(_ label: String, libraryGenres: [GenreItem]) -> GenreItem? {
         let g = label.trimmingCharacters(in: .whitespacesAndNewlines)
         if g.isEmpty { return nil }
@@ -212,6 +228,46 @@ enum HomeFeedRules {
                 if ls != rs { return ls > rs }
                 return $0.tracks > $1.tracks
             }
+    }
+
+    private static let decadePatterns: [String: [NSRegularExpression]] = {
+        func rx(_ pattern: String) -> NSRegularExpression {
+            try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
+        }
+        return [
+            "60s": [
+                rx(#"\b60'?s\b"#), rx(#"'60s"#), rx(#"\bsixties\b"#),
+                rx(#"\b1960s\b"#), rx(#"\b196[0-9]\b"#),
+            ],
+            "70s": [
+                rx(#"\b70'?s\b"#), rx(#"'70s"#), rx(#"\bseventies\b"#),
+                rx(#"\b1970s\b"#), rx(#"\b197[0-9]\b"#),
+            ],
+            "80s": [
+                rx(#"\b80'?s\b"#), rx(#"'80s"#), rx(#"\beighties\b"#),
+                rx(#"\b1980s\b"#), rx(#"\b198[0-9]\b"#),
+            ],
+            "90s": [
+                rx(#"\b90'?s\b"#), rx(#"'90s"#), rx(#"\bnineties\b"#),
+                rx(#"\b1990s\b"#), rx(#"\b199[0-9]\b"#),
+            ],
+        ]
+    }()
+
+    static func playlistMatchesDecade(_ playlist: PlaylistSummary, decadeId: String) -> Bool {
+        playlistMatchesDecade(playlistSearchText(playlist), decadeId: decadeId)
+    }
+
+    static func playlistMatchesDecade(_ name: String, decadeId: String) -> Bool {
+        guard let patterns = decadePatterns[decadeId] else { return false }
+        let range = NSRange(name.startIndex..<name.endIndex, in: name)
+        return patterns.contains { $0.firstMatch(in: name, options: [], range: range) != nil }
+    }
+
+    static func playlistsForDecadeSection(_ all: [PlaylistSummary], decadeId: String) -> [PlaylistSummary] {
+        all
+            .filter { $0.tracks > 0 && playlistMatchesDecade($0, decadeId: decadeId) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     static func isSpecialHomePlaylistName(_ name: String) -> Bool {

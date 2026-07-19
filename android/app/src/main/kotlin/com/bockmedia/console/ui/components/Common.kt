@@ -21,8 +21,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.bockmedia.console.data.api.dto.AlexaDevice
 import com.bockmedia.console.data.api.dto.DeviceGroup
+import com.bockmedia.console.data.api.dto.PlaylistSummary
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.ui.alexaRemotePlayMessage
 import com.bockmedia.console.ui.util.formatTime12
@@ -72,6 +74,22 @@ fun TabScreenHeader(
         )
         trailing?.invoke(this)
     }
+}
+
+/** Uppercase section label used on browse/detail sub-pages (genres, search, sonic adventure). */
+@Composable
+fun BockDetailSectionHeader(
+    title: String,
+    modifier: Modifier = Modifier,
+) {
+    Text(
+        title.uppercase(),
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        letterSpacing = 1.sp,
+        modifier = modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+    )
 }
 
 /** Matches iOS `ProgressView().tint(BockColors.green)` — thin Spotify-green spinner. */
@@ -244,6 +262,143 @@ fun DeviceSelectField(
                             expanded = false
                         },
                     )
+                }
+            }
+        }
+    }
+}
+
+/** Searchable, scrollable playlist picker for automations, routines, and add-to-playlist flows. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun PlaylistSelectField(
+    playlists: List<PlaylistSummary>,
+    selectedId: String?,
+    selectedName: String?,
+    onSelect: (PlaylistSummary) -> Unit,
+    onClear: () -> Unit,
+    searchQuery: String,
+    onSearchQueryChange: (String) -> Unit,
+    loading: Boolean = false,
+    placeholder: String = "Select playlist…",
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val filtered = remember(playlists, searchQuery) {
+        val q = searchQuery.trim()
+        if (q.isEmpty()) playlists
+        else playlists.filter { it.name.contains(q, ignoreCase = true) }
+    }
+    val showingSelection = selectedId != null && !selectedName.isNullOrBlank()
+
+    Column(modifier.fillMaxWidth()) {
+        BockTextField(
+            value = if (showingSelection && !expanded) selectedName.orEmpty() else searchQuery,
+            onValueChange = { query ->
+                if (showingSelection) onClear()
+                onSearchQueryChange(query)
+                expanded = true
+            },
+            placeholder = placeholder,
+            leadingIcon = {
+                Icon(Icons.Default.Search, contentDescription = null, tint = SpotifyMuted)
+            },
+            trailingIcon = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (showingSelection) {
+                        IconButton(onClick = {
+                            onClear()
+                            onSearchQueryChange("")
+                            expanded = true
+                        }) {
+                            Icon(Icons.Default.Clear, contentDescription = "Clear playlist")
+                        }
+                    }
+                    IconButton(onClick = { expanded = !expanded }) {
+                        ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
+                    }
+                }
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .onFocusChanged { if (it.isFocused) expanded = true },
+        )
+        if (expanded) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 6.dp),
+                shape = RoundedCornerShape(12.dp),
+                tonalElevation = 3.dp,
+                color = MaterialTheme.colorScheme.surfaceVariant,
+            ) {
+                Column(Modifier.padding(8.dp)) {
+                    if (loading) {
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .height(120.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            BockProgressIndicator()
+                        }
+                    } else {
+                        Text(
+                            "${filtered.size} playlist${if (filtered.size == 1) "" else "s"}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        )
+                        BockLazyColumn(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp, max = 320.dp),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            if (filtered.isEmpty()) {
+                                item {
+                                    Text(
+                                        "No playlists match",
+                                        modifier = Modifier.padding(12.dp),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            } else {
+                                items(filtered, key = { it.id }) { pl ->
+                                    val selected = pl.id == selectedId
+                                    Surface(
+                                        onClick = {
+                                            onSelect(pl)
+                                            onSearchQueryChange(pl.name)
+                                            expanded = false
+                                        },
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = if (selected) {
+                                            MaterialTheme.colorScheme.primaryContainer
+                                        } else {
+                                            Color.Transparent
+                                        },
+                                    ) {
+                                        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                                            Text(
+                                                pl.name,
+                                                style = MaterialTheme.typography.bodyLarge,
+                                                maxLines = 2,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                            if (pl.tracks > 0) {
+                                                Text(
+                                                    "${pl.tracks} tracks",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

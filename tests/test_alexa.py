@@ -143,14 +143,15 @@ class TestTransport:
     @pytest.fixture(autouse=True)
     def _seed_state(self, isolated_paths, sample_track):
         # set up a now-playing state with a real, decodable token
-        token = server.encode_token({'tracks': [sample_track['path']], 'idx': 0})
+        track_path = server._path_under_music_root(sample_track['path']) or sample_track['path']
+        token = server.encode_token({'tracks': [track_path], 'idx': 0})
         with server.app.test_request_context('/'):
             server.g.device_id = 'amzn1.ask.device.TESTDEVICE'
             server.register_device('amzn1.ask.device.TESTDEVICE')
             server.write_np_state({
                 'track':    sample_track['title'],
                 'artist':   sample_track['artist'],
-                'filepath': sample_track['path'],
+                'filepath': track_path,
                 'token':    token,
                 'playing':  True,
             })
@@ -251,8 +252,9 @@ class TestAudioPlayerEvents:
             assert d['playBehavior'] == 'REPLACE_ALL'
 
     def test_failed_honors_stop_after(self, post_alexa, sample_track):
+        path = server._path_under_music_root(sample_track['path']) or sample_track['path']
         token = server.encode_token({
-            'tracks': [sample_track['path'], sample_track['path']],
+            'tracks': [path, path],
             'idx': 0,
             'stopAfterIdx': 0,
         })

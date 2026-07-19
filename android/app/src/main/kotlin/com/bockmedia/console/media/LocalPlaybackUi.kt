@@ -17,6 +17,7 @@ fun LocalPlaybackState.toNowPlayingDevice(): NowPlayingDeviceItem? {
         artist = track.artist,
         album = track.album,
         filepath = track.path,
+        year = track.year,
         duration_ms = durationMs,
         offset_ms = positionMs,
         paused = !isPlaying,

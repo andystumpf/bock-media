@@ -1,11 +1,13 @@
 package com.bockmedia.console.local
 
 import android.content.Context
+import android.util.Log
 import com.bockmedia.console.BockMediaApp
 import com.bockmedia.console.data.local.AppPreferences
 import com.bockmedia.console.data.network.NetworkReachability
 import com.bockmedia.console.domain.model.PlayTarget
 import com.bockmedia.console.data.analytics.DeviceAnalyticsReporter
+import com.bockmedia.console.media.LocalPlaybackDuration
 import com.bockmedia.console.media.LocalPlaybackQueueResolver
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -31,24 +33,30 @@ import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
 
 object OfflineDownloadManager {
+    private const val TAG = "BockOffline"
     private const val MAX_TRACKS = 150
     private const val DEFAULT_BUFFER_BYTES = 64 * 1024
-    private const val CALL_TIMEOUT_SEC = 120L
+    // Transcode streams can take a long time to produce the first byte under load.
+    private const val DOWNLOAD_READ_TIMEOUT_SEC = 300L
+    private const val DOWNLOAD_CALL_TIMEOUT_SEC = 600L
     private const val TRACK_ATTEMPTS = 3
 
     // On cellular we ask the server to transcode to a small MP3 (~128 kbps) instead
     // of pulling the full-size original. Audio is bandwidth-bound on cell, so fewer
     // bytes is the single biggest speedup. Wi-Fi/LAN keeps original quality.
     private const val CELLULAR_BITRATE_KBPS = 128
+    // FLAC/WMA/etc. require server transcode — request an explicit bitrate on Wi-Fi too
+    // (otherwise the server returns 415 when FlacSupport is off).
+    private const val WIFI_TRANSCODE_BITRATE_KBPS = 192
 
     // Parallel download fan-out. Wi-Fi/LAN can saturate many sockets. On cellular the
     // bottleneck is total bandwidth (often the server's home uplink), so extra parallel
     // streams don't add throughput — they just split the pipe until each track is slow
     // enough to hit the call timeout and fail. Keep cellular low so every track finishes.
-    private fun downloadConcurrency(): Int = if (NetworkReachability.onWifi) 6 else 2
+    // Cap Wi-Fi fan-out so server-side ffmpeg transcodes aren't starved.
+    private fun downloadConcurrency(): Int = if (NetworkReachability.onWifi) 3 else 2
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mutex = Mutex()
@@ -95,7 +103,7 @@ object OfflineDownloadManager {
             manifest.id to OfflineCollectionStatus(manifest, state, progress)
         }
         _statuses.value = persisted + _statuses.value.filterValues {
-            it.state == DownloadState.Downloading
+            it.state == DownloadState.Downloading || it.state == DownloadState.Idle
         }
     }
 
@@ -120,7 +128,27 @@ object OfflineDownloadManager {
         OfflineDownloadSync.register(appContext, target)
         ClientPrefsSync.schedulePush(appContext)
         val id = target.downloadId()
-        if (_statuses.value[id]?.state == DownloadState.Downloading) return
+        val state = _statuses.value[id]?.state
+        if (state == DownloadState.Downloading) return
+        if (state == DownloadState.Idle && activeJobs.containsKey(id)) return
+        val store = OfflineDownloadStore(appContext)
+        val existing = store.readManifest(id)
+        if (isDownloadSlotBusy(id)) {
+            updateStatus(
+                id,
+                OfflineCollectionStatus(
+                    existing ?: manifestFor(
+                        id,
+                        target.label,
+                        target.downloadKindLabel().lowercase(),
+                        (target as? PlayTarget.Playlist)?.id,
+                        emptyList(),
+                    ),
+                    DownloadState.Idle,
+                    existing?.let { store.completionProgress(it) } ?: 0f,
+                ),
+            )
+        }
         cancelFlags[id] = AtomicBoolean(false)
         activeJobs[id] = scope.launch {
             val blocked = OfflineDownloadNetwork.blockedReason(appContext)
@@ -149,7 +177,7 @@ object OfflineDownloadManager {
         cancelFlags.computeIfAbsent(id) { AtomicBoolean(false) }.set(true)
         activeJobs[id]?.cancel()
         val existing = _statuses.value[id]
-        if (existing?.state == DownloadState.Downloading) {
+        if (existing?.state == DownloadState.Downloading || existing?.state == DownloadState.Idle) {
             updateStatus(
                 id,
                 OfflineCollectionStatus(
@@ -191,11 +219,7 @@ object OfflineDownloadManager {
         if (!OfflineDownloadNetwork.canDownloadNow(context)) return
         refresh(context)
         val visibleIds = OfflineDownloadSync.visibleCollectionIds(context)
-        _statuses.value.filter { (id, status) ->
-            id in visibleIds && status.state == DownloadState.Failed
-        }.forEach { (_, status) ->
-            downloadOrSyncLocked(context, status.manifest.toPlayTarget(), resyncOnly = false)
-        }
+        // Failed collections are not retried here — the user must tap Retry.
         val store = OfflineDownloadStore(context)
         store.listManifests()
             .filter { manifest -> manifest.id in visibleIds && store.isCollectionComplete(manifest) }
@@ -238,7 +262,10 @@ object OfflineDownloadManager {
 
         runCatching {
             val resolver = LocalPlaybackQueueResolver(repository, store)
-            val resolved = resolver.resolve(target, shuffle = false, maxTracks = MAX_TRACKS)
+            // Playlists download in full; artist/album/radio mixes stay capped so a huge
+            // library artist doesn't try to sync thousands of tracks at once.
+            val trackCap = if (target is PlayTarget.Playlist) null else MAX_TRACKS
+            val resolved = resolver.resolve(target, shuffle = false, maxTracks = trackCap)
             if (resolved.isEmpty()) error("No downloadable tracks found")
 
             val mergedTracks = store.mergeTrackEntries(existing, resolved, id)
@@ -259,10 +286,13 @@ object OfflineDownloadManager {
             }
 
             val base = app.resolveBaseUrl()
+            Log.i(TAG, "download base=$base collection=$id tracks=${mergedTracks.size}")
             // Per-call ceiling so a stalled connection (common on cellular/external links)
             // can't wedge the whole download forever.
-            val client = app.buildAuthenticatedHttpClient().newBuilder()
-                .callTimeout(CALL_TIMEOUT_SEC, TimeUnit.SECONDS)
+            val client = app.buildLiveAuthHttpClient(readTimeoutSec = DOWNLOAD_READ_TIMEOUT_SEC)
+                .newBuilder()
+                .callTimeout(DOWNLOAD_CALL_TIMEOUT_SEC, TimeUnit.SECONDS)
+                .readTimeout(DOWNLOAD_READ_TIMEOUT_SEC, TimeUnit.SECONDS)
                 .build()
             val workingManifest = manifestFor(id, title, kind, sourcePlaylistId, mergedTracks)
 
@@ -272,18 +302,19 @@ object OfflineDownloadManager {
             // supervisorScope + per-track try/catch keeps one flaky track from cancelling
             // (and wedging) the rest; completed tracks persist so a retry resumes.
             val tracksOnDisk = java.util.Collections.synchronizedList(mutableListOf<OfflineTrackEntry>())
+            val failedTracks = java.util.Collections.synchronizedList(mutableListOf<String>())
             val progressMutex = Mutex()
             val gate = Semaphore(downloadConcurrency())
-            val failures = AtomicInteger(0)
             supervisorScope {
                 mergedTracks.map { entry ->
                     async {
                         if (cancelFlags[id]?.get() == true) return@async
                         try {
                             gate.withPermit {
+                                if (cancelFlags[id]?.get() == true) return@withPermit
                                 val dest = store.trackFile(id, entry.fileName)
                                 if (!(dest.exists() && dest.length() > 0)) {
-                                    downloadTrack(client, base, entry, dest, id)
+                                    downloadTrack(client, base, entry, dest, id, app.preferences.mobileTokenNow())
                                 }
                                 progressMutex.withLock {
                                     tracksOnDisk.add(entry)
@@ -292,16 +323,18 @@ object OfflineDownloadManager {
                             }
                         } catch (ce: CancellationException) {
                             throw ce
-                        } catch (_: Exception) {
-                            failures.incrementAndGet()
+                        } catch (e: Exception) {
+                            val label = entry.title.ifBlank { entry.path }
+                            failedTracks.add("$label (${e.message ?: "failed"})")
                         }
                     }
                 }.awaitAll()
             }
             if (cancelFlags[id]?.get() == true) error("Cancelled")
-            // Some tracks failed — keep what landed and surface a retryable failure.
-            if (failures.get() > 0) {
-                error("${failures.get()} of ${mergedTracks.size} tracks failed — tap retry to resume")
+            if (failedTracks.isNotEmpty()) {
+                val preview = failedTracks.take(3).joinToString("; ")
+                val more = if (failedTracks.size > 3) " (+${failedTracks.size - 3} more)" else ""
+                error("${failedTracks.size} track(s) failed: $preview$more — tap retry to resume")
             }
 
             val manifest = workingManifest.copy(
@@ -349,10 +382,25 @@ object OfflineDownloadManager {
         entry: OfflineTrackEntry,
         dest: File,
         id: String,
+        mediaSignSecret: String?,
     ) {
-        val baseUrl = AppPreferences.streamUrl(base, entry.path) ?: error("Bad stream URL")
-        // Cellular: fetch a compact transcode so the playlist syncs in far fewer bytes.
-        val url = if (NetworkReachability.onWifi) baseUrl else "$baseUrl?br=$CELLULAR_BITRATE_KBPS"
+        val needsTranscode = LocalPlaybackDuration.needsStreamTranscode(entry.path)
+        val bitrate = when {
+            needsTranscode && NetworkReachability.onWifi -> WIFI_TRANSCODE_BITRATE_KBPS
+            needsTranscode && !NetworkReachability.onWifi -> CELLULAR_BITRATE_KBPS
+            else -> null
+        }
+        if (!AppPreferences.isValidLibraryPath(entry.path)) {
+            error("Invalid library path")
+        }
+        val url = AppPreferences.streamUrl(
+            base,
+            entry.path,
+            title = entry.title,
+            artist = entry.artist,
+            bitrateKbps = bitrate,
+            mediaSignSecret = mediaSignSecret,
+        ) ?: error("Bad stream URL")
         dest.parentFile?.mkdirs()
         val part = File(dest.parentFile, "${dest.name}.part")
         var lastError: Exception? = null
@@ -360,7 +408,10 @@ object OfflineDownloadManager {
             if (cancelFlags[id]?.get() == true) error("Cancelled")
             try {
                 client.newCall(Request.Builder().url(url).build()).execute().use { response ->
-                    if (!response.isSuccessful) error("HTTP ${response.code}")
+                    if (!response.isSuccessful) {
+                        Log.w(TAG, "HTTP ${response.code} path=${entry.path} url=$url")
+                        error("HTTP ${response.code}")
+                    }
                     response.body?.byteStream()?.use { input ->
                         part.outputStream().use { output ->
                             input.copyTo(output, DEFAULT_BUFFER_BYTES)
@@ -422,5 +473,13 @@ object OfflineDownloadManager {
 
     private fun updateStatus(id: String, status: OfflineCollectionStatus) {
         _statuses.value = _statuses.value + (id to status)
+    }
+
+    /** True when another collection is downloading or waiting on the download mutex. */
+    private fun isDownloadSlotBusy(excludingId: String): Boolean {
+        if (activeJobs.keys.any { it != excludingId }) return true
+        return _statuses.value.values.any {
+            it.manifest.id != excludingId && it.state == DownloadState.Downloading
+        }
     }
 }

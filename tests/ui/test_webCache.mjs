@@ -22,16 +22,27 @@ const sampleFeed = () => ({
   sections: [
     { kind: 'Mood', title: 'Dinner', cards: [{ playlistId: 'p1', title: 'A' }] },
     ...Array.from({ length: 8 }, (_, i) => ({ kind: 'Mood', title: `M${i}`, cards: [] })),
+    { id: 'more-playlists', kind: 'Playlists', title: 'More playlists', cards: [] },
   ],
 });
 
-test('WebCache stores and skips reload within session TTL', () => {
+test('WebCache stores current-layout home feed for fast paint', () => {
   const WebCache = loadWebCache();
   const feed = sampleFeed();
   WebCache.putHome(feed, { p1: '/art.jpg' });
   WebCache.markHomeLoaded();
   assert.ok(WebCache.peekHome());
-  assert.ok(WebCache.shouldSkipHomeReload());
+  // Home always refreshes in the background — cache is paint-only.
+  assert.equal(WebCache.shouldSkipHomeReload(), false);
+});
+
+test('WebCache putHome rejects legacy feed layouts', () => {
+  const WebCache = loadWebCache();
+  const legacy = {
+    sections: [{ kind: 'Mood', title: 'Dinner', cards: [{ playlistId: 'p1' }] }],
+  };
+  WebCache.putHome(legacy, { p1: '/art.jpg' });
+  assert.equal(WebCache.peekHome(), null);
 });
 
 test('WebCache visibleHomeCoverIds caps at limit', () => {
@@ -48,11 +59,24 @@ test('WebCache visibleHomeCoverIds caps at limit', () => {
 
 test('WebCache library session cache', () => {
   const WebCache = loadWebCache();
-  WebCache.putLibrary({ playlists: [{ id: '1', name: 'Test' }], smart: [], folders: [], genres: [] });
+  WebCache.putLibrary({
+    playlists: [{ id: '1', name: 'Test' }],
+    smart: [],
+    folders: [],
+    genres: [],
+    covers: { 1: '/art.jpg' },
+  });
   WebCache.markLibraryLoaded();
   const snap = WebCache.peekLibrary();
   assert.equal(snap.playlists.length, 1);
   assert.ok(WebCache.shouldSkipLibraryReload());
+});
+
+test('WebCache library reload not skipped without covers', () => {
+  const WebCache = loadWebCache();
+  WebCache.putLibrary({ playlists: [{ id: '1', name: 'Test' }], smart: [], folders: [], genres: [] });
+  WebCache.markLibraryLoaded();
+  assert.equal(WebCache.shouldSkipLibraryReload(), false);
 });
 
 test('WebCache playlist session cache', () => {

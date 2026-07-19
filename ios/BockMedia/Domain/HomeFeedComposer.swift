@@ -1,18 +1,20 @@
 import Foundation
 
 enum HomeFeedLimits {
-    static let jumpBackIn = 24
-    static let favorites = 16
-    static let topMixes = 16
-    static let moodSectionMin = 9
+    static let jumpBackIn = 36
+    static let ratedSongs = 5
+    static let topMixes = 24
+    static let moodSectionMin = 12
     static let moodSectionCards = 500
-    static let exploreThemes = 18
-    static let libraryGenreExtras = 6
-    static let dailyMixes = 12
-    static let recentPlaylists = 24
-    static let radio = 16
-    static let discover = 24
-    static let morePlaylists = 60
+    static let browseGenres = 16
+    static let exploreThemes = 24
+    static let libraryGenreExtras = 10
+    static let dailyMixes = 20
+    static let recentlyCreated = 10
+    static let recentPlaylists = 36
+    static let radio = 24
+    static let discover = 36
+    static let morePlaylists = 100
 }
 
 struct HomeFeedInput {
@@ -27,16 +29,19 @@ struct HomeFeedInput {
     var continueResume: ResumeEntry? = nil
     var releaseRadarLabel: String? = nil
     var releaseRadarArtPath: String? = nil
+    var followedReleaseCards: [HomeCard] = []
     var discoverWeeklyCards: [HomeCard] = []
+    var ratedSongItems: [RatingItem] = []
+    var recentlyCreatedPlaylists: [PlaylistSummary] = []
 }
 
-private struct HomeFeedRegistry {
+private final class HomeFeedRegistry {
     private(set) var usedPlaylistIds = Set<String>()
     private(set) var usedPlaylistNameKeys = Set<String>()
     private(set) var usedCardIds = Set<String>()
     var usedArtPaths = Set<String>()
 
-    mutating func claimPlaylist(id: String, name: String) -> Bool {
+    func claimPlaylist(id: String, name: String) -> Bool {
         let nameKey = name.lowercased()
         guard !usedPlaylistIds.contains(id), !usedPlaylistNameKeys.contains(nameKey) else { return false }
         usedPlaylistIds.insert(id)
@@ -44,7 +49,7 @@ private struct HomeFeedRegistry {
         return true
     }
 
-    mutating func registerCard(_ card: HomeCard) {
+    func registerCard(_ card: HomeCard) {
         usedCardIds.insert(card.id)
         if let path = card.artPath, !path.isEmpty {
             usedArtPaths.insert(path)
@@ -55,11 +60,11 @@ private struct HomeFeedRegistry {
         }
     }
 
-    mutating func registerMoodCard(_ card: HomeCard) {
+    func registerMoodCard(_ card: HomeCard) {
         usedCardIds.insert(card.id)
     }
 
-    mutating func reserveMoodPlaylists(_ cards: [HomeCard]) {
+    func reserveMoodPlaylists(_ cards: [HomeCard]) {
         for card in cards {
             if let playlistId = card.playlistId {
                 usedPlaylistIds.insert(playlistId)
@@ -76,7 +81,7 @@ private struct HomeFeedRegistry {
         !usedPlaylistIds.contains(playlist.id) && !usedPlaylistNameKeys.contains(playlist.name.lowercased())
     }
 
-    mutating func claimArtPath(_ path: String?) -> String? {
+    func claimArtPath(_ path: String?) -> String? {
         guard let path, !path.isEmpty, !usedArtPaths.contains(path) else { return nil }
         usedArtPaths.insert(path)
         return path
@@ -163,6 +168,15 @@ enum HomeFeedComposer {
             return cards
         }
 
+        let recentlyCreated = fillPlaylists(
+            from: input.recentlyCreatedPlaylists.isEmpty
+                ? input.allPlaylists.sorted { parseSortDate($0.createDate) > parseSortDate($1.createDate) }
+                : input.recentlyCreatedPlaylists,
+            target: HomeFeedLimits.recentlyCreated,
+            kind: .recentlyCreated,
+            subtitle: { pl in "\(pl.tracks) tracks · Recently created" }
+        )
+
         func resolveMixArt(genre: String, artist: String?, index: Int) -> String? {
             if let lib = HomeFeedRules.matchingLibraryGenreForLabel(genre, libraryGenres: input.libraryGenres),
                let path = lib.art_path?.trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty,
@@ -178,7 +192,7 @@ enum HomeFeedComposer {
             let cards = buildMoodSectionCards(
                 mood: mood,
                 input: input,
-                registry: &registry,
+                registry: registry,
                 playlistById: playlistById,
                 topArtists: topArtists,
                 resolveMixArt: resolveMixArt
@@ -186,6 +200,17 @@ enum HomeFeedComposer {
             return section("mood-\(mood.id)", mood.title, .mood, cards)
         }
         registry.reserveMoodPlaylists(moodSections.flatMap(\.cards))
+
+        let decadeSections = HomeDecadeSections.all().compactMap { decade -> HomeSection? in
+            let cards = buildDecadeSectionCards(
+                decade: decade,
+                input: input,
+                registry: registry,
+                playlistById: playlistById
+            )
+            return section("decade-\(decade.id)", decade.title, .decade, cards)
+        }
+        registry.reserveMoodPlaylists(decadeSections.flatMap(\.cards))
 
         // MARK: Jump back in
 
@@ -239,15 +264,6 @@ enum HomeFeedComposer {
             jumpBackIn.append(card)
         }
 
-        let recentlyAddedPool = input.allPlaylists
-            .sorted { parseSortDate($0.createDate) > parseSortDate($1.createDate) }
-        jumpBackIn.append(contentsOf: fillPlaylists(
-            from: recentlyAddedPool,
-            target: HomeFeedLimits.jumpBackIn - jumpBackIn.count,
-            kind: .jumpBackIn,
-            subtitle: { _ in "Recently added" }
-        ))
-
         jumpBackIn.append(contentsOf: fillPlaylists(
             from: shuffledGeneric,
             target: HomeFeedLimits.jumpBackIn - jumpBackIn.count,
@@ -256,24 +272,8 @@ enum HomeFeedComposer {
         ))
         jumpBackIn = jumpBackIn.uniqued(by: \.id).prefix(HomeFeedLimits.jumpBackIn).map { $0 }
 
-        // MARK: Favorites
-
-        var favoriteCards: [HomeCard] = []
-        for fav in input.favorites {
-            guard favoriteCards.count < HomeFeedLimits.favorites else { break }
-            let card = HomeCard(
-                id: "fav-\(fav.path)",
-                title: fav.title ?? fav.path,
-                subtitle: fav.artist ?? "Liked song",
-                artPath: fav.path,
-                playlistId: nil,
-                playTarget: .song(path: fav.path, title: fav.title ?? fav.path),
-                kind: .favorites
-            )
-            guard !registry.hasCard(id: card.id) else { continue }
-            registry.registerCard(card)
-            favoriteCards.append(card)
-        }
+        let ratedSongCards = buildRatedSongCards(input.ratedSongItems, registry: registry)
+        let browseGenres = buildBrowseGenreCards(input.libraryGenres, registry: registry)
 
         // MARK: Top mixes
 
@@ -361,7 +361,7 @@ enum HomeFeedComposer {
 
         let exploreThemes = buildExploreThemeCards(
             input: input,
-            registry: &registry,
+            registry: registry,
             playlistById: playlistById,
             topArtists: topArtists,
             topGenres: topGenres,
@@ -394,7 +394,7 @@ enum HomeFeedComposer {
             topArtists: topArtists,
             topGenres: topGenres,
             allPlaylists: input.allPlaylists,
-            registry: &registry,
+            registry: registry,
             limit: HomeFeedLimits.radio
         )
 
@@ -448,6 +448,9 @@ enum HomeFeedComposer {
             }
         }
 
+        let followedReleases = input.followedReleaseCards.filter { !registry.hasCard(id: $0.id) }
+        followedReleases.forEach { registry.registerCard($0) }
+
         // MARK: More playlists
 
         // Catch-all so no library playlist is permanently hidden from home; the
@@ -462,9 +465,14 @@ enum HomeFeedComposer {
 
         var sections: [HomeSection] = [
             section("jump-back-in", "Jump back in", .jumpBackIn, jumpBackIn),
-            section("favorites", "Your favorites", .favorites, favoriteCards),
+            section("recently-created", "Recently Created", .recentlyCreated, recentlyCreated),
+            section("rated-songs", "Rated Songs", .ratedSongs, ratedSongCards),
+            section("browse-genres", "Browse by genre", .browseGenres, browseGenres),
             section("top-mixes", "Your top mixes", .topMixes, genreMixes),
         ].compactMap { $0 }
+        if let fr = section("followed-releases", "New from artists you follow", .discover, followedReleases) {
+            sections.append(fr)
+        }
         if let rr = section("release-radar", "Release Radar", .discover, releaseRadar) {
             sections.append(rr)
         }
@@ -473,6 +481,7 @@ enum HomeFeedComposer {
             sections.append(dw)
         }
         sections.append(contentsOf: moodSections)
+        sections.append(contentsOf: decadeSections)
         sections.append(contentsOf: [
             section("explore-themes", "Explore genres & worlds", .exploreThemes, exploreThemes),
             section("daily-mixes", "New daily mixes", .dailyMixes, dailyMixes),
@@ -546,7 +555,7 @@ enum HomeFeedComposer {
         topArtists: [CountRow],
         topGenres: [CountRow],
         allPlaylists: [PlaylistSummary],
-        registry: inout HomeFeedRegistry,
+        registry: HomeFeedRegistry,
         limit: Int
     ) -> [HomeCard] {
         func resolveRadioArt(preferred: String?, artist: String?, index: Int) -> String? {
@@ -630,7 +639,7 @@ enum HomeFeedComposer {
 
     private static func buildExploreThemeCards(
         input: HomeFeedInput,
-        registry: inout HomeFeedRegistry,
+        registry: HomeFeedRegistry,
         playlistById: [String: PlaylistSummary],
         topArtists: [CountRow],
         topGenres: [CountRow],
@@ -772,7 +781,7 @@ enum HomeFeedComposer {
     private static func buildMoodSectionCards(
         mood: HomeMoodSection,
         input: HomeFeedInput,
-        registry: inout HomeFeedRegistry,
+        registry: HomeFeedRegistry,
         playlistById: [String: PlaylistSummary],
         topArtists: [CountRow],
         resolveMixArt: (String, String?, Int) -> String?
@@ -831,6 +840,100 @@ enum HomeFeedComposer {
         }
 
         return cards.uniqued(by: \.id).prefix(limit).map { $0 }
+    }
+
+    private static func buildDecadeSectionCards(
+        decade: HomeDecadeSection,
+        input: HomeFeedInput,
+        registry: HomeFeedRegistry,
+        playlistById: [String: PlaylistSummary]
+    ) -> [HomeCard] {
+        let kind = HomeSectionKind.decade
+        var cards: [HomeCard] = []
+
+        func addCard(_ card: HomeCard?) {
+            guard let card else { return }
+            guard !registry.hasCard(id: card.id) else { return }
+            guard !cards.contains(where: { $0.id == card.id }) else { return }
+            registry.registerMoodCard(card)
+            cards.append(card)
+        }
+
+        func decadePlaylistCard(_ pl: PlaylistSummary) -> HomeCard? {
+            guard pl.tracks > 0 else { return nil }
+            let cardId = "decade-\(decade.id)-pl-\(pl.id)"
+            guard !registry.hasCard(id: cardId) else { return nil }
+            return HomeCard(
+                id: cardId,
+                title: pl.name,
+                subtitle: "\(pl.tracks) tracks · \(decade.title)",
+                artPath: nil,
+                playlistId: pl.id,
+                playTarget: .playlist(id: pl.id, name: pl.name),
+                kind: kind
+            )
+        }
+
+        for pl in HomeFeedRules.playlistsForDecadeSection(input.allPlaylists, decadeId: decade.id) {
+            addCard(decadePlaylistCard(pl))
+        }
+
+        for sp in input.smartPlaylists where sp.enabled && HomeFeedRules.playlistMatchesDecade(sp.name, decadeId: decade.id) {
+            guard let pl = sp.playlistId.flatMap({ playlistById[$0] }) else { continue }
+            addCard(decadePlaylistCard(pl))
+        }
+
+        return cards.uniqued(by: \.id)
+    }
+
+    private static func buildBrowseGenreCards(
+        _ libraryGenres: [GenreItem],
+        registry: HomeFeedRegistry
+    ) -> [HomeCard] {
+        var cards: [HomeCard] = []
+        for genre in libraryGenres.sorted(by: { $0.track_count > $1.track_count }) {
+            guard cards.count < HomeFeedLimits.browseGenres else { break }
+            guard genre.track_count >= 8, !genre.name.isEmpty else { continue }
+            let cardId = "browse-genre-\(genre.name)"
+            guard !registry.hasCard(id: cardId) else { continue }
+            let card = HomeCard(
+                id: cardId,
+                title: genre.name,
+                subtitle: "\(genre.track_count) tracks",
+                artPath: registry.claimArtPath(genre.art_path),
+                playlistId: nil,
+                playTarget: .radio(displayTitle: "\(genre.name) Radio", seedKind: .genre, name: genre.name, path: nil),
+                kind: .browseGenres
+            )
+            registry.registerCard(card)
+            cards.append(card)
+        }
+        return cards
+    }
+
+    private static func buildRatedSongCards(
+        _ ratedItems: [RatingItem],
+        registry: HomeFeedRegistry
+    ) -> [HomeCard] {
+        var cards: [HomeCard] = []
+        let byStar = Dictionary(grouping: ratedItems.filter { $0.kind == "song" && (1...5).contains($0.stars) }, by: \.stars)
+        for stars in RatedSongPlaylists.starLevelsDescending {
+            let songs = byStar[stars] ?? []
+            guard !songs.isEmpty else { continue }
+            let card = HomeCard(
+                id: "rated-\(stars)",
+                title: RatedSongPlaylists.title(stars),
+                subtitle: "\(songs.count) tracks",
+                artPath: songs.first?.id,
+                playlistId: RatedSongPlaylists.id(stars),
+                playTarget: RatedSongPlaylists.playTarget(stars),
+                kind: .ratedSongs
+            )
+            guard !registry.hasCard(id: card.id) else { continue }
+            registry.registerCard(card)
+            cards.append(card)
+        }
+        return cards
     }
 }
 

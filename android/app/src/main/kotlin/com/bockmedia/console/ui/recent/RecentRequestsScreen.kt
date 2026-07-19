@@ -3,6 +3,8 @@ package com.bockmedia.console.ui.recent
 import androidx.compose.foundation.layout.*
 import com.bockmedia.console.ui.theme.BockGreen
 import com.bockmedia.console.ui.components.*
+import androidx.compose.ui.platform.testTag
+import com.bockmedia.console.ui.testing.BockTestTags
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -30,7 +32,7 @@ fun RecentRequestsScreen(repository: BockMediaRepository) {
         loading = false
     }
 
-    Column(Modifier.fillMaxSize().padding(horizontal = 8.dp)) {
+    Column(Modifier.fillMaxSize().testTag(BockTestTags.VOICE_LOG_BODY).padding(horizontal = 8.dp)) {
         Text(
             "Recent Alexa voice requests — what Alexa heard vs what played.",
             modifier = Modifier.padding(16.dp),

@@ -53,6 +53,16 @@ class TestTunnelTrust:
 
 
 class TestLanApiAuth:
+    def test_lan_get_blocked_without_credentials_or_opt_in(self, client, isolated_paths):
+        _write_config(
+            isolated_paths,
+            token='',
+            allowOpenLanApi=False,
+            allowOpenLanMedia=True,
+        )
+        rv = client.get('/api/summary', headers={'Host': '192.168.1.1:3001'})
+        assert rv.status_code == 403
+
     def test_lan_post_blocked_without_credentials(self, client, isolated_paths):
         _write_config(
             isolated_paths,

@@ -223,6 +223,51 @@ object HomeFeedRules {
                     .thenByDescending { it.tracks },
             )
 
+    private val decadePatterns: Map<String, List<Regex>> = mapOf(
+        "60s" to listOf(
+            Regex("(?i)\\b60'?s\\b"),
+            Regex("(?i)'60s"),
+            Regex("(?i)\\bsixties\\b"),
+            Regex("(?i)\\b1960s\\b"),
+            Regex("(?i)\\b196[0-9]\\b"),
+        ),
+        "70s" to listOf(
+            Regex("(?i)\\b70'?s\\b"),
+            Regex("(?i)'70s"),
+            Regex("(?i)\\bseventies\\b"),
+            Regex("(?i)\\b1970s\\b"),
+            Regex("(?i)\\b197[0-9]\\b"),
+        ),
+        "80s" to listOf(
+            Regex("(?i)\\b80'?s\\b"),
+            Regex("(?i)'80s"),
+            Regex("(?i)\\beighties\\b"),
+            Regex("(?i)\\b1980s\\b"),
+            Regex("(?i)\\b198[0-9]\\b"),
+        ),
+        "90s" to listOf(
+            Regex("(?i)\\b90'?s\\b"),
+            Regex("(?i)'90s"),
+            Regex("(?i)\\bnineties\\b"),
+            Regex("(?i)\\b1990s\\b"),
+            Regex("(?i)\\b199[0-9]\\b"),
+        ),
+    )
+
+    fun playlistMatchesDecade(playlist: PlaylistSummary, decadeId: String): Boolean =
+        playlistMatchesDecade(playlistSearchText(playlist), decadeId)
+
+    fun playlistMatchesDecade(name: String, decadeId: String): Boolean {
+        val patterns = decadePatterns[decadeId] ?: return false
+        return patterns.any { it.containsMatchIn(name) }
+    }
+
+    /** All library playlists named for this decade; multi-decade names match every listed decade. */
+    fun playlistsForDecadeSection(all: List<PlaylistSummary>, decadeId: String): List<PlaylistSummary> =
+        all
+            .filter { it.tracks > 0 && playlistMatchesDecade(it, decadeId) }
+            .sortedBy { it.name.lowercase() }
+
     fun isSpecialHomePlaylistName(name: String): Boolean =
         isDailyMixName(name) || isDiscoverName(name) || isGenreMixPlaylistName(name) ||
             isExplicitRadioPlaylistName(name) || isAutomationPlaylistName(name)

@@ -1,5 +1,6 @@
 /**
  * Browser playback — stream from /stream/ on this server (Spotify-style laptop listening).
+ * Supports crossfade between tracks when ClientPrefsSync.crossfadeSeconds > 0.
  */
 (function (root) {
   'use strict';
@@ -35,6 +36,32 @@
   function dbToLinear(db) {
     if (db == null || db >= 0) return 1;
     return Math.pow(10, db / 20);
+  }
+
+  function getCrossfadeSeconds() {
+    if (typeof root.ClientPrefsSync !== 'undefined') {
+      return root.ClientPrefsSync.getCrossfadeSeconds?.() ?? 0;
+    }
+    return 0;
+  }
+
+  function crossfadeProgress(elapsedSec, durationSec) {
+    if (!durationSec || durationSec <= 0) return 1;
+    return Math.min(1, Math.max(0, elapsedSec / durationSec));
+  }
+
+  function crossfadeVolumes(progress, masterVolume) {
+    const p = Math.min(1, Math.max(0, progress));
+    const vol = Math.max(0, Math.min(1, masterVolume));
+    return { outgoing: vol * (1 - p), incoming: vol * p };
+  }
+
+  function shouldStartCrossfade(remainingSec, crossfadeSec, crossfading, hasNext) {
+    if (crossfading || !hasNext) return false;
+    const xf = Math.max(0, crossfadeSec || 0);
+    if (xf <= 0) return false;
+    if (!Number.isFinite(remainingSec) || remainingSec <= 0.05) return false;
+    return remainingSec <= xf;
   }
 
   async function replayGainDbForTrack(track) {
@@ -117,6 +144,7 @@
       title: row.title || row.track || path2name(path),
       artist: row.artist || '',
       album: row.album || '',
+      year: row.year || null,
       durationMs: Math.max(0, (row.duration_seconds ?? row.duration ?? 0) * 1000),
     };
   }
@@ -126,7 +154,7 @@
     let page = 1;
     let total = Infinity;
     while (tracks.length < total) {
-      const d = await apiGet(`/api/playlists/${encodeURIComponent(id)}?page=${page}&limit=200`);
+      const d = await apiGet(`/api/playlists/${encodeURIComponent(id)}?page=${page}&limit=200&sortBy=original`);
       total = d.total || tracks.length;
       const batch = (d.tracks || []).map(trackFromRow).filter(Boolean);
       if (!batch.length) break;
@@ -226,6 +254,7 @@
     order: [],
     orderPos: 0,
     shuffle: false,
+    repeat: 'off',
     sourceLabel: '',
     playlist: '',
     playlistId: null,
@@ -235,14 +264,28 @@
     lastError: null,
   };
 
-  const audio = new Audio();
+  let audio = new Audio();
   audio.preload = 'auto';
+  let incomingAudio = null;
+  let crossfading = false;
+  let crossfadeTimer = null;
+  let crossfadeStartedAt = 0;
+  let crossfadeDuration = 0;
+  let suppressEnded = false;
+
   const listeners = new Set();
-  /** Bumped on each new load — stale play() promises are ignored. */
   let loadToken = 0;
-  /** Serializes load/play so rapid skips or double-clicks don't interrupt each other. */
   let loadChain = Promise.resolve();
   let playToken = 0;
+
+  function ensureIncomingAudio() {
+    if (!incomingAudio) {
+      incomingAudio = new Audio();
+      incomingAudio.preload = 'auto';
+      bindIncomingEvents(incomingAudio);
+    }
+    return incomingAudio;
+  }
 
   function isPlayInterrupted(err) {
     return err && (err.name === 'AbortError' || /interrupted by a new load/i.test(String(err.message || '')));
@@ -272,64 +315,109 @@
     });
   }
 
-  async function loadIndexInner(idx, token) {
+  function cancelCrossfade() {
+    if (crossfadeTimer) {
+      clearInterval(crossfadeTimer);
+      crossfadeTimer = null;
+    }
+    crossfading = false;
+    crossfadeStartedAt = 0;
+    crossfadeDuration = 0;
+    suppressEnded = false;
+    if (incomingAudio) {
+      incomingAudio.pause();
+      incomingAudio.removeAttribute('src');
+      incomingAudio.load();
+    }
+    audio.volume = state.volume;
+  }
+
+  function hasNextTrack() {
+    if (!state.tracks.length) return false;
+    if (state.shuffle && state.order.length) {
+      return state.orderPos < state.order.length - 1;
+    }
+    return state.orderPos < state.tracks.length - 1;
+  }
+
+  function advanceQueueIndex() {
+    if (state.shuffle && state.order.length) {
+      if (state.orderPos < state.order.length - 1) {
+        state.orderPos += 1;
+        return true;
+      }
+      return false;
+    }
+    if (state.orderPos < state.tracks.length - 1) {
+      state.orderPos += 1;
+      return true;
+    }
+    return false;
+  }
+
+  async function prepareTrackOnElement(el, idx, token, { autoplay = true, volume = null } = {}) {
     const track = state.tracks[idx];
     if (!track || token !== loadToken) return false;
     const gainDb = await replayGainDbForTrack(track);
     const clientGain = gainDb != null && gainDb <= 0;
     let url = await streamUrl(track, !clientGain);
     if (!url) return false;
-    audio.pause();
-    audio.src = url;
-    audio.dataset.loadToken = String(token);
-    audio.load();
-    audio.volume = state.volume * dbToLinear(clientGain ? gainDb : 0);
+
+    el.pause();
+    el.src = url;
+    el.dataset.loadToken = String(token);
+    el.load();
+    const baseVol = volume == null ? state.volume : volume;
+    el.volume = baseVol * dbToLinear(clientGain ? gainDb : 0);
+
     try {
-      await waitForCanPlay(audio, token);
+      await waitForCanPlay(el, token);
       if (token !== loadToken) return false;
-      await audio.play();
-      if (token !== loadToken) {
-        audio.pause();
-        return false;
-      }
-      state.playing = true;
-      state.errorCount = 0;
-      state.lastError = null;
-      syncMediaSession(track);
-      notify();
-      return true;
-    } catch (e) {
-      if (token !== loadToken || isPlayInterrupted(e)) return false;
-      // Fallback: original file without server-side transcode.
-      if (!clientGain && url.indexOf('normalize=0') < 0) {
-        url = await streamUrl(track, false);
-        audio.src = url;
-        audio.load();
-        audio.volume = state.volume;
-        try {
-          await waitForCanPlay(audio, token);
-          if (token !== loadToken) return false;
-          await audio.play();
-          if (token !== loadToken) {
-            audio.pause();
-            return false;
-          }
-          state.playing = true;
-          state.errorCount = 0;
-          state.lastError = null;
-          syncMediaSession(track);
-          notify();
-          return true;
-        } catch (retryErr) {
-          if (token !== loadToken || isPlayInterrupted(retryErr)) return false;
-          e = retryErr;
+      if (autoplay) {
+        await el.play();
+        if (token !== loadToken) {
+          el.pause();
+          return false;
         }
       }
-      state.playing = false;
-      state.lastError = e.message || 'Playback failed';
-      notify();
+      return { track, clientGain, gainDb };
+    } catch (e) {
+      if (token !== loadToken || isPlayInterrupted(e)) return false;
+      if (!clientGain && url.indexOf('normalize=0') < 0) {
+        url = await streamUrl(track, false);
+        el.src = url;
+        el.load();
+        el.volume = baseVol;
+        try {
+          await waitForCanPlay(el, token);
+          if (token !== loadToken) return false;
+          if (autoplay) {
+            await el.play();
+            if (token !== loadToken) {
+              el.pause();
+              return false;
+            }
+          }
+          return { track, clientGain: false, gainDb: null };
+        } catch (retryErr) {
+          if (token !== loadToken || isPlayInterrupted(retryErr)) return false;
+          throw retryErr;
+        }
+      }
       throw e;
     }
+  }
+
+  async function loadIndexInner(idx, token) {
+    cancelCrossfade();
+    const result = await prepareTrackOnElement(audio, idx, token, { autoplay: true, volume: state.volume });
+    if (!result) return false;
+    state.playing = true;
+    state.errorCount = 0;
+    state.lastError = null;
+    syncMediaSession(result.track);
+    notify();
+    return true;
   }
 
   function loadIndex(idx) {
@@ -338,9 +426,104 @@
       .then(() => loadIndexInner(idx, token))
       .catch((e) => {
         if (token !== loadToken || isPlayInterrupted(e)) return false;
+        state.playing = false;
+        state.lastError = e.message || 'Playback failed';
+        notify();
         throw e;
       });
     return loadChain;
+  }
+
+  async function startCrossfade(overlapSec) {
+    if (crossfading || !hasNextTrack()) return;
+    const token = loadToken;
+    crossfading = true;
+    crossfadeDuration = Math.max(0.05, overlapSec);
+    crossfadeStartedAt = performance.now();
+    suppressEnded = true;
+
+    if (!advanceQueueIndex()) {
+      crossfading = false;
+      suppressEnded = false;
+      return;
+    }
+
+    const nextIdx = currentIndex();
+    const nextTrack = state.tracks[nextIdx];
+    const incoming = ensureIncomingAudio();
+
+    try {
+      const result = await prepareTrackOnElement(incoming, nextIdx, token, {
+        autoplay: true,
+        volume: 0,
+      });
+      if (!result || token !== loadToken) {
+        cancelCrossfade();
+        return;
+      }
+      syncMediaSession(nextTrack);
+      notify();
+
+      crossfadeTimer = setInterval(() => {
+        if (!crossfading || token !== loadToken) {
+          cancelCrossfade();
+          return;
+        }
+        const elapsed = (performance.now() - crossfadeStartedAt) / 1000;
+        const progress = crossfadeProgress(elapsed, crossfadeDuration);
+        const vols = crossfadeVolumes(progress, state.volume);
+        audio.volume = vols.outgoing;
+        incoming.volume = vols.incoming;
+        notify();
+        if (progress >= 1) completeCrossfade(token);
+      }, 50);
+    } catch (_) {
+      cancelCrossfade();
+      state.orderPos = Math.max(0, state.orderPos - 1);
+      if (state.shuffle && state.order.length) {
+        const cur = currentIndex();
+        state.orderPos = Math.max(0, state.order.indexOf(cur));
+      }
+    }
+  }
+
+  function completeCrossfade(token) {
+    if (crossfadeTimer) {
+      clearInterval(crossfadeTimer);
+      crossfadeTimer = null;
+    }
+    if (!crossfading || token !== loadToken) return;
+
+    audio.pause();
+    audio.removeAttribute('src');
+    audio.load();
+
+    const outgoing = audio;
+    audio = incomingAudio;
+    incomingAudio = outgoing;
+    audio.volume = state.volume;
+
+    crossfading = false;
+    crossfadeStartedAt = 0;
+    crossfadeDuration = 0;
+    suppressEnded = false;
+    state.playing = !audio.paused;
+    state.errorCount = 0;
+    state.lastError = null;
+    notify();
+  }
+
+  function checkCrossfadeTrigger() {
+    if (crossfading) return;
+    const xf = getCrossfadeSeconds();
+    if (!shouldStartCrossfade(getRemainingSec(), xf, crossfading, hasNextTrack())) return;
+    startCrossfade(Math.min(xf, getRemainingSec())).catch(() => cancelCrossfade());
+  }
+
+  function getRemainingSec() {
+    const dur = audio.duration;
+    if (!dur || !isFinite(dur)) return Infinity;
+    return Math.max(0, dur - (audio.currentTime || 0));
   }
 
   function notify() {
@@ -350,6 +533,7 @@
   function getPublicState() {
     const idx = currentIndex();
     const t = state.tracks[idx];
+    const el = crossfading && incomingAudio && incomingAudio.src ? incomingAudio : audio;
     return {
       active: state.active,
       tracks: state.tracks.slice(),
@@ -357,15 +541,17 @@
       current: t || null,
       playing: state.playing,
       shuffle: state.shuffle,
+      repeat: state.repeat,
       sourceLabel: state.sourceLabel,
       playlist: state.playlist,
       playlistId: state.playlistId,
-      positionMs: Math.round((audio.currentTime || 0) * 1000),
-      durationMs: audio.duration && isFinite(audio.duration)
-        ? Math.round(audio.duration * 1000)
+      positionMs: Math.round((el.currentTime || 0) * 1000),
+      durationMs: el.duration && isFinite(el.duration)
+        ? Math.round(el.duration * 1000)
         : (t && t.durationMs) || 0,
       volume: state.volume,
       lastError: state.lastError,
+      crossfading,
     };
   }
 
@@ -426,6 +612,7 @@
     try {
       if (audio.src && audio.paused && audio.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
         await audio.play();
+        if (crossfading && incomingAudio?.src) await incomingAudio.play().catch(() => {});
         state.playing = true;
       } else {
         await loadIndex(currentIndex());
@@ -439,6 +626,7 @@
 
   function pause() {
     audio.pause();
+    if (incomingAudio) incomingAudio.pause();
     state.playing = false;
     if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
     notify();
@@ -450,7 +638,26 @@
   }
 
   async function next() {
+    cancelCrossfade();
     if (!state.tracks.length) return;
+    if (state.repeat === 'one') {
+      audio.currentTime = 0;
+      try { await audio.play(); state.playing = true; notify(); } catch (_) { /* */ }
+      return;
+    }
+    const atEnd = state.shuffle
+      ? (state.orderPos >= state.order.length - 1)
+      : (state.orderPos >= state.tracks.length - 1);
+    if (atEnd && state.repeat === 'all') {
+      state.orderPos = 0;
+      if (state.shuffle && state.order.length) {
+        const idx = currentIndex();
+        state.order = shuffleOrder(state.tracks.length, idx);
+        state.orderPos = 0;
+      }
+      await loadIndex(currentIndex());
+      return;
+    }
     if (state.shuffle && state.order.length) {
       if (state.orderPos < state.order.length - 1) state.orderPos += 1;
       else if (!(await tryContinueAfterQueue())) return pause();
@@ -463,6 +670,7 @@
   }
 
   async function prev() {
+    cancelCrossfade();
     if (audio.currentTime > 3) {
       audio.currentTime = 0;
       notify();
@@ -483,19 +691,31 @@
   }
 
   function seekRatio(ratio) {
-    const dur = audio.duration;
+    const el = crossfading && incomingAudio?.src ? incomingAudio : audio;
+    const dur = el.duration;
     if (!dur || !isFinite(dur)) return;
-    audio.currentTime = Math.max(0, Math.min(dur, dur * ratio));
+    el.currentTime = Math.max(0, Math.min(dur, dur * ratio));
     notify();
   }
 
   function setVolume(v) {
     state.volume = Math.max(0, Math.min(1, v / 100));
-    audio.volume = state.volume;
+    if (crossfading && incomingAudio) {
+      const elapsed = crossfadeStartedAt
+        ? (performance.now() - crossfadeStartedAt) / 1000
+        : 0;
+      const progress = crossfadeProgress(elapsed, crossfadeDuration);
+      const vols = crossfadeVolumes(progress, state.volume);
+      audio.volume = vols.outgoing;
+      incomingAudio.volume = vols.incoming;
+    } else {
+      audio.volume = state.volume;
+    }
     notify();
   }
 
   function setShuffle(on) {
+    cancelCrossfade();
     state.shuffle = !!on;
     const idx = currentIndex();
     state.order = state.shuffle ? shuffleOrder(state.tracks.length, idx) : [];
@@ -507,9 +727,25 @@
     notify();
   }
 
+  function setRepeat(mode) {
+    const modes = ['off', 'all', 'one'];
+    if (mode === undefined || mode === null) {
+      const i = modes.indexOf(state.repeat);
+      state.repeat = modes[(i + 1) % modes.length];
+    } else {
+      state.repeat = modes.includes(mode) ? mode : 'off';
+    }
+    notify();
+  }
+
+  function cycleRepeat() {
+    setRepeat();
+  }
+
   async function play(opts, playOpts = {}) {
     const token = ++playToken;
     loadToken += 1;
+    cancelCrossfade();
     const resolved = await resolveQueue(opts);
     if (token !== playToken) return;
     let startIndex = playOpts.startIndex ?? opts.startIndex ?? 0;
@@ -537,7 +773,24 @@
     await loadIndex(currentIndex());
   }
 
+  async function seekToUpcomingOffset(qi) {
+    cancelCrossfade();
+    if (!state.tracks.length) return;
+    const offset = Math.max(0, parseInt(qi, 10) || 0);
+    if (state.shuffle && state.order.length) {
+      const pos = state.orderPos + 1 + offset;
+      if (pos >= state.order.length) return;
+      state.orderPos = pos;
+    } else {
+      const idx = state.orderPos + 1 + offset;
+      if (idx >= state.tracks.length) return;
+      state.orderPos = idx;
+    }
+    await loadIndex(currentIndex());
+  }
+
   async function seekToIndex(index) {
+    cancelCrossfade();
     if (index < 0 || index >= state.tracks.length) return;
     state.orderPos = state.shuffle ? Math.max(0, state.order.indexOf(index)) : index;
     if (state.shuffle && state.orderPos < 0) state.orderPos = 0;
@@ -546,6 +799,7 @@
 
   function stop() {
     loadToken += 1;
+    cancelCrossfade();
     audio.pause();
     audio.removeAttribute('src');
     audio.load();
@@ -556,24 +810,52 @@
     notify();
   }
 
-  audio.addEventListener('timeupdate', () => notify());
-  audio.addEventListener('ended', () => { next().catch(() => { /* */ }); });
-  audio.addEventListener('pause', () => {
-    if (!audio.ended) {
-      state.playing = false;
+  function bindPrimaryEvents(el) {
+    el.addEventListener('timeupdate', () => {
+      checkCrossfadeTrigger();
       notify();
-    }
-  });
-  audio.addEventListener('play', () => {
-    state.playing = true;
-    notify();
-  });
-  audio.addEventListener('error', () => {
-    if (audio.dataset.loadToken !== String(loadToken)) return;
-    state.playing = false;
-    state.lastError = 'Could not load audio stream';
-    notify();
-  });
+    });
+    el.addEventListener('ended', () => {
+      if (suppressEnded || crossfading) return;
+      next().catch(() => { /* */ });
+    });
+    el.addEventListener('pause', () => {
+      if (!el.ended && !crossfading) {
+        state.playing = false;
+        notify();
+      }
+    });
+    el.addEventListener('play', () => {
+      if (!crossfading) {
+        state.playing = true;
+        notify();
+      }
+    });
+    el.addEventListener('error', () => {
+      if (el.dataset.loadToken !== String(loadToken)) return;
+      state.playing = false;
+      state.lastError = 'Could not load audio stream';
+      notify();
+    });
+  }
+
+  function bindIncomingEvents(el) {
+    el.addEventListener('timeupdate', () => {
+      if (crossfading) notify();
+    });
+    el.addEventListener('ended', () => {
+      if (!crossfading) return;
+      completeCrossfade(loadToken);
+    });
+  }
+
+  bindPrimaryEvents(audio);
+
+  const CrossfadeHelpers = {
+    crossfadeProgress,
+    crossfadeVolumes,
+    shouldStartCrossfade,
+  };
 
   const api = {
     get active() { return state.active; },
@@ -589,11 +871,16 @@
     seekRatio,
     setVolume,
     setShuffle,
+    setRepeat,
+    cycleRepeat,
     seekToIndex,
+    seekToUpcomingOffset,
     stop,
     streamUrl,
+    CrossfadeHelpers,
   };
 
   root.WebPlayback = api;
+  root.WebPlaybackCrossfade = CrossfadeHelpers;
   if (typeof module !== 'undefined') module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : typeof window !== 'undefined' ? window : {});

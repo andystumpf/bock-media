@@ -12,6 +12,7 @@ data class LibraryData(
         LibraryFilter.Playlists -> playlists
         LibraryFilter.Artists -> artists
         LibraryFilter.Albums -> albums
+        LibraryFilter.Tracks -> emptyList()
         LibraryFilter.Downloaded -> offline
     }
 }

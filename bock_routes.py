@@ -1,17 +1,93 @@
 """Register Spotify-parity API routes on the Flask app."""
+import json
+import os
+import time
+
 from flask import jsonify, request, Response
 
 import bock_acquire
+import bock_artist_top_tracks
 import bock_continue
 import bock_discover
 import bock_folders
 import bock_handoff
+import bock_home
 import bock_loudness
+import bock_listen_agent
 import bock_mix_muse
+import bock_perf
 import bock_play_counts
 import bock_resonance
 import bock_search
 import bock_search_ext
+
+
+def resolve_library_artist_name(db_query, db_one, requested):
+    """Map a requested artist label to the canonical name stored in songs_cache."""
+    import re
+    from urllib.parse import unquote
+
+    req = unquote(str(requested or '')).strip().replace('+', ' ')
+    if not req:
+        return ''
+
+    candidates = [req]
+    stripped = re.sub(r'^the\s+', '', req, flags=re.I).strip()
+    if stripped and stripped not in candidates:
+        candidates.append(stripped)
+    if not req.lower().startswith('the '):
+        with_the = f'The {req}'
+        if with_the not in candidates:
+            candidates.append(with_the)
+
+    best_name = None
+    best_count = -1
+    for candidate in candidates:
+        row = db_one(
+            'SELECT artist, COUNT(*) AS cnt FROM songs_cache '
+            'WHERE LOWER(TRIM(artist)) = LOWER(?) AND path IS NOT NULL AND path != "" '
+            'GROUP BY artist ORDER BY cnt DESC LIMIT 1',
+            [candidate],
+        )
+        if not row or not row.get('artist'):
+            continue
+        count = int(row.get('cnt') or 0)
+        if count > best_count:
+            best_count = count
+            best_name = row['artist']
+    if best_name:
+        return best_name
+
+    req_key = bock_acquire._artist_key(req)
+    if not req_key:
+        return req
+
+    rows = db_query(
+        'SELECT artist, COUNT(*) AS cnt FROM songs_cache '
+        'WHERE artist IS NOT NULL AND TRIM(artist) != "" '
+        'AND path IS NOT NULL AND path != "" '
+        'GROUP BY artist',
+    ) or []
+    matches = [r for r in rows if bock_acquire._artist_key(r.get('artist')) == req_key]
+    if not matches:
+        return req
+    matches.sort(key=lambda r: -(int(r.get('cnt') or 0)))
+    return matches[0]['artist']
+
+
+def _cache_artist_matches(requested, cached_artist):
+    """True when a music-video cache key artist matches the requested library artist."""
+    import re
+    req = (requested or '').strip().lower()
+    ca = (cached_artist or '').strip().lower()
+    if not req:
+        return True
+    if not ca:
+        return False
+    if req == ca or req in ca or ca in req:
+        return True
+    strip = lambda s: re.sub(r'^the\s+', '', s, flags=re.I).strip()
+    return strip(req) == strip(ca)
 
 
 def register(app, g):
@@ -151,25 +227,52 @@ def register(app, g):
 
     @app.route('/api/library/new')
     def api_library_new():
-        since = (request.args.get('since') or '7d').strip().lower()
-        days = 7
-        if since.endswith('d') and since[:-1].isdigit():
-            days = int(since[:-1])
+        import bock_library_new
+        import bock_ratings
+        since = (request.args.get('since') or '7d').strip()
         limit = min(max(int(request.args.get('limit', 50) or 50), 1), 200)
-        import datetime
-        cutoff = (datetime.datetime.now() - datetime.timedelta(days=days)).strftime('%Y-%m-%d')
-        tracks = db_query(
-            'SELECT title, artist, album, path, first_seen_at FROM songs_cache '
-            'WHERE first_seen_at >= ? AND path IS NOT NULL ORDER BY first_seen_at DESC LIMIT ?',
-            [cutoff, limit],
-        ) or []
-        albums = db_query(
-            'SELECT album, artist, MIN(path) as path, MIN(first_seen_at) as first_seen_at '
-            'FROM songs_cache WHERE first_seen_at >= ? AND album != "" '
-            'GROUP BY album, artist ORDER BY first_seen_at DESC LIMIT ?',
-            [cutoff, limit],
-        ) or []
-        return jsonify({'since': since, 'tracks': tracks, 'albums': albums, 'playlists': []})
+        after = (request.args.get('after') or '').strip() or None
+        followed_only = request.args.get('followed', '').strip().lower() in ('1', 'true', 'yes')
+        artists = None
+        if followed_only:
+            member = g['_ratings_member_from_request']()
+            followed = bock_ratings.list_followed_artists(g['RATINGS_PATH'], member)
+            artists = [a['name'] for a in followed]
+        payload = bock_library_new.library_new_payload(
+            db_query, since=since, limit=limit, artists=artists, after=after,
+        )
+        payload['followedOnly'] = followed_only
+        return jsonify(payload)
+
+    @app.route('/api/followed-artists')
+    def api_followed_artists():
+        import bock_ratings
+        member = g['_ratings_member_from_request']()
+        artists = bock_ratings.list_followed_artists(g['RATINGS_PATH'], member)
+        return jsonify({'artists': artists, 'memberId': member or None})
+
+    @app.route('/api/notifications/followed')
+    def api_notifications_followed():
+        import bock_library_new
+        import bock_ratings
+        member = g['_ratings_member_from_request']()
+        since = (request.args.get('since') or '30d').strip()
+        after = (request.args.get('after') or '').strip() or None
+        limit = min(max(int(request.args.get('limit', 50) or 50), 1), 200)
+        followed = bock_ratings.list_followed_artists(g['RATINGS_PATH'], member)
+        artist_names = [a['name'] for a in followed]
+        payload = bock_library_new.library_new_payload(
+            db_query, since=since, limit=limit, artists=artist_names, after=after,
+        )
+        unread = len(payload.get('albums') or []) + len(payload.get('tracks') or [])
+        return jsonify({
+            'since': payload.get('since'),
+            'albums': payload.get('albums') or [],
+            'tracks': payload.get('tracks') or [],
+            'unreadCount': unread,
+            'followedCount': len(followed),
+            'followedArtists': artist_names,
+        })
 
     @app.route('/api/continue')
     def api_continue():
@@ -234,21 +337,36 @@ def register(app, g):
         )
         return jsonify({'ok': True, 'pins': cleaned, 'memberId': member_id or None})
 
+    _suggest_playlist_cache = {'at': 0.0, 'pl': [], 'smart': []}
+
+    def _cached_suggest_playlists(ttl_sec=90):
+        now = time.time()
+        if now - _suggest_playlist_cache['at'] < ttl_sec:
+            return _suggest_playlist_cache['pl'], _suggest_playlist_cache['smart']
+        pl = [{'id': pid, 'name': name} for pid, name, _ in _load_playlist_entries()]
+        smart = [{'id': s.get('id'), 'name': s.get('name')} for s in _load_smart_playlists()]
+        _suggest_playlist_cache.update(at=now, pl=pl, smart=smart)
+        return pl, smart
+
+    _response_cache_get = g.get('_response_cache_get')
+    _response_cache_put = g.get('_response_cache_put')
+
     @app.route('/api/search/suggest')
     def api_search_suggest():
         q = (request.args.get('q') or '').strip()
         if len(q) < 1:
             return jsonify({'query': q, 'songs': [], 'playlists': [], 'artists': [], 'albums': []})
-        bock_search_ext.ensure_fts(g['get_db_rw'], db_query)
-        pl_names = [{'id': pid, 'name': name} for pid, name, _ in _load_playlist_entries()]
-        smart = [{'id': s.get('id'), 'name': s.get('name')} for s in _load_smart_playlists()]
-        devices = []
-        try:
-            import alexa_remote
-            devices = [d.get('name', '') for d in (alexa_remote.list_devices() or [])]
-        except Exception:
-            pass
-        payload = bock_search_ext.suggest_payload(db_query, q, pl_names, devices, smart)
+        cache_key = f'suggest?{request.query_string.decode("utf-8", "ignore")}'
+        if _response_cache_get:
+            cached = _response_cache_get(cache_key)
+            if cached is not None:
+                resp = jsonify(cached)
+                resp.headers['Cache-Control'] = 'private, max-age=30'
+                return resp
+        pl_names, smart = _cached_suggest_playlists()
+        payload = bock_search_ext.suggest_payload(db_query, q, pl_names, [], smart)
+        if _response_cache_put:
+            _response_cache_put(cache_key, payload)
         resp = jsonify(payload)
         resp.headers['Cache-Control'] = 'private, max-age=30'
         return resp
@@ -270,6 +388,253 @@ def register(app, g):
         _, _, _, counts_path = _paths()
         data = bock_play_counts.rebuild_from_history(STREAM_HISTORY_PATH, counts_path)
         return jsonify({'ok': True, 'paths': len((data or {}).get('paths', {}))})
+
+    def _member_from_request():
+        member = (request.args.get('member') or '').strip()
+        if not member and (request.args.get('clientId') or '').strip():
+            member = member_for_client(request.args.get('clientId').strip()) or ''
+        return member
+
+    def _enrich_song_rows(rows, member=''):
+        if not rows:
+            return rows
+        import bock_ratings
+        counts = bock_play_counts.load_counts(PLAY_COUNTS_PATH)
+        path_counts = counts.get('paths') or {}
+        member_counts = (counts.get('byMember') or {}).get(member or 'household', {})
+        if member and member in (counts.get('byMember') or {}):
+            member_counts = counts['byMember'][member]
+        ratings_list = bock_ratings.list_ratings(g['RATINGS_PATH'], member) if member else []
+        song_ratings = {}
+        for r in ratings_list:
+            if (r.get('kind') or 'song') != 'song':
+                continue
+            pid = r.get('id') or r.get('path')
+            if pid:
+                song_ratings[pid] = int(r.get('stars') or 0)
+        out = []
+        for row in rows:
+            r = dict(row)
+            path = r.get('path') or ''
+            r['playCount'] = int(member_counts.get(path) or path_counts.get(path) or 0)
+            stars = song_ratings.get(path, 0)
+            r['rating'] = stars
+            r['liked'] = stars >= 5
+            raw_dur = r.get('duration_seconds')
+            if raw_dur is not None:
+                try:
+                    dur = int(float(raw_dur))
+                    r['duration_seconds'] = dur if dur > 0 else None
+                except (TypeError, ValueError):
+                    r['duration_seconds'] = None
+            out.append(r)
+        return out
+
+    @app.route('/api/artists/<path:artist_name>/top-tracks')
+    def api_artist_top_tracks(artist_name):
+        artist = resolve_library_artist_name(db_query, db_one, artist_name)
+        if not artist:
+            return jsonify({'error': 'artist required'}), 400
+        limit = min(max(int(request.args.get('limit') or 10), 1), 50)
+        member = _member_from_request()
+        items, _source = bock_artist_top_tracks.resolve_artist_top_tracks(
+            artist,
+            db_query,
+            lambda rows: _enrich_song_rows(rows, member),
+            member,
+            limit,
+            load_config,
+        )
+        return jsonify({'artist': artist, 'items': items, 'total': len(items)})
+
+    @app.route('/api/artists/<path:artist_name>')
+    def api_artist_detail(artist_name):
+        artist = resolve_library_artist_name(db_query, db_one, artist_name)
+        if not artist:
+            return jsonify({'error': 'artist required'}), 400
+        member = _member_from_request()
+        ratings_member = g['_ratings_member_from_request']()
+        stats = db_one(
+            'SELECT COUNT(*) as track_count, COUNT(DISTINCT album) as album_count '
+            'FROM songs_cache WHERE artist = ? AND path IS NOT NULL',
+            [artist],
+        ) or {}
+        albums = db_query(
+            'SELECT album, artist, MIN(path) as path, MIN(year) as year, COUNT(*) as track_count, '
+            'MAX(first_seen_at) as first_seen_at '
+            'FROM songs_cache WHERE artist = ? AND album != "" AND path IS NOT NULL '
+            'GROUP BY album, artist ORDER BY year DESC, album COLLATE NOCASE ASC LIMIT 200',
+            [artist],
+        ) or []
+        top_tracks, top_tracks_source = bock_artist_top_tracks.resolve_artist_top_tracks(
+            artist,
+            db_query,
+            lambda rows: _enrich_song_rows(rows, member),
+            member,
+            10,
+            load_config,
+        )
+        total_plays = sum(t.get('playCount', 0) for t in top_tracks)
+        import bock_ratings
+        artist_rating = bock_ratings.get_artist_rating(g['RATINGS_PATH'], artist, ratings_member)
+        similar = []
+        if top_tracks:
+            seed_path = top_tracks[0].get('path')
+            seed = bock_resonance.fetch_seed_row(db_one, db_query, 'song', path=seed_path)
+            if seed:
+                sim_rows = bock_resonance.similar_tracks(db_query, seed, limit=16)
+                seen = {artist.lower()}
+                for row in sim_rows:
+                    a = (row.get('artist') or '').strip()
+                    if a and a.lower() not in seen:
+                        seen.add(a.lower())
+                        similar.append({'artist': a, 'path': row.get('path')})
+        appears_on = db_query(
+            'SELECT s.album, MIN(s.path) as path, MIN(s.year) as year, COUNT(*) as track_count '
+            'FROM songs_cache s '
+            'WHERE s.artist = ? AND s.path IS NOT NULL AND s.album != "" '
+            'AND EXISTS ('
+            '  SELECT 1 FROM songs_cache o '
+            '  WHERE o.album = s.album AND o.path IS NOT NULL '
+            '  AND LOWER(TRIM(o.artist)) != LOWER(?)'
+            ') '
+            'GROUP BY s.album '
+            'ORDER BY year DESC, album COLLATE NOCASE ASC LIMIT 12',
+            [artist, artist],
+        ) or []
+        first_added = db_one(
+            'SELECT MIN(first_seen_at) as first_seen FROM songs_cache '
+            'WHERE artist = ? AND path IS NOT NULL',
+            [artist],
+        ) or {}
+        decade_row = db_one(
+            'SELECT CAST(year / 10 AS INT) * 10 as decade, COUNT(*) as cnt FROM songs_cache '
+            'WHERE artist = ? AND year > 1900 GROUP BY decade ORDER BY cnt DESC LIMIT 1',
+            [artist],
+        ) or {}
+        genre_counts = {}
+        for row in top_tracks:
+            genre_name = (row.get('genre') or '').strip()
+            if genre_name:
+                genre_counts[genre_name] = genre_counts.get(genre_name, 0) + 1
+        top_genres = [name for name, _ in sorted(genre_counts.items(), key=lambda x: -x[1])[:8]]
+        for album in albums:
+            raw_year = album.get('year')
+            if raw_year is not None:
+                try:
+                    album['year'] = int(float(raw_year))
+                except (TypeError, ValueError):
+                    album['year'] = None
+            raw_tc = album.get('track_count')
+            if raw_tc is not None:
+                try:
+                    album['track_count'] = int(float(raw_tc))
+                except (TypeError, ValueError):
+                    album['track_count'] = 0
+        for album in appears_on:
+            raw_year = album.get('year')
+            if raw_year is not None:
+                try:
+                    album['year'] = int(float(raw_year))
+                except (TypeError, ValueError):
+                    album['year'] = None
+            raw_tc = album.get('track_count')
+            if raw_tc is not None:
+                try:
+                    album['track_count'] = int(float(raw_tc))
+                except (TypeError, ValueError):
+                    album['track_count'] = 0
+        return jsonify({
+            'artist': artist,
+            'trackCount': stats.get('track_count') or 0,
+            'albumCount': stats.get('album_count') or 0,
+            'totalPlays': total_plays,
+            'followed': artist_rating >= 3,
+            'rating': artist_rating,
+            'topTracks': top_tracks[:10],
+            'topTracksSource': top_tracks_source,
+            'albums': albums,
+            'similarArtists': similar,
+            'appearsOn': appears_on,
+            'about': {
+                'firstAdded': first_added.get('first_seen'),
+                'topDecade': decade_row.get('decade'),
+                'topGenres': top_genres,
+            },
+        })
+
+    @app.route('/api/music-video/related')
+    def api_music_video_related():
+        artist = (request.args.get('artist') or '').strip()
+        title = (request.args.get('title') or '').strip()
+        limit = min(max(int(request.args.get('limit') or 12), 1), 24)
+        cache_path = g.get('MUSIC_VIDEO_CACHE_PATH') or os.path.join(DATA_DIR, 'music_video_cache.json')
+        artist_matches = g.get('_music_video_artist_matches')
+        items = []
+        seen_vids = set()
+        try:
+            if os.path.isfile(cache_path):
+                with open(cache_path) as f:
+                    cached = json.load(f)
+                if isinstance(cached, dict):
+                    for cache_key, entry in cached.items():
+                        if not isinstance(entry, dict):
+                            continue
+                        key_parts = str(cache_key).split('|', 2)
+                        if len(key_parts) >= 3:
+                            key_artist = key_parts[1]
+                            track_title = key_parts[2]
+                        else:
+                            key_artist = (entry.get('artist') or '').strip()
+                            track_title = ''
+                        if artist and not _cache_artist_matches(artist, key_artist):
+                            continue
+                        if title and track_title and track_title == title.strip().lower():
+                            continue
+                        vid = entry.get('videoId') or entry.get('id')
+                        if not vid or vid in seen_vids:
+                            continue
+                        picked_title = (entry.get('title') or '').strip()
+                        if artist and artist_matches and picked_title:
+                            if not artist_matches(artist, picked_title):
+                                continue
+                        seen_vids.add(vid)
+                        items.append({
+                            'videoId': vid,
+                            'title': picked_title or track_title.replace('_', ' ').title(),
+                            'artist': artist,
+                            'thumbnail': entry.get('thumbnail') or f'https://i.ytimg.com/vi/{vid}/hqdefault.jpg',
+                        })
+                        if len(items) >= limit:
+                            break
+        except Exception:
+            pass
+        return jsonify({'items': items[:limit]})
+
+    @app.route('/api/music-video/check', methods=['POST'])
+    def api_music_video_check():
+        body = request.get_json(silent=True) or {}
+        tracks = body.get('tracks') or []
+        cache_path = g.get('MUSIC_VIDEO_CACHE_PATH') or os.path.join(DATA_DIR, 'music_video_cache.json')
+        cached = {}
+        try:
+            if os.path.isfile(cache_path):
+                with open(cache_path) as f:
+                    cached = json.load(f) or {}
+        except Exception:
+            cached = {}
+        mv_key_fn = g.get('_music_video_cache_key')
+        available = {}
+        for tr in tracks[:100]:
+            if not isinstance(tr, dict):
+                continue
+            t_title = (tr.get('title') or '').strip()
+            t_artist = (tr.get('artist') or '').strip()
+            key_label = f'{t_title}|{t_artist}'
+            cache_key = mv_key_fn(t_title, t_artist) if mv_key_fn else f'v4|{t_artist}|{t_title}'
+            entry = cached.get(cache_key) if isinstance(cached, dict) else None
+            available[key_label] = bool(entry and (entry.get('videoId') or entry.get('id')))
+        return jsonify({'available': available})
 
     @app.route('/api/playback/handoff', methods=['POST'])
     def api_playback_handoff():
@@ -317,8 +682,9 @@ def register(app, g):
         save = bool(body.get('save'))
         try:
             candidates = bock_mix_muse.candidates_for_prompt(db_query, prompt)
-            ai_name, paths = bock_mix_muse.pick_tracks(
+            ai_name, paths, mode = bock_mix_muse.curate_playlist(
                 prompt, candidates, max_tracks, load_config, body.get('provider'),
+                db_query=db_query,
             )
         except ValueError as e:
             code = str(e)
@@ -328,12 +694,44 @@ def register(app, g):
             return jsonify({'error': 'mix_muse_request_failed', 'detail': str(e)}), 502
         name = (body.get('name') or '').strip() or ai_name
         tracks = _enrich_track_paths(paths)
-        out = {'name': name, 'tracks': tracks, 'trackCount': len(tracks), 'source': 'mix-muse'}
+        out = {'name': name, 'tracks': tracks, 'trackCount': len(tracks), 'source': f'mix-muse-{mode}', 'mode': mode}
         if save:
             pid = str(_uuid.uuid4())
             saved = _persist_playlist(pid, name, paths, create=True)
             out.update(saved or {})
             out['playlistId'] = pid
+        return jsonify(out)
+
+    @app.route('/api/listen-agent/status')
+    def api_listen_agent_status():
+        return jsonify(bock_listen_agent.status(load_config))
+
+    @app.route('/api/listen-agent/play', methods=['POST'])
+    def api_listen_agent_play():
+        body = request.get_json(silent=True) or {}
+        prompt = (body.get('prompt') or '').strip()
+        if not prompt:
+            return jsonify({'error': 'prompt_required'}), 400
+        try:
+            out = bock_listen_agent.play_from_prompt(
+                prompt,
+                db_query=db_query,
+                load_config_fn=load_config,
+                enrich_paths_fn=_enrich_track_paths,
+                enrich_song_rows_fn=lambda rows: _enrich_song_rows(rows, _member_from_request()),
+                fuzzy_artist=g.get('fuzzy_find_artist'),
+                fuzzy_album=g.get('fuzzy_find_album'),
+                album_tracks_fn=g.get('_album_tracks_for_play'),
+                best_playlist_fn=g.get('best_playlist_entry'),
+                parse_m3u_fn=g.get('parse_m3u'),
+                fuzzy_track_fn=g.get('fuzzy_find_track'),
+            )
+        except ValueError as e:
+            code = str(e)
+            status = 404 if code.endswith('_not_found') or code == 'no_tracks_found' else 400
+            return jsonify({'error': code}), status
+        except Exception as e:
+            return jsonify({'error': 'listen_agent_failed', 'detail': str(e)}), 502
         return jsonify(out)
 
     @app.route('/api/mix-muse/similar', methods=['POST'])
@@ -365,8 +763,9 @@ def register(app, g):
                 return jsonify({'error': 'invalid seedKind'}), 400
             if user_prompt:
                 prompt = user_prompt
-            ai_name, paths = bock_mix_muse.pick_tracks(
+            ai_name, paths, mode = bock_mix_muse.curate_playlist(
                 prompt, pool, max_tracks, load_config, body.get('provider'),
+                seed_row=seed_row, db_query=db_query,
             )
         except ValueError as e:
             code = str(e)
@@ -379,7 +778,7 @@ def register(app, g):
         tracks = _enrich_track_paths(paths)
         out = {
             'name': name, 'tracks': tracks, 'trackCount': len(tracks),
-            'source': 'mix-muse', 'prompt': prompt, 'seedKind': seed_kind,
+            'source': f'mix-muse-{mode}', 'mode': mode, 'prompt': prompt, 'seedKind': seed_kind,
         }
         if save:
             pid = str(_uuid.uuid4())
@@ -540,6 +939,145 @@ def register(app, g):
             'unifiedSearch': True,
             'drivingMode': True,
             'mixMuse': bock_mix_muse.status(load_config).get('configured', False),
+            'listenAgent': bock_listen_agent.status(load_config).get('configured', False),
             'resonance': True,
             'acquireIdeas': bock_acquire.status(load_config).get('enabled', True),
+            'unifiedHome': True,
         })
+
+    _read_stream_history = g['_read_stream_history']
+    _genres_items = g['_genres_items']
+    _playlist_summaries_for_home = g['_playlist_summaries_for_home']
+    _recently_created_playlists_for_home = g['_recently_created_playlists_for_home']
+    _rated_songs_as_favorites = g['_rated_songs_as_favorites']
+    member_for_client = g['member_for_client']
+    RATINGS_PATH = g['RATINGS_PATH']
+
+    def _home_member():
+        member = (request.args.get('member') or request.args.get('memberId') or '').strip()
+        if not member and (request.args.get('clientId') or '').strip():
+            member = member_for_client(request.args.get('clientId').strip()) or ''
+        return member
+
+    def _history_mtime():
+        try:
+            path = g['STREAM_HISTORY_PATH']
+            return os.path.getmtime(path) if os.path.isfile(path) else 0.0
+        except OSError:
+            return 0.0
+
+    def _household_mtime():
+        try:
+            path = g.get('HOUSEHOLD_PATH') or ''
+            return os.path.getmtime(path) if path and os.path.isfile(path) else 0.0
+        except OSError:
+            return 0.0
+
+    def _library_new_payload(since='7d', limit=50, artists=None):
+        import bock_library_new
+        return bock_library_new.library_new_payload(
+            db_query, since=since, limit=limit, artists=artists,
+        )
+
+    def _followed_library_new_payload(since='14d', limit=24):
+        import bock_ratings
+        member = _home_member()
+        followed = bock_ratings.list_followed_artists(RATINGS_PATH, member)
+        if not followed:
+            return {'since': since, 'tracks': [], 'albums': [], 'playlists': [], 'followedOnly': True}
+        return _library_new_payload(
+            since=since,
+            limit=limit,
+            artists=[a['name'] for a in followed],
+        )
+
+    @app.route('/api/home')
+    @bock_perf.timed_route('home')
+    def api_home():
+        import bock_uitest
+        injected = bock_uitest.uitest_fail_response('home')
+        if injected is not None:
+            return injected
+        member = _home_member()
+        deferred = request.args.get('deferred', '1') != '0'
+        playlist_limit = min(max(int(request.args.get('playlistLimit') or 500), 1), 2000)
+        genre_limit = min(max(int(request.args.get('genreLimit') or 40), 1), 200)
+        history_limit = min(max(int(request.args.get('historyLimit') or 150), 1), 500)
+        _, resume_path, cache_path, _ = _paths()
+
+        def load_favorites():
+            return g['_load_favorites'](member)
+
+        ratings_items = None
+        analytics_payload = None
+        include_ratings = request.args.get('includeRatings', '0') == '1'
+        if not deferred or include_ratings:
+            import bock_ratings
+            ratings_items = bock_ratings.list_ratings(g['RATINGS_PATH'], member)
+
+        import bock_home_defaults
+        home_defaults = bock_home_defaults.load(DATA_DIR, load_config())
+
+        def _home_genres(limit=40):
+            items = _genres_items(limit=limit or genre_limit)
+            return {'items': items, 'total': len(items)}
+
+        payload = bock_home.build_home_payload(
+            member=member,
+            history_mtime=_history_mtime(),
+            household_mtime=_household_mtime(),
+            deferred=deferred,
+            read_stream_history=_read_stream_history,
+            filter_history_rows=g.get('_filter_history_rows'),
+            filter_history_for_member=lambda rows, mid: g['_filter_history_by_member'](
+                rows, mid, g['_load_household'](),
+            ),
+            load_favorites=load_favorites,
+            load_smart_playlists=_load_smart_playlists,
+            load_playlist_summaries=lambda member='', limit=500: _playlist_summaries_for_home(
+                member_filter=member, limit=limit,
+            ),
+            load_recently_created_playlists=lambda member='', limit=10: _recently_created_playlists_for_home(
+                member_filter=member, limit=limit,
+            ),
+            load_genres=_home_genres,
+            library_new=lambda: _library_new_payload(),
+            followed_library_new=lambda: _followed_library_new_payload(),
+            discover_weekly=lambda member='': bock_discover.get_discover_weekly(cache_path, member or 'household'),
+            continue_listening=lambda member='': bock_continue.get_continue(resume_path, member, db_one),
+            analytics_payload=analytics_payload,
+            ratings_items=ratings_items,
+            db_query=db_query,
+            playlist_limit=playlist_limit,
+            genre_limit=genre_limit,
+            history_limit=history_limit,
+            home_defaults=home_defaults,
+        )
+        return jsonify(payload)
+
+    @app.route('/api/perf/home-burst')
+    def api_perf_home_burst():
+        """CI/diagnostic: sequential timing of home refresh endpoints."""
+        client = app.test_client()
+        paths = (
+            '/api/home?deferred=1',
+            '/api/playlists?page=1&limit=500&fields=summary',
+            '/api/genres?limit=40',
+            '/api/dashboard/quick',
+            '/api/nowplaying?page=1&limit=150',
+            '/api/smart_playlists',
+            '/api/library/new?since=7d&limit=50',
+            '/api/analytics',
+        )
+        rows = []
+        for path in paths:
+            t0 = time.perf_counter()
+            resp = client.get(path)
+            ms = (time.perf_counter() - t0) * 1000.0
+            rows.append({
+                'path': path,
+                'status': resp.status_code,
+                'ms': round(ms, 2),
+                'budgetMs': bock_perf.perf_budget_ms(path.split('?')[0].split('/')[-1].replace('-', '_')),
+            })
+        return jsonify({'endpoints': rows})

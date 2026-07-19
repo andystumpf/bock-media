@@ -86,7 +86,7 @@ Playback reverts to title/artist/album art only. Safe default if anything breaks
 If disabling the flag is not enough (e.g. bad import crash):
 
 ```bash
-cd ~/Documents/github/ourMedia
+cd ~/~/bock-media
 git checkout main -- server.py alexa_apl.py
 sudo systemctl restart ourmedia
 ```

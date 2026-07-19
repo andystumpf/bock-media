@@ -6,6 +6,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import com.bockmedia.console.ui.testing.BockTestTags
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -48,7 +50,7 @@ fun FavoritesScreen(
     BockPullRefresh(
         isRefreshing = refreshing,
         onRefresh = { refreshing = true; scope.launch { load() } },
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize().testTag(BockTestTags.FAVORITES_BODY),
     ) {
         when {
             loading -> LoadingBox()

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Material Icons (baseline/filled) — same set as Android `Icons.Default.*` in Routes.kt and components.
 enum BockIcons: String, CaseIterable {

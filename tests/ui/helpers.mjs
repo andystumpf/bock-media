@@ -17,7 +17,11 @@ export function readHomeFeedJs() {
 
 export function readAppJs() {
   let src = readFileSync(path.join(REPO, 'public', 'js', 'app.js'), 'utf8');
-  return src.replace(/\binit\(\);?\s*$/m, '');
+  return src.replace(/\ninit\(\);\s*\n?\s*$/, '\n');
+}
+
+export function readShellLayoutJs() {
+  return readFileSync(path.join(REPO, 'public', 'js', 'shellLayout.js'), 'utf8');
 }
 
 export function shellHtml(extra = '') {
@@ -37,6 +41,7 @@ export function shellHtml(extra = '') {
       <div id="app-backdrop" class="app-backdrop hidden"></div>
       <div class="spotify-main-column">
         <div id="global-banner"></div>
+        <button type="button" id="topbar-profile" class="topbar-profile-btn"><span class="topbar-profile-avatar">B</span></button>
         <span id="page-title" hidden></span>
         <main id="main-content" class="spotify-main-view page-content"></main>
       </div>
@@ -59,12 +64,13 @@ export function shellHtml(extra = '') {
       </footer>
       <nav id="bottom-nav" class="bottom-nav">
         <a href="#dashboard" class="bottom-nav-link" data-tab="home"><span class="bottom-nav-label">Home</span></a>
+        <a href="#nowplaying" class="bottom-nav-link" data-tab="nowplaying"><span class="bottom-nav-label">Now Playing</span></a>
         <a href="#search" class="bottom-nav-link" data-tab="search"><span class="bottom-nav-label">Search</span></a>
         <a href="#library" class="bottom-nav-link" data-tab="library"><span class="bottom-nav-label">Library</span></a>
-        <a href="#automation" class="bottom-nav-link" data-tab="automations"><span class="bottom-nav-label">Automations</span></a>
       </nav>
+      <div id="profile-dropdown" class="profile-dropdown hidden"></div>
     </div>
-    <button id="account-menu-btn"></button>
+    <button id="account-menu-btn" class="sidebar-user-btn"></button>
     ${extra}
   </body></html>`;
 }
@@ -86,6 +92,11 @@ export function bootstrap({ fetchImpl, htmlExtra = '' } = {}) {
   feedScript.textContent = readHomeFeedJs();
   window.document.body.appendChild(feedScript);
 
+  const shellScript = window.document.createElement('script');
+  shellScript.textContent = readShellLayoutJs();
+  window.document.body.appendChild(shellScript);
+  window.ShellLayout.init();
+
   const script = window.document.createElement('script');
   script.textContent = readAppJs();
   window.document.body.appendChild(script);
@@ -96,7 +107,7 @@ export function bottomTabForRoute(route) {
   const root = (route || 'dashboard').split('/')[0];
   if (['dashboard', 'nowplaying', 'rooms', 'analytics', 'routines'].includes(root)) return 'home';
   if (root === 'search') return 'search';
-  if (['library', 'playlists', 'artists', 'albums', 'songs', 'watchfolders', 'genres'].includes(root)) return 'library';
+  if (['library', 'playlists', 'artists', 'albums', 'songs', 'watchfolders', 'genres', 'liked', 'artist', 'album'].includes(root)) return 'library';
   if (['automation'].includes(root)) return 'automations';
   return null;
 }

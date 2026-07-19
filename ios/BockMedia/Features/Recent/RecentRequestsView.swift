@@ -17,6 +17,7 @@ struct RecentRequestsView: View {
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
+        .accessibilityIdentifier(BockTestTags.voiceLogBody)
         .navigationTitle("Voice log")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

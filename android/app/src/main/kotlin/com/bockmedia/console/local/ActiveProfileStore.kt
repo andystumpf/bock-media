@@ -54,6 +54,17 @@ object ActiveProfileStore {
         markProfileChosen(context)
     }
 
+    /** Clears a member id that no longer exists on the server; keeps profile-choice flag. */
+    fun clearStaleMember(context: Context) {
+        hydrate(context)
+        context.applicationContext
+            .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .remove(KEY)
+            .apply()
+        _activeMemberId.value = null
+    }
+
     /** User explicitly chose to stay unattributed (first-run picker or Family dropdown). */
     fun chooseUnattributed(context: Context) {
         val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)

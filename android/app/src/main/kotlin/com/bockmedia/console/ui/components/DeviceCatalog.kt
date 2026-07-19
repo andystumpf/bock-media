@@ -1,6 +1,8 @@
 package com.bockmedia.console.ui.components
 
+import com.bockmedia.console.data.api.dto.AlexaDevice
 import com.bockmedia.console.data.api.dto.AlexaRemoteStatus
+import com.bockmedia.console.data.api.dto.DeviceGroup
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.ui.alexaControlsAvailable
 import kotlinx.coroutines.async
@@ -19,6 +21,8 @@ object DeviceCatalog {
         val status: AlexaRemoteStatus?,
         val remoteReady: Boolean,
         val options: List<DeviceOption>,
+        val devices: List<AlexaDevice>,
+        val groups: List<DeviceGroup>,
         val atMs: Long,
     )
 
@@ -43,11 +47,13 @@ object DeviceCatalog {
             runCatching {
                 val devicesDef = async { repository.alexaRemoteDevices().devices }
                 val groupsDef = async { repository.deviceGroups().items }
-                buildDeviceOptions(groupsDef.await(), devicesDef.await())
-            }.getOrDefault(emptyList())
+                val devices = devicesDef.await()
+                val groups = groupsDef.await()
+                Triple(buildDeviceOptions(groups, devices), devices, groups)
+            }.getOrDefault(Triple(emptyList(), emptyList(), emptyList()))
         } else {
-            emptyList()
+            Triple(emptyList(), emptyList(), emptyList())
         }
-        Snapshot(status, remoteReady, options, System.currentTimeMillis()).also { cached = it }
+        Snapshot(status, remoteReady, options.first, options.second, options.third, System.currentTimeMillis()).also { cached = it }
     }
 }

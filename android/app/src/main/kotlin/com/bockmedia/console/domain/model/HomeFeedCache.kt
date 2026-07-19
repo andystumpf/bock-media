@@ -11,8 +11,13 @@ object HomeFeedCache {
     @Volatile
     private var cachedAtMs: Long = 0L
 
+    @Volatile
+    private var hasRatedSongs: Boolean? = null
+
     /** Last cached feed regardless of age — for instant tab revisit paint. */
     fun peek(): HomeFeed? = feed
+
+    fun peekHasRatedSongs(): Boolean? = hasRatedSongs
 
     fun getIfFresh(): HomeFeed? {
         val cached = feed ?: return null
@@ -20,14 +25,20 @@ object HomeFeedCache {
         return cached
     }
 
-    fun put(value: HomeFeed) {
+    fun put(value: HomeFeed, hasRatedSongs: Boolean? = null) {
         if (value.sections.isEmpty()) return
         feed = value
         cachedAtMs = System.currentTimeMillis()
+        if (hasRatedSongs != null) this.hasRatedSongs = hasRatedSongs
+    }
+
+    fun setHasRatedSongs(value: Boolean) {
+        hasRatedSongs = value
     }
 
     fun invalidate() {
         feed = null
         cachedAtMs = 0L
+        hasRatedSongs = null
     }
 }

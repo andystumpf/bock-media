@@ -43,7 +43,10 @@ object HomeTileRotation {
     }
 
     private fun isRotatable(kind: HomeSectionKind): Boolean = when (kind) {
-        HomeSectionKind.Favorites, HomeSectionKind.RatedSongs, HomeSectionKind.Offline -> false
+        HomeSectionKind.Favorites, HomeSectionKind.RatedSongs, HomeSectionKind.Offline, HomeSectionKind.Decade,
+        // Genre directory — rotation would swap genre tiles for unrelated playlists.
+        HomeSectionKind.BrowseGenres,
+        -> false
         else -> true
     }
 
@@ -84,6 +87,7 @@ object HomeTileRotation {
         HomeSectionKind.Radio -> "From your library"
         HomeSectionKind.Discover -> "${playlist.tracks} tracks · Discover"
         HomeSectionKind.RecentPlaylists -> "${playlist.tracks} tracks · Suggested for you"
+        HomeSectionKind.RecentlyCreated -> "${playlist.tracks} tracks · Recently created"
         else -> "${playlist.tracks} tracks"
     }
 }

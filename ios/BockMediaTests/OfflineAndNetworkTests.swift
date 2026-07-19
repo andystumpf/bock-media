@@ -52,4 +52,33 @@ final class OfflineAndNetworkTests: XCTestCase {
             )
         )
     }
+
+    func testEffectiveLocalURLStripsLoopback() {
+        XCTAssertNil(ServerEndpointResolver.effectiveLocalURL("http://127.0.0.1:3001"))
+        XCTAssertNil(ServerEndpointResolver.effectiveLocalURL("http://localhost:3001"))
+        XCTAssertEqual(
+            ServerEndpointResolver.effectiveLocalURL("http://your-server.local:3001"),
+            "http://your-server.local:3001"
+        )
+    }
+
+    func testSanitizedServerURLRejectsSchemeOnlyXcconfigValues() {
+        XCTAssertNil(ServerURL.sanitizedServerURL("http:"))
+        XCTAssertNil(ServerURL.sanitizedServerURL("https:"))
+        XCTAssertEqual(
+            ServerURL.sanitizedServerURL("https://alexa.morejava.bid"),
+            "https://alexa.morejava.bid"
+        )
+    }
+
+    func testPickEndpointOnCellularUsesExternalOnly() {
+        let chosen = ServerEndpointResolver.pickEndpoint(
+            local: "http://192.168.1.10:5000",
+            external: "https://example.com",
+            localReachable: true,
+            externalReachable: false,
+            wifiAvailable: false
+        )
+        XCTAssertEqual(chosen, ServerURL.normalize("https://example.com"))
+    }
 }

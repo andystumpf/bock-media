@@ -13,6 +13,17 @@ import kotlinx.coroutines.withContext
 
 object HomeArtworkResolver {
     private const val RESOLVE_CONCURRENCY = 8
+    private const val MAX_COVER_WARM = 48
+    private const val MAX_WARM_SECTIONS = 4
+    private const val MAX_WARM_CARDS_PER_SECTION = 12
+
+    /** Visible home tiles only — first N sections × M cards. */
+    fun visibleCardsForWarm(
+        feed: HomeFeed,
+        maxSections: Int = MAX_WARM_SECTIONS,
+        maxCardsPerSection: Int = MAX_WARM_CARDS_PER_SECTION,
+    ): List<HomeCard> =
+        feed.sections.take(maxSections).flatMap { it.cards.take(maxCardsPerSection) }
 
     /** Build artwork URL from cached paths only — no network (safe for first paint). */
     fun peekUrl(baseUrl: String?, card: HomeCard, sizePx: Int = TILE_SIZE_PX): String? {
@@ -22,7 +33,13 @@ object HomeArtworkResolver {
     }
 
     suspend fun warmPlaylistCovers(repository: BockMediaRepository, cards: List<HomeCard>) {
-        val ids = cards.mapNotNull { it.linkedPlaylistId() }.distinct()
+        val ids = cards
+            .filter { it.artPath.isNullOrBlank() }
+            .mapNotNull { it.linkedPlaylistId() }
+            .filter { HomeArtworkCache.playlistPath(it) == null }
+            .distinct()
+            .take(MAX_COVER_WARM)
+        if (ids.isEmpty()) return
         repository.prefetchPlaylistCoverPaths(ids)
     }
 

@@ -1,0 +1,52 @@
+import Foundation
+
+/// Stable accessibility identifiers for UI / smoke tests (Debug).
+enum BockTestTags {
+    static let bottomNav = "bock_bottom_nav"
+    static let navHome = "bock_nav_home"
+    static let navSearch = "bock_nav_search"
+    static let navLibrary = "bock_nav_library"
+    static let navDownloads = "bock_nav_downloads"
+    static let navAutomations = "bock_nav_automations"
+
+    static let screenLoading = "bock_screen_loading"
+    static let homeFeed = "bock_home_feed"
+    static let homeGreeting = "bock_home_greeting"
+    static let searchField = "bock_search_field"
+    static let searchResults = "bock_search_results"
+    static let searchEmpty = "bock_search_empty"
+    static let searchError = "bock_search_error"
+    static let libraryList = "bock_library_list"
+    static let automationsContent = "bock_automations_content"
+    static let analyticsBody = "bock_analytics_body"
+    static let analyticsTotalPlays = "bock_analytics_total_plays"
+    static let accountMenuButton = "bock_account_menu_button"
+    static let settingsBody = "bock_settings_body"
+    static let settingsWifiOnly = "bock_settings_wifi_only"
+    static func settingsContinue(_ value: String) -> String { "bock_settings_continue_\(value)" }
+    static let profilePicker = "bock_profile_picker"
+    static let profileContinueUnattributed = "bock_profile_continue_unattributed"
+    static func profileMemberPick(_ id: String) -> String { "bock_profile_member_\(id)" }
+    static let clientId = "bock_client_id"
+    static let setupScreen = "bock_setup_screen"
+
+    static let playlistDetailBody = "bock_playlist_detail_body"
+    static let artistDetailBody = "bock_artist_detail_body"
+    static let albumDetailBody = "bock_album_detail_body"
+    static let genreDetailBody = "bock_genre_detail_body"
+    static let nowPlayingBody = "bock_now_playing_body"
+    static let nowPlayingPlayPause = "bock_now_playing_play_pause"
+    static let downloadsList = "bock_downloads_list"
+    static let aboutBody = "bock_about_body"
+    static let familyBody = "bock_family_body"
+    static let roomsBody = "bock_rooms_body"
+    static let devicesBody = "bock_devices_body"
+    static let voiceLogBody = "bock_voice_log_body"
+    static let drivingBody = "bock_driving_body"
+    static let routinesBody = "bock_routines_body"
+    static let favoritesBody = "bock_favorites_body"
+    static let playlistsListBody = "bock_playlists_list_body"
+    static let artistsListBody = "bock_artists_list_body"
+    static let albumsListBody = "bock_albums_list_body"
+    static let songsListBody = "bock_songs_list_body"
+}

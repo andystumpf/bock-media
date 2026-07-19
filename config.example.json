@@ -45,7 +45,7 @@
     "provider": ""
   },
   "alexaRemote": {
-    "_comment": "Optional. Unofficial Alexa API for Play on device. url = amazon.com | amazon.co.uk | etc.",
+    "_comment": "Optional. Unofficial Alexa API for Play on device. url = amazon.com | amazon.co.uk | etc. Prefer env vars ALEXA_REMOTE_EMAIL, ALEXA_REMOTE_PASSWORD, ALEXA_REMOTE_OTP_SECRET, ALEXA_REMOTE_URL over on-disk secrets.",
     "url": "amazon.com",
     "email": "SET_LOCALLY",
     "password": "SET_LOCALLY",
@@ -54,6 +54,11 @@
     "loginProxyPort": 3005,
     "loginTimeoutSec": 1800
   },
+  "alexaAplLyrics": {
+    "_comment": "Echo Show synced lyrics via APL. See docs/ECHO_SHOW_APL_LYRICS.md. Enable on NAS after skill manifest update.",
+    "enabled": false
+  },
+  "timezone": "America/Chicago",
   "mobileApi": {
     "_comment": "Bearer token for mobile apps and external API access.",
     "token": "GENERATE_AND_SET_LOCALLY",

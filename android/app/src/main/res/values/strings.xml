@@ -40,4 +40,6 @@
     <string name="notification_pause">Pause</string>
     <string name="notification_next_device">Next device</string>
     <string name="notification_more_devices">+%1$d more</string>
+    <string name="follow_notification_channel_name">Followed artists</string>
+    <string name="follow_notification_channel_desc">Alerts when new music is added by artists you follow</string>
 </resources>

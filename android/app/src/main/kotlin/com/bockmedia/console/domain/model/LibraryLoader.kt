@@ -14,6 +14,7 @@ enum class LibraryFilter(val label: String) {
     Playlists("Playlists"),
     Artists("Artists"),
     Albums("Albums"),
+    Tracks("Tracks"),
     Downloaded("Downloads"),
 }
 
@@ -21,7 +22,7 @@ enum class LibraryViewMode { List, Grid }
 
 enum class LibrarySort { Recents, Name }
 
-enum class LibraryItemKind { Playlist, Artist, Album, Downloaded }
+enum class LibraryItemKind { Playlist, Artist, Album, Track, Downloaded }
 
 data class LibraryItem(
     val id: String,
@@ -77,6 +78,17 @@ object LibraryLoader {
         return albumItems(repository, resp.items) to resp.total
     }
 
+    suspend fun loadTrackPage(
+        repository: BockMediaRepository,
+        page: Int,
+        search: String = "",
+    ): Pair<List<LibraryItem>, Int> {
+        val resp = runCatching {
+            repository.songs(page = page, search = search, limit = BROWSE_PAGE_SIZE)
+        }.getOrNull() ?: return emptyList<LibraryItem>() to 0
+        return trackItems(resp.items) to resp.total
+    }
+
     private suspend fun artistItems(
         repository: BockMediaRepository,
         artists: List<com.bockmedia.console.data.api.dto.ArtistItem>,
@@ -110,6 +122,23 @@ object LibraryLoader {
             unplayed = album.unplayed,
             year = album.year,
             avgStars = album.avgStars,
+        )
+    }
+
+    private fun trackItems(
+        songs: List<com.bockmedia.console.data.api.dto.SongItem>,
+    ): List<LibraryItem> = songs.mapNotNull { song ->
+        val path = song.path?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+        val title = song.title?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+        LibraryItem(
+            id = "tr-$path",
+            title = title,
+            subtitle = listOfNotNull(song.artist, song.album).joinToString(" · "),
+            kind = LibraryItemKind.Track,
+            playTarget = PlayTarget.Song(path, title),
+            artPath = path,
+            artistName = song.artist,
+            albumName = song.album,
         )
     }
 
@@ -194,6 +223,7 @@ object LibraryLoader {
             }
             LibraryFilter.Artists -> loadArtistPage(repository, page = 1, search = q).first
             LibraryFilter.Albums -> loadAlbumPage(repository, page = 1, search = q).first
+            LibraryFilter.Tracks -> loadTrackPage(repository, page = 1, search = q).first
             LibraryFilter.Downloaded -> {
                 OfflineDownloadManager.refresh(context)
                 OfflineDownloadStore(context).listManifests()

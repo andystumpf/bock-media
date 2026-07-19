@@ -5,6 +5,7 @@ import threading
 import time
 
 _RATINGS_LOCK = threading.Lock()
+_RATINGS_LIST_CACHE: dict = {}
 _LEGACY_MEMBER = ''
 
 
@@ -31,6 +32,11 @@ def _read_file(path):
         return {'members': {}}
     except json.JSONDecodeError:
         return {'members': {}}
+
+
+def _bust_ratings_list_cache():
+    global _RATINGS_LIST_CACHE
+    _RATINGS_LIST_CACHE = {}
 
 
 def _load_doc(path):
@@ -66,9 +72,11 @@ def _mutate_and_save(path, mutator, atomic_write):
             os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
             with open(path, 'w', encoding='utf-8') as fh:
                 json.dump(payload, fh, indent=2)
+        _bust_ratings_list_cache()
 
 
 def _save_doc(path, doc, atomic_write):
+    _bust_ratings_list_cache()
     """Legacy direct save — prefer _mutate_and_save for updates."""
     payload = {'members': doc.get('members') or {}}
     with _RATINGS_LOCK:
@@ -126,6 +134,14 @@ def rating_key(kind, item_id):
 
 
 def list_ratings(path, member_id=''):
+    try:
+        mtime = os.path.getmtime(path) if os.path.isfile(path) else 0.0
+    except OSError:
+        mtime = 0.0
+    cache_key = (path, mtime, member_id or '')
+    cached = _RATINGS_LIST_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
     items = _member_items(_load_doc(path), member_id)
     out = []
     for key, row in items.items():
@@ -144,6 +160,8 @@ def list_ratings(path, member_id=''):
             'updatedAt': row.get('updatedAt'),
         })
     out.sort(key=lambda r: float(r.get('updatedAt') or 0), reverse=True)
+    _RATINGS_LIST_CACHE.clear()
+    _RATINGS_LIST_CACHE[cache_key] = out
     return out
 
 
@@ -179,12 +197,14 @@ def rated_playlist_name(stars):
     return f'{n} {label}'
 
 
-def rated_playlist_detail(path, stars, page=1, limit=100, sort_by='title', order='asc', q='',
+def rated_playlist_detail(path, stars, page=1, limit=100, sort_by='original', order='asc', q='',
                           member_id=''):
     songs = songs_at_stars(path, stars, member_id=member_id)
     pid = rated_playlist_id(stars)
     name = rated_playlist_name(stars)
-    if sort_by == 'updated':
+    if sort_by in ('catalog', 'order', 'original'):
+        pass
+    elif sort_by == 'updated':
         songs.sort(
             key=lambda r: float(r.get('updatedAt') or 0),
             reverse=(order == 'desc'),
@@ -240,12 +260,62 @@ def get_rating(path, kind, item_id, member_id=''):
     return max(0, min(5, int(row.get('stars') or 0)))
 
 
+def list_followed_artists(path, member_id='', min_stars=3):
+    """Artist names the member follows (artist rating >= min_stars)."""
+    min_stars = max(1, min(5, int(min_stars or 3)))
+    out = []
+    seen = set()
+    for row in list_ratings(path, member_id):
+        if (row.get('kind') or '') != 'artist':
+            continue
+        stars = int(row.get('stars') or 0)
+        if stars < min_stars:
+            continue
+        name = (row.get('id') or row.get('title') or '').strip()
+        if not name:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({
+            'name': name,
+            'stars': stars,
+            'followedAt': row.get('updatedAt'),
+        })
+    out.sort(key=lambda r: float(r.get('followedAt') or 0), reverse=True)
+    return out
+
+
+def get_artist_rating(path, artist_name, member_id=''):
+    """Return star rating for an artist, checking primary member then all profiles."""
+    needle = (artist_name or '').strip().lower()
+    if not needle:
+        return 0
+    checked = []
+    for mid in [member_id, '']:
+        if mid in checked:
+            continue
+        checked.append(mid)
+        for r in list_ratings(path, mid):
+            if (r.get('kind') or '') == 'artist' and (r.get('id') or '').lower() == needle:
+                return max(0, min(5, int(r.get('stars') or 0)))
+    doc = _load_doc(path)
+    for mid in (doc.get('members') or {}):
+        if mid in checked:
+            continue
+        for r in list_ratings(path, mid):
+            if (r.get('kind') or '') == 'artist' and (r.get('id') or '').lower() == needle:
+                return max(0, min(5, int(r.get('stars') or 0)))
+    return 0
+
+
 def set_rating(path, kind, item_id, stars, atomic_write, title=None, artist=None, album=None,
                member_id=''):
     kind = (kind or '').strip().lower()
     item_id = (item_id or '').strip()
-    if kind not in ('song', 'album', 'playlist'):
-        raise ValueError('kind must be song, album, or playlist')
+    if kind not in ('song', 'album', 'playlist', 'artist'):
+        raise ValueError('kind must be song, album, playlist, or artist')
     if not item_id:
         raise ValueError('id required')
     stars = int(stars or 0)

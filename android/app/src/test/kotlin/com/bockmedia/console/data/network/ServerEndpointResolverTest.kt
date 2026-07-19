@@ -28,14 +28,14 @@ class ServerEndpointResolverTest {
     }
 
     @Test
-    fun pickEndpoint_prefersLanFallbackWhenNeitherReachable() {
+    fun pickEndpoint_prefersExternalFallbackWhenNeitherReachable() {
         val url = ServerEndpointResolver.pickEndpoint(
             local = "http://192.168.1.100:3001",
             external = "http://203.0.113.10:3001",
             localReachable = false,
             externalReachable = false,
         )
-        assertEquals("http://192.168.1.100:3001", url)
+        assertEquals("http://203.0.113.10:3001", url)
     }
 
     @Test

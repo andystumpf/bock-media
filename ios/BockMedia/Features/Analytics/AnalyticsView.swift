@@ -65,7 +65,7 @@ struct AnalyticsView: View {
         case .allTime: range = "all"
         case .custom: range = "custom:\(isoDate(customFrom)):\(isoDate(customTo))"
         }
-        return "\(range)|\(deviceFilter.apiDeviceId(thisPhoneId: thisPhoneId) ?? "all-devices")"
+        return "\(range)|\(deviceFilter.apiDeviceId(thisPhoneId: thisPhoneId) ?? "all-devices")|\(appState.activeMemberId ?? "none")|\(appState.profileChangeRevision)"
     }
 
     var body: some View {
@@ -74,12 +74,9 @@ struct AnalyticsView: View {
 
             if loading && data == nil {
                 Section {
-                    HStack {
-                        Spacer()
-                        ProgressView()
-                        Spacer()
-                    }
-                    .listRowBackground(Color.clear)
+                    LoadingBox()
+                        .frame(minHeight: 120)
+                        .listRowBackground(Color.clear)
                 }
             } else if let data {
                 summarySection(data)
@@ -107,6 +104,7 @@ struct AnalyticsView: View {
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
+        .accessibilityIdentifier(BockTestTags.analyticsBody)
         .navigationTitle("Analytics")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -243,8 +241,9 @@ struct AnalyticsView: View {
         }
         return Section {
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
-                ForEach(Array(tiles.enumerated()), id: \.offset) { _, tile in
+                ForEach(Array(tiles.enumerated()), id: \.offset) { index, tile in
                     StatCard(tile: tile)
+                        .accessibilityIdentifier(index == 0 ? BockTestTags.analyticsTotalPlays : "bock_analytics_stat_\(index)")
                 }
             }
             .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))

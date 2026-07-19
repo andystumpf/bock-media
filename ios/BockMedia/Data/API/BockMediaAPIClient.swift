@@ -5,9 +5,16 @@ final class BockMediaAPIClient {
     private var baseURL: String?
     private let session: URLSession
 
-    init(preferences: AppPreferences, session: URLSession = .shared) {
+    init(preferences: AppPreferences, session: URLSession? = nil) {
         self.preferences = preferences
-        self.session = session
+        if let session {
+            self.session = session
+        } else {
+            let config = URLSessionConfiguration.default
+            config.timeoutIntervalForRequest = 120
+            config.timeoutIntervalForResource = 180
+            self.session = URLSession(configuration: config)
+        }
     }
 
     func setBaseURL(_ url: String) {
@@ -18,10 +25,20 @@ final class BockMediaAPIClient {
         baseURL = nil
     }
 
+    var currentBaseURL: String? { baseURL }
+
     // MARK: - Health / summary
 
     func health() async throws -> HealthResponse {
         try await get("api/health")
+    }
+
+    func libraryHealth(attentionLimit: Int = 5) async throws -> LibraryHealthResponse {
+        try await get("api/library/health", query: ["attentionLimit": String(attentionLimit)])
+    }
+
+    func mergeArtists(body: [String: Any]) async throws -> OkResponse {
+        try await post("api/library/artists/merge", body: body)
     }
 
     func summary() async throws -> SummaryResponse {
@@ -32,11 +49,42 @@ final class BockMediaAPIClient {
         try await get("api/dashboard/quick")
     }
 
+    func home(
+        deferred: Bool = true,
+        includeRatings: Bool = false,
+        member: String? = nil,
+        clientId: String? = nil,
+        playlistLimit: Int = 500,
+        genreLimit: Int = 40,
+        historyLimit: Int = 150
+    ) async throws -> HomeResponse {
+        var query = [
+            "deferred": deferred ? "1" : "0",
+            "playlistLimit": "\(playlistLimit)",
+            "genreLimit": "\(genreLimit)",
+            "historyLimit": "\(historyLimit)",
+        ]
+        if includeRatings { query["includeRatings"] = "1" }
+        if let member, !member.isEmpty { query["member"] = member }
+        if let clientId, !clientId.isEmpty { query["clientId"] = clientId }
+        return try await get("api/home", query: query)
+    }
+
     // MARK: - Browse
 
-    func playlists(page: Int = 1, limit: Int = 100, search: String = "", member: String? = nil) async throws -> PlaylistsResponse {
-        var query = ["page": "\(page)", "limit": "\(limit)", "search": search]
+    func playlists(
+        page: Int = 1,
+        limit: Int = 100,
+        search: String = "",
+        member: String? = nil,
+        sortBy: String = "catalog",
+        fields: String? = nil,
+        inlineCovers: String? = nil
+    ) async throws -> PlaylistsResponse {
+        var query = ["page": "\(page)", "limit": "\(limit)", "search": search, "sortBy": sortBy]
         if let member, !member.isEmpty { query["member"] = member }
+        if let fields, !fields.isEmpty { query["fields"] = fields }
+        if let inlineCovers, !inlineCovers.isEmpty { query["inlineCovers"] = inlineCovers }
         return try await get("api/playlists", query: query)
     }
 
@@ -70,12 +118,16 @@ final class BockMediaAPIClient {
         limit: Int = 100,
         q: String? = nil,
         sortBy: String? = nil,
-        order: String? = nil
+        order: String? = nil,
+        memberId: String? = nil,
+        clientId: String? = nil
     ) async throws -> PlaylistDetailResponse {
         var query = ["page": "\(page)", "limit": "\(limit)"]
         if let q, !q.isEmpty { query["q"] = q }
         if let sortBy { query["sortBy"] = sortBy }
         if let order { query["order"] = order }
+        if let memberId, !memberId.isEmpty { query["memberId"] = memberId }
+        if let clientId, !clientId.isEmpty { query["clientId"] = clientId }
         return try await get("api/playlists/\(id)", query: query)
     }
 
@@ -92,9 +144,19 @@ final class BockMediaAPIClient {
         limit: Int = 30,
         preview: Int = 5,
         section: String? = nil,
-        source: String? = nil
+        source: String? = nil,
+        fast: Bool = true,
+        includeResonance: Bool = false,
+        includeRooms: Bool = false
     ) async throws -> SearchResponse {
-        var query: [String: String] = ["q": q, "limit": "\(limit)", "preview": "\(preview)"]
+        var query: [String: String] = [
+            "q": q,
+            "limit": "\(limit)",
+            "preview": "\(preview)",
+            "fast": fast ? "1" : "0",
+            "includeResonance": includeResonance ? "1" : "0",
+            "includeRooms": includeRooms ? "1" : "0",
+        ]
         if let section { query["section"] = section }
         if let source { query["source"] = source }
         return try await get("api/search", query: query)
@@ -121,8 +183,17 @@ final class BockMediaAPIClient {
         return try await get("api/continue", query: query)
     }
 
-    func libraryNew(since: String = "7d", limit: Int = 50) async throws -> LibraryNewResponse {
-        try await get("api/library/new", query: ["since": since, "limit": "\(limit)"])
+    func libraryNew(since: String = "7d", limit: Int = 50, followed: Bool = false, after: String? = nil) async throws -> LibraryNewResponse {
+        var query = ["since": since, "limit": "\(limit)"]
+        if followed { query["followed"] = "1" }
+        if let after, !after.isEmpty { query["after"] = after }
+        return try await get("api/library/new", query: query)
+    }
+
+    func followedNotifications(since: String = "30d", after: String? = nil, limit: Int = 50) async throws -> FollowedNotificationsResponse {
+        var query = ["since": since, "limit": "\(limit)"]
+        if let after, !after.isEmpty { query["after"] = after }
+        return try await get("api/notifications/followed", query: query)
     }
 
     func discoverWeekly(member: String? = nil) async throws -> DiscoverWeeklyResponse {
@@ -159,6 +230,16 @@ final class BockMediaAPIClient {
         try await get("api/artist-portrait", query: ["artist": artist])
     }
 
+    func artistDetail(name: String) async throws -> ArtistDetailResponse {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? trimmed
+        return try await get("api/artists/\(encoded)")
+    }
+
+    func musicVideoRelated(artist: String, limit: Int = 12) async throws -> MusicVideoRelatedResponse {
+        try await get("api/music-video/related", query: ["artist": artist, "limit": "\(limit)"])
+    }
+
     func albums(
         page: Int = 1,
         limit: Int = 50,
@@ -172,11 +253,16 @@ final class BockMediaAPIClient {
         return try await get("api/albums", query: query)
     }
 
-    func songs(page: Int = 1, limit: Int = 100, search: String = "", artist: String? = nil, album: String? = nil) async throws -> SongsResponse {
+    func songs(page: Int = 1, limit: Int = 100, search: String = "", artist: String? = nil, album: String? = nil, genre: String? = nil) async throws -> SongsResponse {
         var query = ["page": "\(page)", "limit": "\(limit)", "search": search]
         if let artist { query["artist"] = artist }
         if let album { query["album"] = album }
+        if let genre, !genre.isEmpty { query["genre"] = genre }
         return try await get("api/songs", query: query)
+    }
+
+    func trackMeta(path: String) async throws -> TrackMetaResponse {
+        try await get("api/track_meta", query: ["path": path])
     }
 
     func lyrics(
@@ -192,6 +278,28 @@ final class BockMediaAPIClient {
         if let artist, !artist.isEmpty { query["artist"] = artist }
         if let album, !album.isEmpty { query["album"] = album }
         return try await get("api/lyrics", query: query)
+    }
+
+    func musicVideo(
+        title: String,
+        artist: String? = nil,
+        durationSec: Int? = nil,
+        lowBandwidth: Bool = false,
+        waitSec: Int? = nil
+    ) async throws -> MusicVideoResponse {
+        var query = ["title": title]
+        if let artist, !artist.isEmpty { query["artist"] = artist }
+        if let durationSec, durationSec > 0 { query["duration"] = "\(durationSec)" }
+        if lowBandwidth { query["mobile"] = "1" }
+        if let waitSec, waitSec > 0 { query["wait"] = "\(waitSec)" }
+        return try await get("api/music-video", query: query)
+    }
+
+    func musicVideoPlay(videoId: String, mobile: Bool = false, waitSec: Int? = nil) async throws -> MusicVideoPlayResponse {
+        var query: [String: String] = [:]
+        if mobile { query["mobile"] = "1" }
+        if let waitSec, waitSec > 0 { query["wait"] = "\(waitSec)" }
+        return try await get("api/music-video/\(videoId)/play", query: query)
     }
 
     func genres(limit: Int = 20) async throws -> GenresResponse {
@@ -244,6 +352,14 @@ final class BockMediaAPIClient {
 
     func mixMuseStatus() async throws -> MixMuseStatusResponse {
         try await get("api/mix-muse/status")
+    }
+
+    func listenAgentStatus() async throws -> MixMuseStatusResponse {
+        try await get("api/listen-agent/status")
+    }
+
+    func listenAgentPlay(body: [String: Any]) async throws -> ListenAgentResponse {
+        try await post("api/listen-agent/play", body: body)
     }
 
     func mixMuseSimilar(body: [String: Any]) async throws -> AiPlaylistResponse {
@@ -335,6 +451,29 @@ final class BockMediaAPIClient {
         if let member, !member.isEmpty { query["memberId"] = member }
         if let clientId, !clientId.isEmpty { query["clientId"] = clientId }
         return try await get("api/favorites", query: query)
+    }
+
+    func ratings(memberId: String? = nil, clientId: String? = nil) async throws -> RatingsResponse {
+        var query: [String: String] = [:]
+        if let memberId, !memberId.isEmpty { query["memberId"] = memberId }
+        if let clientId, !clientId.isEmpty { query["clientId"] = clientId }
+        return try await get("api/ratings", query: query)
+    }
+
+    func ratingLookup(
+        kind: String,
+        id: String,
+        memberId: String? = nil,
+        clientId: String? = nil
+    ) async throws -> RatingLookupResponse {
+        var query = ["kind": kind, "id": id]
+        if let memberId, !memberId.isEmpty { query["memberId"] = memberId }
+        if let clientId, !clientId.isEmpty { query["clientId"] = clientId }
+        return try await get("api/ratings/lookup", query: query)
+    }
+
+    func setRating(body: [String: Any]) async throws -> OkResponse {
+        try await request(path: "api/ratings", method: "PUT", query: [:], body: body)
     }
 
     func streamHistory(page: Int = 1, limit: Int = 25) async throws -> StreamHistoryResponse {

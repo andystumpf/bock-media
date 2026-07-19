@@ -23,12 +23,16 @@ struct BockMediaApp: App {
         let tab = UITabBarAppearance()
         tab.configureWithOpaqueBackground()
         tab.backgroundColor = UIColor(red: 0x18 / 255, green: 0x18 / 255, blue: 0x18 / 255, alpha: 1)
-        tab.stackedLayoutAppearance.normal.iconColor = UIColor.gray
-        tab.stackedLayoutAppearance.normal.titleTextAttributes = [.foregroundColor: UIColor.gray]
-        tab.stackedLayoutAppearance.selected.iconColor = UIColor(red: 0x1D / 255, green: 0xB9 / 255, blue: 0x54 / 255, alpha: 1)
-        tab.stackedLayoutAppearance.selected.titleTextAttributes = [
-            .foregroundColor: UIColor(red: 0x1D / 255, green: 0xB9 / 255, blue: 0x54 / 255, alpha: 1),
-        ]
+        let green = UIColor(red: 0x1D / 255, green: 0xB9 / 255, blue: 0x54 / 255, alpha: 1)
+        let inactiveIcon = UIColor(red: 0.72, green: 0.74, blue: 0.78, alpha: 1)
+        for layout in [
+            tab.stackedLayoutAppearance,
+            tab.inlineLayoutAppearance,
+            tab.compactInlineLayoutAppearance,
+        ] {
+            layout.normal.iconColor = inactiveIcon
+            layout.selected.iconColor = green
+        }
         UITabBar.appearance().standardAppearance = tab
         UITabBar.appearance().scrollEdgeAppearance = tab
 

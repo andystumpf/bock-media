@@ -41,7 +41,19 @@ def _config():
 
 
 def cfg():
-    return _config().get('alexaRemote') or {}
+    c = dict(_config().get('alexaRemote') or {})
+    # P0: prefer env vars over on-disk secrets (config.json may still hold email/url).
+    env_map = (
+        ('email', 'ALEXA_REMOTE_EMAIL'),
+        ('password', 'ALEXA_REMOTE_PASSWORD'),
+        ('otpSecret', 'ALEXA_REMOTE_OTP_SECRET'),
+        ('url', 'ALEXA_REMOTE_URL'),
+    )
+    for key, env_key in env_map:
+        val = os.environ.get(env_key, '').strip()
+        if val:
+            c[key] = val
+    return c
 
 
 def _cookie_session_exists():
@@ -378,7 +390,7 @@ def resolve_proxy_host(host=None):
     configured = (cfg().get('loginProxyHost') or '').strip()
     if configured:
         return configured
-    return lan_ip()
+    return '127.0.0.1'
 
 
 def _join_login_thread(timeout=8.0):
@@ -534,3 +546,26 @@ def stop_proxy_login():
         _set_proxy(status='stopped', error=None)
     _join_login_thread(timeout=3.0)
     return proxy_login_state()
+
+
+# ── Thread-pool wrapper (Flask workers must not block 10–20s on alexapy I/O) ─
+
+import concurrent.futures
+
+_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix='alexa_remote')
+
+
+def _run_timed(fn, *args, timeout=25.0, **kwargs):
+    future = _EXECUTOR.submit(fn, *args, **kwargs)
+    try:
+        return future.result(timeout=timeout)
+    except concurrent.futures.TimeoutError:
+        raise AlexaRemoteError('timeout')
+
+
+def device_control_timed(target, action, alias='bock media', timeout=25.0):
+    return _run_timed(device_control, target, action, alias, timeout=timeout)
+
+
+def play_text_timed(target, text, timeout=25.0):
+    return _run_timed(play_text, target, text, timeout=timeout)

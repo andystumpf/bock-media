@@ -36,13 +36,25 @@ final class AppPreferences: ObservableObject {
     }
 
     var localServerURL: String? {
-        get { defaults.string(forKey: Key.localURL)?.nilIfBlank }
-        set { defaults.set(newValue, forKey: Key.localURL) }
+        get { ServerURL.sanitizedServerURL(defaults.string(forKey: Key.localURL)) }
+        set {
+            if let newValue, ServerURL.isValidServerURL(newValue) {
+                defaults.set(newValue, forKey: Key.localURL)
+            } else {
+                defaults.removeObject(forKey: Key.localURL)
+            }
+        }
     }
 
     var externalServerURL: String? {
-        get { defaults.string(forKey: Key.externalURL)?.nilIfBlank }
-        set { defaults.set(newValue, forKey: Key.externalURL) }
+        get { ServerURL.sanitizedServerURL(defaults.string(forKey: Key.externalURL)) }
+        set {
+            if let newValue, ServerURL.isValidServerURL(newValue) {
+                defaults.set(newValue, forKey: Key.externalURL)
+            } else {
+                defaults.removeObject(forKey: Key.externalURL)
+            }
+        }
     }
 
     var adminUser: String? {
@@ -69,8 +81,27 @@ final class AppPreferences: ObservableObject {
     }
 
     func applyBuildServerURLs() {
-        localServerURL = BuildConfig.localServerURL.nilIfBlank
-        externalServerURL = BuildConfig.externalServerURL.nilIfBlank
+        purgeInvalidServerURLs()
+        if let ext = BuildConfig.externalServerURL.nilIfBlank,
+           ServerURL.isValidServerURL(ext),
+           !ServerURL.isLoopbackHost(ext) {
+            externalServerURL = ext
+        }
+        if let local = BuildConfig.localServerURL.nilIfBlank,
+           ServerURL.isValidServerURL(local),
+           !ServerURL.isLoopbackHost(local) {
+            localServerURL = local
+        }
+    }
+
+    private func purgeInvalidServerURLs() {
+        if !ServerURL.isValidServerURL(defaults.string(forKey: Key.localURL))
+            || ServerURL.isLoopbackHost(defaults.string(forKey: Key.localURL)) {
+            defaults.removeObject(forKey: Key.localURL)
+        }
+        if !ServerURL.isValidServerURL(defaults.string(forKey: Key.externalURL)) {
+            defaults.removeObject(forKey: Key.externalURL)
+        }
     }
 
     func applyBuildDefaultsIfEmpty() {
@@ -112,6 +143,31 @@ final class AppPreferences: ObservableObject {
     var searchSourcePath: String? {
         get { defaults.string(forKey: "search_source_path")?.nilIfBlank }
         set { defaults.set(newValue, forKey: "search_source_path") }
+    }
+
+    /// Folder scope for search APIs — nil when "all libraries" is on (mirrors Android).
+    func effectiveSearchSource() -> String? {
+        searchAllLibraries ? nil : searchSourcePath
+    }
+
+    var libraryTab: String {
+        get { defaults.string(forKey: "library_tab") ?? "all" }
+        set { defaults.set(newValue, forKey: "library_tab") }
+    }
+
+    var libraryViewMode: String {
+        get { defaults.string(forKey: "library_view_mode") ?? "list" }
+        set { defaults.set(newValue, forKey: "library_view_mode") }
+    }
+
+    var librarySortBy: String {
+        get { defaults.string(forKey: "library_sort_by") ?? "recents" }
+        set { defaults.set(newValue, forKey: "library_sort_by") }
+    }
+
+    var librarySortOrder: String {
+        get { defaults.string(forKey: "library_sort_order") ?? "desc" }
+        set { defaults.set(newValue, forKey: "library_sort_order") }
     }
 }
 

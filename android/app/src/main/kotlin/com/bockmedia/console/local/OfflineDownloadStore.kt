@@ -1,28 +1,38 @@
 package com.bockmedia.console.local
 
 import android.content.Context
+import com.bockmedia.console.data.local.AppPreferences
 import com.bockmedia.console.domain.model.LocalTrack
 import com.bockmedia.console.domain.model.PlayTarget
+import com.bockmedia.console.media.LocalPlaybackDuration
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
 
 /** Unique on-disk name for a library path; includes a path hash so same basename in different folders cannot collide. */
-internal fun offlineTrackFileName(path: String, index: Int): String {
+internal fun offlineTrackFileName(path: String, index: Int, transcodeToMp3: Boolean = false): String {
     val base = path.substringAfterLast('/').substringBeforeLast('.')
         .replace(Regex("[^A-Za-z0-9._-]"), "_")
         .take(60)
         .ifBlank { "track" }
-    val ext = path.substringAfterLast('.', "mp3").take(8)
+    val ext = when {
+        transcodeToMp3 -> "mp3"
+        else -> path.substringAfterLast('.', "mp3").take(8)
+    }
     val pathTag = kotlin.math.abs(path.hashCode()).toUInt().toString(16).padStart(8, '0')
     return "${index.toString().padStart(4, '0')}_${pathTag}_$base.$ext"
 }
 
-internal fun uniqueOfflineFileName(path: String, startIndex: Int, used: MutableSet<String>): String {
+internal fun uniqueOfflineFileName(
+    path: String,
+    startIndex: Int,
+    used: MutableSet<String>,
+    transcodeToMp3: Boolean = LocalPlaybackDuration.needsStreamTranscode(path),
+): String {
     var idx = startIndex
     while (true) {
-        val candidate = offlineTrackFileName(path, idx)
+        val candidate = offlineTrackFileName(path, idx, transcodeToMp3)
         if (candidate !in used) {
             used.add(candidate)
             return candidate
@@ -190,7 +200,8 @@ class OfflineDownloadStore(context: Context) {
         return dir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
     }
 
-    fun safeFileName(path: String, index: Int): String = offlineTrackFileName(path, index)
+    fun safeFileName(path: String, index: Int): String =
+        offlineTrackFileName(path, index, LocalPlaybackDuration.needsStreamTranscode(path))
 
     fun completionProgress(manifest: OfflineCollectionManifest): Float {
         if (manifest.tracks.isEmpty()) return 0f
@@ -206,31 +217,30 @@ class OfflineDownloadStore(context: Context) {
         resolved: List<com.bockmedia.console.domain.model.LocalTrack>,
         collectionId: String,
     ): List<OfflineTrackEntry> {
-        val byPath = linkedMapOf<String, OfflineTrackEntry>()
+        val existingByPath = existing?.tracks
+            ?.filter { AppPreferences.isValidLibraryPath(it.path) }
+            ?.associateBy { it.path }
+            ?: emptyMap()
         val usedNames = mutableSetOf<String>()
-        existing?.tracks?.forEach {
-            val fileName = if (it.fileName in usedNames) {
-                uniqueOfflineFileName(it.path, usedNames.size, usedNames)
-            } else {
-                usedNames.add(it.fileName)
-                it.fileName
-            }
-            byPath[it.path] = it.copy(fileName = fileName)
-        }
-        var seq = existing?.tracks?.size ?: 0
+        val out = mutableListOf<OfflineTrackEntry>()
+        var seq = 0
         resolved.forEach { track ->
-            if (track.path.isBlank()) return@forEach
-            val prior = byPath[track.path]
-            val fileName = prior?.fileName ?: uniqueOfflineFileName(track.path, seq, usedNames).also { seq++ }
-            byPath[track.path] = OfflineTrackEntry(
-                path = track.path,
-                title = track.title,
-                artist = track.artist,
-                album = track.album,
-                fileName = fileName,
+            if (track.path.isBlank() || !AppPreferences.isValidLibraryPath(track.path)) return@forEach
+            val prior = existingByPath[track.path]
+            val fileName = prior?.fileName?.takeIf { it !in usedNames }
+                ?: uniqueOfflineFileName(track.path, seq, usedNames).also { seq++ }
+            usedNames.add(fileName)
+            out.add(
+                OfflineTrackEntry(
+                    path = track.path,
+                    title = track.title,
+                    artist = track.artist,
+                    album = track.album,
+                    fileName = fileName,
+                ),
             )
         }
-        return byPath.values.toList()
+        return out
     }
 
     fun pruneOrphanFiles(collectionId: String, tracks: List<OfflineTrackEntry>) {

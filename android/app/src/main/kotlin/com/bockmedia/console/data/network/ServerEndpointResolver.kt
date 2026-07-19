@@ -16,6 +16,7 @@ object ServerEndpointResolver {
     @Volatile private var cachedUrl: String? = null
     @Volatile private var cachedAtMs = 0L
     private const val CACHE_TTL_MS = 60_000L
+    private const val CELLULAR_CACHE_TTL_MS = 300_000L
     private val resolveMutex = Mutex()
 
     // Health checks hit a tiny JSON endpoint; keep probes short so a hung/old
@@ -61,12 +62,12 @@ object ServerEndpointResolver {
         if (!external.isNullOrBlank() && externalReachable) {
             return AppPreferences.normalizeUrl(external)
         }
-        // Neither answered — default to LAN at home (avoids hairpin-NAT / dead external IP).
-        if (!local.isNullOrBlank()) {
-            return AppPreferences.normalizeUrl(local)
-        }
+        // Stale Wi‑Fi (connected but not home) — prefer external over a dead LAN default.
         if (!external.isNullOrBlank()) {
             return AppPreferences.normalizeUrl(external)
+        }
+        if (!local.isNullOrBlank()) {
+            return AppPreferences.normalizeUrl(local)
         }
         return null
     }
@@ -83,10 +84,10 @@ object ServerEndpointResolver {
 
             if (!forceRefresh) {
                 cachedUrl?.let { url ->
-                    if (System.currentTimeMillis() - cachedAtMs < CACHE_TTL_MS) {
-                        if (wifiAvailable || !AppPreferences.isLanHost(url, local, external)) {
-                            return@withContext url
-                        }
+                    val ttl = if (wifiAvailable) CACHE_TTL_MS else CELLULAR_CACHE_TTL_MS
+                    val isLan = AppPreferences.isLanHost(url, local, external)
+                    if (!isLan && System.currentTimeMillis() - cachedAtMs < ttl) {
+                        return@withContext url
                     }
                 }
             }
@@ -101,6 +102,29 @@ object ServerEndpointResolver {
                 .readTimeout(EXT_READ_SEC, TimeUnit.SECONDS)
                 .callTimeout(EXT_CONNECT_SEC + EXT_READ_SEC, TimeUnit.SECONDS)
                 .build()
+
+            if (!forceRefresh) {
+                cachedUrl?.let { url ->
+                    val ttl = if (wifiAvailable) CACHE_TTL_MS else CELLULAR_CACHE_TTL_MS
+                    if (AppPreferences.isLanHost(url, local, external) &&
+                        wifiAvailable &&
+                        System.currentTimeMillis() - cachedAtMs < ttl &&
+                        !local.isNullOrBlank() &&
+                        probe(localClient, local)
+                    ) {
+                        return@withContext url
+                    }
+                }
+            }
+
+            // On cellular, probe only the external URL first (skip dead LAN probes).
+            if (!wifiAvailable && !external.isNullOrBlank()) {
+                val externalNorm = AppPreferences.normalizeUrl(external)
+                if (probe(externalClient, externalNorm)) {
+                    runCatching { preferences.setLastGoodEndpoint(externalNorm) }
+                    return@withContext cache(externalNorm)
+                }
+            }
 
             val (localOk, externalOk) = coroutineScope {
                 val localProbe = async {

@@ -14,6 +14,7 @@ struct RootView: View {
             case true:
                 ProfilePickerGate(appState: appState) {
                     MainTabView(appState: appState)
+                        .overlay { UITestSupport.clientIdProbe() }
                 }
             }
         }
@@ -26,7 +27,12 @@ struct RootView: View {
                 NowPlayingPollService.shared.setForeground(true)
                 NotificationCenter.default.post(name: .widgetSessionShouldRefresh, object: nil)
                 if appState.isConnected == true {
-                    Task { await ClientPrefsSync.pullAndApply(repository: appState.repository) }
+                    Task {
+                        if !ClientPrefsSync.shouldSkipResumePull() {
+                            appState.repository.invalidateEndpoint()
+                            await ClientPrefsSync.pullAndApply(repository: appState.repository)
+                        }
+                    }
                 }
             case .background:
                 NowPlayingPollService.shared.setForeground(false)
@@ -38,6 +44,7 @@ struct RootView: View {
             }
         }
         .onOpenURL { url in
+            if UITestSupport.handle(url: url, appState: appState) { return }
             guard let link = DeepLink.parse(url: url) else { return }
             guard appState.isConnected == true else { return }
             if case .control(let deviceId, let action) = link {
@@ -53,6 +60,12 @@ struct RootView: View {
             } else {
                 appState.pendingDeepLink = link
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: ClientPrefsSyncNotifications.profileChanged)) { _ in
+            appState.noteProfileChanged()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: HouseholdStore.changedNotification)) { _ in
+            appState.noteHouseholdChanged()
         }
     }
 }

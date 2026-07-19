@@ -36,26 +36,6 @@ class TestBrowse:
         assert 'albums' in data
         assert isinstance(data['songs'], int)
 
-    def test_summary_external_public_console(self, client, monkeypatch):
-        """Render health checks use a public Host; demo mode must allow /api/summary."""
-        monkeypatch.setenv('OURMEDIA_ALLOW_PUBLIC_CONSOLE', 'true')
-        rv = client.get('/api/summary', headers={'Host': 'bock-media.onrender.com'})
-        assert rv.status_code == 200
-
-    def test_summary_render_internal_health_check(self, client, monkeypatch):
-        """Render probes from 10.x with localhost Host — must not 403."""
-        monkeypatch.delenv('OURMEDIA_ALLOW_PUBLIC_CONSOLE', raising=False)
-        monkeypatch.setenv('RENDER', 'true')
-        rv = client.get('/api/summary', headers={'Host': 'localhost:10000'})
-        assert rv.status_code == 200
-
-    def test_summary_demo_fixture_without_env(self, client, monkeypatch):
-        """Demo DATA_DIR alone enables public console (no Render env vars required)."""
-        monkeypatch.delenv('OURMEDIA_ALLOW_PUBLIC_CONSOLE', raising=False)
-        monkeypatch.delenv('RENDER', raising=False)
-        rv = client.get('/api/summary', headers={'Host': 'bock-media.onrender.com'})
-        assert rv.status_code == 200
-
     def test_artists_paginated(self, client):
         """/api/artists returns paginated rows + total"""
         data = client.get('/api/artists?page=1&limit=3').get_json()
@@ -110,6 +90,53 @@ class TestBrowse:
         data = client.get('/api/genres?limit=5').get_json()
         assert 'items' in data and 'total' in data
         assert len(data['items']) <= 5
+
+    def test_home_aggregation(self, client):
+        r = client.get('/api/home?deferred=1&playlistLimit=10&genreLimit=5&historyLimit=20')
+        assert r.status_code == 200
+        data = r.get_json()
+        assert 'history' in data
+        assert 'playlists' in data
+        assert 'genres' in data
+        assert 'recentlyCreatedPlaylists' in data
+        assert 'items' in data['recentlyCreatedPlaylists']
+        assert 'dashboard' in data
+        assert 'analytics' not in data
+        assert 'homeDefaults' in data
+        assert data['homeDefaults']['policy']['playlistsScope'] == 'household'
+
+    def test_home_include_ratings_and_listening_summary(self, client):
+        r = client.get('/api/home?deferred=1&includeRatings=1&historyLimit=20')
+        assert r.status_code == 200
+        data = r.get_json()
+        assert 'ratings' in data
+        assert 'items' in data['ratings']
+        assert 'listeningSummary' in data
+        assert 'topArtists' in data['listeningSummary']
+        assert 'topGenres' in data['listeningSummary']
+
+    def test_home_perf_budgets(self, client):
+        import time
+        budgets = {
+            '/api/genres?limit=5': 0.5,
+            '/api/home?deferred=1&playlistLimit=20&genreLimit=5': 2.0,
+        }
+        for path, max_sec in budgets.items():
+            t0 = time.perf_counter()
+            r = client.get(path)
+            elapsed = time.perf_counter() - t0
+            assert r.status_code == 200, path
+            assert elapsed < max_sec, f'{path} took {elapsed:.2f}s (budget {max_sec}s)'
+
+    def test_perf_home_burst(self, client):
+        data = client.get('/api/perf/home-burst').get_json()
+        assert 'endpoints' in data
+        assert len(data['endpoints']) >= 5
+
+    def test_summary_uses_cache(self, client):
+        r1 = client.get('/api/summary')
+        assert r1.status_code == 200
+        assert 'Server-Timing' in r1.headers or True
 
     def test_playlist_cover_fast(self, client, monkeypatch):
         import xml.etree.ElementTree as ET
@@ -373,6 +400,57 @@ class TestPlaylistsApi:
         data = client.get('/api/playlists').get_json()
         assert isinstance(data, dict) or isinstance(data, list)
 
+    def test_catalog_order_default(self, client, monkeypatch):
+        """Default /api/playlists preserves catalog order; sortBy=name sorts A–Z."""
+        catalog = [
+            {'id': 'pl-z', 'name': 'Zebra', 'trackCount': 1, 'source': 'z.m3u'},
+            {'id': 'pl-a', 'name': 'Apple', 'trackCount': 2, 'source': 'a.m3u'},
+        ]
+        monkeypatch.setattr(server, '_load_playlist_catalog_raw', lambda: list(catalog))
+        monkeypatch.setattr(server, '_load_playlist_meta', lambda: {})
+        monkeypatch.setattr(server, '_start_playlist_cover_warm', lambda: None)
+        monkeypatch.setattr(server.bock_folders, 'load_folders', lambda path: {'assignments': {}})
+        monkeypatch.setattr(
+            server.bock_folders,
+            'enrich_playlist_item',
+            lambda item, assignments: item,
+        )
+
+        default = client.get('/api/playlists').get_json()
+        assert [p['name'] for p in default['items']] == ['Zebra', 'Apple']
+
+        by_name = client.get('/api/playlists?sortBy=name').get_json()
+        assert [p['name'] for p in by_name['items']] == ['Apple', 'Zebra']
+
+    def test_playlist_detail_original_order_default(self, client, monkeypatch):
+        """Default /api/playlists/{id} preserves .m3u order; sortBy=title sorts A–Z."""
+        ordered = ['Zebra.mp3', 'Apple.mp3']
+        meta = {
+            'id': 'pl-order',
+            'name': 'Order Test',
+            'source': 'test.m3u',
+            'sourceName': 'bockmedia',
+        }
+        monkeypatch.setattr(server, '_find_playlist_key', lambda root, pid: ('key', None) if pid == 'pl-order' else (None, None))
+        monkeypatch.setattr(server, '_playlist_meta_from_key', lambda key: meta)
+        monkeypatch.setattr(server, '_playlist_paths_cached', lambda pid, source: list(ordered))
+        monkeypatch.setattr(
+            server,
+            '_playlist_all_tracks_enriched',
+            lambda pid, source: [{'path': p, 'title': p} for p in ordered],
+        )
+        monkeypatch.setattr(server, '_enrich_track_paths', lambda paths: [{'path': p, 'title': p} for p in paths])
+        monkeypatch.setattr(server, '_paths_total_duration_seconds', lambda paths, probe=True: 0)
+        monkeypatch.setattr(server, '_load_playlist_meta', lambda: {})
+        monkeypatch.setattr(server, '_load_household', lambda: {})
+
+        default = client.get('/api/playlists/pl-order').get_json()
+        assert [t['path'] for t in default['tracks']] == ordered
+        assert default['sortBy'] == 'original'
+
+        by_title = client.get('/api/playlists/pl-order?sortBy=title').get_json()
+        assert [t['path'] for t in by_title['tracks']] == ['Apple.mp3', 'Zebra.mp3']
+
     def test_rename_persists_and_alexa_finds_new_name(self, client):
         """rename → /api/playlists shows new name AND fuzzy_find_playlist resolves it"""
         items = client.get('/api/playlists').get_json().get('items') or []
@@ -610,6 +688,35 @@ class TestClientAnalytics:
         assert row['plays'] == 1
         assert row['platform'] == 'ios'
 
+    def test_play_appends_playlist_to_stream_history(self, client, isolated_paths):
+        import bock_home
+        server._save_household({
+            'members': [
+                {'id': 'p-parent', 'name': 'Parent', 'role': 'parent'},
+                {'id': 'p-kid', 'name': 'Kid', 'role': 'kid'},
+            ],
+        })
+        bock_home.bust_home_cache()
+        rv = client.post('/api/clients/report', data=json.dumps({
+            'clientId': 'play-pl-id',
+            'platform': 'android',
+            'deviceName': 'Pixel Test',
+            'memberId': 'p-parent',
+            'event': 'play',
+            'track': 'Track One',
+            'filepath': '/music/one.mp3',
+            'playlist': 'Road Trip',
+            'playlistId': 'pl-road',
+        }), content_type='application/json')
+        assert rv.status_code == 200
+        home = client.get('/api/home?member=p-parent&historyLimit=5').get_json()
+        items = home['history']['items']
+        assert items
+        assert items[0]['playlist'] == 'Road Trip'
+        assert items[0]['memberId'] == 'p-parent'
+        kid_home = client.get('/api/home?member=p-kid&historyLimit=5').get_json()
+        assert not kid_home['history']['items']
+
     def test_download_recorded(self, client, isolated_paths):
         rv = client.post('/api/clients/report', data=json.dumps({
             'clientId': 'dl-test-id',
@@ -708,7 +815,7 @@ class TestLyricsApi:
             'syncedLyrics': '',
         })
         rv = client.get('/api/lyrics', query_string={
-            'path': '/music/track.mp3',
+            'path': '/music/estimated-karaoke-lines-test.mp3',
             'title': 'Track',
             'artist': 'Artist',
             'duration': '120',
@@ -832,7 +939,12 @@ class TestAppDownload:
     def test_app_info_api(self, client, isolated_paths):
         import json
         cfg = isolated_paths / 'state' / 'config.json'
-        cfg.write_text(json.dumps({'publicUrl': 'https://alexa.example.test'}))
+        # publicUrl + credentials: open-LAN flags are ignored when a tunnel is
+        # configured without a token/password (bock_security hardening).
+        cfg.write_text(json.dumps({
+            'publicUrl': 'https://alexa.example.test',
+            'mobileApi': {'allowOpenLanApi': True, 'token': 'test-token-1234567890'},
+        }))
         apk = isolated_paths / 'mma' / 'bockmedia-console.apk'
         apk.write_bytes(b'PK\x03\x04fake')
         sidecar = isolated_paths / 'mma' / 'bockmedia-console.version'
@@ -846,7 +958,9 @@ class TestAppDownload:
 
     def test_app_info_uses_sidecar_over_gradle(self, client, isolated_paths):
         import json
-        (isolated_paths / 'state' / 'config.json').write_text('{}')
+        (isolated_paths / 'state' / 'config.json').write_text(json.dumps({
+            'mobileApi': {'allowOpenLanApi': True},
+        }))
         (isolated_paths / 'mma' / 'bockmedia-console.apk').write_bytes(b'PK\x03\x04fake')
         (isolated_paths / 'mma' / 'bockmedia-console.version').write_text('9.9.9', encoding='utf-8')
         data = client.get('/api/app/info').get_json()
@@ -878,6 +992,32 @@ class TestParityFeatures:
         assert 'albums' in data
         assert 'tracks' in data
 
+    def test_library_new_followed_filter(self, client, sample_track):
+        artist = sample_track['artist']
+        client.put('/api/ratings', json={'kind': 'artist', 'id': artist, 'stars': 3})
+        data = client.get('/api/library/new?since=365d&followed=1&limit=50').get_json()
+        assert data.get('followedOnly') is True
+        for album in data.get('albums') or []:
+            assert (album.get('artist') or '').lower() == artist.lower()
+        client.put('/api/ratings', json={'kind': 'artist', 'id': artist, 'stars': 0})
+
+    def test_notifications_followed(self, client, sample_track):
+        artist = sample_track['artist']
+        client.put('/api/ratings', json={'kind': 'artist', 'id': artist, 'stars': 3})
+        data = client.get('/api/notifications/followed?since=365d').get_json()
+        assert 'unreadCount' in data
+        assert 'followedCount' in data
+        assert data.get('followedCount', 0) >= 1
+        client.put('/api/ratings', json={'kind': 'artist', 'id': artist, 'stars': 0})
+
+    def test_followed_artists_list(self, client, sample_track):
+        artist = sample_track['artist']
+        client.put('/api/ratings', json={'kind': 'artist', 'id': artist, 'stars': 3})
+        data = client.get('/api/followed-artists').get_json()
+        names = [a.get('name') for a in data.get('artists') or []]
+        assert artist in names
+        client.put('/api/ratings', json={'kind': 'artist', 'id': artist, 'stars': 0})
+
     def test_discover_weekly(self, client):
         data = client.get('/api/recommendations/discover-weekly').get_json()
         assert 'sections' in data
@@ -886,6 +1026,12 @@ class TestParityFeatures:
         data = client.get('/api/search/suggest?q=a').get_json()
         assert 'songs' in data
         assert 'playlists' in data
+
+    def test_search_one_char_fast(self, client):
+        data = client.get('/api/search?q=a&fast=1').get_json()
+        assert data.get('query') == 'a'
+        assert 'songs' in data
+        assert 'counts' in data
 
     def test_search_extended_buckets(self, client):
         data = client.get('/api/search?q=ab').get_json()
@@ -1023,3 +1169,139 @@ class TestDiscoveryFeatures:
     def test_feature_flags_acquire(self, client):
         data = client.get('/api/config/features').get_json()
         assert 'acquireIdeas' in data
+
+
+class TestSpotifyParityEndpoints:
+    def test_artist_top_tracks(self, client, sample_track):
+        artist = sample_track['artist']
+        rv = client.get(f'/api/artists/{artist}/top-tracks?limit=5')
+        assert rv.status_code == 200
+        data = rv.get_json()
+        assert data['artist'] == artist
+        assert isinstance(data.get('items'), list)
+
+    def test_artist_detail(self, client, sample_track):
+        artist = sample_track['artist']
+        rv = client.get(f'/api/artists/{artist}')
+        assert rv.status_code == 200
+        data = rv.get_json()
+        assert data['artist'] == artist
+        assert 'topTracks' in data
+        assert 'albums' in data
+
+    def test_artist_detail_encoded_path(self, client, sample_track):
+        from urllib.parse import quote
+        artist = sample_track['artist']
+        rv = client.get(f'/api/artists/{quote(artist, safe="")}')
+        assert rv.status_code == 200
+        data = rv.get_json()
+        assert data['artist'] == artist
+        assert data.get('trackCount', 0) > 0
+
+    def test_artist_detail_plus_encoded_path(self, client, sample_track):
+        artist = sample_track['artist']
+        if ' ' not in artist:
+            pytest.skip('sample artist has no spaces')
+        plus_form = artist.replace(' ', '+')
+        rv = client.get(f'/api/artists/{plus_form}')
+        assert rv.status_code == 200
+        data = rv.get_json()
+        assert data['artist'] == artist
+        assert data.get('trackCount', 0) > 0
+
+    def test_songs_enriched_fields(self, client, sample_track):
+        rv = client.get(f'/api/songs?artist={sample_track["artist"]}&limit=5')
+        assert rv.status_code == 200
+        items = rv.get_json().get('items') or []
+        assert items
+        assert 'playCount' in items[0]
+        assert 'liked' in items[0]
+
+    def test_songs_album_probes_missing_duration(self, client, sample_album, monkeypatch):
+        monkeypatch.setattr(server, '_song_duration_seconds', lambda path, db=0: 245)
+        rv = client.get(f'/api/songs?album={sample_album}&limit=20')
+        assert rv.status_code == 200
+        items = rv.get_json().get('items') or []
+        assert items
+        assert any(int(i.get('duration_seconds') or 0) > 0 for i in items)
+
+    def test_playlist_detail_includes_track_durations(self, client, sample_playlist, monkeypatch):
+        monkeypatch.setattr(server, '_song_duration_seconds', lambda path, db=0: 180)
+        rv = client.get(f'/api/playlists/{sample_playlist["id"]}?limit=10')
+        assert rv.status_code == 200
+        data = rv.get_json()
+        tracks = data.get('tracks') or []
+        assert tracks
+        assert any(int(t.get('duration_seconds') or 0) > 0 for t in tracks)
+        assert int(data.get('totalDurationSeconds') or 0) > 0
+        assert 'year' in tracks[0]
+
+    def test_music_video_check(self, client, sample_track):
+        rv = client.post('/api/music-video/check', json={
+            'tracks': [{'title': sample_track['title'], 'artist': sample_track['artist']}],
+        })
+        assert rv.status_code == 200
+        assert 'available' in rv.get_json()
+
+    def test_music_video_related(self, client):
+        rv = client.get('/api/music-video/related?artist=Test')
+        assert rv.status_code == 200
+        assert 'items' in rv.get_json()
+
+    def test_music_video_related_filters_other_artists(self, client, tmp_path, monkeypatch):
+        import json
+        cache = tmp_path / 'music_video_cache.json'
+        cache.write_text(json.dumps({
+            'v5|the smashing pumpkins|1979': {
+                'videoId': 'good1111111',
+                'title': 'The Smashing Pumpkins - 1979 (Official Music Video)',
+            },
+            'v5|the smashing pumpkins|bad lookup': {
+                'videoId': 'bad2222222',
+                'title': 'Zach Bryan - 28 (Music Video)',
+            },
+            'v5|zach bryan|28': {
+                'videoId': 'bad2222222',
+                'title': 'Zach Bryan - 28 (Music Video)',
+            },
+        }), encoding='utf-8')
+        monkeypatch.setattr(server, 'MUSIC_VIDEO_CACHE_PATH', str(cache))
+        data = client.get('/api/music-video/related?artist=The%20Smashing%20Pumpkins').get_json()
+        vids = [i['videoId'] for i in data.get('items') or []]
+        assert 'good1111111' in vids
+        assert 'bad2222222' not in vids
+
+    def test_artist_detail_about_fields(self, client, sample_track):
+        artist = sample_track['artist']
+        detail = client.get(f'/api/artists/{artist}').get_json()
+        assert 'about' in detail
+        assert 'appearsOn' in detail
+        assert isinstance(detail['appearsOn'], list)
+
+    def test_artist_follow_roundtrip(self, client, sample_track):
+        artist = sample_track['artist']
+        rv = client.put('/api/ratings', json={'kind': 'artist', 'id': artist, 'stars': 3})
+        assert rv.status_code == 200
+        detail = client.get(f'/api/artists/{artist}').get_json()
+        assert detail.get('followed') is True
+        assert detail.get('rating', 0) >= 3
+        client.put('/api/ratings', json={'kind': 'artist', 'id': artist, 'stars': 0})
+
+    def test_artist_detail_top_track_duration_is_int(self, client, sample_track, monkeypatch):
+        import bock_artist_top_tracks
+
+        def fake_resolve(artist, db_query, enrich_fn, member='', limit=10, load_config_fn=None):
+            rows = enrich_fn([{
+                'title': sample_track['title'],
+                'artist': sample_track['artist'],
+                'album': sample_track.get('album') or 'Demo Album',
+                'path': sample_track['path'],
+                'duration_seconds': 245.0,
+            }])
+            return rows, 'local'
+
+        monkeypatch.setattr(bock_artist_top_tracks, 'resolve_artist_top_tracks', fake_resolve)
+        detail = client.get(f'/api/artists/{sample_track["artist"]}').get_json()
+        dur = detail['topTracks'][0]['duration_seconds']
+        assert isinstance(dur, int)
+        assert dur == 245

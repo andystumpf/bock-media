@@ -1,0 +1,1 @@
+{"path": "/Users/andymac/Documents/GitHub/ourMedia/.publish-export/fixtures/demo-data/music/rock/Demo_Artist/02-Neon_Drive.mp3", "synced": true, "lines": [{"timeMs": 0, "text": "Line one"}, {"timeMs": 5000, "text": "Line two"}], "plain": "Line one\nLine two", "source": "lrclib", "estimated": false, "fetchedAt": 1784428401}

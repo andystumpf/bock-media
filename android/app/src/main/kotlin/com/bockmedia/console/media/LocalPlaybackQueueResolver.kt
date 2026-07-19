@@ -29,7 +29,8 @@ class LocalPlaybackQueueResolver(
 
         if (tracks.isEmpty()) return emptyList()
         val capped = maxTracks?.let { tracks.take(it) } ?: tracks
-        return if (shuffle) capped.shuffled() else capped
+        // ExoPlayer applies shuffle when enabled — do not pre-shuffle here.
+        return capped
     }
 
     private suspend fun loadGenreRadioTracks(target: PlayTarget.Radio, maxTracks: Int?): List<LocalTrack> {
@@ -64,10 +65,10 @@ class LocalPlaybackQueueResolver(
         val out = mutableListOf<LocalTrack>()
         var page = 1
         while (true) {
-            val resp = repository.playlistDetail(id, page = page, limit = 200)
+            val resp = repository.playlistDetail(id, page = page, limit = 200, sortBy = "original")
             resp.tracks.forEach { t ->
                 val path = t.path ?: return@forEach
-                out += songTrack(path, t.title ?: path, t.artist, t.album, collectionId, t.duration)
+                out += songTrack(path, t.title ?: path, t.artist, t.album, collectionId, t.duration, t.year)
                 if (maxTracks != null && out.size >= maxTracks) return out
             }
             if (out.size >= resp.total || resp.tracks.isEmpty()) break
@@ -135,6 +136,7 @@ class LocalPlaybackQueueResolver(
         album: String?,
         playlistId: String? = null,
         durationSec: Int? = null,
+        year: Int? = null,
     ): LocalTrack {
         val local = offlineStore.localFileFor(path, playlistId)
         val durationMs = durationSec?.takeIf { it > 0 }?.times(1000L) ?: 0L
@@ -143,6 +145,7 @@ class LocalPlaybackQueueResolver(
             title = title,
             artist = artist,
             album = album,
+            year = year?.takeIf { it > 0 },
             localFile = local,
             durationMs = durationMs,
         )

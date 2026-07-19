@@ -2,8 +2,9 @@
 // Find Team ID: Xcode → Settings → Accounts → your team → Team ID
 DEVELOPMENT_TEAM = YOUR_TEAM_ID_HERE
 
-BOCK_LOCAL_SERVER_URL = http://127.0.0.1:3001
-BOCK_EXTERNAL_SERVER_URL = http://YOUR_PUBLIC_IP:3001
+// xcconfig treats // as a comment — use http:/$()/ to embed URLs safely.
+BOCK_LOCAL_SERVER_URL = http:/$()/127.0.0.1:3001
+BOCK_EXTERNAL_SERVER_URL = http:/$()/YOUR_PUBLIC_IP:3001
 BOCK_MOBILE_API_TOKEN =
 BOCK_ADMIN_USER =
 BOCK_ADMIN_PASSWORD =

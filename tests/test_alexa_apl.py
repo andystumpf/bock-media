@@ -29,9 +29,11 @@ class TestAlexaAplHelpers:
 
 
 class TestAlexaAplPlay:
-    def _play_artist(self, client, monkeypatch, isolated_paths, sample_artist, apl=False):
+    def _play_artist(self, client, monkeypatch, isolated_paths, sample_artist, apl=False, apl_enabled=True):
         cfg = isolated_paths / 'state' / 'config.json'
-        cfg.write_text(json.dumps({'alexaAplLyrics': {'enabled': True}}))
+        cfg.write_text(json.dumps({'alexaAplLyrics': {'enabled': apl_enabled}}))
+        server._config_cache = {}
+        server._config_mtime = 0
         monkeypatch.setattr(server, '_fetch_lrclib', lambda *a, **k: {
             'syncedLyrics': '[00:00.00]Line one\n[00:05.00]Line two',
             'plainLyrics': 'Line one\nLine two',
@@ -72,11 +74,13 @@ class TestAlexaAplPlay:
     def test_apl_disabled_no_render_document(self, client, monkeypatch, isolated_paths, sample_artist):
         cfg = isolated_paths / 'state' / 'config.json'
         cfg.write_text(json.dumps({'alexaAplLyrics': {'enabled': False}}))
+        server._config_cache = {}
+        server._config_mtime = 0
         monkeypatch.setattr(server, '_fetch_lrclib', lambda *a, **k: {
             'syncedLyrics': '[00:00.00]Line one\n[00:05.00]Line two',
             'plainLyrics': 'Line one\nLine two',
         })
-        resp = self._play_artist(client, monkeypatch, isolated_paths, sample_artist, apl=True)
+        resp = self._play_artist(client, monkeypatch, isolated_paths, sample_artist, apl=True, apl_enabled=False)
         types = [d.get('type') for d in resp.get('response', {}).get('directives', [])]
         assert 'Alexa.Presentation.APL.RenderDocument' not in types
 

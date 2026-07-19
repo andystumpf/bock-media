@@ -68,7 +68,7 @@ struct DevicePickerSheet: View {
                     }
                     if loading {
                         Section {
-                            ProgressView()
+                            BockProgressIndicator(size: 32)
                         }
                     } else if options.isEmpty {
                         Section {

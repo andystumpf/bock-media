@@ -47,6 +47,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.testTag
+import com.bockmedia.console.ui.testing.BockTestTags
 import androidx.compose.ui.unit.sp
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.formatPlaybackTime
@@ -90,7 +92,7 @@ fun DrivingModeScreen(repository: BockMediaRepository, onOpenNowPlaying: () -> U
         320.dp,
     )
 
-    Box(Modifier.fillMaxSize()) {
+    Box(Modifier.fillMaxSize().testTag(BockTestTags.DRIVING_BODY)) {
         ArtBackdrop(artUrl)
 
         Column(

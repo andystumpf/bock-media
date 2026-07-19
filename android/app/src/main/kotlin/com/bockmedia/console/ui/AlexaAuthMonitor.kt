@@ -40,6 +40,7 @@ fun AlexaAuthMonitor(
 fun rememberAlexaRemoteStatus(repository: BockMediaRepository): State<AlexaRemoteStatus?> {
     val state = remember { mutableStateOf<AlexaRemoteStatus?>(null) }
     LaunchedEffect(repository) {
+        delay(2_500)
         runCatching { state.value = repository.alexaRemoteStatus(probe = false) }
     }
     return state

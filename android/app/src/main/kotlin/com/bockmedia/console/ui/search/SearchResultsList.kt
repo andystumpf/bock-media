@@ -46,6 +46,8 @@ import com.bockmedia.console.data.api.dto.SearchResponse
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.PlayTarget
 import com.bockmedia.console.domain.model.SearchResultsSessionCache
+import com.bockmedia.console.domain.model.SearchTopResultKind
+import com.bockmedia.console.domain.model.pickTopSearchResult
 import com.bockmedia.console.local.SearchRecentSelection
 import com.bockmedia.console.domain.model.SearchSuggestionKind
 import com.bockmedia.console.local.OfflineDownloadManager
@@ -64,6 +66,36 @@ private data class SearchSection(
     val showChevron: Boolean = false,
 )
 
+enum class SearchResultFilter(val label: String, val sectionKey: String?) {
+    All("All", null),
+    Songs("Songs", "songs"),
+    Artists("Artists", "artists"),
+    Albums("Albums", "albums"),
+    Playlists("Playlists", "playlists"),
+}
+
+@Composable
+fun SearchResultFilterChips(
+    selected: SearchResultFilter,
+    onSelect: (SearchResultFilter) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    androidx.compose.foundation.lazy.LazyRow(
+        modifier = modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
+    ) {
+        items(SearchResultFilter.entries.size) { index ->
+            val filter = SearchResultFilter.entries[index]
+            val active = filter == selected
+            androidx.compose.material3.FilterChip(
+                selected = active,
+                onClick = { onSelect(filter) },
+                label = { Text(filter.label) },
+            )
+        }
+    }
+}
+
 @Composable
 fun SearchResultsList(
     repository: BockMediaRepository,
@@ -76,20 +108,31 @@ fun SearchResultsList(
     onOpenArtist: (String) -> Unit,
     onOpenAlbum: (String, String?) -> Unit,
     onOpenGenre: (String) -> Unit,
-    onOpenPlaylist: (String) -> Unit,
+    onOpenPlaylist: (String, String?) -> Unit,
     snackbarHostState: androidx.compose.material3.SnackbarHostState? = null,
     onRatingChange: (String, SearchHit, Int) -> Unit,
     onRecordSelection: (SearchRecentSelection) -> Unit = {},
+    sectionFilter: SearchResultFilter = SearchResultFilter.All,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var addToPlaylist by remember { mutableStateOf<Pair<String, String>?>(null) }
-    val expanded = remember {
+    val expanded = remember(query) {
         mutableStateMapOf<String, Boolean>().apply {
-            SearchResultsSessionCache.expandedSections.forEach { put(it, true) }
+            if (SearchResultsSessionCache.query == query) {
+                SearchResultsSessionCache.expandedSections.forEach { put(it, true) }
+            }
         }
     }
-    var expandedData by remember { mutableStateOf(SearchResultsSessionCache.expandedData.toMap()) }
+    var expandedData by remember(query) {
+        mutableStateOf<Map<String, SearchResponse>>(
+            if (SearchResultsSessionCache.query == query) {
+                SearchResultsSessionCache.expandedData.toMap()
+            } else {
+                emptyMap()
+            },
+        )
+    }
 
     LaunchedEffect(expanded.keys.toList(), expandedData) {
         SearchResultsSessionCache.expandedSections.clear()
@@ -109,29 +152,85 @@ fun SearchResultsList(
     }
 
     val preview = results.preview
+    val topResult = if (query.trim().length >= 2) pickTopSearchResult(results) else null
+    val topHitId = topResult?.let { itemKey(it.hit) }
+
+    fun dedupe(items: List<Any>): List<Any> =
+        if (topHitId == null) items else items.filter { itemKey(it) != topHitId }
+
     val sections = buildList {
         if (results.songs.isNotEmpty()) {
-            add(SearchSection("songs", "Tracks", results.songs))
+            add(SearchSection("songs", "Songs", dedupe(results.songs)))
         }
         if (results.artists.isNotEmpty()) {
-            add(SearchSection("artists", "Artists", results.artists))
+            add(SearchSection("artists", "Artists", dedupe(results.artists)))
         }
         if (results.albums.isNotEmpty()) {
             val total = results.counts["albums"] ?: results.albums.size
-            add(SearchSection("albums", "Albums", results.albums, showChevron = total > preview))
+            add(SearchSection("albums", "Albums", dedupe(results.albums), showChevron = total > preview))
         }
-        if (results.radios.isNotEmpty()) add(SearchSection("radios", "Radio", results.radios))
-        if (results.similar.isNotEmpty()) add(SearchSection("similar", "Sonically similar", results.similar))
-        if (results.playlists.isNotEmpty()) add(SearchSection("playlists", "Playlists", results.playlists))
+        if (results.radios.isNotEmpty()) add(SearchSection("radios", "Radio", dedupe(results.radios)))
+        if (results.similar.isNotEmpty()) add(SearchSection("similar", "Sonically similar", dedupe(results.similar)))
+        if (results.playlists.isNotEmpty()) add(SearchSection("playlists", "Playlists", dedupe(results.playlists)))
         if (results.smartPlaylists.isNotEmpty()) {
-            add(SearchSection("smartPlaylists", "Smart playlists", results.smartPlaylists))
+            add(SearchSection("smartPlaylists", "Smart playlists", dedupe(results.smartPlaylists)))
         }
-        if (results.genres.isNotEmpty()) add(SearchSection("genres", "Genres", results.genres))
-        if (results.rooms.isNotEmpty()) add(SearchSection("rooms", "Rooms", results.rooms))
-        if (results.messages.isNotEmpty()) add(SearchSection("messages", "Messages", results.messages))
-    }
+        if (results.genres.isNotEmpty()) add(SearchSection("genres", "Genres", dedupe(results.genres)))
+        if (results.rooms.isNotEmpty()) add(SearchSection("rooms", "Rooms", dedupe(results.rooms)))
+        if (results.messages.isNotEmpty()) add(SearchSection("messages", "Messages", dedupe(results.messages)))
+    }.filter { it.items.isNotEmpty() }
+        .let { all ->
+            val key = sectionFilter.sectionKey
+            if (key == null) all else all.filter { it.key == key }
+        }
 
     BockLazyColumn(Modifier.testTag(BockTestTags.SEARCH_RESULTS)) {
+        topResult?.let { top ->
+            item(key = "top-hdr") {
+                PlexampSectionHeader(title = "Top result")
+            }
+            item(key = "top-row") {
+                when (top.kind) {
+                    SearchTopResultKind.Song -> SongHitRow(
+                        repository = repository,
+                        hit = top.hit,
+                        remoteOk = remoteOk,
+                        songRatings = songRatings,
+                        onPlay = onPlay,
+                        onRatingChange = onRatingChange,
+                        onAddToPlaylist = { path, title -> addToPlaylist = path to title },
+                        snackbarHostState = snackbarHostState,
+                    )
+                    SearchTopResultKind.Artist -> ArtistHitRow(
+                        repository = repository,
+                        hit = top.hit,
+                        onOpenArtist = { name ->
+                            SearchRecentSelection.fromHit("artist", top.hit)?.let(onRecordSelection)
+                            onOpenArtist(name)
+                        },
+                        onPlay = onPlay,
+                    )
+                    SearchTopResultKind.Album -> {
+                        val hit = top.hit
+                        AlbumHitRow(
+                            repository = repository,
+                            hit = hit,
+                            onOpenAlbum = { album, artist ->
+                                SearchRecentSelection.fromHit("album", hit)?.let(onRecordSelection)
+                                onOpenAlbum(album, artist)
+                            },
+                            onPlay = onPlay,
+                        )
+                    }
+                    SearchTopResultKind.Playlist -> PlaylistHitRow(
+                        repository = repository,
+                        hit = top.hit,
+                        onOpenPlaylist = onOpenPlaylist,
+                        onPlay = onPlay,
+                    )
+                }
+            }
+        }
         sections.forEach { section ->
             val total = results.counts[section.key] ?: section.items.size
             val isExpanded = expanded[section.key] == true
@@ -351,7 +450,7 @@ private fun RadioRow(
 private fun PlaylistHitRow(
     repository: BockMediaRepository,
     hit: SearchHit,
-    onOpenPlaylist: (String) -> Unit,
+    onOpenPlaylist: (String, String?) -> Unit,
     onPlay: (PlayTarget) -> Unit,
 ) {
     val id = hit.id ?: return
@@ -362,9 +461,9 @@ private fun PlaylistHitRow(
         hit = hit,
         title = hit.name ?: "",
         subtitle = null,
-        onClick = { onOpenPlaylist(id) },
+        onClick = { onOpenPlaylist(id, hit.name) },
         menuItems = listOf(
-            SearchMenuAction("Open") { onOpenPlaylist(id) },
+            SearchMenuAction("Open") { onOpenPlaylist(id, hit.name) },
             SearchMenuAction("Play") { onPlay(target) },
         ),
     )

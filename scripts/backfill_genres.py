@@ -15,7 +15,9 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.dirname(HERE))
 from lib import tag_io  # noqa: E402
+import bock_aggregates  # noqa: E402
 
 DB_PATH = os.environ.get('OURMEDIA_DB_PATH', os.path.join(os.path.dirname(__file__), '..', 'fixtures', 'demo-data', 'songs_cache.db'))
 SUPPORTED = tag_io.SUPPORTED
@@ -118,6 +120,11 @@ def main():
 
     if not args.dry_run:
         _db_retry(lambda: conn.commit(), label='final commit')
+        if updated:
+            # Keep genres_agg/albums_agg (search + browse fast paths) in step
+            # with the new tags — the live server only rebuilds them lazily.
+            print('rebuilding albums_agg/genres_agg…', flush=True)
+            _db_retry(lambda: bock_aggregates.rebuild(conn), label='agg rebuild')
     conn.close()
 
     print(

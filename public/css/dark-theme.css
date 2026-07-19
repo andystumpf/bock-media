@@ -1,6 +1,40 @@
+/* style.css loads after shell.css, so its light-theme body wins the cascade
+   — re-assert the dark shell here (this file loads last). */
+body {
+  background: var(--spotify-black) !important;
+  color: var(--text-primary) !important;
+}
+.settings-row label { color: var(--text-secondary) !important; }
+.settings-input:focus { border-color: var(--bock-green) !important; }
+.an-period-btn {
+  background: var(--spotify-elevated) !important;
+  color: #ffffff !important;
+  border-color: var(--border-subtle) !important;
+}
+.an-period-btn:hover { background: var(--spotify-hover) !important; color: #ffffff !important; }
+.an-hm-label { color: #ffffff !important; }
+.an-hbar-wrap p { color: #ffffff !important; }
+.stat-card .stat-label { color: #ffffff !important; }
+.stat-card .stat-value span { color: #ffffff !important; }
+.card-body { color: #ffffff !important; }
+.card-body .hint { color: #ffffff !important; }
+.global-alert code { background: rgba(0,0,0,0.3) !important; color: var(--text-primary) !important; }
+.plex-log-tail { background: var(--spotify-surface) !important; color: var(--text-secondary) !important; }
+.search-bar input {
+  background-color: var(--spotify-surface) !important;
+  color: var(--text-primary) !important;
+  border-color: var(--border-subtle) !important;
+}
+.search-bar input:focus { border-color: var(--bock-green) !important; }
+
 .home-greeting {
   color: #ffffff !important;
   -webkit-text-fill-color: #ffffff !important;
+}
+
+.spotify-player .player-track-name {
+  color: var(--text-primary) !important;
+  -webkit-text-fill-color: var(--text-primary) !important;
 }
 
 .card {
@@ -28,15 +62,15 @@
 .stat-card .stat-icon.purple { background: rgba(80,56,160,0.2) !important; color: #8d67ab !important; }
 .data-table th {
   background: var(--spotify-surface) !important;
-  color: var(--text-muted) !important;
+  color: #ffffff !important;
   border-bottom: 1px solid var(--border-subtle) !important;
 }
 .data-table td {
   border-bottom: 1px solid var(--border-subtle) !important;
-  color: var(--text-primary) !important;
+  color: #ffffff !important;
 }
 .data-table tbody tr:hover { background: rgba(255,255,255,0.04) !important; }
-.data-table .text-muted { color: var(--text-muted) !important; }
+.data-table .text-muted { color: #ffffff !important; }
 .data-table .badge { background: var(--spotify-surface) !important; color: var(--text-secondary) !important; }
 .btn-primary { background: var(--bock-green) !important; border-color: var(--bock-green) !important; color: var(--on-green) !important; }
 .btn-primary:hover { background: var(--bock-green-dark) !important; }
@@ -58,7 +92,7 @@
 .pagination-bar { background: var(--spotify-surface) !important; border-color: var(--border-subtle) !important; color: var(--text-muted) !important; }
 .page-btn { background: var(--spotify-elevated) !important; border-color: var(--border-subtle) !important; color: var(--text-primary) !important; }
 .page-btn:hover, .page-btn.active { background: var(--bock-green) !important; color: var(--on-green) !important; }
-.empty-state { color: var(--text-muted) !important; }
+.empty-state { color: #ffffff !important; }
 .spinner { border-color: var(--spotify-elevated) !important; border-top-color: var(--bock-green) !important; }
 .global-alert { background: rgba(233,157,26,0.15) !important; border: 1px solid rgba(233,157,26,0.35) !important; color: var(--text-primary) !important; }
 .health-chip.ok { background: rgba(29,185,84,0.15) !important; color: var(--bock-green) !important; border-color: rgba(29,185,84,0.3) !important; }
@@ -87,3 +121,15 @@
 .action-btn.action-play:hover { background: rgba(29,185,84,0.12) !important; }
 .back-link { color: var(--text-muted) !important; }
 .back-link:hover { color: var(--text-primary) !important; }
+
+.settings-security-warn {
+  border: 1px solid #e8a838 !important;
+  border-radius: 8px !important;
+  padding: 12px !important;
+  background: rgba(232, 168, 56, 0.12) !important;
+  color: var(--text-primary) !important;
+}
+.settings-security-warn.settings-security-critical {
+  border-color: #e74c3c !important;
+  background: rgba(231, 76, 60, 0.12) !important;
+}

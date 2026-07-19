@@ -77,6 +77,8 @@ PLAYLISTS = [
     ("Workout Energy", 42, True),
     ("Sunday Chill", 27, False),
     ("90s Throwback", 36, True),
+    # Deterministic small playlist for mobile UI tests (see shared/fixtures/ui_test_manifest.json).
+    ("UITest Small", 5, False),
 ]
 
 DEVICES = [

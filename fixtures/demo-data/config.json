@@ -1,13 +1,10 @@
 {
-  "publicUrl": "https://your-tunnel.example.com",
-  "launchPlaylistPrompt": false,
-  "mobileApi": {
-    "token": "DEMO_TOKEN_REPLACE_IN_PRODUCTION",
-    "allowExternalAccess": true,
-    "allowOpenLanApi": true,
-    "allowOpenLanMedia": true
-  },
-  "appAbout": {
-    "githubPublic": "https://github.com/andystumpf/bock-media"
+  "publicUrl": "https://your-domain.example.com",
+  "launchPlaylistPrompt": true,
+  "identifyPlaylist": "",
+  "alexaRemote": {
+    "url": "amazon.com",
+    "email": "demo@example.com",
+    "password": "demo-only-not-a-real-login"
   }
 }

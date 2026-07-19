@@ -18,6 +18,17 @@ interface BockMediaApi {
     @GET("api/dashboard/quick")
     suspend fun dashboardQuick(): DashboardQuickResponse
 
+    @GET("api/home")
+    suspend fun home(
+        @Query("deferred") deferred: String? = "1",
+        @Query("includeRatings") includeRatings: String? = null,
+        @Query("member") member: String? = null,
+        @Query("clientId") clientId: String? = null,
+        @Query("playlistLimit") playlistLimit: Int? = null,
+        @Query("genreLimit") genreLimit: Int? = null,
+        @Query("historyLimit") historyLimit: Int? = null,
+    ): HomeResponse
+
     @GET("api/playback/status")
     suspend fun playbackStatus(): PlaybackStatusResponse
 
@@ -51,6 +62,9 @@ interface BockMediaApi {
         @Query("preview") preview: Int = 5,
         @Query("section") section: String? = null,
         @Query("source") source: String? = null,
+        @Query("fast") fast: String? = null,
+        @Query("includeResonance") includeResonance: String? = null,
+        @Query("includeRooms") includeRooms: String? = null,
     ): SearchResponse
 
     @GET("api/search/pins")
@@ -69,7 +83,19 @@ interface BockMediaApi {
     suspend fun continueListening(@Query("member") member: String? = null): ContinueResponse
 
     @GET("api/library/new")
-    suspend fun libraryNew(@Query("since") since: String = "7d", @Query("limit") limit: Int = 50): LibraryNewResponse
+    suspend fun libraryNew(
+        @Query("since") since: String = "7d",
+        @Query("limit") limit: Int = 50,
+        @Query("followed") followed: Int? = null,
+        @Query("after") after: String? = null,
+    ): LibraryNewResponse
+
+    @GET("api/notifications/followed")
+    suspend fun followedNotifications(
+        @Query("since") since: String = "30d",
+        @Query("after") after: String? = null,
+        @Query("limit") limit: Int = 50,
+    ): FollowedNotificationsResponse
 
     @GET("api/recommendations/discover-weekly")
     suspend fun discoverWeekly(@Query("member") member: String? = null): DiscoverWeeklyResponse
@@ -88,6 +114,8 @@ interface BockMediaApi {
         @Query("sortBy") sortBy: String? = null,
         @Query("order") order: String? = null,
         @Query("member") member: String? = null,
+        @Query("fields") fields: String? = null,
+        @Query("inlineCovers") inlineCovers: String? = null,
     ): PlaylistsResponse
 
     @GET("api/playlists/{id}/cover")
@@ -141,11 +169,20 @@ interface BockMediaApi {
     @POST("api/playlists/ai")
     suspend fun aiPlaylist(@Body body: JsonObject): AiPlaylistResponse
 
+    @GET("api/listen-agent/status")
+    suspend fun listenAgentStatus(): MixMuseStatusResponse
+
+    @POST("api/listen-agent/play")
+    suspend fun listenAgentPlay(@Body body: JsonObject): ListenAgentResponse
+
     @GET("api/mix-muse/status")
     suspend fun mixMuseStatus(): MixMuseStatusResponse
 
     @POST("api/mix-muse/similar")
     suspend fun mixMuseSimilar(@Body body: JsonObject): AiPlaylistResponse
+
+    @POST("api/mix-muse/playlist")
+    suspend fun mixMusePlaylist(@Body body: JsonObject): AiPlaylistResponse
 
     @POST("api/resonance/mix")
     suspend fun resonanceMix(@Body body: JsonObject): DiscoveryMixResponse
@@ -181,6 +218,9 @@ interface BockMediaApi {
         @Query("search") search: String = "",
     ): ArtistsResponse
 
+    @GET("api/artists/{name}")
+    suspend fun artistDetail(@Path("name") name: String): ArtistDetailResponse
+
     @GET("api/artist-portrait")
     suspend fun artistPortrait(@Query("artist") artist: String): ArtistPortraitResponse
 
@@ -213,10 +253,22 @@ interface BockMediaApi {
         @Query("title") title: String,
         @Query("artist") artist: String? = null,
         @Query("durationSec") durationSec: Int? = null,
+        @Query("mobile") mobile: String? = null,
+        @Query("wait") waitSec: Int? = null,
     ): MusicVideoResponse
 
+    @GET("api/music-video/related")
+    suspend fun musicVideoRelated(
+        @Query("artist") artist: String,
+        @Query("limit") limit: Int = 12,
+    ): MusicVideoRelatedResponse
+
     @GET("api/music-video/{videoId}/play")
-    suspend fun musicVideoPlay(@Path("videoId") videoId: String): MusicVideoPlayResponse
+    suspend fun musicVideoPlay(
+        @Path("videoId") videoId: String,
+        @Query("mobile") mobile: String? = null,
+        @Query("wait") waitSec: Int? = null,
+    ): MusicVideoPlayResponse
 
     @GET("api/songs")
     suspend fun songs(
@@ -283,7 +335,7 @@ interface BockMediaApi {
     suspend fun deleteAutomation(@Path("id") id: String): OkResponse
 
     @POST("api/automations/{id}/run")
-    suspend fun runAutomation(@Path("id") id: String): OkResponse
+    suspend fun runAutomation(@Path("id") id: String): AutomationRunResponse
 
     @POST("api/clients/report")
     suspend fun reportClientEvent(@Body body: JsonObject): OkResponse

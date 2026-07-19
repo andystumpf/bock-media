@@ -119,11 +119,13 @@ upload_apk_remote() {
 }
 
 echo "Deploying to ${NAS}…"
-if scp "$APK" "${NAS}:${DATA_REMOTE}/bockmedia-console.apk" \
-  && ssh "$NAS" "printf '%s' '${GRADLE_VER}' > '${DATA_REMOTE}/bockmedia-console.version'" \
+# Use scp/ssh paths relative to remote $HOME (`.bockmedia/…`) so local `~` is never expanded.
+if scp "$APK" "${NAS}:.bockmedia/bockmedia-console.apk" \
+  && ssh "$NAS" "mkdir -p .bockmedia && printf '%s' '${GRADLE_VER}' > .bockmedia/bockmedia-console.version" \
   && scp "$NOTES" "${NAS}:${REPO_REMOTE}/app-release-notes.json" \
   && scp "$GRADLE" "${NAS}:${REPO_REMOTE}/android/app/build.gradle.kts" \
   && scp "$REPO_ROOT/server.py" "${NAS}:${REPO_REMOTE}/server.py" \
+  && scp "$REPO_ROOT/alexa_remote.py" "${NAS}:${REPO_REMOTE}/alexa_remote.py" \
   && { for mod in "$REPO_ROOT"/bock_*.py; do scp "$mod" "${NAS}:${REPO_REMOTE}/$(basename "$mod")"; done; true; } \
   && "$REPO_ROOT/scripts/deploy_web.sh" --no-restart \
   && ssh "$NAS" "sudo systemctl restart ourmedia"; then
@@ -147,6 +149,11 @@ if [[ -n "$ADB_SERIAL" ]]; then
   adb -s "$ADB_SERIAL" install -r "$APK"
   adb -s "$ADB_SERIAL" shell am start -n com.bockmedia.console/com.bockmedia.console.MainActivity >/dev/null 2>&1 || true
   echo "Phone install OK (${ADB_SERIAL})"
+  if [[ "${DEPLOY_SMOKE:-0}" == "1" ]]; then
+    echo "Running post-deploy Tier 1 smoke on ${ADB_SERIAL}…"
+    ANDROID_DEVICE="${ADB_SERIAL}" TIER=1 PLATFORM=android SKIP_PREFLIGHT=0 \
+      "$REPO_ROOT/scripts/run_mobile_ui_suite.sh" || echo "Deploy smoke failed (see report)" >&2
+  fi
 else
   echo "Phone: run from repo root after wireless pairing:"
   echo "  adb connect YOUR_DEVICE_IP:PORT && adb install -r android/app/build/outputs/apk/sideload/app-sideload.apk"

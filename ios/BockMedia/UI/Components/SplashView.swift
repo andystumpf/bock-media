@@ -13,7 +13,7 @@ struct SplashView: View {
             .ignoresSafeArea()
 
             VStack(spacing: 20) {
-                BockLoadingLogo(size: 96)
+                BockProgressIndicator(size: 48)
                 Text("Bock Media")
                     .font(.title.bold())
                     .foregroundStyle(BockColors.onSurface)

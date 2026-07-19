@@ -97,6 +97,8 @@ paths:
         - { name: page, in: query, schema: { type: integer } }
         - { name: limit, in: query, schema: { type: integer } }
         - { name: search, in: query, schema: { type: string } }
+        - { name: fields, in: query, schema: { type: string, enum: [summary] } }
+        - { name: inlineCovers, in: query, schema: { type: string, enum: ["0", "1"] } }
       responses:
         "200":
           content:
@@ -157,6 +159,116 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/NowPlayingDevicesResponse"
+  /api/library/health:
+    get:
+      summary: Library metadata health (Picard attention + duplicate artists)
+      parameters:
+        - name: attentionLimit
+          in: query
+          schema: { type: integer, default: 5 }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LibraryHealthResponse"
+  /api/library/artists/merge:
+    post:
+      summary: Merge duplicate artist spellings in the library index
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [from, to]
+              properties:
+                from: { type: array, items: { type: string } }
+                to: { type: string }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  rowsUpdated: { type: integer }
+  /api/home:
+    get:
+      summary: Unified home refresh payload
+      parameters:
+        - { name: deferred, in: query, schema: { type: integer } }
+        - { name: includeRatings, in: query, schema: { type: integer } }
+        - { name: memberId, in: query, schema: { type: string } }
+        - { name: member, in: query, schema: { type: string } }
+        - { name: clientId, in: query, schema: { type: string } }
+        - { name: playlistLimit, in: query, schema: { type: integer } }
+        - { name: genreLimit, in: query, schema: { type: integer } }
+        - { name: historyLimit, in: query, schema: { type: integer } }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  history: { type: object }
+                  dashboard: { type: object }
+                  playlists: { type: object }
+                  ratings: { type: object }
+                  listeningSummary: { type: object }
+                  homeDefaults: { type: object }
+  /api/search/pins:
+    get:
+      summary: Custom search shortcuts for the active profile
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pins: { type: array, items: { type: object } }
+    put:
+      summary: Save custom search shortcuts
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+  /api/notifications/followed:
+    get:
+      summary: New library music from followed artists
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+  /api/followed-artists:
+    get:
+      summary: Artists the active profile follows (3-star rating)
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+  /api/library/new:
+    get:
+      summary: Recently indexed library albums
+      parameters:
+        - { name: followed, in: query, schema: { type: integer } }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
 components:
   schemas:
     HealthResponse:
@@ -222,6 +334,9 @@ components:
         id: { type: string }
         name: { type: string }
         title: { type: string }
+        artist: { type: string }
+        album: { type: string }
+        genre: { type: string }
         path: { type: string }
     PlaylistsResponse:
       type: object
@@ -274,3 +389,31 @@ components:
         track: { type: string }
         artist: { type: string }
         paused: { type: boolean }
+    LibraryHealthResponse:
+      type: object
+      properties:
+        summary: { $ref: "#/components/schemas/LibraryHealthSummary" }
+        attentionFolders:
+          type: array
+          items: { $ref: "#/components/schemas/LibraryAttentionFolder" }
+        duplicateArtists:
+          type: array
+          items: { $ref: "#/components/schemas/DuplicateArtistGroup" }
+    LibraryHealthSummary:
+      type: object
+      properties:
+        totalTracks: { type: integer }
+        missingGenre: { type: integer }
+        missingAlbumArtist: { type: integer }
+        needsAttention: { type: integer }
+    LibraryAttentionFolder:
+      type: object
+      properties:
+        path: { type: string }
+        trackCount: { type: integer }
+    DuplicateArtistGroup:
+      type: object
+      properties:
+        canonical: { type: string }
+        variants: { type: array, items: { type: string } }
+        totalTracks: { type: integer }

@@ -52,7 +52,7 @@ def test_kid_safe_room_queues_until_approved(isolated_paths, client, monkeypatch
 
     rid = resp.get_json()['id']
     approve = client.post(f'/api/rooms/kitchen-echo/requests/{rid}/approve', json={
-        'memberId': 'p-andy',
+        'memberId': 'p-parent',
         'pin': '1234',
     })
     assert approve.status_code == 200

@@ -23,6 +23,8 @@ import com.bockmedia.console.data.api.dto.RoomItem
 import com.bockmedia.console.data.repository.BockMediaRepository
 import com.bockmedia.console.domain.model.PlayTarget
 import com.bockmedia.console.ui.components.*
+import androidx.compose.ui.platform.testTag
+import com.bockmedia.console.ui.testing.BockTestTags
 import androidx.compose.foundation.lazy.items
 import com.bockmedia.console.ui.theme.HomePillInactive
 import kotlinx.coroutines.delay
@@ -68,7 +70,7 @@ fun RoomsScreen(
         else -> BockPullRefresh(
             isRefreshing = refreshing,
             onRefresh = { refreshing = true; scope.launch { load() } },
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().testTag(BockTestTags.ROOMS_BODY),
         ) {
             BockLazyColumn(
                 Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp),

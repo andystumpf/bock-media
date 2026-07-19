@@ -12,6 +12,35 @@ struct HouseholdMember: Codable, Identifiable, Equatable, Hashable {
     var createdAt: Double?
 
     var isParent: Bool { role == "parent" }
+
+    init(
+        id: String,
+        name: String,
+        role: String,
+        color: String? = nil,
+        avatar: String? = nil,
+        hasPin: Bool = false,
+        createdAt: Double? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.role = role
+        self.color = color
+        self.avatar = avatar
+        self.hasPin = hasPin
+        self.createdAt = createdAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        role = try c.decode(String.self, forKey: .role)
+        color = try c.decodeIfPresent(String.self, forKey: .color)
+        avatar = try c.decodeIfPresent(String.self, forKey: .avatar)
+        hasPin = try c.decodeIfPresent(Bool.self, forKey: .hasPin) ?? false
+        createdAt = try c.decodeIfPresent(Double.self, forKey: .createdAt)
+    }
 }
 
 struct DeviceOwner: Codable, Identifiable, Equatable {
@@ -114,18 +143,56 @@ struct MessagesResponse: Codable {
 /// Stores the household member this install is "acting as" — used to attribute
 /// plays, send messages, share playlists, and approve requests.
 enum ActiveProfileStore {
-    private static let key = "active_member_id"
+    private static let memberKey = "active_member_id"
+    private static let choiceKey = "profile_choice_made"
 
     static func activeMemberId() -> String? {
-        let v = UserDefaults.standard.string(forKey: key)?.trimmingCharacters(in: .whitespaces)
+        hydrate()
+        let v = UserDefaults.standard.string(forKey: memberKey)?.trimmingCharacters(in: .whitespaces)
         return (v?.isEmpty == false) ? v : nil
     }
 
+    static func hasProfileChoice() -> Bool {
+        hydrate()
+        return UserDefaults.standard.bool(forKey: choiceKey)
+    }
+
     static func setActiveMember(_ id: String?) {
+        hydrate()
         if let id, !id.isEmpty {
-            UserDefaults.standard.set(id, forKey: key)
+            UserDefaults.standard.set(id, forKey: memberKey)
         } else {
-            UserDefaults.standard.removeObject(forKey: key)
+            UserDefaults.standard.removeObject(forKey: memberKey)
         }
+        markProfileChosen()
+    }
+
+    /// Clears a member id that no longer exists on the server; keeps profile-choice flag.
+    static func clearStaleMember() {
+        hydrate()
+        UserDefaults.standard.removeObject(forKey: memberKey)
+    }
+
+    /// User explicitly chose to stay unattributed (first-run picker or Family dropdown).
+    static func chooseUnattributed() {
+        UserDefaults.standard.removeObject(forKey: memberKey)
+        markProfileChosen()
+    }
+
+    private static var hydrated = false
+
+    private static func hydrate() {
+        guard !hydrated else { return }
+        var chosen = UserDefaults.standard.bool(forKey: choiceKey)
+        let storedMember = UserDefaults.standard.string(forKey: memberKey)?.trimmingCharacters(in: .whitespaces)
+        if !chosen, let storedMember, !storedMember.isEmpty {
+            chosen = true
+            UserDefaults.standard.set(true, forKey: choiceKey)
+        }
+        hydrated = true
+    }
+
+    private static func markProfileChosen() {
+        UserDefaults.standard.set(true, forKey: choiceKey)
     }
 }

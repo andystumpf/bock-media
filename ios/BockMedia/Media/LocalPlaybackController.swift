@@ -288,13 +288,16 @@ final class LocalPlaybackController: ObservableObject {
             }
             var appended: [LocalTrack] = []
             let seen = Set(state.tracks.map(\.path))
+            let base = try? await repository.resolveBaseURL()
+            let offline = OfflineDownloadStore()
             for t in resp.tracks {
                 guard let path = t.path, !path.isEmpty, !seen.contains(path),
-                      let urlStr = await repository.streamURL(for: path),
+                      let base,
+                      let urlStr = ServerURL.streamURL(base: base, filepath: path),
                       let url = URL(string: urlStr) else { continue }
                 appended.append(LocalTrack(
                     path: path, title: t.title ?? path, artist: t.artist,
-                    album: t.album, streamURL: url, localFileURL: nil
+                    album: t.album, streamURL: url, localFileURL: offline.localFileURL(path: path)
                 ))
             }
             guard !appended.isEmpty else { return false }
@@ -309,6 +312,7 @@ final class LocalPlaybackController: ObservableObject {
 
     func nowPlayingDeviceItem() -> NowPlayingDeviceItem? {
         guard state.active, let track = state.current else { return nil }
+        let (sourceLabel, playlist) = playContextLabels(from: activePlayTarget)
         return NowPlayingDeviceItem(
             deviceId: LocalPlaybackIds.localPhoneDeviceId,
             deviceName: "This iPhone",
@@ -319,8 +323,42 @@ final class LocalPlaybackController: ObservableObject {
             timestamp: Date().timeIntervalSince1970,
             duration_ms: state.durationMs,
             offset_ms: state.positionMs,
-            paused: !state.isPlaying
+            paused: !state.isPlaying,
+            playlist: playlist,
+            sourceLabel: sourceLabel
         )
+    }
+
+    private func playContextLabels(from target: PlayTarget?) -> (sourceLabel: String?, playlist: String?) {
+        guard let target else { return (nil, nil) }
+        switch target {
+        case .playlist(_, let name):
+            return (name, name)
+        case .artist(let name):
+            return (name, nil)
+        case .album(let name, _):
+            return (name, nil)
+        case .radio(let displayTitle, _, _, _):
+            return (displayTitle, nil)
+        case .song:
+            return (nil, nil)
+        }
+    }
+
+    private func avPlayerItem(for track: LocalTrack) -> AVPlayerItem {
+        if track.localFileURL != nil {
+            return AVPlayerItem(url: track.playbackURL)
+        }
+        return StreamAuth.playerItem(url: track.streamURL, preferences: analyticsRepository?.preferences)
+    }
+
+    private func playbackReportContext() -> (playlist: String?, playlistId: String?, sourceLabel: String?) {
+        let (sourceLabel, playlist) = playContextLabels(from: activePlayTarget)
+        let playlistId: String? = {
+            guard case .playlist(let id, _) = activePlayTarget else { return nil }
+            return id
+        }()
+        return (playlist, playlistId, sourceLabel)
     }
 
     private func playCurrent() async throws {
@@ -331,7 +369,7 @@ final class LocalPlaybackController: ObservableObject {
         configureAudioSession()
         currentArtwork = nil
 
-        let item = AVPlayerItem(url: track.playbackURL)
+        let item = avPlayerItem(for: track)
         if player == nil {
             player = AVPlayer(playerItem: item)
         } else {
@@ -346,7 +384,14 @@ final class LocalPlaybackController: ObservableObject {
         observeTime()
         loadArtwork(for: track)
         if let analyticsRepository {
-            DeviceAnalyticsReporter.reportPlay(repository: analyticsRepository, track: track)
+            let ctx = playbackReportContext()
+            DeviceAnalyticsReporter.reportPlay(
+                repository: analyticsRepository,
+                track: track,
+                playlist: ctx.playlist,
+                playlistId: ctx.playlistId,
+                sourceLabel: ctx.sourceLabel
+            )
         }
         notifyWidgetSession()
     }
@@ -363,7 +408,7 @@ final class LocalPlaybackController: ObservableObject {
         // Outgoing track must not fire handleTrackEnded once we've advanced the queue index.
         removeEndObserver()
 
-        let item = AVPlayerItem(url: nextTrack.playbackURL)
+        let item = avPlayerItem(for: nextTrack)
         let incoming = AVPlayer(playerItem: item)
         incoming.volume = 0
         incoming.play()
@@ -373,7 +418,14 @@ final class LocalPlaybackController: ObservableObject {
         updateNowPlayingInfo(track: nextTrack)
         loadArtwork(for: nextTrack)
         if let analyticsRepository {
-            DeviceAnalyticsReporter.reportPlay(repository: analyticsRepository, track: nextTrack)
+            let ctx = playbackReportContext()
+            DeviceAnalyticsReporter.reportPlay(
+                repository: analyticsRepository,
+                track: nextTrack,
+                playlist: ctx.playlist,
+                playlistId: ctx.playlistId,
+                sourceLabel: ctx.sourceLabel
+            )
         }
 
         crossfadeTimer?.invalidate()
@@ -584,13 +636,17 @@ final class LocalPlaybackController: ObservableObject {
         let now = Int64(Date().timeIntervalSince1970 * 1000)
         if !force, now - lastPlaybackReportMs < 4_000 { return }
         lastPlaybackReportMs = now
+        let ctx = playbackReportContext()
         DeviceAnalyticsReporter.reportPlayback(
             repository: analyticsRepository,
             track: track,
             playing: state.isPlaying,
             offsetMs: state.positionMs,
             durationMs: state.durationMs,
-            force: force
+            force: force,
+            playlist: ctx.playlist,
+            playlistId: ctx.playlistId,
+            sourceLabel: ctx.sourceLabel
         )
     }
 
@@ -617,6 +673,35 @@ final class LocalPlaybackController: ObservableObject {
             NotificationCenter.default.removeObserver(endObserver)
         }
         endObserver = nil
+    }
+
+    /// Seeds local playback for XCUITest Now Playing screenshots (no server playback required).
+    func installUITestPreviewIfNeeded(force: Bool = false) {
+        guard force || ProcessInfo.processInfo.arguments.contains("-NowPlayingPreview") else { return }
+        if force { stopPlayback() }
+        let placeholder = URL(string: "https://localhost/preview")!
+        let tracks = [
+            LocalTrack(
+                path: "/music/Pearl Jam/Ten/01 - Daughter.flac",
+                title: "Daughter - Remastered",
+                artist: "Pearl Jam",
+                album: "Ten",
+                streamURL: placeholder
+            ),
+            LocalTrack(path: "/music/Pearl Jam/Ten/02 - Alive.flac", title: "Alive", artist: "Pearl Jam", album: "Ten", streamURL: placeholder),
+            LocalTrack(path: "/music/Pearl Jam/Ten/03 - Even Flow.flac", title: "Even Flow", artist: "Pearl Jam", album: "Ten", streamURL: placeholder),
+        ]
+        activePlayTarget = .playlist(id: "preview", name: "Rock Essentials")
+        state = LocalPlaybackState(
+            active: true,
+            tracks: tracks,
+            index: 0,
+            isPlaying: true,
+            positionMs: 45_000,
+            durationMs: 235_000,
+            shuffle: false
+        )
+        NotificationCenter.default.post(name: .localPlaybackDidChange, object: nil)
     }
 }
 

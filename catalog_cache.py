@@ -45,15 +45,25 @@ def write_playlists_index(data_dir, items, xml_mtime=None):
     _atomic_json_write(path, {'mtime': mtime, 'items': items})
 
 
-def read_playlists_index(data_dir, xml_path):
-    """Return items list if sidecar matches XML mtime, else None."""
+def read_playlists_index(data_dir, xml_path, allow_stale=False):
+    """Return items list if sidecar matches XML mtime, else None.
+
+    When allow_stale=True, return the last sidecar even if XML mtime drifted
+    (e.g. Plex sync wrote XML but has not rebuilt the index yet). Better than
+    blocking live reads on the XML flock for minutes.
+    """
     idx_path = playlists_index_path(data_dir)
     try:
         xml_mtime = os.path.getmtime(xml_path)
         with open(idx_path, encoding='utf-8') as f:
             data = json.load(f)
-        if data.get('mtime') == xml_mtime and isinstance(data.get('items'), list):
-            return data['items']
+        items = data.get('items')
+        if not isinstance(items, list):
+            return None
+        if data.get('mtime') == xml_mtime:
+            return items
+        if allow_stale:
+            return items
     except (OSError, json.JSONDecodeError, TypeError, ValueError):
         pass
     return None

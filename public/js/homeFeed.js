@@ -14,6 +14,7 @@
     EXPLORE_THEMES: 18,
     LIBRARY_GENRE_EXTRAS: 6,
     DAILY_MIXES: 12,
+    RECENTLY_CREATED: 10,
     RECENT_PLAYLISTS: 24,
     RADIO: 16,
     DISCOVER: 24,
@@ -245,6 +246,21 @@
           return a.name.localeCompare(b.name);
         });
     },
+    decadePatterns: {
+      '60s': [/\b60'?s\b/i, /'60s/i, /\bsixties\b/i, /\b1960s\b/i, /\b196[0-9]\b/i],
+      '70s': [/\b70'?s\b/i, /'70s/i, /\bseventies\b/i, /\b1970s\b/i, /\b197[0-9]\b/i],
+      '80s': [/\b80'?s\b/i, /'80s/i, /\beighties\b/i, /\b1980s\b/i, /\b198[0-9]\b/i],
+      '90s': [/\b90'?s\b/i, /'90s/i, /\bnineties\b/i, /\b1990s\b/i, /\b199[0-9]\b/i],
+    },
+    playlistMatchesDecade(name, decadeId) {
+      const patterns = this.decadePatterns[decadeId] || [];
+      return patterns.some((re) => re.test(name || ''));
+    },
+    playlistsForDecadeSection(all, decadeId) {
+      return all
+        .filter((p) => plTracks(p) > 0 && this.playlistMatchesDecade(this.playlistSearchText(p), decadeId))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    },
     browsablePlaylists(all) {
       return all.filter((p) => plTracks(p) > 0 && !this.isSpecialHomePlaylistName(p.name));
     },
@@ -265,6 +281,13 @@
   function theme(id, title, subtitle, playlistKeywords, genreKeywords) {
     return { id, title, subtitle, playlistKeywords, genreKeywords };
   }
+
+  const HomeDecadeSections = [
+    { id: '60s', title: '60s' },
+    { id: '70s', title: '70s' },
+    { id: '80s', title: '80s' },
+    { id: '90s', title: '90s' },
+  ];
 
   const HomeMoodSections = [
     { id: 'dinner', title: 'Dinner & entertaining', theme: theme('dinner', 'Dinner playlist', 'Cooking, hosting & table music',
@@ -379,7 +402,10 @@
   };
 
   function isRotatableSectionKind(kind) {
-    return kind !== 'RatedSongs' && kind !== 'Offline' && kind !== 'Favorites';
+    // BrowseGenres is a genre directory — rotation would swap genre tiles for
+    // unrelated playlists.
+    return kind !== 'RatedSongs' && kind !== 'Offline' && kind !== 'Favorites' && kind !== 'Decade'
+      && kind !== 'BrowseGenres';
   }
 
   function rotationSubtitle(kind, pl) {
@@ -393,6 +419,7 @@
       case 'Radio': return 'From your library';
       case 'Discover': return `${tracks} tracks · Discover`;
       case 'RecentPlaylists': return `${tracks} tracks · Suggested for you`;
+      case 'RecentlyCreated': return `${tracks} tracks · Recently created`;
       default: return `${tracks} tracks`;
     }
   }
@@ -616,6 +643,48 @@
     }).slice(0, limit);
   }
 
+  function buildDecadeSectionCards(decade, input, registry, playlistById) {
+    const kind = 'Decade';
+    const cards = [];
+
+    function addCard(card) {
+      if (!card || registry.hasCard(card.id)) return;
+      if (cards.some((c) => c.id === card.id)) return;
+      registry.registerMoodCard(card);
+      cards.push(card);
+    }
+
+    function decadePlaylistCard(pl) {
+      if (plTracks(pl) <= 0) return null;
+      const cardId = `decade-${decade.id}-pl-${pl.id}`;
+      if (registry.hasCard(cardId)) return null;
+      return {
+        id: cardId,
+        title: pl.name,
+        subtitle: `${plTracks(pl)} tracks · ${decade.title}`,
+        artPath: pl.artPath || null,
+        playlistId: pl.id,
+        playTarget: ptPlaylist(pl.id, pl.name),
+        kind,
+      };
+    }
+
+    for (const pl of Rules.playlistsForDecadeSection(input.allPlaylists, decade.id)) {
+      addCard(decadePlaylistCard(pl));
+    }
+    for (const sp of (input.smartPlaylists || []).filter((s) => s.enabled && Rules.playlistMatchesDecade(s.name, decade.id))) {
+      const pl = sp.playlistId ? playlistById[sp.playlistId] : null;
+      if (pl) addCard(decadePlaylistCard(pl));
+    }
+
+    const seen = new Set();
+    return cards.filter((c) => {
+      if (seen.has(c.id)) return false;
+      seen.add(c.id);
+      return true;
+    });
+  }
+
   function buildRadioCards(history, topArtists, topGenres, allPlaylists, registry, limit) {
     const cards = [];
     function resolveRadioArt(preferred, artist, index) {
@@ -835,11 +904,12 @@
   function compose(input) {
     const registry = HomeFeedRegistry();
     const allPlaylists = (input.allPlaylists || []).map((p) => ({ ...p, tracks: plTracks(p) }));
+    const browsablePlaylists = allPlaylists.filter((p) => plTracks(p) > 0);
     const playlistByName = Object.fromEntries(allPlaylists.map((p) => [p.name.toLowerCase(), p]));
     const playlistById = Object.fromEntries(allPlaylists.map((p) => [p.id, p]));
     const topGenres = (input.analytics?.topGenres || []).slice(0, 12);
     const topArtists = input.analytics?.topArtists || [];
-    const shuffledGeneric = Rules.shuffledBrowsablePlaylists(allPlaylists, input.shuffleSeed);
+    const shuffledGeneric = Rules.shuffledBrowsablePlaylists(browsablePlaylists, input.shuffleSeed);
 
     const recentPlaylistNames = [];
     const recentSeen = new Set();
@@ -916,6 +986,22 @@
     }).filter(Boolean);
     registry.reserveMoodPlaylists(moodSections.flatMap((s) => s.cards));
 
+    const decadeSections = HomeDecadeSections.map((decade) => {
+      const cards = buildDecadeSectionCards(decade, { ...input, allPlaylists }, registry, playlistById);
+      return section(`decade-${decade.id}`, decade.title, 'Decade', cards);
+    }).filter(Boolean);
+    registry.reserveMoodPlaylists(decadeSections.flatMap((s) => s.cards));
+
+    const recentlyCreatedPool = (input.recentlyCreatedPlaylists && input.recentlyCreatedPlaylists.length)
+      ? input.recentlyCreatedPlaylists
+      : allPlaylists.slice().sort((a, b) => parseSortDate(b.createDate) - parseSortDate(a.createDate));
+    const recentlyCreated = fillPlaylists(
+      recentlyCreatedPool,
+      LIMITS.RECENTLY_CREATED,
+      'RecentlyCreated',
+      (pl) => `${plTracks(pl)} tracks · Recently created`,
+    );
+
     const jumpBackIn = [];
     const jumpSeen = new Set();
     function addJump(card) {
@@ -967,12 +1053,6 @@
         kind: 'JumpBackIn',
       });
     }
-    jumpBackIn.push(...fillPlaylists(
-      allPlaylists.slice().sort((a, b) => parseSortDate(b.createDate) - parseSortDate(a.createDate)),
-      LIMITS.JUMP_BACK_IN - jumpBackIn.length,
-      'JumpBackIn',
-      () => 'Recently added',
-    ));
     jumpBackIn.push(...fillPlaylists(
       shuffledGeneric,
       LIMITS.JUMP_BACK_IN - jumpBackIn.length,
@@ -1136,12 +1216,21 @@
       }
     }
 
+    const followedReleases = (input.followedReleaseCards || []).filter((card) => {
+      if (registry.hasCard(card.id)) return false;
+      registry.registerCard(card);
+      return true;
+    });
+
     const sections = [
       section('jump-back-in', 'Jump back in', 'JumpBackIn', jumpBackInFinal),
+      section('recently-created', 'Recently Created', 'RecentlyCreated', recentlyCreated),
       section('rated-songs', 'Rated Songs', 'RatedSongs', ratedSongCards),
       section('browse-genres', 'Browse by genre', 'BrowseGenres', browseGenres),
       section('top-mixes', 'Your top mixes', 'TopMixes', genreMixes),
       ...moodSections,
+      ...decadeSections,
+      section('followed-releases', 'New from artists you follow', 'Discover', followedReleases),
       section('release-radar', 'Release Radar', 'Discover', releaseRadar),
       section('discover-weekly', 'Discover Weekly', 'Discover', input.discoverWeeklyCards || []),
       section('explore-themes', 'Explore genres & worlds', 'ExploreThemes', exploreThemes),

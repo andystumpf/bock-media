@@ -87,4 +87,23 @@ final class HomeFeedComposerGoldenTests: XCTestCase {
         }
         XCTAssertEqual(shortcuts.count, Set(shortcuts.map(\.id)).count, "duplicate shortcut tiles")
     }
+
+    func testHomeFeedMoodSectionsComposeWithoutTrap() throws {
+        let decoder = JSONDecoder()
+        let g = try decoder.decode(GoldenInput.self, from: fixtureData("input.json"))
+        let feed = HomeFeedComposer.compose(
+            HomeFeedInput(
+                history: g.history,
+                analytics: g.analytics,
+                allPlaylists: g.allPlaylists,
+                smartPlaylists: g.smartPlaylists,
+                favorites: g.favorites,
+                dashboard: g.dashboard,
+                libraryGenres: g.libraryGenres,
+                shuffleSeed: g.shuffleSeed
+            )
+        )
+        let moodSections = feed.sections.filter { $0.kind == .mood }
+        XCTAssertFalse(moodSections.isEmpty, "expected mood sections in golden feed")
+    }
 }
