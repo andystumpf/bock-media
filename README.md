@@ -742,6 +742,7 @@ generate a phrase and paste it into an Alexa Routine.
 │   ├── AMAZON_UK.md              # Amazon UK (amazon.co.uk) config
 │   ├── screenshots/README.md     # how to regenerate README captures
 │   └── dev/                      # internal bug hunts & QA (private repo only)
+├── CONTRIBUTING.md               # how to fork, test, and open PRs (public repo)
 ├── .github/workflows/ci.yml
 ├── package.json                  # Playwright (README screenshot scripts only)
 └── requirements.txt
@@ -756,6 +757,9 @@ node scripts/capture_readme_screenshots.mjs
 
 Capture mobile screenshots from a running demo server — see
 [`docs/screenshots/README.md`](docs/screenshots/README.md).
+
+This public repo is a **sanitized export** of the private development tree (no maintainer
+publish tooling). To contribute, see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ---
 

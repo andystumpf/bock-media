@@ -4,40 +4,48 @@ All README captures use **`scripts/seed_demo_data.py`** — real well-known arti
 (Fleetwood Mac, Miles Davis, Pearl Jam, etc.) with synthetic household names,
 devices, and listening history. No personal library data.
 
-## Regenerate web console shots
+## Regeneration checklist (before publishing)
 
-```bash
-pip install -r requirements.txt
-python3 scripts/seed_demo_data.py --config --alexa-remote --write-audio
+1. **Seed demo data**
+   ```bash
+   python3 scripts/seed_demo_data.py --config --alexa-remote --write-audio
+   ```
 
-# Demo server (default port 3033 in capture script)
-OURMEDIA_DATA_DIR=demo-data \
-OURMEDIA_DB_PATH=demo-data/music_organizer.db \
-OURMEDIA_MUSIC_ROOT=/Users/Shared/bock-media/music \
-PORT=3033 python3 server.py
+2. **Start demo server** (port 3033)
+   ```bash
+   OURMEDIA_DATA_DIR=demo-data \
+   OURMEDIA_DB_PATH=demo-data/music_organizer.db \
+   OURMEDIA_MUSIC_ROOT=/Users/Shared/bock-media/music \
+   PORT=3033 \
+   BOCK_MOBILE_API_TOKEN=demo \
+   python3 server.py
+   ```
 
-# In another terminal (needs Node + Playwright)
-node scripts/capture_readme_screenshots.mjs --port 3033
-node scripts/capture_automation_screenshots.mjs --port 3033
-```
+3. **Web console** (Node + Playwright)
+   ```bash
+   npm install && npx playwright install chromium
+   node scripts/capture_readme_screenshots.mjs --port 3033
+   node scripts/capture_automation_screenshots.mjs --port 3033
+   ```
 
-Output: `img/screenshots/*.png` (web), referenced from the root `README.md`.
+4. **Mobile apps** (Xcode simulator + adb device/emulator)
+   ```bash
+   ./scripts/capture_mobile_readme_screenshots.sh
+   ```
 
-## Regenerate mobile shots
+5. **Sensitive-string scan** (text files + spot-check PNGs)
+   ```bash
+   rg -l '192\.168\.1\.187|admin|ourMedia' img/ docs/ README.md || echo "OK"
+   ```
 
-```bash
-# Demo server must already be listening (see above)
-./scripts/capture_mobile_readme_screenshots.sh
-```
+6. **Publish** — see [`docs/dev/PUBLISHING.md`](../dev/PUBLISHING.md) (private repo only).
 
-Output:
+## Output paths
 
 | Path | Description |
 |------|-------------|
-| `img/screenshots/ios/01-home.png` … `05-automations.png` | iOS Simulator (launch args — no deep-link dialog) |
-| `img/screenshots/android/01-home.png` … `05-automations.png` | Android device/emulator (`adb reverse` for USB phone) |
+| `img/screenshots/*.png` | Web console (linked from root `README.md`) |
+| `img/screenshots/ios/01-home.png` … `05-automations.png` | iOS Simulator |
+| `img/screenshots/android/01-home.png` … `05-automations.png` | Android device/emulator |
 
-## Legacy paths under `docs/screenshots/`
-
-Older captures live under `docs/screenshots/web/` and `docs/screenshots/android/`.
-The public README uses **`img/screenshots/`** only — regenerate there before publishing.
+Legacy dev captures under `docs/screenshots/` were removed — use **`img/screenshots/`** only.

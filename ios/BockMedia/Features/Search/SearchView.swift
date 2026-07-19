@@ -81,8 +81,15 @@ struct SearchView: View {
             }
         }
         .task {
+            if UITestSupport.isEnabled {
+                applyUITestSearchIfNeeded()
+                applyUITestLaunchSearchIfNeeded()
+            }
             recentSelections = SearchHistoryStore.selections()
             searchPins = (try? await appState.repository.searchPins()) ?? []
+            if UITestSupport.isEnabled, !trimmedQuery.isEmpty {
+                return
+            }
             if SearchBrowseSessionCache.getIfFresh() == nil {
                 TabWarmCoordinator.warmSearchBrowse(repository: appState.repository)
             }
@@ -100,6 +107,11 @@ struct SearchView: View {
             applyUITestSearchIfNeeded()
         }
         .onChange(of: appState.profileChangeRevision) { _, _ in
+            if UITestSupport.isEnabled {
+                applyUITestSearchIfNeeded()
+                applyUITestLaunchSearchIfNeeded()
+                return
+            }
             recentSelections = SearchHistoryStore.selections()
             query = ""
             results = nil

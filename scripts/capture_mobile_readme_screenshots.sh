@@ -139,8 +139,8 @@ PY
   sleep 12
   snap_ios "01-home"
 
-  launch_ios -UITesting -UITestSearchQuery fleetwood
-  sleep 12
+  launch_ios -UITesting -UITestTab search -UITestSearchQuery fleetwood
+  sleep 18
   snap_ios "02-search"
 
   launch_ios -UITesting -UITestTab library
