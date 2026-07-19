@@ -66,6 +66,19 @@ done < <(git -C "$REPO_ROOT" ls-files -o --exclude-standard -z)
 echo "==> Sanitizing export"
 python3 "$REPO_ROOT/scripts/sanitize_for_public.py" "$EXPORT_DIR"
 
+echo "==> Running pytest on export (sanity check)"
+(
+  cd "$EXPORT_DIR"
+  python3 -m pytest tests/ -q --tb=no \
+    --ignore=tests/test_bock_uitest.py
+)
+
+echo "==> Re-sanitizing after pytest (tests write runtime fixture paths)"
+python3 "$REPO_ROOT/scripts/sanitize_for_public.py" "$EXPORT_DIR"
+find "$EXPORT_DIR" -type d -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true
+rm -f "$EXPORT_DIR/queues.json" "$EXPORT_DIR/nowplaying_state.json" \
+  "$EXPORT_DIR/streaming_history.jsonl" "$EXPORT_DIR/server.log"
+
 echo "==> Verifying no tracked secrets in export"
 SCAN_FILES=()
 while IFS= read -r -d '' f; do
@@ -73,7 +86,10 @@ while IFS= read -r -d '' f; do
     */scripts/sanitize_for_public.py|*/scripts/publish_public_repo.sh) continue ;;
   esac
   case "${f##*.}" in
-    png|jpg|jpeg|gif|webp|ico|db|deb|mp3|m4a|aac|flac|wav|ogg|zip|jar|apk|keystore|p12|woff|woff2|ttf|eot|pdf|bin|png) continue ;;
+    png|jpg|jpeg|gif|webp|ico|db|deb|mp3|m4a|aac|flac|wav|ogg|zip|jar|apk|keystore|p12|woff|woff2|ttf|eot|pdf|bin|pyc|pyo) continue ;;
+  esac
+  case "$f" in
+    */__pycache__/*) continue ;;
   esac
   SCAN_FILES+=("$f")
 done < <(find "$EXPORT_DIR" -type f -print0)
@@ -90,13 +106,6 @@ if ((${#SCAN_FILES[@]})) && rg -n --hidden -S \
   echo "rg found unresolved sensitive content (see above)" >&2
   exit 1
 fi
-
-echo "==> Running pytest on export (sanity check)"
-(
-  cd "$EXPORT_DIR"
-  python3 -m pytest tests/ -q --tb=no \
-    --ignore=tests/test_bock_uitest.py
-)
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
   echo ""
