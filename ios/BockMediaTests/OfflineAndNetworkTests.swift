@@ -66,8 +66,8 @@ final class OfflineAndNetworkTests: XCTestCase {
         XCTAssertNil(ServerURL.sanitizedServerURL("http:"))
         XCTAssertNil(ServerURL.sanitizedServerURL("https:"))
         XCTAssertEqual(
-            ServerURL.sanitizedServerURL("https://alexa.morejava.bid"),
-            "https://alexa.morejava.bid"
+            ServerURL.sanitizedServerURL("https://your-tunnel.example.com"),
+            "https://your-tunnel.example.com"
         )
     }
 

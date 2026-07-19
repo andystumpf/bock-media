@@ -23,6 +23,9 @@ REPLACEMENTS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r'http://192\.168\.1\.187:3001'), 'http://your-server.local:3001'),
     (re.compile(r'http://192\.168\.1\.187:5000'), 'http://your-server.local:5000'),
     (re.compile(r'192\.168\.1\.187'), 'your-server.local'),
+    (re.compile(r'https://alexa\.admin\.bid'), 'https://your-tunnel.example.com'),
+    (re.compile(r'alexa\.admin\.bid'), 'your-tunnel.example.com'),
+    (re.compile(r'\bmorejava\b'), 'admin'),
     (re.compile(r'~/bock-media'), '~/bock-media'),
     (re.compile(r'/opt/bock-media(?:/\.publish-export)?'), '/opt/bock-media'),
     (re.compile(r'/opt/bock-media/'), '/opt/bock-media/'),
@@ -41,6 +44,8 @@ BLOCK_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ('Local username', re.compile(r'andymac')),
     ('Private repo URL', re.compile(r'github\.com/andystumpf/ourMedia')),
     ('Home NAS SSH', re.compile(r'plex@192\.168\.1\.187')),
+    ('Home tunnel host', re.compile(r'alexa\.admin\.bid|admin\.bid')),
+    ('Home admin user', re.compile(r'\bmorejava\b')),
 ]
 
 ALLOWLIST_SUBSTRINGS = (

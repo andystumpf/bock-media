@@ -36,6 +36,7 @@ should_skip() {
     docs/MOBILE_UI_TESTING.md) return 0 ;;
     docs/HOME_STARTUP_REGRESSION_TEST_PLAN.md) return 0 ;;
     docs/PHASE6_ACCOUNTS.md) return 0 ;;
+    docs/IOS_PARITY_PLAN.md) return 0 ;;
   esac
   return 1
 }

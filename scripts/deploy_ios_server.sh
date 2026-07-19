@@ -86,7 +86,7 @@ if props.exists():
         if line.startswith("bockmedia.externalServerUrl="):
             print(line.split("=", 1)[1].strip().rstrip("/"))
             raise SystemExit(0)
-print("https://alexa.morejava.bid")
+print("https://your-tunnel.example.com")
 PY
 )"
   if [[ -z "$TOKEN" ]]; then
@@ -104,4 +104,4 @@ PY
 fi
 
 echo "iOS server deploy OK v${VER} ($(du -h "$IPA" | awk '{print $1}'))"
-echo "Verify: https://alexa.morejava.bid/api/app/info"
+echo "Verify: ${BASE:-https://your-tunnel.example.com}/api/app/info"
