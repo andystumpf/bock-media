@@ -14,6 +14,9 @@ demo-data/
 
 # Runtime state (auto-generated, not committed)
 *.bak
+*.deb
+*.log
+!fixtures/**/*.log
 nowplaying_state.json
 streaming_history.jsonl
 queues.json
@@ -58,6 +61,10 @@ ourmedia.service
 
 # Public publish staging dir
 .publish-export/
+
+# Ephemeral captures / scratch
+tmp-device-screenshot.png
+img/screenshots/android-home.png
 
 # Python
 __pycache__/

@@ -740,9 +740,11 @@ generate a phrase and paste it into an Alexa Routine.
 │   ├── SETUP.md                  # condensed self-host notes
 │   ├── MUSIC_VIDEO.md            # Now Playing music video pipeline
 │   ├── AMAZON_UK.md              # Amazon UK (amazon.co.uk) config
-│   └── …
+│   ├── screenshots/README.md     # how to regenerate README captures
+│   └── dev/                      # internal bug hunts & QA (private repo only)
 ├── .github/workflows/ci.yml
-└── DEVICE_TEST_PLAN.md           # manual real-device test checklist
+├── package.json                  # Playwright (README screenshot scripts only)
+└── requirements.txt
 ```
 
 Regenerate web screenshots after UI changes:
@@ -790,7 +792,7 @@ xcodebuild test -project BockMedia.xcodeproj -scheme BockMedia \
 ```
 
 For features that need real hardware (multi-room, device identity, sleep timer
-boundaries), follow [`DEVICE_TEST_PLAN.md`](DEVICE_TEST_PLAN.md).
+boundaries), follow [`docs/dev/DEVICE_TEST_PLAN.md`](docs/dev/DEVICE_TEST_PLAN.md).
 
 ---
 

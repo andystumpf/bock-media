@@ -28,7 +28,8 @@ should_skip() {
     .publish-export/*|.publish-export) return 0 ;;
     .cursor/*|.cursor) return 0 ;;
     tmp/*|tmp) return 0 ;;
-    tmp-device-screenshot.png) return 0 ;;
+    tmp-device-screenshot.png|backfill-metadata.log|cloudflared.deb) return 0 ;;
+    img/screenshots/android-home.png) return 0 ;;
     *.readme-bak|*.bak-prod) return 0 ;;
     build/mobile-ui-reports/*|build/mobile-ui-reports) return 0 ;;
     .github/workflows/notify-dashboard.yml) return 0 ;;
@@ -38,6 +39,7 @@ should_skip() {
     docs/HOME_STARTUP_REGRESSION_TEST_PLAN.md) return 0 ;;
     docs/PHASE6_ACCOUNTS.md) return 0 ;;
     docs/IOS_PARITY_PLAN.md) return 0 ;;
+    docs/dev/*|docs/dev) return 0 ;;
   esac
   return 1
 }

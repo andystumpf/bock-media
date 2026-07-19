@@ -13,7 +13,7 @@
 Today playlist tracks live in **`.m3u` files** indexed by **`ServerPlaylists.xml`**. That works for read-mostly Plex exports but creates pain when:
 
 - Adding/removing one track rewrites an entire large file (Android loads all pages, then `PUT`s the full list).
-- Server and Plex sync race on XML/m3u (torn reads — see `SRV-07`, `SRV-08` in `BUG_REPORT.md`).
+- Server and Plex sync race on XML/m3u (torn reads — see `SRV-07`, `SRV-08` in [`BUG_REPORT.md`](dev/BUG_REPORT.md)).
 - Virtual playlists (`rated-stars-N`) and smart/daily playlists already bypass m3u — special cases multiply.
 
 **Recommendation:** Use **`music_organizer.db`** (same DB as `songs_cache`) for playlist membership. Keep **`ServerPlaylists.xml` as the catalog index** during transition (id, name, source type, track count). Optionally keep **`.m3u` as an export/interop artifact** for Plex and debugging, not as the source of truth for Bock-owned lists.
@@ -422,7 +422,7 @@ When each phase ships, update:
 
 - `RUNBOOK.md` — backup paths, migration script, rollback.
 - `README.md` — playlist storage paragraph.
-- `BUG_REPORT.md` — close SRV-07/SRV-08 when XML read races reduced.
+- [`BUG_REPORT.md`](dev/BUG_REPORT.md) — close SRV-07/SRV-08 when XML read races reduced.
 - `shared/api-contract/api-contract.yaml` — add optional `tracks/add` if implemented.
 
 ---
