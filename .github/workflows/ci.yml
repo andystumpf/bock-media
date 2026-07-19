@@ -122,4 +122,5 @@ jobs:
             -project BockMedia.xcodeproj \
             -scheme BockMedia \
             -destination "$DESTINATION" \
+            -only-testing:BockMediaTests \
             CODE_SIGNING_ALLOWED=NO
