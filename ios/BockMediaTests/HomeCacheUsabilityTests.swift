@@ -28,6 +28,22 @@ final class HomeCacheUsabilityTests: XCTestCase {
         }
         return HomeFeed(sections: rated + [
             HomeSection(
+                id: "recently-created",
+                title: "Recently Created",
+                kind: .recentlyCreated,
+                cards: [
+                    HomeCard(
+                        id: "pl-new",
+                        title: "New Playlist",
+                        subtitle: nil,
+                        artPath: nil,
+                        playlistId: "pl-new",
+                        playTarget: .playlist(id: "pl-new", name: "New Playlist"),
+                        kind: .recentlyCreated
+                    ),
+                ]
+            ),
+            HomeSection(
                 id: "browse-genres",
                 title: "Browse by genre",
                 kind: .browseGenres,
