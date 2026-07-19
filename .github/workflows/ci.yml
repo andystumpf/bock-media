@@ -70,6 +70,7 @@ jobs:
 
   ios-tests:
     runs-on: macos-15
+    timeout-minutes: 20
     env:
       DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
     steps:

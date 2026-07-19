@@ -416,10 +416,11 @@ cloudflared tunnel route dns <tunnel-name> your-domain.example.com
 ### 4. Run as a systemd stack
 
 ```bash
-cp ourmedia.service.example ourmedia.service     # edit paths/user + OURMEDIA_SKILL_ID
-sudo cp ourmedia.service       /etc/systemd/system/
-sudo cp ourmedia-stack.target  /etc/systemd/system/
-sudo cp ourmedia-health.service ourmedia-health.timer /etc/systemd/system/
+cp deploy/systemd/ourmedia.service.example ourmedia.service   # edit paths/user + OURMEDIA_SKILL_ID
+sudo cp ourmedia.service deploy/systemd/ourmedia-stack.target \
+  deploy/systemd/ourmedia-health.service.example deploy/systemd/ourmedia-health.timer \
+  /etc/systemd/system/
+# Rename ourmedia-health.service.example → ourmedia-health.service if you edit it locally.
 sudo systemctl daemon-reload
 sudo systemctl enable --now ourmedia-stack.target ourmedia-health.timer
 ```
@@ -698,16 +699,18 @@ generate a phrase and paste it into an Alexa Routine.
 ```
 .
 ├── server.py                     # Flask app — all routes, Alexa handler, helpers
+├── bock_*.py                     # Domain modules (search, home, playlists, …)
 ├── alexa_remote.py               # Unofficial Alexa API wrapper (alexapy)
 ├── plex_client.py                # Plex API client (playlist write-back, status)
+├── catalog_cache.py              # Alexa music catalog cache helpers
 ├── start.sh                      # Trivial launcher
 ├── requirements.txt
 ├── render.yaml                   # Render Blueprint (hosted demo)
 ├── app-release-notes.json        # Changelog for GET /app mobile downloads
 ├── config.example.json           # → copy to config.json (gitignored)
-├── ourmedia.service.example      # → systemd unit for the backend
-├── ourmedia-stack.target         # Aggregate target (backend + tunnel + health)
-├── ourmedia-health.service/.timer# Health watchdog
+├── deploy/
+│   ├── README.md                 # systemd install notes
+│   └── systemd/                # ourmedia.service.example, stack target, health timer
 ├── public/                       # Static admin console (vanilla JS + Chart.js)
 │   ├── index.html
 │   ├── css/  js/app.js  img/

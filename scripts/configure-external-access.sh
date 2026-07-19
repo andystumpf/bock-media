@@ -58,8 +58,8 @@ check_local_health() {
         log "OK — backend reachable on LAN IP ${lan_ip}:3001 (port-forward ready)"
     else
         log "WARN — localhost works but LAN IP does not."
-        log "      gunicorn may be bound to 127.0.0.1 only. Use ourmedia.service.example:"
-        log "      sudo cp ${REPO_DIR}/ourmedia.service.example /etc/systemd/system/ourmedia.service"
+        log "      gunicorn may be bound to 127.0.0.1 only. Use deploy/systemd/ourmedia.service.example:"
+        log "      sudo cp ${REPO_DIR}/deploy/systemd/ourmedia.service.example /etc/systemd/system/ourmedia.service"
         log "      sudo systemctl daemon-reload && sudo systemctl restart ourmedia"
         return 1
     fi
@@ -70,11 +70,11 @@ install_service_if_needed() {
         if systemctl cat ourmedia.service | grep -q '127.0.0.1:3001'; then
             log "ourmedia.service binds 127.0.0.1 — port-forward needs 0.0.0.0:3001"
             log "Install example unit:"
-            log "  sudo cp ${REPO_DIR}/ourmedia.service.example /etc/systemd/system/ourmedia.service"
+            log "  sudo cp ${REPO_DIR}/deploy/systemd/ourmedia.service.example /etc/systemd/system/ourmedia.service"
             log "  sudo systemctl daemon-reload && sudo systemctl restart ourmedia"
         fi
     else
-        log "ourmedia.service not installed. Copy ourmedia.service.example and enable it."
+        log "ourmedia.service not installed. Copy deploy/systemd/ourmedia.service.example and enable it."
     fi
 }
 

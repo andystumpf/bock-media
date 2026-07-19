@@ -63,8 +63,12 @@ ourmedia.service
 .publish-export/
 
 # Ephemeral captures / scratch
+tmp/
 tmp-device-screenshot.png
 img/screenshots/android-home.png
+
+# Mobile UI automation reports (regenerated locally)
+build/mobile-ui-reports/
 
 # Python
 __pycache__/

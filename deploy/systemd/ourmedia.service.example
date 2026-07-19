@@ -1,5 +1,5 @@
 # Example systemd unit for Bock Media backend.
-# Copy to the server: sudo cp ourmedia.service.example /etc/systemd/system/ourmedia.service
+# Copy to the server: sudo cp deploy/systemd/ourmedia.service.example /etc/systemd/system/ourmedia.service
 #
 # For router port-forward (public IP:3001 -> this host), gunicorn MUST bind 0.0.0.0:3001.
 # Binding 127.0.0.1 only works with Cloudflare tunnel, not direct port-forward.
