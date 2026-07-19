@@ -12,6 +12,8 @@ enum BockTestTags {
     static let homeGreeting = "bock_home_greeting"
     static let searchField = "bock_search_field"
     static let searchResults = "bock_search_results"
+    static let searchEmpty = "bock_search_empty"
+    static let searchError = "bock_search_error"
     static let searchBrowseGrid = "bock_search_browse_grid"
     static let searchResultRow = "bock_search_result_row"
     static let libraryList = "bock_library_list"
@@ -25,6 +27,7 @@ enum BockTestTags {
     static let profilePicker = "bock_profile_picker"
     static let profileContinueUnattributed = "bock_profile_continue_unattributed"
     static let clientId = "bock_client_id"
+    static let setupScreen = "bock_setup_screen"
     static let screenLoading = "bock_screen_loading"
 
     static let playlistDetailBody = "bock_playlist_detail_body"
