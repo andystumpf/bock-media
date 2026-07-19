@@ -34,11 +34,11 @@ final class HomeCacheUsabilityTests: XCTestCase {
                 cards: [
                     HomeCard(
                         id: "pl-new",
-                        title: "New Playlist",
+                        title: "New Mix",
                         subtitle: nil,
                         artPath: nil,
                         playlistId: "pl-new",
-                        playTarget: .playlist(id: "pl-new", name: "New Playlist"),
+                        playTarget: .playlist(id: "pl-new", name: "New Mix"),
                         kind: .recentlyCreated
                     ),
                 ]
