@@ -9,6 +9,9 @@
 ios/Config.xcconfig
 ios/build/
 
+# Generated demo dataset (seed_demo_data.py)
+demo-data/
+
 # Runtime state (auto-generated, not committed)
 *.bak
 nowplaying_state.json
@@ -52,6 +55,9 @@ skill/play-yacht-request.json
 
 # Systemd unit (machine-specific, tracked separately)
 ourmedia.service
+
+# Public publish staging dir
+.publish-export/
 
 # Python
 __pycache__/

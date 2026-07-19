@@ -53,10 +53,12 @@ fun HomeScreen(
     var actionCard by remember { mutableStateOf<HomeCard?>(null) }
     var warmJob by remember { mutableStateOf<Job?>(null) }
     val alexaStatus by rememberAlexaRemoteStatus(repository)
-    val alexaBanner = alexaRemotePlayMessage(alexaStatus).takeIf { !remoteOk }
+    val uitestMode = remember { com.bockmedia.console.ui.testing.UITestSupport.isEnabled() }
+    val alexaBanner = alexaRemotePlayMessage(alexaStatus).takeIf { !remoteOk && !uitestMode }
     var profileBanner by remember { mutableStateOf<String?>(null) }
     var profileFirstName by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) {
+        if (uitestMode) return@LaunchedEffect
         if (!ActiveProfileStore.activeMemberId(context).isNullOrBlank()) return@LaunchedEffect
         scope.launch(Dispatchers.IO) {
             val members = runCatching { repository.household().members }.getOrDefault(emptyList())

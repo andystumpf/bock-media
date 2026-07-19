@@ -21,6 +21,7 @@ struct AlexaAuthMonitor: View {
             }
         }
         .task {
+            if UITestSupport.isEnabled { return }
             while !Task.isCancelled {
                 if let status = try? await appState.repository.alexaRemoteStatus() {
                     if status.configured && status.authenticated == false && lastAuth != false {

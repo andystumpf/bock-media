@@ -1,1 +1,1 @@
-{"path": "/music/estimated-karaoke-lines-test.mp3", "synced": true, "lines": [{"timeMs": 4800, "text": "First line"}, {"timeMs": 58800, "text": "Second line"}], "plain": "First line\nSecond line", "source": "lrclib", "estimated": true, "fetchedAt": 1784428475}
+{"path": "/music/estimated-karaoke-lines-test.mp3", "synced": true, "lines": [{"timeMs": 4800, "text": "First line"}, {"timeMs": 58800, "text": "Second line"}], "plain": "First line\nSecond line", "source": "lrclib", "estimated": true, "fetchedAt": 1784436063}

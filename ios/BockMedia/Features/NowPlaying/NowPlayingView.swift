@@ -994,9 +994,11 @@ private struct NowPlayingDevicePage: View {
     ) -> some View {
         VStack(spacing: 16) {
             VStack(alignment: .leading, spacing: 2) {
-                let albumName = dev.album?
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                    .flatMap { $0.isEmpty ? nil : $0 }
+                let albumName: String? = {
+                    guard let raw = dev.album?.trimmingCharacters(in: .whitespacesAndNewlines),
+                          !raw.isEmpty else { return nil }
+                    return raw
+                }()
                 if let albumName {
                     NavigationLink(value: SearchRoute.album(name: albumName, artist: dev.artist)) {
                         Text(dev.track ?? "Not playing")

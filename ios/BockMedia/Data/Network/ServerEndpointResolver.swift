@@ -161,7 +161,7 @@ actor ServerEndpointResolver {
     }
 }
 
-private extension String {
+extension String {
     var nilIfEmpty: String? {
         isEmpty ? nil : self
     }

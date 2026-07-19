@@ -248,6 +248,46 @@ object LocalPlaybackController {
         _state.value = LocalPlaybackState()
     }
 
+    /** Seeds local playback for UI-test / README Now Playing screenshots (no server playback). */
+    fun installUITestPreview() {
+        val tracks = listOf(
+            LocalTrack(
+                path = "/music/Pearl Jam/Ten/01 - Daughter.flac",
+                title = "Daughter - Remastered",
+                artist = "Pearl Jam",
+                album = "Ten",
+                durationMs = 235_000,
+            ),
+            LocalTrack(
+                path = "/music/Pearl Jam/Ten/02 - Alive.flac",
+                title = "Alive",
+                artist = "Pearl Jam",
+                album = "Ten",
+                durationMs = 341_000,
+            ),
+            LocalTrack(
+                path = "/music/Pearl Jam/Ten/03 - Even Flow.flac",
+                title = "Even Flow",
+                artist = "Pearl Jam",
+                album = "Ten",
+                durationMs = 292_000,
+            ),
+        )
+        _state.value = LocalPlaybackState(
+            active = true,
+            tracks = tracks,
+            index = 0,
+            isPlaying = true,
+            positionMs = 45_000,
+            durationMs = 235_000,
+            shuffle = false,
+            sourceLabel = "Rock Essentials",
+            playlist = "Rock Essentials",
+            playlistId = "preview",
+            activeTarget = PlayTarget.Playlist(id = "preview", name = "Rock Essentials"),
+        )
+    }
+
     fun seekTo(context: Context, positionMs: Long) {
         val pos = positionMs.coerceAtLeast(0)
         update { it.copy(positionMs = pos) }

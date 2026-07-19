@@ -24,6 +24,12 @@ enum DownloadNotifications {
     }
 
     static func requestAuthorization() {
+        // Avoid the system permission sheet during UI tests / README captures.
+        if ProcessInfo.processInfo.arguments.contains("-UITesting")
+            || ProcessInfo.processInfo.environment["UITESTING"] == "1"
+        {
+            return
+        }
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 

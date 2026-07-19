@@ -83,9 +83,7 @@ final class HomeViewModel: ObservableObject {
     }
 
     func loadOffline() async {
-        offlineSection = await Task.detached(priority: .utility) {
-            HomeFeedLoader.offlineSection(store: OfflineDownloadStore())
-        }.value
+        offlineSection = HomeFeedLoader.offlineSection(store: OfflineDownloadStore())
     }
 
     var jumpBackInSection: HomeSection? {
@@ -153,7 +151,7 @@ struct HomeView: View {
                     onOpenListenAgent: onOpenListenAgent
                 )
 
-                if !appState.remoteOk {
+                if !appState.remoteOk, !UITestSupport.isEnabled {
                     Text("Alexa remote unavailable — playing locally when possible.")
                         .font(.caption)
                         .foregroundStyle(.red)
@@ -161,7 +159,7 @@ struct HomeView: View {
                         .padding(.bottom, 4)
                 }
 
-                if appState.activeMemberId == nil {
+                if appState.activeMemberId == nil, !UITestSupport.isEnabled {
                     Text("Select your profile in Family to restore ratings and settings.")
                         .font(.caption)
                         .foregroundStyle(BockColors.green)

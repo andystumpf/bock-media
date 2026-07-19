@@ -211,7 +211,10 @@ class MainActivity : ComponentActivity() {
                     if (hasServer == true) {
                         OfflineNetworkMonitor.start(this@MainActivity)
                         launch(Dispatchers.IO) { OfflineDownloadManager.refresh(this@MainActivity) }
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        if (
+                            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                            !UITestSupport.isEnabled(intent)
+                        ) {
                             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
                         }
                     }

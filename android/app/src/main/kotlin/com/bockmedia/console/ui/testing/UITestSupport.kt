@@ -4,6 +4,7 @@ import android.content.Intent
 import android.net.Uri
 import com.bockmedia.console.local.ActiveProfileStore
 import com.bockmedia.console.local.ClientPrefsSync
+import com.bockmedia.console.media.LocalPlaybackController
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -84,9 +85,22 @@ object UITestState {
 
 /** Debug-only hooks for instrumented UI tests (mirrors iOS UITestSupport). */
 object UITestSupport {
+    /** Sticky for the process so later VIEW deep-links (without extras) still work. */
+    @Volatile
+    private var sessionEnabled: Boolean = false
+
     fun isEnabled(intent: Intent? = null): Boolean {
-        if (intent?.getBooleanExtra("UITesting", false) == true) return true
-        return System.getProperty("bock.uitesting") == "1"
+        if (sessionEnabled) return true
+        if (intent?.getBooleanExtra("UITesting", false) == true) {
+            sessionEnabled = true
+            System.setProperty("bock.uitesting", "1")
+            return true
+        }
+        if (System.getProperty("bock.uitesting") == "1") {
+            sessionEnabled = true
+            return true
+        }
+        return false
     }
 
     suspend fun handleUri(context: android.content.Context, uri: Uri): Boolean {
@@ -107,7 +121,10 @@ object UITestSupport {
                 ClientPrefsSync.onActiveMemberChanged(context, memberId, previous)
             }
             "/flush-prefs" -> ClientPrefsSync.push(context)
-            "/now-playing-preview" -> UITestState.openNowPlayingPreview()
+            "/now-playing-preview" -> {
+                LocalPlaybackController.installUITestPreview()
+                UITestState.openNowPlayingPreview()
+            }
             "/tab" -> UITestState.openTab(uri.getQueryParameter("route").orEmpty().ifBlank { "home" })
             "/route" -> UITestState.navigateRouteFromTest(uri.getQueryParameter("path").orEmpty())
             "/fail" -> UITestState.failEndpoint = uri.getQueryParameter("endpoint")

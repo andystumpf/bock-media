@@ -38,7 +38,10 @@ enum ClientPrefsSync {
 
     static func shouldSkipResumePull() -> Bool {
         let now = Int64(Date().timeIntervalSince1970 * 1000)
-        return shouldSkipResumePull(lastPullCompletedMs: lastPullCompletedMs, nowMs: now)
+        return HomeLoadCoordinator.shouldSkipResumePull(
+            lastPullCompletedMs: lastPullCompletedMs,
+            nowMs: now
+        )
     }
 
     static func pullAndApply(repository: BockMediaRepository, profileSwitch: Bool = false) async {

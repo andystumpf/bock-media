@@ -13,11 +13,10 @@ if [[ ! -f "$OURMEDIA_DB_PATH" ]]; then
   python scripts/seed_demo_data.py --base "$OURMEDIA_DATA_DIR" --state-dir "$ROOT" --config --alexa-remote
 fi
 
-if [[ -n "${RENDER_EXTERNAL_URL:-}" ]] && [[ -f "$ROOT/config.json" ]]; then
-  export ROOT
+if [[ -n "${RENDER_EXTERNAL_URL:-}" ]] && [[ -f "$OURMEDIA_DATA_DIR/config.json" ]]; then
   python - <<'PY'
 import json, os
-path = os.path.join(os.environ["ROOT"], "config.json")
+path = os.path.join(os.environ["OURMEDIA_DATA_DIR"], "config.json")
 with open(path) as f:
     cfg = json.load(f)
 cfg["publicUrl"] = os.environ["RENDER_EXTERNAL_URL"].rstrip("/")

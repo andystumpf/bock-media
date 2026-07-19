@@ -33,6 +33,18 @@ enum UITestSupport {
             appState.uitestSearchQuery = params["q"] ?? ""
             appState.uitestSearchNonce += 1
             return true
+        case "/tab":
+            let route = (params["route"] ?? "home").lowercased()
+            let index: Int = switch route {
+            case "home": 0
+            case "search": 1
+            case "library": 2
+            case "downloads": 3
+            case "automations", "automation": 4
+            default: 0
+            }
+            appState.uitestSelectedTab = index
+            return true
         case "/switch-member", "/flush-prefs", "/now-playing-preview":
             guard isEnabled else { return false }
         default:
@@ -72,6 +84,18 @@ enum UITestSupport {
     static func applyLaunchOverrides(appState: AppState) {
         guard isEnabled else { return }
         let args = ProcessInfo.processInfo.arguments
+        if let idx = args.firstIndex(of: "-UITestTab"), idx + 1 < args.count {
+            let route = args[idx + 1].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let index: Int = switch route {
+            case "home": 0
+            case "search": 1
+            case "library": 2
+            case "downloads": 3
+            case "automations", "automation": 4
+            default: 0
+            }
+            appState.uitestSelectedTab = index
+        }
         if let idx = args.firstIndex(of: "-UITestSearchQuery"), idx + 1 < args.count {
             let q = args[idx + 1].trimmingCharacters(in: .whitespacesAndNewlines)
             guard !q.isEmpty else { return }

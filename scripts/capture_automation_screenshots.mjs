@@ -69,6 +69,12 @@ async function main() {
   async function freshPage() {
     const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const page = await ctx.newPage();
+    // Hide the expired-Alexa-session banner (demo creds have no live session).
+    await page.addInitScript(() => {
+      const style = document.createElement('style');
+      style.textContent = '.global-alert{display:none !important}';
+      document.addEventListener('DOMContentLoaded', () => document.head.appendChild(style));
+    });
     return { ctx, page };
   }
 

@@ -67,9 +67,33 @@ echo "==> Sanitizing export"
 python3 "$REPO_ROOT/scripts/sanitize_for_public.py" "$EXPORT_DIR"
 
 echo "==> Running pytest on export (sanity check)"
+# Prefer a python that has pytest (Xcode's python3 often does not).
+PYTEST_PY="${OURMEDIA_PYTHON:-}"
+if [[ -z "$PYTEST_PY" ]]; then
+  for cand in \
+    /Library/Frameworks/Python.framework/Versions/3.13/bin/python3 \
+    /Library/Frameworks/Python.framework/Versions/3.12/bin/python3 \
+    /opt/homebrew/bin/python3 \
+    "$(command -v python3)"
+  do
+    [[ -x "$cand" ]] || continue
+    if "$cand" -c "import pytest" 2>/dev/null; then
+      PYTEST_PY="$cand"
+      break
+    fi
+  done
+fi
+if [[ -z "${PYTEST_PY:-}" ]]; then
+  echo "No python with pytest found; set OURMEDIA_PYTHON=/path/to/python3" >&2
+  exit 1
+fi
+echo "    using $PYTEST_PY"
 (
   cd "$EXPORT_DIR"
-  python3 -m pytest tests/ -q --tb=no \
+  # Don't inherit a local demo-data override from the developer shell —
+  # public export tests must use fixtures/demo-data.
+  env -u OURMEDIA_DATA_DIR -u OURMEDIA_DB_PATH -u OURMEDIA_MUSIC_ROOT \
+    "$PYTEST_PY" -m pytest tests/ -q --tb=no \
     --ignore=tests/test_bock_uitest.py
 )
 

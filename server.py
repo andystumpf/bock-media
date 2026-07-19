@@ -8934,13 +8934,26 @@ def _remote_album_artwork(audio_path):
     try:
         term = f'{artist} {album}' if artist else album
         url = f'{_ITUNES_SEARCH_URL}?' + urlencode({
-            'term': term, 'entity': 'album', 'limit': 1, 'media': 'music'
+            'term': term, 'entity': 'album', 'limit': 5, 'media': 'music'
         })
         req = Request(url, headers={'User-Agent': 'ourMedia/1.0'})
         with urlopen(req, timeout=_REMOTE_ART_TIMEOUT) as r:
             data = json.loads(r.read().decode('utf-8', errors='replace'))
         results = data.get('results') or []
-        art_url = (results[0].get('artworkUrl100') if results else None)
+        # Term search can rank a different artist first (e.g. "Nirvana
+        # Nevermind" → Dennis Lloyd's "Nevermind" single, which contains a
+        # track called "Nirvana"). Prefer a result by the right artist.
+        best = None
+        if artist:
+            al = artist.lower()
+            for res in results:
+                ra = (res.get('artistName') or '').lower()
+                if ra == al or al in ra or ra in al:
+                    best = res
+                    break
+        if best is None and results:
+            best = results[0]
+        art_url = best.get('artworkUrl100') if best else None
         if not art_url:
             _REMOTE_ART_NEG_CACHE.add(key)
             return None
