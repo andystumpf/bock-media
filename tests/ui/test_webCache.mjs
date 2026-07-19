@@ -20,6 +20,7 @@ function loadWebCache() {
 
 const sampleFeed = () => ({
   sections: [
+    { id: 'recently-created', kind: 'RecentlyCreated', title: 'Recently Created', cards: [{ playlistId: 'p0', title: 'New' }] },
     { kind: 'Mood', title: 'Dinner', cards: [{ playlistId: 'p1', title: 'A' }] },
     ...Array.from({ length: 8 }, (_, i) => ({ kind: 'Mood', title: `M${i}`, cards: [] })),
     { id: 'more-playlists', kind: 'Playlists', title: 'More playlists', cards: [] },

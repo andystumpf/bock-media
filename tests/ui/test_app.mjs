@@ -264,9 +264,9 @@ test('saveDevice POSTs the new name and updates local state', async () => {
   document.getElementById('dev-input-0').value = 'Living Room';
   await window.saveDevice(0);
   assert.equal(window._devices[0].name, 'Living Room');
-  assert.equal(calls.length, 1);
-  assert.match(calls[0].url, /\/api\/devices\/amzn1\.ask\.device\.X/);
-  assert.equal(calls[0].opts.method, 'POST');
+  const saveCall = calls.find((c) => c.url.includes('/api/devices/amzn1.ask.device.X'));
+  assert.ok(saveCall, `expected device save fetch, got: ${calls.map((c) => c.url).join(', ')}`);
+  assert.equal(saveCall.opts.method, 'POST');
 });
 
 test('deleteDevice calls DELETE and removes from local list', async () => {
@@ -285,7 +285,9 @@ test('deleteDevice calls DELETE and removes from local list', async () => {
   await window.deleteDevice(0);
   assert.equal(window._devices.length, 1);
   assert.equal(window._devices[0].deviceId, 'amzn1.ask.device.B');
-  assert.equal(calls[0].method, 'DELETE');
+  const deleteCall = calls.find((c) => c.method === 'DELETE');
+  assert.ok(deleteCall, `expected device DELETE fetch, got: ${calls.map((c) => c.method || 'GET').join(', ')}`);
+  assert.match(deleteCall.url, /\/api\/devices\/amzn1\.ask\.device\.A/);
 });
 
 

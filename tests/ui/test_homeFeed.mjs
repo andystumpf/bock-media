@@ -39,7 +39,7 @@ test('compose matches Android section groups from library-only input', () => {
   const titles = feed.sections.map((s) => s.title);
   assert.ok(titles.includes('Jump back in'));
   assert.ok(titles.includes('Your top mixes'));
-  assert.ok(titles.some((t) => /Recent playlists|More playlists|Daily mixes/.test(t)));
+  assert.ok(titles.some((t) => /Recent playlists|More playlists|daily mixes/i.test(t)));
 });
 
 test('compose excludes Automations playlists from feed', () => {

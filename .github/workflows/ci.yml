@@ -64,7 +64,9 @@ jobs:
         with:
           python-version: "3.10"
       - name: Validate mobile UI workflow catalog
-        run: python3 scripts/validate_ui_workflow_catalog.py
+        run: |
+          pip install pyyaml
+          python3 scripts/validate_ui_workflow_catalog.py
 
   ios-tests:
     runs-on: macos-15
@@ -80,8 +82,6 @@ jobs:
       - name: Generate Xcode project
         working-directory: ios
         run: xcodegen generate
-      - name: Prepare iOS Simulator
-        run: xcodebuild -downloadPlatform iOS
       - name: Build and test
         working-directory: ios
         run: |
