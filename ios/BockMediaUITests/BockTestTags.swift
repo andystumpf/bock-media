@@ -27,7 +27,6 @@ enum BockTestTags {
     static let profilePicker = "bock_profile_picker"
     static let profileContinueUnattributed = "bock_profile_continue_unattributed"
     static let clientId = "bock_client_id"
-    static let setupScreen = "bock_setup_screen"
     static let screenLoading = "bock_screen_loading"
 
     static let playlistDetailBody = "bock_playlist_detail_body"
