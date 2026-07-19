@@ -9,9 +9,9 @@ struct RootView: View {
             switch appState.isConnected {
             case nil:
                 SplashView(message: appState.bootstrapMessage)
-            case false:
+            case .some(false):
                 SetupView(appState: appState)
-            case true:
+            case .some(true):
                 ProfilePickerGate(appState: appState) {
                     MainTabView(appState: appState)
                         .overlay { UITestSupport.clientIdProbe() }
