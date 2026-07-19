@@ -67,6 +67,12 @@ for home playback, offline downloads, and Now Playing on your phone.
 |:---:|:---:|:---:|
 | ![Playlists](img/screenshots/playlists.png) | ![Albums](img/screenshots/albums.png) | ![Search](img/screenshots/search.png) |
 
+#### Artists & songs
+
+| Artists | Songs |
+|:---:|:---:|
+| ![Artists](img/screenshots/artists.png) | ![Songs](img/screenshots/songs.png) |
+
 #### Analytics, devices & family
 
 | Analytics | Alexa Devices | Family |
@@ -88,6 +94,15 @@ and a one-time login via `scripts/alexa_login.py` (see
 Full Automation page (form + list):
 
 ![Automation — overview](img/screenshots/automation.png)
+
+#### Routines
+
+Alexa won't let third-party apps create Routines directly — Bock Media generates
+the exact *"ask bock media to …"* phrase to paste into the Alexa app.
+
+| Routines helper |
+|:---:|
+| ![Routines](img/screenshots/routines.png) |
 
 #### Watch Folders & Settings
 

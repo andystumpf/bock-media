@@ -27,7 +27,7 @@ Audio always comes from your **`/stream/`** library URL; video is visual only.
 ./scripts/youtube_cookies.sh
 ```
 
-This exports cookies from Chrome, uploads to `user@your-server.local:~/.bockmedia/youtube-cookies.txt`, verifies with yt-dlp on the NAS, writes `youtube-cookies-verify.json`, and restarts `ourmedia`.
+This exports cookies from Chrome, uploads to `user@your-server.local:~/.bockmedia/youtube-cookies.txt`, verifies with yt-dlp on the server, writes `youtube-cookies-verify.json`, and restarts `ourmedia`.
 
 **Daily automation** (recommended):
 

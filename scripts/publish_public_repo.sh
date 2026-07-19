@@ -29,6 +29,7 @@ should_skip() {
     .cursor/*|.cursor) return 0 ;;
     tmp/*|tmp) return 0 ;;
     tmp-device-screenshot.png) return 0 ;;
+    *.readme-bak|*.bak-prod) return 0 ;;
     build/mobile-ui-reports/*|build/mobile-ui-reports) return 0 ;;
     .github/workflows/notify-dashboard.yml) return 0 ;;
     docs/BUG_HUNT_BACKLOG.md|docs/BUG_HUNT_PROMPT.md) return 0 ;;
