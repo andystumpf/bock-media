@@ -75,7 +75,7 @@ echo "Running iOS UI tests ($ONLY_TEST) on \"$DEVICE_LABEL\" …"
 echo "  server=$SERVER_URL"
 echo "  Unlock your iPhone. You should see Bock Media switch tabs (Home → Search → Library …)."
 echo "  The gray \"XCUITest-Runner\" banner may stay on screen — that is normal; the app still runs behind it."
-printf '{"serverURL":"%s","apiToken":"%s"}\n' "$SERVER_URL" "$TOKEN" > /tmp/bock-smoke-env.json
+printf '{"serverURL":"%s","apiToken":"%s","timeoutMs":%s}\n' "$SERVER_URL" "$TOKEN" "$TIMEOUT_MS" > /tmp/bock-smoke-env.json
 cd "$IOS"
 
 if [[ -f project.yml ]] && command -v xcodegen >/dev/null; then

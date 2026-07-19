@@ -18,6 +18,7 @@ final class BockDeviceSmokeTests: XCTestCase {
 
     override func setUp() {
         continueAfterFailure = false
+        executionTimeAllowance = 180
         app = Self.sharedApp
         BockSmokeHarness.navigateBackToShell(app)
         BockSmokeHarness.dismissProfilePickerIfNeeded(app)

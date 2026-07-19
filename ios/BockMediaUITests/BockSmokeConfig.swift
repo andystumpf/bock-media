@@ -1,10 +1,16 @@
 import Foundation
 
 enum BockSmokeConfig {
+    /// Hard ceiling so a stuck shell wait cannot run for an hour.
+    static let maxWaitSeconds: TimeInterval = 90
+
     static var defaultTimeout: TimeInterval {
+        if let ms = smokeEnvFile()?.timeoutMs, ms > 0 {
+            return min(ms / 1000, maxWaitSeconds)
+        }
         if let raw = ProcessInfo.processInfo.environment["SMOKE_TIMEOUT_MS"],
            let ms = Double(raw), ms > 0 {
-            return ms / 1000
+            return min(ms / 1000, maxWaitSeconds)
         }
         return 30
     }
@@ -38,6 +44,7 @@ enum BockSmokeConfig {
     private struct SmokeEnvFile: Decodable {
         let serverURL: String
         let apiToken: String
+        let timeoutMs: Double?
     }
 
     /// Written by scripts/run_ios_smoke_tests.sh before xcodebuild (UI test host may not inherit shell env).

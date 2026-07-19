@@ -4,23 +4,66 @@ import XCTest
 enum BockSmokeHarness {
     static let greetingTexts = ["Good morning", "Good afternoon", "Good evening"]
 
+    private static func remaining(until deadline: Date) -> TimeInterval {
+        max(0, deadline.timeIntervalSinceNow)
+    }
+
+    private static func pollSleep(until deadline: Date) {
+        let slice = min(0.2, remaining(until: deadline))
+        guard slice > 0 else { return }
+        usleep(useconds_t(slice * 1_000_000))
+    }
+
+    private static func isSetupScreen(_ app: XCUIApplication) -> Bool {
+        app.buttons["Sign in"].exists || app.staticTexts["Bock Media"].exists
+    }
+
+    private static func isProfilePickerVisible(_ app: XCUIApplication) -> Bool {
+        app.staticTexts["Who's listening?"].exists
+            || app.otherElements[BockTestTags.profilePicker].exists
+    }
+
+    private static func shellStateDescription(_ app: XCUIApplication) -> String {
+        var parts: [String] = []
+        if isSetupScreen(app) { parts.append("Setup/sign-in") }
+        if isProfilePickerVisible(app) { parts.append("profile picker") }
+        if app.otherElements[BockTestTags.screenLoading].exists { parts.append("loading spinner") }
+        if bottomNavVisible(app) { parts.append("bottom nav visible") }
+        if app.otherElements[BockTestTags.homeGreeting].exists { parts.append("home greeting") }
+        if app.state != .runningForeground { parts.append("app state=\(app.state.rawValue)") }
+        if parts.isEmpty { parts.append("unknown shell state") }
+        return parts.joined(separator: ", ")
+    }
+
     static func assumeMainAppReady(_ app: XCUIApplication, timeout: TimeInterval = BockSmokeConfig.defaultTimeout) {
         bypassProfilePickerViaDeepLink()
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            dismissProfilePickerIfNeeded(app)
+        let deadline = Date().addingTimeInterval(min(timeout, BockSmokeConfig.maxWaitSeconds))
+        var lastPickerBypass = Date.distantPast
+        while remaining(until: deadline) > 0 {
+            if isSetupScreen(app) {
+                XCTFail("App is on Setup — configure server URL/token in ios/Config.xcconfig or stop the test run")
+                return
+            }
+            if isProfilePickerVisible(app), Date().timeIntervalSince(lastPickerBypass) > 1.5 {
+                bypassProfilePickerViaDeepLink()
+                lastPickerBypass = Date()
+            }
+            dismissProfilePickerIfNeeded(app, timeout: min(3, remaining(until: deadline)))
             if app.otherElements[BockTestTags.screenLoading].exists {
-                waitForLoadingGone(app, timeout: min(90, deadline.timeIntervalSinceNow))
+                waitForLoadingGone(app, timeout: min(12, remaining(until: deadline)))
             }
             if bottomNavVisible(app) { return }
             if app.otherElements[BockTestTags.homeGreeting].exists { return }
             for text in greetingTexts where app.staticTexts[text].exists { return }
             if app.buttons[BockTestTags.accountMenuButton].exists { return }
-            usleep(200_000)
+            pollSleep(until: deadline)
         }
-        dismissProfilePickerIfNeeded(app, timeout: 5)
+        dismissProfilePickerIfNeeded(app, timeout: min(3, remaining(until: deadline)))
         if bottomNavVisible(app) { return }
-        XCTFail("Main app shell not ready — unlock phone, pick a profile, or check server connection")
+        XCTFail(
+            "Main app shell not ready after \(Int(min(timeout, BockSmokeConfig.maxWaitSeconds)))s "
+            + "(\(shellStateDescription(app))) — unlock phone, pick a profile, or check server connection"
+        )
     }
 
     static func bottomNavVisible(_ app: XCUIApplication) -> Bool {
@@ -30,23 +73,26 @@ enum BockSmokeHarness {
             || app.tabBars.firstMatch.exists
     }
 
-    static func dismissProfilePickerIfNeeded(_ app: XCUIApplication, timeout: TimeInterval = 25) {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            let pickerVisible = app.staticTexts["Who's listening?"].exists
-                || app.otherElements[BockTestTags.profilePicker].exists
+    static func dismissProfilePickerIfNeeded(_ app: XCUIApplication, timeout: TimeInterval = 8) {
+        let deadline = Date().addingTimeInterval(min(timeout, BockSmokeConfig.maxWaitSeconds))
+        var deepLinkAttempts = 0
+        while remaining(until: deadline) > 0 {
+            let pickerVisible = isProfilePickerVisible(app)
             if !pickerVisible, bottomNavVisible(app) { return }
 
             if pickerVisible {
-                bypassProfilePickerViaDeepLink()
+                if deepLinkAttempts < 2 {
+                    bypassProfilePickerViaDeepLink()
+                    deepLinkAttempts += 1
+                }
                 let continueCandidates: [XCUIElement] = [
                     app.buttons[BockTestTags.profileContinueUnattributed],
                     app.buttons["Continue unattributed"],
                     app.staticTexts["Continue unattributed"],
                 ]
-                for candidate in continueCandidates where candidate.waitForExistence(timeout: 2) {
+                for candidate in continueCandidates where candidate.waitForExistence(timeout: 1) {
                     tapElement(candidate)
-                    waitForLoadingGone(app, timeout: 60)
+                    waitForLoadingGone(app, timeout: min(12, remaining(until: deadline)))
                     return
                 }
                 let memberButtons = app.buttons.matching(
@@ -54,20 +100,11 @@ enum BockSmokeHarness {
                 )
                 if memberButtons.count > 0 {
                     tapElement(memberButtons.element(boundBy: 0))
-                    waitForLoadingGone(app, timeout: 60)
-                    return
-                }
-                for button in app.buttons.allElementsBoundByIndex {
-                    let label = button.label
-                    guard !label.isEmpty else { continue }
-                    if label == "Account menu" || label == "Continue unattributed" { continue }
-                    if label.hasPrefix("bock_") { continue }
-                    tapElement(button)
-                    waitForLoadingGone(app, timeout: 60)
+                    waitForLoadingGone(app, timeout: min(12, remaining(until: deadline)))
                     return
                 }
             }
-            usleep(200_000)
+            pollSleep(until: deadline)
         }
     }
 
@@ -152,19 +189,19 @@ enum BockSmokeHarness {
     static func waitForLoadingGone(_ app: XCUIApplication, timeout: TimeInterval = BockSmokeConfig.defaultTimeout) {
         let loading = app.otherElements[BockTestTags.screenLoading]
         guard loading.exists else { return }
-        _ = loading.waitForNonExistence(timeout: timeout)
+        _ = loading.waitForNonExistence(timeout: min(timeout, BockSmokeConfig.maxWaitSeconds))
     }
 
     static func navigateBackToShell(_ app: XCUIApplication) {
         dismissKeyboardIfNeeded(app)
-        dismissProfilePickerIfNeeded(app, timeout: 5)
-        if bottomNavVisible(app), !app.staticTexts["Who's listening?"].exists {
+        dismissProfilePickerIfNeeded(app, timeout: 3)
+        if bottomNavVisible(app), !isProfilePickerVisible(app) {
             return
         }
         resetShell(app)
         bypassProfilePickerViaDeepLink()
-        let deadline = Date().addingTimeInterval(min(BockSmokeConfig.defaultTimeout, 45))
-        while Date() < deadline {
+        let deadline = Date().addingTimeInterval(min(BockSmokeConfig.defaultTimeout, 20))
+        while remaining(until: deadline) > 0 {
             var dismissed = false
             for title in ["Done", "Cancel", "Close"] {
                 let button = app.navigationBars.buttons[title]
@@ -186,7 +223,7 @@ enum BockSmokeHarness {
                 dismissProfilePickerIfNeeded(app, timeout: 2)
                 return
             }
-            usleep(200_000)
+            pollSleep(until: deadline)
         }
     }
 
@@ -198,13 +235,13 @@ enum BockSmokeHarness {
     }
 
     static func waitForHomeContent(_ app: XCUIApplication) {
-        let deadline = Date().addingTimeInterval(BockSmokeConfig.defaultTimeout)
-        while Date() < deadline {
+        let deadline = Date().addingTimeInterval(min(BockSmokeConfig.defaultTimeout, 20))
+        while remaining(until: deadline) > 0 {
             if app.otherElements[BockTestTags.homeGreeting].exists { return }
             if app.otherElements[BockTestTags.homeFeed].exists { return }
             if app.buttons[BockTestTags.accountMenuButton].exists { return }
             for text in greetingTexts where app.staticTexts[text].exists { return }
-            usleep(200_000)
+            pollSleep(until: deadline)
         }
     }
 
